@@ -1,0 +1,20 @@
+# Build output
+*.img
+*.img.xz
+*.img.gz
+rootfs/
+out/
+
+# Debian packaging
+*.deb
+*.changes
+*.buildinfo
+
+# Docker
+.docker-cache/
+
+# Editor
+.vscode/
+*.swp
+*~
+.DS_Store
