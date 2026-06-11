@@ -1,0 +1,29 @@
+# Dockerfile build context lives at libsdl3-sunxifb/build/. The Dockerfile
+# fetches the toolchain via curl at build time (not COPY) so we keep this
+# context tiny. Defensive ignores below in case anyone later drops large
+# files (toolchain tarball, intermediate test outputs) next to the
+# Dockerfile and inflates the build context unnoticed.
+
+# Toolchain tarballs — fetched in-Dockerfile, must not be here.
+*.tar.xz
+*.tar.gz
+*.tar.bz2
+*.tgz
+
+# Cached/extracted toolchain trees — must not bleed into the image.
+arm-*/
+gcc-arm-*/
+
+# Test outputs / scratch
+*.elf
+*.a
+*.o
+*.so
+*.so.*
+hello
+hello.c
+
+# Editor / OS noise
+.*.swp
+.DS_Store
+*~
