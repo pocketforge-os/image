@@ -162,7 +162,7 @@ RUN dpkg --add-architecture arm64 \
 #
 #   Cross-build basics:   cmake ninja-build pkg-config make patch xxd
 #   Source acquisition:   git curl ca-certificates gpg gnupg
-#   Archive handling:     xz-utils zstd
+#   Archive handling:     xz-utils zstd cpio
 #   DT compilation:       device-tree-compiler  (provides `dtc` binary)
 #   Image composition:    abootimg genimage dosfstools mtools sunxi-tools parted
 #   Debian rootfs:        debootstrap mmdebstrap (>=1.5 from backports)
@@ -197,6 +197,7 @@ RUN apt-get update \
         xxd \
         xz-utils \
         zstd \
+        cpio \
         device-tree-compiler \
         abootimg \
         genimage \
@@ -221,6 +222,37 @@ RUN apt-get update \
         e2fsprogs \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
+
+# -----------------------------------------------------------------------------
+# Bake the arm64 busybox-static binary in as an initrd payload.
+# -----------------------------------------------------------------------------
+# The hand-rolled cpio initrd (boards/tsp/initrd/, bead tsp-iuz.1.6) needs a
+# statically-linked AArch64 busybox as its first process (PID-1 precursor, runs
+# before any rootfs /lib is mounted). We CANNOT apt-install busybox-static:arm64
+# into this amd64 base — it collides with the amd64 busybox on /usr/bin/busybox —
+# and we don't want the initrd build to need network/apt at runtime (the build
+# runs as a non-root --user, which can't apt-get update/download). So we extract
+# the binary HERE (at container-build time, as root, with the snapshot sources
+# live) to a fixed payload path, pinned by the digest-pinned container itself.
+#
+# The .deb is resolved from the same snapshot.debian.org mirror as every other
+# tool, so the busybox version is deterministic for a given APT_SNAPSHOT_DATE.
+# The binary's SHA-256 is recorded alongside it so the initrd build can assert
+# integrity (and so a snapshot bump that changes busybox is visible in git).
+RUN set -eux; \
+    apt-get update; \
+    mkdir -p /tmp/bb /opt/pocketforge/initrd-payload; \
+    cd /tmp/bb; \
+    apt-get download busybox-static:arm64; \
+    dpkg -x busybox-static_*_arm64.deb x; \
+    install -m 0755 x/bin/busybox /opt/pocketforge/initrd-payload/busybox-arm64; \
+    # Confirm it's a static AArch64 ELF (no DT_NEEDED) before we trust it.
+    aarch64-linux-gnu-readelf -h /opt/pocketforge/initrd-payload/busybox-arm64 | grep -q AArch64; \
+    ! aarch64-linux-gnu-readelf -d /opt/pocketforge/initrd-payload/busybox-arm64 2>/dev/null | grep -q NEEDED; \
+    sha256sum /opt/pocketforge/initrd-payload/busybox-arm64 \
+        | cut -d' ' -f1 > /opt/pocketforge/initrd-payload/busybox-arm64.sha256; \
+    echo "baked busybox-arm64 sha256=$(cat /opt/pocketforge/initrd-payload/busybox-arm64.sha256)"; \
+    cd /; rm -rf /tmp/bb /var/lib/apt/lists/*
 
 # Migrate the arm64-multiarch artifacts into the cross-toolchain's sysroot so
 # downstream find_library / pkg-config / find_package work without per-build
@@ -340,6 +372,7 @@ RUN set -eux; \
     genimage --version || true; \
     abootimg -h >/dev/null 2>&1 || abootimg 2>&1 | head -1 || true; \
     dtc --version | head -1; \
+    cpio --version | head -1; \
     sunxi-fel --version 2>&1 | head -1 || true; \
     qemu-aarch64-static --version | head -1; \
     aarch64-linux-gnu-readelf --version | head -1

@@ -1,0 +1,143 @@
+#!/bin/busybox sh
+# =============================================================================
+# PocketForge initrd /init  (TrimUI Smart Pro, Allwinner A133, vendor 4.9.191)
+# -----------------------------------------------------------------------------
+# Boot-critical. A wrong /init = no boot. Three things must be exactly right:
+#   1. module load order: videobuf2-dma-contig -> pvrsrvkm -> dc_sunxi
+#   2. rootfs found by GPT PARTLABEL (vendor U-Boot/kernel resolves by NAME,
+#      never a hardcoded mmcblk index)
+#   3. switch_root into the real rootfs (or, in M1.B mode, fall through to a
+#      busybox shell instead)
+#
+# Observability (USER decision 2026-06-12; bd memory tsp-debug-observability-
+# no-uart): every step is logged to BOTH the serial console AND a persistent
+# file on the FAT "boot-resource" partition, so a failed boot is diagnosable
+# by pulling the SD even when no UART is attached. Logging never blocks boot:
+# if the log partition can't be mounted, we continue console-only.
+#
+# Mode select is data-driven, NOT a code fork: presence of the staged marker
+# file /etc/pocketforge-m1b-mode (baked into M1.B-mode initrds only) switches
+# the final handoff from switch_root to an interactive shell. Same /init
+# source ships in M1.B and M1.C; M1.C simply omits the marker. (bd tsp-iuz.1.11)
+#
+# IMPORTANT module-name nuance: the videobuf2 DMA module's FILE is hyphenated
+# on disk (videobuf2-dma-contig.ko) while its runtime/lsmod name is underscored
+# (videobuf2_dma_contig). insmod-by-path uses the hyphen. (verified on blobs)
+# =============================================================================
+
+# Populate busybox applets into /bin (findfs, mount, insmod, switch_root, ...).
+/bin/busybox --install -s /bin
+
+# --- pseudo-filesystems -------------------------------------------------------
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev
+
+# --- on-SD boot log -----------------------------------------------------------
+# Try to mount the FAT "boot-resource" partition rw at /pflog. The literal
+# "boot" partition holds a raw Android boot.img (not a filesystem) — the FAT
+# boot-resource partition is the writable, mountable log target.
+#
+# RESOLUTION BY FILESYSTEM LABEL, NOT GPT PARTLABEL: the Debian busybox
+# `findfs` supports ONLY `LABEL=`/`UUID=` (no `PARTLABEL=`/`PARTUUID=`), and the
+# `blkid` applet is not compiled in (verified against busybox-static 1.35.0).
+# So the initrd resolves partitions by their FILESYSTEM volume label:
+#   boot-resource FAT  -> volume label POCKETFORGE        (genimage: mkfs.vfat -n)
+#   userdata      ext4 -> volume label POCKETFORGE_DATA   (genimage: ext4 label=)
+# The KERNEL cmdline still uses `root=PARTLABEL=userdata` — the kernel's own
+# partition parser DOES support PARTLABEL; only busybox doesn't. (The two keys
+# must be kept consistent by the genimage config in tsp-iuz.1.7.)
+PFLOG=""
+mkdir -p /pflog
+LOGDEV="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
+if [ -n "$LOGDEV" ] && mount -t vfat -o rw,flush "$LOGDEV" /pflog 2>/dev/null; then
+    PFLOG=/pflog/bootlog.txt
+    # Truncate at boot so the log reflects THIS boot, not an accreting history.
+    : > "$PFLOG" 2>/dev/null || PFLOG=""
+fi
+
+# log <msg>: emit to console always; append to the SD log when available; sync
+# after every line so even a truncated log names the last reached checkpoint
+# (a hard hang before the next sync loses at most one step).
+log() {
+    echo "[pf-initrd] $*"
+    if [ -n "$PFLOG" ]; then
+        echo "[pf-initrd] $*" >> "$PFLOG" 2>/dev/null
+        sync 2>/dev/null
+    fi
+}
+
+# fail <msg>: log, then drop to an interactive busybox shell on the console so a
+# failed boot is debuggable rather than a silent hang. sync first so the SD log
+# captures the failure reason. The cmdline carries console=ttyS0,115200.
+fail() {
+    log "FAILURE: $*"
+    log "dropping to busybox shell (console=ttyS0,115200)"
+    sync 2>/dev/null
+    exec /bin/sh
+}
+
+PF_INITRD_VERSION="$(cat /etc/pocketforge-initrd-version 2>/dev/null || echo dev)"
+log "STAGE: banner — PocketForge initrd ${PF_INITRD_VERSION} booting"
+if [ -n "$PFLOG" ]; then
+    log "STAGE: on-SD log active at boot-resource:/bootlog.txt ($LOGDEV)"
+else
+    log "STAGE: on-SD log UNAVAILABLE (boot-resource not mountable) — console only"
+fi
+
+# --- PowerVR + buffer plumbing ------------------------------------------------
+# Load order: vb2 (DMA buffers) -> pvrsrvkm (GPU KMD) -> dc_sunxi (DC bridge).
+# Per-insmod trap: a silent skip past a vermagic mismatch would leave no
+# breadcrumb, so each failure is fatal-with-a-message.
+log "STAGE: insmod videobuf2-dma-contig"
+insmod /lib/modules/videobuf2-dma-contig.ko || fail "insmod videobuf2-dma-contig failed (rc=$?)"
+
+log "STAGE: insmod pvrsrvkm"
+insmod /lib/modules/pvrsrvkm.ko || fail "insmod pvrsrvkm failed (rc=$?)"
+
+log "STAGE: insmod dc_sunxi"
+insmod /lib/modules/dc_sunxi.ko || fail "insmod dc_sunxi failed (rc=$?)"
+
+log "STAGE: modules loaded"
+
+# --- WiFi (NOT in the initrd) -------------------------------------------------
+# PocketForge boots from a LOCAL SD rootfs, so WiFi is not needed before
+# switch_root. The xradio triplet (xradio_mac -> xradio_core -> xradio_wlan)
+# + xr829 firmware live in the rootfs and are brought up post-switch_root by
+# wpa_supplicant + udhcpc (M1.C). Decision recorded in bd tsp-iuz.1.6.
+#   insmod /lib/modules/xradio_mac.ko
+#   insmod /lib/modules/xradio_core.ko
+#   insmod /lib/modules/xradio_wlan.ko
+
+# --- M1.B mode: fall through to a shell instead of switch_root ----------------
+# Data-driven branch (NOT a separate /init). In M1.B-mode initrds the marker
+# file is staged; in M1.C-onward initrds it is absent and we switch_root.
+if [ -f /etc/pocketforge-m1b-mode ]; then
+    log "STAGE: M1.B mode — falling through to busybox shell (no switch_root)"
+    log "       (this is expected for the M1.B first-SD-boot milestone, G0)"
+    sync 2>/dev/null
+    exec /bin/sh
+fi
+
+# --- find + mount the rootfs by filesystem LABEL ------------------------------
+# By LABEL (POCKETFORGE_DATA), not PARTLABEL — busybox findfs has no PARTLABEL
+# support (see the on-SD-log block above). The kernel cmdline's
+# root=PARTLABEL=userdata is the kernel's own resolution and is unaffected.
+log "STAGE: locate rootfs by LABEL=POCKETFORGE_DATA"
+ROOT="$(findfs LABEL=POCKETFORGE_DATA 2>/dev/null)"
+[ -n "$ROOT" ] || fail "rootfs not found (LABEL=POCKETFORGE_DATA)"
+log "STAGE: rootfs is $ROOT"
+
+mkdir -p /newroot
+log "STAGE: mount $ROOT -> /newroot (ext4)"
+mount -t ext4 -o rw,noatime "$ROOT" /newroot || fail "mount $ROOT failed"
+
+# --- hand off to the real init ------------------------------------------------
+# Unmount the log partition cleanly before handoff (switch_root will move /proc,
+# /sys, /dev into /newroot; /pflog lives outside that and must be released).
+log "STAGE: switch_root /newroot /sbin/init"
+if [ -n "$PFLOG" ]; then
+    sync 2>/dev/null
+    umount /pflog 2>/dev/null
+fi
+exec switch_root /newroot /sbin/init || fail "switch_root failed"

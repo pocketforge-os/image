@@ -42,7 +42,7 @@ package, which is unique per snapshot date).
 | `pkg-config` | bookworm | |
 | `make`, `patch`, `xxd` | bookworm | |
 | `git`, `curl`, `gnupg`, `gpg` | bookworm | source acquisition + signature verify |
-| `xz-utils`, `zstd` | bookworm | archive handling |
+| `xz-utils`, `zstd`, `cpio` | bookworm | archive handling (`cpio` assembles the hand-rolled initrd, bead `tsp-iuz.1.6`) |
 | `python3` | bookworm | scripting glue |
 | `binutils-aarch64-linux-gnu` | bookworm | `aarch64-linux-gnu-readelf` for the symver gate |
 
@@ -80,13 +80,20 @@ These are migrated into the cross-toolchain's sysroot at container build time
 SDL3's CMake + pkg-config + find_package work without per-build
 `CMAKE_FIND_ROOT_PATH` overrides.
 
-### NOT in this container yet (filed for later M1.B beads)
+### Baked-in initrd payload (arm64, NOT on the host PATH)
 
-- **`dragonsecboot`** — vendored from FriendlyARM's `h3_lichee` Lichee-SDK
-  (`tools/pack/pctools/linux/openssl/`, commit `75b584e2…`) into
-  `image/tools/dragonsecboot/`. Tracked in bead `tsp-iuz.1.4`. Adding it to
-  this Dockerfile is a pinned-source-tree COPY, not an apt install; lives in a
-  later container layer once the source is committed.
+| Item | Path in container | Notes |
+|---|---|---|
+| `busybox-arm64` | `/opt/pocketforge/initrd-payload/busybox-arm64` | Statically-linked AArch64 `busybox-static` (Debian, from the snapshot mirror), extracted at container-build time. SHA-256 recorded at `…/busybox-arm64.sha256`. The hand-rolled initrd (`tsp-iuz.1.6`) uses it as `/init`'s first process. Baked in (not apt-installed) because the initrd build runs as a non-root `--user` that can't `apt-get download`, and `busybox-static:arm64` collides with the amd64 busybox on `/usr/bin/busybox`. A snapshot bump that changes busybox surfaces as a changed SHA in the container build log. |
+
+### dragonsecboot (vendored source tree, not apt)
+
+`dragonsecboot` is **vendored** at `image/tools/dragonsecboot/dragonsecboot`
+(precompiled static x86_64 binary with `-pack`, from `bkleiner/hdzero-goggle-tools`
+commit `66703c7b…`, the upstream of KNULLI's `host-allwinner-utils`). Bead
+`tsp-iuz.1.4` (closed). It is consumed from the bind-mounted `/work/src`, not
+installed into the container. (Retraction: an earlier draft cited FriendlyARM's
+`h3_lichee` commit `75b584e2…`; that is an older H3-era binary without `-pack`.)
 
 ## Bind-mount layout (runtime, not baked in)
 
@@ -111,6 +118,17 @@ image). Documented bind-mount paths:
 - Consumers of the container (image-build CI, libsdl3-sunxifb CI) reference
   the container by `@sha256:digest` from `image/container.pin`, never by `:tag`.
   Tag-pinning lets a base-layer rebuild silently break reproducibility.
+
+> **`container.pin` is STALE as of 2026-06-12 (bead `tsp-iuz.1.6`).** The
+> Dockerfile gained a baked-in `busybox-arm64` initrd payload + `cpio` this
+> session and was rebuilt locally (image id `fadc8f24a05a`), but the container
+> was **not** re-pushed to the registry, so `container.pin` still holds the
+> previous digest (`sha256:98fed4f9…`). Re-pin on the next deliberate
+> container-publish pass (natural fit for M1.E's CI hardening): push the rebuilt
+> container, then `docker inspect … RepoDigests` → write the new
+> `image@sha256:` line into `container.pin` in one commit. The local rebuild is
+> what every initrd/image build this session ran against; reproducibility of the
+> *initrd artifact* is already verified (`logs/m1b-initrd-build-verification.txt`).
 
 ## Fallback if the container becomes burdensome
 

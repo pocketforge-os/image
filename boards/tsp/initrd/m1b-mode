@@ -1,0 +1,16 @@
+# PocketForge initrd M1.B-mode marker.
+#
+# Presence of this file as /etc/pocketforge-m1b-mode INSIDE the initrd cpio
+# switches /init's final handoff from `switch_root` to an interactive busybox
+# shell on the serial console, AFTER the PowerVR modules load successfully.
+#
+# This satisfies M1.B's G0 "first SD that boots to a shell" without needing a
+# separate Debian rootfs build: the empty 64 MiB userdata partition is never
+# mounted; the shell runs inside the initramfs.
+#
+# The build stages this file into the cpio ONLY when assembling an M1.B-mode
+# initrd (build.sh --m1b-mode). M1.C onward omits it, so the SAME /init source
+# takes the normal switch_root path. (bd tsp-iuz.1.11, tsp-iuz.1.6)
+#
+# The file's CONTENT is irrelevant — only its presence matters. This text is
+# documentation for anyone who extracts the cpio.
