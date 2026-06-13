@@ -5,6 +5,9 @@
 rootfs/
 out/
 
+# Working directory (populated by make fetch-blobs, bind-mounted into container)
+work/
+
 # Debian packaging
 *.deb
 *.changes
