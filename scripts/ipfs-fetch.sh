@@ -205,6 +205,42 @@ while IFS=$'\t' read -r path size sha256 cid; do
     echo "OK"
 done <<< "$BLOB_LIST"
 
+# ---- generate per-group SHA-256 manifest files ------------------------------
+# The old blobs repo shipped KERNEL.SHA256, BLOBS.SHA256, BOOTCHAIN.SHA256.
+# build-initrd.sh uses KERNEL.SHA256 for module integrity checks.
+# Generate these from the manifest data so the rest of the pipeline is unchanged.
+echo ""
+echo "Generating per-group SHA-256 manifests..."
+
+python3 -c "
+import tomllib, sys, os
+
+with open(sys.argv[1], 'rb') as f:
+    m = tomllib.load(f)
+
+output_dir = sys.argv[2]
+
+# Map group names to their SHA-256 manifest filenames and path prefixes
+group_map = {
+    'kernel-4.9.191':        ('tsp/kernel-4.9.191/KERNEL.SHA256',     'tsp/kernel-4.9.191/'),
+    'pvr-ddk-22.102.54.38':  ('tsp/22.102.54.38/BLOBS.SHA256',        'tsp/22.102.54.38/'),
+    'boot-chain':            ('tsp/boot-chain/BOOTCHAIN.SHA256',       'tsp/boot-chain/'),
+}
+
+for group_name, (sha_file, prefix) in group_map.items():
+    entries = []
+    for b in m.get('blobs', []):
+        if b.get('group') == group_name:
+            # Relative path within the group directory
+            rel_path = b['path'][len(prefix):]
+            entries.append(f\"{b['sha256']}  {rel_path}\")
+    if entries:
+        sha_path = os.path.join(output_dir, sha_file)
+        with open(sha_path, 'w') as f:
+            f.write('\n'.join(sorted(entries)) + '\n')
+        print(f'  {sha_file} ({len(entries)} entries)')
+" "$MANIFEST" "$OUTPUT_DIR"
+
 echo ""
 echo "=== done ==="
 echo "  $TOTAL blobs fetched and verified in $OUTPUT_DIR"
