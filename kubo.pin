@@ -1,0 +1,13 @@
+# Kubo (go-ipfs) version pin for the build pipeline's blob fetcher.
+# The fetch script (make fetch-blobs) uses the local kubo daemon on the
+# build runner to retrieve vendor blobs by CID from the vendor-manifest.
+#
+# CID profile: unixfs-v1-2025 (IPIP-499) — CIDv1, raw-leaves, sha2-256,
+# 1 MiB chunks. Re-adding the same file bytes with this profile MUST
+# produce the same CID.
+#
+# Update these values when upgrading kubo on the build runner.
+
+kubo_version=0.42.0
+kubo_binary_sha256=a2bcd470ee4c5df3cfc7f11d8acb7b10ab6cadbf0fd8cb079c77fd303746ee4d
+cid_profile=unixfs-v1-2025
