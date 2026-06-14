@@ -142,6 +142,20 @@ mkdir -p /newroot
 log "STAGE: mount $ROOT -> /newroot (ext4)"
 mount -t ext4 -o rw,noatime "$ROOT" /newroot || fail "mount $ROOT failed"
 
+# --- watchdog keepalive before handoff -----------------------------------------
+# The vendor kernel auto-starts sunxi-wdt at driver probe (CONFIG_SUNXI_WDOG_
+# BOOTON=y, 16-second timeout, nowayout=0).  By this point ~3-5s of the 16s have
+# elapsed.  Reset the counter so systemd has the full 16s window to start up,
+# parse /etc/systemd/system.conf.d/watchdog.conf, and open /dev/watchdog itself.
+# IMPORTANT: '\0' is a keepalive ping (resets the counter).  Do NOT write 'V' —
+# that is the magic-close character which DISARMS the watchdog entirely.
+if [ -c /dev/watchdog ]; then
+    printf '\0' > /dev/watchdog
+    log "STAGE: watchdog ping (counter reset for systemd handoff)"
+else
+    log "WARN: /dev/watchdog not found — watchdog ping skipped"
+fi
+
 # --- hand off to the real init ------------------------------------------------
 # Unmount the log partition cleanly before handoff (switch_root will move /proc,
 # /sys, /dev into /newroot; /pflog lives outside that and must be released).

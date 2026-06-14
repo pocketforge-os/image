@@ -535,6 +535,15 @@ rm -f "${ROOTFS}/etc/resolv.conf"
 
 echo "[customize] WiFi + networking: all config installed"
 
+# --- Watchdog (bd: tsp-iuz.2.3) ----------------------------------------------
+# The vendor kernel auto-starts sunxi-wdt at driver probe with a 16s timeout.
+# Tell systemd PID 1 to take ownership and ping at half the interval (8s).
+echo "[customize] Installing watchdog drop-in..."
+install -d "${ROOTFS}/etc/systemd/system.conf.d"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/watchdog.conf" \
+    "${ROOTFS}/etc/systemd/system.conf.d/watchdog.conf"
+echo "[customize] Watchdog: systemd drop-in installed"
+
 # --- Directory scaffolding ---------------------------------------------------
 echo "[customize] Creating directory scaffolding..."
 install -d "${ROOTFS}/etc/pocketforge/keys/release.d"
