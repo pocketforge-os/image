@@ -13,6 +13,7 @@
 # Runs INSIDE the pocketforge/build container. Inputs via bind mounts:
 #   /work/src     (ro) - this image repo
 #   /work/blobs   (ro) - blobs repo checkout
+#   /work/libsdl3 (ro) - libSDL3-pocketforge.so.0 release artifact
 #   /work/out     (rw) - build output
 #
 # Usage:
@@ -196,15 +197,32 @@ echo "  Creating empty FAT32 boot-resource image (64 MiB, label POCKETFORGE)..."
 dd if=/dev/zero of="${GENIMAGE_INPUT}/boot-resource.vfat" bs=1M count=64 2>/dev/null
 mkdosfs -F 32 -n POCKETFORGE "${GENIMAGE_INPUT}/boot-resource.vfat" >/dev/null
 
-# Create the empty ext4 userdata partition image.
-# Use committed UUIDs for reproducibility (fs-uuids.env).
-echo "  Creating empty ext4 userdata image (64 MiB, label POCKETFORGE_DATA)..."
-dd if=/dev/zero of="${GENIMAGE_INPUT}/userdata.ext4" bs=1M count=64 2>/dev/null
-mke2fs -t ext4 -L POCKETFORGE_DATA \
-    -U "${USERDATA_FS_UUID}" \
-    -E "hash_seed=${USERDATA_HASH_SEED}" \
-    -m 0 -O "^metadata_csum" \
-    "${GENIMAGE_INPUT}/userdata.ext4" >/dev/null 2>&1
+# Create the userdata (rootfs) partition image.
+if [ "$M1B_MODE" = 1 ]; then
+    # M1.B mode: empty 64 MiB ext4 (no rootfs — initrd falls through to shell)
+    echo "  Creating empty ext4 userdata image (64 MiB, label POCKETFORGE_DATA)..."
+    dd if=/dev/zero of="${GENIMAGE_INPUT}/userdata.ext4" bs=1M count=64 2>/dev/null
+    mke2fs -t ext4 -L POCKETFORGE_DATA \
+        -U "${USERDATA_FS_UUID}" \
+        -E "hash_seed=${USERDATA_HASH_SEED}" \
+        -m 0 -O "^metadata_csum" \
+        "${GENIMAGE_INPUT}/userdata.ext4" >/dev/null 2>&1
+else
+    # M1.C+: full Debian rootfs built by build-rootfs.sh
+    # If a pre-built userdata.ext4 exists in OUT_DIR, use it; otherwise build.
+    if [ -f "${OUT_DIR}/userdata.ext4" ]; then
+        echo "  Using pre-built userdata.ext4 from ${OUT_DIR}..."
+        cp "${OUT_DIR}/userdata.ext4" "${GENIMAGE_INPUT}/userdata.ext4"
+    else
+        echo "  Building full Debian rootfs (this may take several minutes)..."
+        bash "${SRC_DIR}/scripts/build-rootfs.sh" \
+            --variant "${VARIANT}" \
+            --owner "$(id -u):$(id -g)"
+        cp "${OUT_DIR}/userdata.ext4" "${GENIMAGE_INPUT}/userdata.ext4"
+    fi
+    USERDATA_SIZE="$(stat -c%s "${GENIMAGE_INPUT}/userdata.ext4")"
+    echo "  userdata.ext4: ${USERDATA_SIZE} bytes ($(( USERDATA_SIZE / 1024 / 1024 )) MiB)"
+fi
 
 # Verify env.img bootcmd does NOT directly reference eMMC.
 # The env contains mmc_root=/dev/mmcblk0p7 and setargs_mmc, but those are

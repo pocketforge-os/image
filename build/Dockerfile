@@ -166,7 +166,7 @@ RUN dpkg --add-architecture arm64 \
 #   DT compilation:       device-tree-compiler  (provides `dtc` binary)
 #   Image composition:    abootimg genimage dosfstools mtools sunxi-tools parted
 #   Debian rootfs:        debootstrap mmdebstrap (>=1.5 from backports)
-#                         qemu-user-static binfmt-support
+#                         qemu-user-static binfmt-support arch-test
 #   Reproducibility (M1.E): faketime disorderfs e2fsprogs (>=1.47.1 from backports)
 #   Cross-readelf:        binutils-aarch64-linux-gnu  (for symver gate)
 #   Scripting glue:       python3 python3-pip
@@ -184,6 +184,7 @@ RUN dpkg --add-architecture arm64 \
 #   - e2fsprogs  >= 1.47.1 (we get 1.47.2-3~bpo12+1 on 20260601)
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        arch-test \
         ca-certificates \
         cmake \
         ninja-build \
