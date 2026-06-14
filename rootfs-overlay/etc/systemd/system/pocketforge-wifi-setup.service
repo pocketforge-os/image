@@ -12,7 +12,8 @@
 [Unit]
 Description=PocketForge WiFi credential templating from /boot/wifi.txt
 DefaultDependencies=no
-After=local-fs.target
+After=local-fs.target boot.mount
+Requires=boot.mount
 Before=wpa_supplicant@wlan0.service
 ConditionPathExists=/boot/wifi.txt
 

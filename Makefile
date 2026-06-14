@@ -27,6 +27,13 @@ LOCAL_BLOBS ?= $(HOME)/blobs
 # Image build variant (dev or release)
 VARIANT ?= dev
 
+# M1B mode: set M1B_MODE=1 for the M1.B busybox-shell image (no rootfs).
+# Default is off (full Debian rootfs via mmdebstrap).
+M1B_MODE ?= 0
+
+# Path to a local libsdl3-sunxifb build (contains libSDL3-pocketforge.so.0)
+LOCAL_LIBSDL3 ?= $(HOME)/libsdl3-sunxifb/_build
+
 # Vendor manifest repo (private; requires GitHub auth for clone)
 MANIFEST_REPO  := https://github.com/pocketforge-os/vendor-manifest.git
 MANIFEST_DIR   := $(WORK)/vendor-manifest
@@ -112,16 +119,27 @@ print(f'Pinning {len(cids)} unique CIDs...'); \
 # For CI, run 'make fetch-blobs' first, then 'make build-image BLOBS_SRC=work/blobs'.
 #
 # The container gets bind mounts:
-#   /work/src   (ro) - this image repo
-#   /work/blobs (ro) - blobs repo checkout
-#   /work/out   (rw) - build output
+#   /work/src     (ro) - this image repo
+#   /work/blobs   (ro) - blobs repo checkout
+#   /work/libsdl3 (ro) - libSDL3-pocketforge.so.0 release artifact
+#   /work/out     (rw) - build output
+#
+# M1B_MODE=1 builds the M1.B busybox-shell image (no rootfs, non-root container).
+# Default (M1B_MODE=0) builds the full Debian rootfs (M1.C+), which requires
+# running the container as root (mmdebstrap needs real chroot/mount for cross-arch
+# arm64 builds; the container provides the isolation boundary).
 BLOBS_SRC ?= $(LOCAL_BLOBS)
+LIBSDL3_SRC ?= $(LOCAL_LIBSDL3)
 
 .PHONY: build-image
 build-image:
-	@echo "=== make build-image (variant=$(VARIANT)) ==="
+	@echo "=== make build-image (variant=$(VARIANT), m1b=$(M1B_MODE)) ==="
 	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; echo "Set BLOBS_SRC= or LOCAL_BLOBS= to the blobs repo checkout"; exit 1; }
+ifeq ($(M1B_MODE),0)
+	@[ -f "$(LIBSDL3_SRC)/libSDL3-pocketforge.so.0" ] || { echo "ERROR: libSDL3-pocketforge.so.0 not found at $(LIBSDL3_SRC)"; echo "Set LIBSDL3_SRC= or LOCAL_LIBSDL3= to the build output directory"; exit 1; }
+endif
 	@mkdir -p "$(OUT_DIR)"
+ifeq ($(M1B_MODE),1)
 	docker run --rm \
 		--user "$$(id -u):$$(id -g)" \
 		-v "$(CURDIR_ABS):/work/src:ro" \
@@ -130,16 +148,51 @@ build-image:
 		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
 		$(CONTAINER) \
 		bash /work/src/scripts/build-sd-image.sh --m1b-mode --variant $(VARIANT)
+else
+	docker run --rm \
+		-e CALLER_UID="$$(id -u)" -e CALLER_GID="$$(id -g)" \
+		--cap-add SYS_ADMIN \
+		--security-opt seccomp=unconfined \
+		--security-opt apparmor=unconfined \
+		-v "$(CURDIR_ABS):/work/src:ro" \
+		-v "$(BLOBS_SRC):/work/blobs:ro" \
+		-v "$(LIBSDL3_SRC):/work/libsdl3:ro" \
+		-v "$(OUT_DIR):/work/out:rw" \
+		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
+		$(CONTAINER) \
+		bash /work/src/scripts/build-sd-image.sh --variant $(VARIANT)
+endif
+
+# Build the rootfs ext4 only (no SD image composition).
+# Runs as root inside the container (mmdebstrap needs chroot/mount).
+.PHONY: build-rootfs
+build-rootfs:
+	@echo "=== make build-rootfs (variant=$(VARIANT)) ==="
+	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; exit 1; }
+	@[ -f "$(LIBSDL3_SRC)/libSDL3-pocketforge.so.0" ] || { echo "ERROR: libSDL3 not found at $(LIBSDL3_SRC)"; exit 1; }
+	@mkdir -p "$(OUT_DIR)"
+	docker run --rm \
+		-e CALLER_UID="$$(id -u)" -e CALLER_GID="$$(id -g)" \
+		--cap-add SYS_ADMIN \
+		--security-opt seccomp=unconfined \
+		--security-opt apparmor=unconfined \
+		-v "$(CURDIR_ABS):/work/src:ro" \
+		-v "$(BLOBS_SRC):/work/blobs:ro" \
+		-v "$(LIBSDL3_SRC):/work/libsdl3:ro" \
+		-v "$(OUT_DIR):/work/out:rw" \
+		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
+		$(CONTAINER) \
+		bash /work/src/scripts/build-rootfs.sh --variant $(VARIANT) --owner "$$(id -u):$$(id -g)"
 
 # Build the SD image directly on the host (no container; for debugging only)
 .PHONY: build-image-host
 build-image-host:
-	@echo "=== make build-image-host (variant=$(VARIANT)) ==="
+	@echo "=== make build-image-host (variant=$(VARIANT), m1b=$(M1B_MODE)) ==="
 	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; exit 1; }
 	@mkdir -p "$(OUT_DIR)"
-	SRC_DIR="$(CURDIR_ABS)" BLOBS_DIR="$(BLOBS_SRC)" OUT_DIR="$(OUT_DIR)" \
+	SRC_DIR="$(CURDIR_ABS)" BLOBS_DIR="$(BLOBS_SRC)" LIBSDL3_DIR="$(LIBSDL3_SRC)" OUT_DIR="$(OUT_DIR)" \
 		SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
-		bash scripts/build-sd-image.sh --m1b-mode --variant $(VARIANT)
+		bash scripts/build-sd-image.sh $(if $(filter 1,$(M1B_MODE)),--m1b-mode) --variant $(VARIANT)
 
 # ---- clean ------------------------------------------------------------------
 .PHONY: clean
@@ -155,7 +208,8 @@ clean-all:
 help:
 	@echo "PocketForge image build targets:"
 	@echo ""
-	@echo "  build-image      Build the SD image in the container (default: --m1b-mode)"
+	@echo "  build-image      Build the full SD image in the container"
+	@echo "  build-rootfs     Build only the rootfs ext4 in the container"
 	@echo "  build-image-host Build on host directly (debugging only, no container)"
 	@echo "  fetch-blobs      Fetch vendor blobs via IPFS (reads signed manifest)"
 	@echo "  warm-cache       Pin all blob CIDs in local kubo (run once per machine)"
@@ -165,10 +219,16 @@ help:
 	@echo ""
 	@echo "Environment variables:"
 	@echo "  VARIANT          Image variant: dev (default) or release"
+	@echo "  M1B_MODE         Set to 1 for M1.B busybox-shell image (default: 0)"
 	@echo "  LOCAL_BLOBS      Path to local blobs repo checkout (default: ~/blobs)"
+	@echo "  LOCAL_LIBSDL3    Path to libSDL3 build dir (default: ~/libsdl3-sunxifb/_build)"
 	@echo "  BLOBS_SRC        Override blobs source for build-image (default: LOCAL_BLOBS)"
+	@echo "  LIBSDL3_SRC      Override libsdl3 source (default: LOCAL_LIBSDL3)"
 	@echo "  IPFS_API         kubo API multiaddr (default: /ip4/127.0.0.1/tcp/5001)"
 	@echo ""
-	@echo "Quick start (first SD image):"
-	@echo "  1. make build-image"
-	@echo "  2. xz -dc work/out/pocketforge-tsp-dev-m1b.img.xz | sudo dd of=/dev/sdX bs=4M conv=fsync"
+	@echo "Quick start (M1.C full image):"
+	@echo "  1. make build-image VARIANT=dev"
+	@echo "  2. xz -dc work/out/pocketforge-tsp-dev.img.xz | sudo dd of=/dev/sdX bs=4M conv=fsync"
+	@echo ""
+	@echo "M1.B mode (busybox shell, no rootfs):"
+	@echo "  1. make build-image M1B_MODE=1"

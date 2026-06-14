@@ -489,13 +489,23 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/network/20-wlan0.network" 
 # The kernel + initrd live inside boot.img (raw partition), not on /boot —
 # /boot is free to serve as the user-editable config mount point (Raspberry
 # Pi precedent). Read-only prevents accidental writes to the FAT partition.
+# nofail: don't block boot if the partition is slow to appear or missing.
+# x-systemd.device-timeout=10s: give udev 10s to enumerate the device node
+# (default 90s would hit the 16s watchdog timeout).
 cat >> "${ROOTFS}/etc/fstab" << 'FSTAB_EOF'
 # Boot-resource FAT partition (user-editable WiFi config, boot logs)
-LABEL=POCKETFORGE  /boot  vfat  ro,noatime,fmask=0133,dmask=0022  0  0
+LABEL=POCKETFORGE  /boot  vfat  ro,noatime,nofail,x-systemd.device-timeout=10s,fmask=0133,dmask=0022  0  0
 FSTAB_EOF
 
 # Hostname
 echo "pocketforge" > "${ROOTFS}/etc/hostname"
+
+# /etc/hosts — required for sudo and local name resolution
+cat > "${ROOTFS}/etc/hosts" << 'HOSTS_EOF'
+127.0.0.1	localhost
+127.0.1.1	pocketforge
+::1		localhost ip6-localhost ip6-loopback
+HOSTS_EOF
 
 # Enable services via symlinks (systemctl enable doesn't work under qemu
 # in all chroot configurations — create the symlinks directly).
@@ -503,6 +513,12 @@ echo "pocketforge" > "${ROOTFS}/etc/hostname"
 install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
 ln -sf /lib/systemd/system/wpa_supplicant@.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service"
+
+# Mask the global wpa_supplicant.service — we use the template instance
+# wpa_supplicant@wlan0.service instead. The global one fails without a
+# config file and causes systemd to report "degraded" status.
+ln -sf /dev/null "${ROOTFS}/etc/systemd/system/wpa_supplicant.service"
+echo "[customize] Masked global wpa_supplicant.service (template instance used instead)"
 
 # pocketforge-wifi-setup.service
 ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
@@ -549,6 +565,14 @@ echo "[customize] Creating directory scaffolding..."
 install -d "${ROOTFS}/etc/pocketforge/keys/release.d"
 install -d "${ROOTFS}/opt/pocketforge/apps"
 install -d "${ROOTFS}/var/lib/pocketforge/apps"
+
+# --- Boot-time entropy + random-seed -----------------------------------------
+# systemd-random-seed.service blocks boot on first boot (no saved seed, and
+# getrandom() blocks until the entropy pool is initialized). haveged provides
+# entropy from CPU timing jitter, but it starts too late to unblock the seed
+# service on a first boot. Mask the service — haveged fills the pool instead.
+ln -sf /dev/null "${ROOTFS}/etc/systemd/system/systemd-random-seed.service"
+echo "[customize] Masked systemd-random-seed.service (haveged provides entropy)"
 
 # --- Variant-conditional steps -----------------------------------------------
 VARIANT="${POCKETFORGE_VARIANT:-dev}"

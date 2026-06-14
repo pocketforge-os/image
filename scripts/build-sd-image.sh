@@ -215,9 +215,13 @@ else
         cp "${OUT_DIR}/userdata.ext4" "${GENIMAGE_INPUT}/userdata.ext4"
     else
         echo "  Building full Debian rootfs (this may take several minutes)..."
+        # When running as container root (mmdebstrap needs it), pass the
+        # caller's original uid:gid so build-rootfs.sh can chown output files.
+        # CALLER_UID/CALLER_GID are set by the Makefile's docker run -e flags.
+        ROOTFS_OWNER="${CALLER_UID:-$(id -u)}:${CALLER_GID:-$(id -g)}"
         bash "${SRC_DIR}/scripts/build-rootfs.sh" \
             --variant "${VARIANT}" \
-            --owner "$(id -u):$(id -g)"
+            --owner "${ROOTFS_OWNER}"
         cp "${OUT_DIR}/userdata.ext4" "${GENIMAGE_INPUT}/userdata.ext4"
     fi
     USERDATA_SIZE="$(stat -c%s "${GENIMAGE_INPUT}/userdata.ext4")"
@@ -297,3 +301,10 @@ echo ""
 # Write SHA manifest
 echo "${FINAL_SHA}  $(basename "${FINAL_XZ}")" > "${OUT_DIR}/${FINAL_NAME}.img.xz.sha256"
 echo "  SHA manifest: ${OUT_DIR}/${FINAL_NAME}.img.xz.sha256"
+
+# Chown output files to the caller's uid:gid when running as container root.
+# CALLER_UID/CALLER_GID are set by the Makefile's docker run -e flags.
+if [ -n "${CALLER_UID:-}" ] && [ -n "${CALLER_GID:-}" ] && [ "$(id -u)" = "0" ]; then
+    chown "${CALLER_UID}:${CALLER_GID}" "${FINAL_XZ}" "${OUT_DIR}/${FINAL_NAME}.img.xz.sha256"
+    echo "  chown: ${CALLER_UID}:${CALLER_GID}"
+fi

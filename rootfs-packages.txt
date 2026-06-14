@@ -12,6 +12,9 @@ alsa-utils
 busybox
 ca-certificates
 curl
+dbus
+dosfstools
+haveged
 iproute2
 kmod
 libatomic1
@@ -65,5 +68,6 @@ openresolv
 sudo
 systemd-sysv
 systemd-timesyncd
+udev
 wpasupplicant
 zlib1g
