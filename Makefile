@@ -114,6 +114,34 @@ print(f'Pinning {len(cids)} unique CIDs...'); \
 	done
 	@echo "=== warm-cache done ==="
 
+# WiFi network name for dev builds (looked up in system keyring)
+WIFI_SSID ?= Cobblejob
+
+# ---- generate-wifi-config ---------------------------------------------------
+# Pull WiFi PSK from the system keyring (secret-tool) and generate wifi.txt
+# for the boot-resource FAT partition. Dev builds only — release images use
+# the WiFi wizard (M1.D). The PSK is never committed; wifi.txt is gitignored.
+#
+# To store a PSK:
+#   echo -n "YourPassword" | secret-tool store --label="PocketForge WiFi PSK (MyNetwork)" \
+#     service pocketforge type wifi-psk network MyNetwork
+BOOT_RES_DIR := $(CURDIR_ABS)/boards/tsp/boot-resource
+WIFI_TXT     := $(BOOT_RES_DIR)/wifi.txt
+
+.PHONY: generate-wifi-config
+generate-wifi-config:
+	@mkdir -p "$(BOOT_RES_DIR)"
+	@PSK=$$(secret-tool lookup service pocketforge type wifi-psk network "$(WIFI_SSID)" 2>/dev/null) || true; \
+	if [ -z "$$PSK" ]; then \
+		echo "WARN: No WiFi PSK found in keyring for network '$(WIFI_SSID)'"; \
+		echo "  WiFi will not be configured on the boot image."; \
+		echo "  To store: echo -n 'password' | secret-tool store --label='PocketForge WiFi PSK ($(WIFI_SSID))' service pocketforge type wifi-psk network $(WIFI_SSID)"; \
+		rm -f "$(WIFI_TXT)"; \
+	else \
+		printf 'SSID=%s\nPSK=%s\n' "$(WIFI_SSID)" "$$PSK" > "$(WIFI_TXT)"; \
+		echo "  wifi.txt generated for SSID=$(WIFI_SSID)"; \
+	fi
+
 # ---- build-image ------------------------------------------------------------
 # Build the SD image inside the container. Uses local blobs checkout by default.
 # For CI, run 'make fetch-blobs' first, then 'make build-image BLOBS_SRC=work/blobs'.
@@ -132,7 +160,7 @@ BLOBS_SRC ?= $(LOCAL_BLOBS)
 LIBSDL3_SRC ?= $(LOCAL_LIBSDL3)
 
 .PHONY: build-image
-build-image:
+build-image: generate-wifi-config
 	@echo "=== make build-image (variant=$(VARIANT), m1b=$(M1B_MODE)) ==="
 	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; echo "Set BLOBS_SRC= or LOCAL_BLOBS= to the blobs repo checkout"; exit 1; }
 ifeq ($(M1B_MODE),0)

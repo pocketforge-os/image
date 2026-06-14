@@ -224,9 +224,21 @@ cp "${BLOBS_DIR}/tsp/boot-chain/env.img"     "${GENIMAGE_INPUT}/env.img"
 # Create the empty FAT32 boot-resource partition image.
 # genimage's vfat{} handler runs 'mcopy rootpath/* ::' which fails when rootpath
 # is empty; we create the FAT image ourselves and feed it to genimage as raw.
-echo "  Creating empty FAT32 boot-resource image (64 MiB, label POCKETFORGE)..."
+echo "  Creating FAT32 boot-resource image (64 MiB, label POCKETFORGE)..."
 dd if=/dev/zero of="${GENIMAGE_INPUT}/boot-resource.vfat" bs=1M count=64 2>/dev/null
 mkdosfs -F 32 -n POCKETFORGE "${GENIMAGE_INPUT}/boot-resource.vfat" >/dev/null
+
+# Copy any files from boards/tsp/boot-resource/ into the FAT image.
+# wifi.txt is generated at build time by 'make generate-wifi-config' from
+# the system keyring (secret-tool). The file is gitignored.
+BOOT_RES_DIR="${SRC_DIR}/boards/tsp/boot-resource"
+if [ -d "${BOOT_RES_DIR}" ] && ls "${BOOT_RES_DIR}"/* >/dev/null 2>&1; then
+    for f in "${BOOT_RES_DIR}"/*; do
+        [ -f "$f" ] || continue
+        mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "$f" "::/$(basename "$f")"
+        echo "  boot-resource: added $(basename "$f")"
+    done
+fi
 
 # Create the userdata (rootfs) partition image.
 if [ "$M1B_MODE" = 1 ]; then
@@ -311,8 +323,13 @@ FINAL_XZ="${OUT_DIR}/${FINAL_NAME}.img.xz"
 
 cp "${SD_IMAGE}" "${FINAL_IMG}"
 
-# Single-threaded xz for reproducibility (multi-threaded is non-deterministic)
-xz -9 --threads=1 --force "${FINAL_IMG}"
+# Release: single-threaded xz for bit-for-bit reproducibility (G-reproducible).
+# Dev: parallel xz at lowest scheduling priority for faster builds.
+if [ "${VARIANT}" = "release" ]; then
+    xz -9 --threads=1 --force "${FINAL_IMG}"
+else
+    nice -n 19 xz -9 -T0 --force "${FINAL_IMG}"
+fi
 
 FINAL_SHA="$(sha256sum "${FINAL_XZ}" | cut -d' ' -f1)"
 FINAL_SIZE="$(stat -c%s "${FINAL_XZ}")"

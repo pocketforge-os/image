@@ -16,6 +16,9 @@ work/
 # Docker
 .docker-cache/
 
+# WiFi credentials (contains PSK — never commit)
+boards/tsp/boot-resource/wifi.txt
+
 # Editor
 .vscode/
 *.swp

@@ -615,6 +615,14 @@ if [ "${VARIANT}" = "dev" ]; then
     chmod 0440 "${ROOTFS}/etc/sudoers.d/pocketforge-dev"
     echo "[customize] dev: sudoers drop-in installed"
 
+    # Dev: serial-console debug user for bring-up diagnostics.
+    # This user has a known password and can sudo to gamer or root.
+    # MUST BE REMOVED BEFORE RELEASE — tracked by bead tsp-iuz.2.9.
+    chroot "$ROOTFS" useradd -m -d /home/debug -s /bin/bash debug
+    echo "debug:pocketforge" | chroot "$ROOTFS" chpasswd
+    printf 'debug ALL=(ALL:ALL) NOPASSWD: ALL\n' >> "${ROOTFS}/etc/sudoers.d/pocketforge-dev"
+    echo "[customize] dev: debug user created (password: pocketforge) — serial console access"
+
     # Dev: sshd hardening (PermitRootLogin no, PasswordAuthentication no)
     install -d "${ROOTFS}/etc/ssh/sshd_config.d"
     install -m 0644 "/work/src/rootfs-overlay/etc/ssh/sshd_config.d/pocketforge.conf" \

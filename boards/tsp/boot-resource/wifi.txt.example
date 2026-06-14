@@ -1,0 +1,9 @@
+# PocketForge WiFi credentials for the boot-resource FAT partition.
+# Copy this file to wifi.txt and fill in your network details.
+# wifi.txt is gitignored — it contains your WiFi password.
+#
+# Format: key=value, one per line. Comments (#) and blank lines are ok.
+# Required: SSID, PSK
+# Optional: KEY_MGMT (default: WPA-PSK)
+SSID=YourNetworkName
+PSK=YourPassword
