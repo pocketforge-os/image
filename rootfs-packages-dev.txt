@@ -1,0 +1,9 @@
+# rootfs-packages-dev.txt — dev-variant-only packages
+#
+# Layered on top of rootfs-packages.txt during dev-variant builds.
+# These are OMITTED entirely from the release variant (not just disabled).
+#
+# Source: pocketforge-plan.md §3.5 (variant definitions)
+
+openssh-server
+systemd-coredump
