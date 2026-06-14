@@ -33,11 +33,13 @@ TOOLS_DIR="${SRC_DIR}/tools"
 
 # Parse arguments
 M1B_MODE=0
+BOOT_ONLY=0
 VARIANT="dev"
 while [ $# -gt 0 ]; do
     case "$1" in
-        --m1b-mode) M1B_MODE=1; shift ;;
-        --variant)  VARIANT="$2"; shift 2 ;;
+        --m1b-mode)  M1B_MODE=1; shift ;;
+        --boot-only) BOOT_ONLY=1; shift ;;
+        --variant)   VARIANT="$2"; shift 2 ;;
         *) echo "build-sd-image.sh: unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -53,8 +55,11 @@ fi
 export SOURCE_DATE_EPOCH
 
 # Load committed UUIDs for reproducible filesystem generation
-# shellcheck source=boards/tsp/fs-uuids.env
-source "${BOARD_DIR}/fs-uuids.env"
+# (only needed for steps 5/6 — genimage + ext4 creation)
+if [ "$BOOT_ONLY" != 1 ]; then
+    # shellcheck source=boards/tsp/fs-uuids.env
+    source "${BOARD_DIR}/fs-uuids.env"
+fi
 
 # Working directory for intermediate artifacts
 WORK="$(mktemp -d)"
@@ -63,13 +68,14 @@ trap 'rm -rf "${WORK}"' EXIT
 echo "========================================================================"
 echo "PocketForge SD image builder"
 echo "========================================================================"
-echo "  board:    ${BOARD}"
-echo "  variant:  ${VARIANT}"
-echo "  m1b-mode: $([ "$M1B_MODE" = 1 ] && echo 'yes (busybox shell)' || echo 'no (switch_root)')"
-echo "  epoch:    ${SOURCE_DATE_EPOCH}"
-echo "  src:      ${SRC_DIR}"
-echo "  blobs:    ${BLOBS_DIR}"
-echo "  out:      ${OUT_DIR}"
+echo "  board:     ${BOARD}"
+echo "  variant:   ${VARIANT}"
+echo "  m1b-mode:  $([ "$M1B_MODE" = 1 ] && echo 'yes (busybox shell)' || echo 'no (switch_root)')"
+echo "  boot-only: $([ "$BOOT_ONLY" = 1 ] && echo 'yes (initrd + boot.img only)' || echo 'no (full image)')"
+echo "  epoch:     ${SOURCE_DATE_EPOCH}"
+echo "  src:       ${SRC_DIR}"
+echo "  blobs:     ${BLOBS_DIR}"
+echo "  out:       ${OUT_DIR}"
 echo "========================================================================"
 
 mkdir -p "${OUT_DIR}"
@@ -84,6 +90,9 @@ fi
 bash "${BOARD_DIR}/initrd/build-initrd.sh" "${INITRD_ARGS[@]}"
 
 # ---- step 2: compile DTB ---------------------------------------------------
+# (boot.img does NOT depend on DTB; only boot_package.fex does.
+#  Skip in --boot-only mode.)
+if [ "$BOOT_ONLY" != 1 ]; then
 echo ""
 echo "=== Step 2/6: Compile DTB ==="
 DTS_FILE="${BOARD_DIR}/trimui-smart-pro.dts"
@@ -138,6 +147,8 @@ BOOTPKG_SIZE="$(stat -c%s "${BOOTPKG_FILE}")"
 BOOTPKG_SHA="$(sha256sum "${BOOTPKG_FILE}" | cut -d' ' -f1)"
 echo "  boot_package.fex: ${BOOTPKG_SIZE} bytes, sha256: ${BOOTPKG_SHA}"
 
+fi  # end of BOOT_ONLY != 1 (steps 2-3)
+
 # ---- step 4: create boot.img -----------------------------------------------
 echo ""
 echo "=== Step 4/6: Create boot.img (abootimg) ==="
@@ -172,6 +183,26 @@ if [ "${MAGIC}" != "414e44524f494421" ]; then
     exit 1
 fi
 echo "  boot.img: ANDROID! magic verified"
+
+# ---- boot-only exit --------------------------------------------------------
+if [ "$BOOT_ONLY" = 1 ]; then
+    cp "${BOOTIMG_FILE}" "${OUT_DIR}/boot.img"
+    FINAL_SHA="$(sha256sum "${OUT_DIR}/boot.img" | cut -d' ' -f1)"
+    echo ""
+    echo "========================================================================"
+    echo "BOOT-ONLY BUILD COMPLETE"
+    echo "========================================================================"
+    echo "  ${OUT_DIR}/boot.img"
+    echo "  size:   ${BOOTIMG_SIZE} bytes"
+    echo "  sha256: ${FINAL_SHA}"
+    echo ""
+    echo "${FINAL_SHA}  boot.img" > "${OUT_DIR}/boot.img.sha256"
+    # Chown to caller when running as container root
+    if [ -n "${CALLER_UID:-}" ] && [ -n "${CALLER_GID:-}" ] && [ "$(id -u)" = "0" ]; then
+        chown "${CALLER_UID}:${CALLER_GID}" "${OUT_DIR}/boot.img" "${OUT_DIR}/boot.img.sha256"
+    fi
+    exit 0
+fi
 
 # ---- step 5: compose SD image with genimage --------------------------------
 echo ""

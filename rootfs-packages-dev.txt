@@ -6,4 +6,5 @@
 # Source: pocketforge-plan.md §3.5 (variant definitions)
 
 openssh-server
+rsync
 systemd-coredump

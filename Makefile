@@ -194,6 +194,80 @@ build-image-host:
 		SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
 		bash scripts/build-sd-image.sh $(if $(filter 1,$(M1B_MODE)),--m1b-mode) --variant $(VARIANT)
 
+# ---- deploy (primary iteration target) --------------------------------------
+# Rsync rootfs-overlay configs + /opt/pocketforge/ to the running dev rootfs.
+# Uses gamer@ with passwordless sudo (dev variant only).
+# SSH retry loop (5s x 60 attempts, silent) per AGENTS.md.
+TSP_HOST ?= gamer@192.168.86.98
+
+.PHONY: deploy
+deploy:
+	@echo "=== make deploy -> $(TSP_HOST) ==="
+	TSP_HOST="$(TSP_HOST)" LIBSDL3_DIR="$(LIBSDL3_SRC)" SRC_DIR="$(CURDIR_ABS)" \
+		bash "$(CURDIR_ABS)/scripts/deploy.sh"
+
+# ---- reflash-boot (rebuild boot.img + write to SD) --------------------------
+# Rebuilds boot.img (initrd + kernel + cmdline) inside the container, then
+# writes it to the SD's boot partition. Two modes:
+#   make reflash-boot              — SD in host reader (default)
+#   make reflash-boot MODE=ssh     — live-write via SSH to running device
+#
+# The build always runs in the container (needs cross readelf + abootimg);
+# the write runs on the host or via SSH.
+MODE ?= sd
+BOOT_PART ?= /dev/disk/by-partlabel/boot
+
+.PHONY: reflash-boot
+reflash-boot:
+	@echo "=== make reflash-boot (mode=$(MODE)) ==="
+	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; exit 1; }
+	@mkdir -p "$(OUT_DIR)"
+	docker run --rm \
+		--user "$$(id -u):$$(id -g)" \
+		-v "$(CURDIR_ABS):/work/src:ro" \
+		-v "$(BLOBS_SRC):/work/blobs:ro" \
+		-v "$(OUT_DIR):/work/out:rw" \
+		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
+		$(CONTAINER) \
+		bash /work/src/scripts/build-sd-image.sh --boot-only --variant $(VARIANT)
+ifeq ($(MODE),ssh)
+	@echo "Writing boot.img to device via SSH..."
+	scp -o BatchMode=yes -o ConnectTimeout=8 -i ~/.ssh/id_ed25519 \
+		"$(OUT_DIR)/boot.img" "$(TSP_HOST):/tmp/boot.img"
+	ssh -o BatchMode=yes -o ConnectTimeout=8 -i ~/.ssh/id_ed25519 \
+		"$(TSP_HOST)" 'sudo dd if=/tmp/boot.img of=/dev/disk/by-partlabel/boot bs=4M conv=fsync && rm /tmp/boot.img && echo "boot.img written; reboot to apply"'
+else
+	@bash "$(CURDIR_ABS)/scripts/sd-safety-check.sh" "$(BOOT_PART)" "$(SD_MAX_SIZE_BYTES)"
+	sudo dd if="$(OUT_DIR)/boot.img" of="$(BOOT_PART)" bs=4M conv=fsync status=progress
+	@echo "boot.img written to $(BOOT_PART). Safe to remove SD."
+endif
+
+# ---- wipe-userdata (fresh ext4 for first-boot UX testing) -------------------
+# SD-reader-ONLY: you cannot rewrite the partition you're running from.
+# Creates a fresh ext4 with the committed UUIDs from fs-uuids.env.
+USERDATA_PART ?= /dev/disk/by-partlabel/userdata
+SD_MAX_SIZE_BYTES ?= 137438953472
+
+.PHONY: wipe-userdata
+wipe-userdata:
+	@echo "=== make wipe-userdata (SD reader only) ==="
+	@bash "$(CURDIR_ABS)/scripts/sd-safety-check.sh" "$(USERDATA_PART)" "$(SD_MAX_SIZE_BYTES)"
+	@echo "Loading filesystem UUIDs..."
+	@. boards/tsp/fs-uuids.env && \
+		echo "  UUID=$$USERDATA_FS_UUID  hash_seed=$$USERDATA_HASH_SEED" && \
+		sudo mke2fs -t ext4 -L POCKETFORGE_DATA \
+			-U "$$USERDATA_FS_UUID" \
+			-E "hash_seed=$$USERDATA_HASH_SEED" \
+			-m 0 -O "^metadata_csum" \
+			"$(USERDATA_PART)" && \
+		echo "userdata partition wiped. Fresh ext4 ready for first-boot."
+
+# ---- full-image (alias for build-image with YYYY.MM naming) -----------------
+# Produces out/pocketforge-tsp-{dev-,}YYYY.MM.img.xz + SHA-256 manifest.
+# This is the gate before each Release publication.
+.PHONY: full-image
+full-image: build-image
+
 # ---- clean ------------------------------------------------------------------
 .PHONY: clean
 clean:
@@ -208,18 +282,34 @@ clean-all:
 help:
 	@echo "PocketForge image build targets:"
 	@echo ""
-	@echo "  build-image      Build the full SD image in the container"
-	@echo "  build-rootfs     Build only the rootfs ext4 in the container"
-	@echo "  build-image-host Build on host directly (debugging only, no container)"
-	@echo "  fetch-blobs      Fetch vendor blobs via IPFS (reads signed manifest)"
-	@echo "  warm-cache       Pin all blob CIDs in local kubo (run once per machine)"
-	@echo "  update-manifest  Force-update the vendor-manifest repo"
-	@echo "  clean            Remove work/blobs and work/out"
-	@echo "  clean-all        Remove entire work/ directory"
+	@echo "  Build:"
+	@echo "    build-image      Build the full SD image in the container"
+	@echo "    build-rootfs     Build only the rootfs ext4 in the container"
+	@echo "    build-image-host Build on host directly (debugging only, no container)"
+	@echo "    full-image       Alias for build-image (release gate)"
+	@echo ""
+	@echo "  Iteration (fast dev loop):"
+	@echo "    deploy           Rsync configs + libs to running dev rootfs (seconds)"
+	@echo "    reflash-boot     Rebuild boot.img + write to SD boot partition (1-2 min)"
+	@echo "    wipe-userdata    Fresh ext4 on userdata partition, SD-reader only"
+	@echo ""
+	@echo "  Blob management:"
+	@echo "    fetch-blobs      Fetch vendor blobs via IPFS (reads signed manifest)"
+	@echo "    warm-cache       Pin all blob CIDs in local kubo (run once per machine)"
+	@echo "    update-manifest  Force-update the vendor-manifest repo"
+	@echo ""
+	@echo "  Cleanup:"
+	@echo "    clean            Remove work/blobs and work/out"
+	@echo "    clean-all        Remove entire work/ directory"
 	@echo ""
 	@echo "Environment variables:"
 	@echo "  VARIANT          Image variant: dev (default) or release"
 	@echo "  M1B_MODE         Set to 1 for M1.B busybox-shell image (default: 0)"
+	@echo "  TSP_HOST         Deploy target (default: gamer@192.168.86.98)"
+	@echo "  MODE             reflash-boot write mode: sd (default) or ssh"
+	@echo "  BOOT_PART        Boot partition path (default: /dev/disk/by-partlabel/boot)"
+	@echo "  USERDATA_PART    Userdata partition path (default: /dev/disk/by-partlabel/userdata)"
+	@echo "  SD_MAX_SIZE_BYTES  Max disk size safety cap (default: 128 GiB)"
 	@echo "  LOCAL_BLOBS      Path to local blobs repo checkout (default: ~/blobs)"
 	@echo "  LOCAL_LIBSDL3    Path to libSDL3 build dir (default: ~/libsdl3-sunxifb/_build)"
 	@echo "  BLOBS_SRC        Override blobs source for build-image (default: LOCAL_BLOBS)"
@@ -229,6 +319,11 @@ help:
 	@echo "Quick start (M1.C full image):"
 	@echo "  1. make build-image VARIANT=dev"
 	@echo "  2. xz -dc work/out/pocketforge-tsp-dev.img.xz | sudo dd of=/dev/sdX bs=4M conv=fsync"
+	@echo ""
+	@echo "Fast iteration loop:"
+	@echo "  1. (edit code)"
+	@echo "  2. make deploy                         # seconds"
+	@echo "  3. (verify on device)"
 	@echo ""
 	@echo "M1.B mode (busybox shell, no rootfs):"
 	@echo "  1. make build-image M1B_MODE=1"
