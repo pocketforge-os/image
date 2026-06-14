@@ -1,0 +1,16 @@
+# =============================================================================
+# 20-wlan0.network — DHCP configuration for the WiFi interface
+# =============================================================================
+# systemd-networkd handles DHCP once wpa_supplicant has associated wlan0.
+# No extra packages required (systemd-networkd is built into systemd).
+#
+# bd: tsp-iuz.2.2
+# =============================================================================
+[Match]
+Name=wlan0
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+UseDomains=yes

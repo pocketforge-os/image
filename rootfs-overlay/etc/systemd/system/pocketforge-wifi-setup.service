@@ -1,0 +1,25 @@
+# =============================================================================
+# pocketforge-wifi-setup.service — Template WiFi credentials on boot
+# =============================================================================
+# Reads /boot/wifi.txt (on the boot-resource FAT partition) and generates
+# /etc/wpa_supplicant/wpa_supplicant-wlan0.conf before wpa_supplicant starts.
+#
+# ConditionPathExists ensures this unit is skipped entirely (not failed) when
+# wifi.txt is absent — the device boots normally with WiFi unconfigured.
+#
+# bd: tsp-iuz.2.2
+# =============================================================================
+[Unit]
+Description=PocketForge WiFi credential templating from /boot/wifi.txt
+DefaultDependencies=no
+After=local-fs.target
+Before=wpa_supplicant@wlan0.service
+ConditionPathExists=/boot/wifi.txt
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/pocketforge/wifi-setup.sh
+
+[Install]
+WantedBy=multi-user.target

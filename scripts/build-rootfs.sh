@@ -463,6 +463,78 @@ SUBSYSTEM=="input", KERNEL=="event[0-9]*", MODE="0660", GROUP="input"
 KERNEL=="js[0-9]*",                        MODE="0660", GROUP="input"
 UDEV_INPUT_EOF
 
+# --- WiFi + networking (bd: tsp-iuz.2.2) -------------------------------------
+echo "[customize] Installing WiFi + networking configuration..."
+
+# WiFi templater script (reads /boot/wifi.txt -> wpa_supplicant conf)
+install -d "${ROOTFS}/usr/lib/pocketforge"
+install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/wifi-setup.sh" \
+    "${ROOTFS}/usr/lib/pocketforge/wifi-setup.sh"
+
+# WiFi templater systemd service (runs before wpa_supplicant@wlan0)
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-wifi-setup.service" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-wifi-setup.service"
+
+# Module autoload for the xradio WiFi triplet
+install -d "${ROOTFS}/etc/modules-load.d"
+install -m 0644 "/work/src/rootfs-overlay/etc/modules-load.d/pocketforge-wifi.conf" \
+    "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf"
+
+# systemd-networkd DHCP configuration for wlan0
+install -d "${ROOTFS}/etc/systemd/network"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/network/20-wlan0.network" \
+    "${ROOTFS}/etc/systemd/network/20-wlan0.network"
+
+# /etc/fstab: mount the boot-resource FAT partition read-only at /boot.
+# The kernel + initrd live inside boot.img (raw partition), not on /boot —
+# /boot is free to serve as the user-editable config mount point (Raspberry
+# Pi precedent). Read-only prevents accidental writes to the FAT partition.
+cat >> "${ROOTFS}/etc/fstab" << 'FSTAB_EOF'
+# Boot-resource FAT partition (user-editable WiFi config, boot logs)
+LABEL=POCKETFORGE  /boot  vfat  ro,noatime,fmask=0133,dmask=0022  0  0
+FSTAB_EOF
+
+# Hostname
+echo "pocketforge" > "${ROOTFS}/etc/hostname"
+
+# Enable services via symlinks (systemctl enable doesn't work under qemu
+# in all chroot configurations — create the symlinks directly).
+# wpa_supplicant@wlan0.service (template instance)
+install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+ln -sf /lib/systemd/system/wpa_supplicant@.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service"
+
+# pocketforge-wifi-setup.service
+ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-setup.service"
+
+# systemd-networkd (DHCP for wlan0)
+ln -sf /lib/systemd/system/systemd-networkd.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service"
+# networkd needs its socket too
+install -d "${ROOTFS}/etc/systemd/system/sockets.target.wants"
+ln -sf /lib/systemd/system/systemd-networkd.socket \
+    "${ROOTFS}/etc/systemd/system/sockets.target.wants/systemd-networkd.socket"
+
+# systemd-timesyncd (NTP — prevents TLS certificate drift)
+ln -sf /lib/systemd/system/systemd-timesyncd.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/systemd-timesyncd.service"
+# timesyncd also needs sysinit.target.wants for earliest possible start
+install -d "${ROOTFS}/etc/systemd/system/sysinit.target.wants"
+ln -sf /lib/systemd/system/systemd-timesyncd.service \
+    "${ROOTFS}/etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
+
+# DNS: openresolv (not systemd-resolved) manages /etc/resolv.conf.
+# systemd-networkd has built-in resolvconf integration — when it detects
+# the `resolvconf` binary (provided by openresolv), it calls
+# `resolvconf -a <iface>` with DHCP-provided nameservers. openresolv
+# then generates /etc/resolv.conf from the contributed data. No resolved
+# stub listener needed.
+# Remove any stale resolv.conf left by mmdebstrap so openresolv owns it.
+rm -f "${ROOTFS}/etc/resolv.conf"
+
+echo "[customize] WiFi + networking: all config installed"
+
 # --- Directory scaffolding ---------------------------------------------------
 echo "[customize] Creating directory scaffolding..."
 install -d "${ROOTFS}/etc/pocketforge/keys/release.d"

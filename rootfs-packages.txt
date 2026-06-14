@@ -61,8 +61,9 @@ libxcb1
 libxkbcommon-x11-0
 libxkbcommon0
 libzstd1
+openresolv
 sudo
 systemd-sysv
-udhcpc
+systemd-timesyncd
 wpasupplicant
 zlib1g
