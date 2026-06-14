@@ -554,12 +554,71 @@ install -d "${ROOTFS}/var/lib/pocketforge/apps"
 VARIANT="${POCKETFORGE_VARIANT:-dev}"
 echo "[customize] Applying variant-specific config (variant=${VARIANT})..."
 
+## -- Journald + coredump config (bd: tsp-iuz.2.8) ---
+# Both variants get a journald drop-in; the file differs per variant.
+install -d "${ROOTFS}/etc/systemd/journald.conf.d"
+if [ "${VARIANT}" = "dev" ]; then
+    # Dev: persistent journald (logs survive reboots for bug-report capture)
+    install -m 0644 "/work/src/rootfs-overlay/etc/systemd/journald.conf.d/pocketforge-dev.conf" \
+        "${ROOTFS}/etc/systemd/journald.conf.d/pocketforge.conf"
+    echo "[customize] dev: journald Storage=persistent, SystemMaxUse=50M"
+
+    # Dev: ensure /var/log/journal/ exists (systemd creates it on first boot
+    # when Storage=persistent, but pre-creating it avoids a race with early
+    # journal writes and lets us set group ownership at build time).
+    install -d -m 2755 "${ROOTFS}/var/log/journal"
+    echo "[customize] dev: /var/log/journal/ pre-created"
+
+    # Dev: loosen /var/log/ permissions so gamer can read logs without sudo.
+    # The default Debian mode is 0755/root:root which already allows read;
+    # add group=adm explicitly and make gamer a member, matching the Debian
+    # convention for log readers.
+    chown root:adm "${ROOTFS}/var/log"
+    chmod 0775 "${ROOTFS}/var/log"
+    chroot "${ROOTFS}" usermod -a -G adm gamer
+    echo "[customize] dev: /var/log/ group-readable (gamer added to adm group)"
+else
+    # Release: volatile journald (tmpfs only; defends against log-bomb DoS)
+    install -m 0644 "/work/src/rootfs-overlay/etc/systemd/journald.conf.d/pocketforge-release.conf" \
+        "${ROOTFS}/etc/systemd/journald.conf.d/pocketforge.conf"
+    echo "[customize] release: journald Storage=volatile, RuntimeMaxUse=16M"
+fi
+
 if [ "${VARIANT}" = "dev" ]; then
     # Dev: passwordless sudo for gamer (make deploy writes root-owned paths)
     install -d "${ROOTFS}/etc/sudoers.d"
     printf 'gamer ALL=(ALL:ALL) NOPASSWD: ALL\n' > "${ROOTFS}/etc/sudoers.d/pocketforge-dev"
     chmod 0440 "${ROOTFS}/etc/sudoers.d/pocketforge-dev"
     echo "[customize] dev: sudoers drop-in installed"
+
+    # Dev: sshd hardening (PermitRootLogin no, PasswordAuthentication no)
+    install -d "${ROOTFS}/etc/ssh/sshd_config.d"
+    install -m 0644 "/work/src/rootfs-overlay/etc/ssh/sshd_config.d/pocketforge.conf" \
+        "${ROOTFS}/etc/ssh/sshd_config.d/pocketforge.conf"
+    echo "[customize] dev: sshd hardening drop-in installed"
+
+    # Dev: multi-developer authorized_keys from device-config/dev/ssh/authorized_keys.d/*.pub
+    # OpenSSH does not natively read from a directory — concatenate all .pub files
+    # into a single authorized_keys at build time. One file per developer for clean
+    # git blame and easy add/remove.
+    KEYS_DIR="/work/src/device-config/dev/ssh/authorized_keys.d"
+    install -d -o 1000 -g 1000 -m 0700 "${ROOTFS}/home/gamer/.ssh"
+    KEY_COUNT=0
+    : > "${ROOTFS}/home/gamer/.ssh/authorized_keys"
+    for pub in "${KEYS_DIR}"/*.pub; do
+        [ -f "${pub}" ] || continue
+        cat "${pub}" >> "${ROOTFS}/home/gamer/.ssh/authorized_keys"
+        KEY_COUNT=$((KEY_COUNT + 1))
+        echo "[customize] dev: added SSH key $(basename "${pub}")"
+    done
+    chown 1000:1000 "${ROOTFS}/home/gamer/.ssh/authorized_keys"
+    chmod 0600 "${ROOTFS}/home/gamer/.ssh/authorized_keys"
+    echo "[customize] dev: authorized_keys installed (${KEY_COUNT} keys)"
+
+    # Dev: enable sshd (Debian's openssh-server postinst typically enables it,
+    # but be explicit for belt-and-suspenders clarity)
+    chroot "${ROOTFS}" systemctl enable ssh.service
+    echo "[customize] dev: ssh.service enabled"
 elif [ "${VARIANT}" = "release" ]; then
     # Release: strip libSDL3 + future supervisor binary
     if command -v aarch64-none-linux-gnu-strip >/dev/null 2>&1; then
