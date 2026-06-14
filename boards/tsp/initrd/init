@@ -115,6 +115,16 @@ log "STAGE: modules loaded"
 if [ -f /etc/pocketforge-m1b-mode ]; then
     log "STAGE: M1.B mode — falling through to busybox shell (no switch_root)"
     log "       (this is expected for the M1.B first-SD-boot milestone, G0)"
+    # Disable the sunxi-wdt watchdog (CONFIG_SUNXI_WDOG_BOOTON=y auto-starts it
+    # at driver probe with a 16-second timeout — without this, the device reboots
+    # before the user can interact with the shell). Magic close: write 'V' then
+    # close the fd.  Works because CONFIG_WATCHDOG_NOWAYOUT is not set (nowayout=0).
+    if [ -c /dev/watchdog ]; then
+        printf 'V' > /dev/watchdog
+        log "STAGE: watchdog disabled (magic close)"
+    else
+        log "WARN: /dev/watchdog not found — watchdog may still be armed"
+    fi
     sync 2>/dev/null
     exec /bin/sh
 fi
