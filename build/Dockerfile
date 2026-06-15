@@ -158,7 +158,7 @@ RUN dpkg --add-architecture arm64 \
         > /etc/apt/apt.conf.d/99-pocketforge-snapshot \
  && echo "${APT_SNAPSHOT_DATE}" > /etc/pocketforge-apt-snapshot-date
 
-# Phase 0+1 build-deps in one apt transaction. Categorized for review:
+# Phase 0+1+2 build-deps in one apt transaction. Categorized for review:
 #
 #   Cross-build basics:   cmake ninja-build pkg-config make patch xxd
 #   Source acquisition:   git curl ca-certificates gpg gnupg
@@ -170,6 +170,11 @@ RUN dpkg --add-architecture arm64 \
 #   Reproducibility (M1.E): faketime disorderfs e2fsprogs (>=1.47.1 from backports)
 #   Cross-readelf:        binutils-aarch64-linux-gnu  (for symver gate)
 #   Scripting glue:       python3 python3-pip
+#   Kernel build (M2.B):  bc bison flex libssl-dev libelf-dev gcc
+#                         (SA-5 spike found these missing; required for
+#                         `make Image` in pocketforge-os/kernel-tsp.
+#                         gcc is the HOST compiler for kernel build-time
+#                         tools — fixdep, dtc-lexer, genksyms, etc.)
 #   SDL3 cross-deps (arm64): libasound2-dev (ALSA), libudev-dev (input),
 #                            libdbus-1-dev (IPC), libpulse-dev (audio),
 #                            libdrm-dev (DRM headers). All multiarch-prefixed
@@ -213,6 +218,12 @@ RUN apt-get update \
         disorderfs \
         binutils-aarch64-linux-gnu \
         python3 \
+        bc \
+        bison \
+        flex \
+        gcc \
+        libssl-dev \
+        libelf-dev \
         libasound2-dev:arm64 \
         libpulse-dev:arm64 \
         libudev-dev:arm64 \
@@ -363,6 +374,7 @@ RUN set -eux; \
 #   gpg            (gnupg)
 #   mke2fs         >= 1.47.1
 #   genimage, abootimg, dtc, sunxi-tools, qemu-aarch64-static — Phase 0 carry-overs
+#   bc, bison, flex, openssl headers, elf headers — Phase 2 kernel build
 RUN set -eux; \
     mmdebstrap --version | grep -Eo 'mmdebstrap [0-9.]+'; \
     faketime --version | head -1; \
@@ -376,7 +388,12 @@ RUN set -eux; \
     cpio --version | head -1; \
     sunxi-fel --version 2>&1 | head -1 || true; \
     qemu-aarch64-static --version | head -1; \
-    aarch64-linux-gnu-readelf --version | head -1
+    aarch64-linux-gnu-readelf --version | head -1; \
+    bc --version | head -1; \
+    bison --version | head -1; \
+    flex --version | head -1; \
+    test -f /usr/include/openssl/evp.h; \
+    test -f /usr/include/libelf.h
 
 # Default workdir matches the documented bind-mount layout: build commands
 # `cd /work/src` (read-only source), produce into `/work/out`.
