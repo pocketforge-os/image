@@ -16,6 +16,7 @@ dbus
 dosfstools
 haveged
 iproute2
+iw
 kmod
 libatomic1
 libavcodec59

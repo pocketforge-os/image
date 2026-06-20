@@ -1,0 +1,33 @@
+# =============================================================================
+# pocketforge-wifi-powersave.service — Disable WiFi power-save on wlan0
+# =============================================================================
+# The XR819/XR829 (xradio) WiFi chip's 802.11 power-save implementation is
+# unreliable: when the link goes quiet the chip sleeps, the AP stops receiving
+# keepalives, ages the station out of its table, and then deauthenticates it
+# with Reason 6 ("Class 2 frame from nonassociated STA"). The client immediately
+# reassociates, producing the ~30s deauth/reassoc flap that prevents a stable
+# DHCP lease from settling on the owned substrate.
+#
+# Disabling power-save is the default product policy (stability-first); it is a
+# per-wdev nl80211 property that persists across association cycles, so a single
+# application at interface bring-up is sufficient. The policy is overridable via
+# a POWER_SAVE key in /boot/wifi.txt — see wifi-powersave.sh.
+#
+# bd: tsp-cv7.4.12
+# =============================================================================
+[Unit]
+Description=PocketForge: apply WiFi power-save policy to wlan0 (default off — xradio flap mitigation)
+# wlan0 is created when the xradio module triplet loads (modules-load.d). Order
+# after the device node and after wpa_supplicant so the interface exists.
+Wants=sys-subsystem-net-devices-wlan0.device
+After=sys-subsystem-net-devices-wlan0.device wpa_supplicant@wlan0.service
+# Skip cleanly on hardware/builds where wlan0 never appears.
+ConditionPathExists=/sys/class/net/wlan0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/pocketforge/wifi-powersave.sh
+
+[Install]
+WantedBy=multi-user.target

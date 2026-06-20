@@ -4,6 +4,10 @@
 #
 # Format: key=value, one per line. Comments (#) and blank lines are ok.
 # Required: SSID, PSK
-# Optional: KEY_MGMT (default: WPA-PSK)
+# Optional: KEY_MGMT  (default: WPA-PSK)
+# Optional: POWER_SAVE (default: off) — WiFi radio power-save policy.
+#   off : stability-first (recommended). Best for game streaming; avoids the
+#         xradio deauth/reassociate flap. Battery is managed by screen-off/suspend.
+#   on  : let the radio doze when idle (small battery gain, may flap on xradio).
 SSID=YourNetworkName
 PSK=YourPassword
