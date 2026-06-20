@@ -159,9 +159,48 @@ fi
 # --- hand off to the real init ------------------------------------------------
 # Unmount the log partition cleanly before handoff (switch_root will move /proc,
 # /sys, /dev into /newroot; /pflog lives outside that and must be released).
-log "STAGE: switch_root /newroot /sbin/init"
 if [ -n "$PFLOG" ]; then
     sync 2>/dev/null
     umount /pflog 2>/dev/null
 fi
-exec switch_root /newroot /sbin/init || fail "switch_root failed"
+
+# Pre-switch_root verification: execv() after chroot returns ENOENT ("No such
+# file or directory") when the ELF interpreter (PT_INTERP) is missing, not just
+# when the binary itself is missing — and busybox prints the same misleading
+# "can't execute" message for both cases.  Catch this before the point of no
+# return (switch_root deletes the initrd).
+log "STAGE: pre-switch_root verification"
+for link in sbin lib bin; do
+    target=$(readlink "/newroot/$link" 2>/dev/null)
+    if [ -n "$target" ]; then
+        log "  /newroot/$link -> $target"
+    else
+        log "  WARN: /newroot/$link is not a symlink"
+    fi
+done
+
+# Use the fully-resolved path to sidestep the Debian usrmerge symlink chain:
+#   /sbin/init -> (sbin->usr/sbin) -> /usr/sbin/init -> /lib/systemd/systemd
+#   -> (lib->usr/lib) -> /usr/lib/systemd/systemd
+# Every hop is a potential ENOENT if a symlink is broken.
+INIT=/usr/lib/systemd/systemd
+if [ ! -x "/newroot${INIT}" ]; then
+    log "WARN: ${INIT} not found, trying /sbin/init"
+    INIT=/sbin/init
+fi
+if [ ! -x "/newroot${INIT}" ]; then
+    log "ERROR: no init binary found on rootfs"
+    ls -la /newroot/usr/lib/systemd/ 2>&1 | while read line; do log "    $line"; done
+    ls -la /newroot/sbin/ 2>&1 | while read line; do log "    $line"; done
+    fail "init binary not found on rootfs"
+fi
+
+# Verify the dynamic linker exists — the OTHER cause of ENOENT from exec()
+if [ ! -f "/newroot/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" ]; then
+    log "ERROR: arm64 dynamic linker missing"
+    fail "dynamic linker (ld-linux-aarch64.so.1) not found"
+fi
+log "  init=${INIT}, dynamic linker OK"
+
+log "STAGE: switch_root /newroot $INIT"
+exec switch_root /newroot $INIT || fail "switch_root failed"

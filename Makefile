@@ -34,6 +34,16 @@ M1B_MODE ?= 0
 # Path to a local libsdl3-sunxifb build (contains libSDL3-pocketforge.so.0)
 LOCAL_LIBSDL3 ?= $(HOME)/libsdl3-sunxifb/_build
 
+# Phase 2 owned-substrate paths (kernel-tsp + gpu-km-tsp local builds).
+# When set, the image pipeline uses PocketForge-built kernel + GPU modules
+# instead of the vendor blobs in LOCAL_BLOBS.
+LOCAL_KERNEL_TSP ?= $(HOME)/kernel-tsp
+LOCAL_GPU_KM_TSP ?= $(HOME)/gpu-km-tsp
+
+# Substrate mode: "owned" (Phase 2: kernel-tsp + gpu-km-tsp) or "vendor"
+# (Phase 1: blobs only). Default "owned" if kernel-tsp Image exists.
+SUBSTRATE ?= $(shell [ -f "$(LOCAL_KERNEL_TSP)/arch/arm64/boot/Image" ] && echo owned || echo vendor)
+
 # Vendor manifest repo (private; requires GitHub auth for clone)
 MANIFEST_REPO  := https://github.com/pocketforge-os/vendor-manifest.git
 MANIFEST_DIR   := $(WORK)/vendor-manifest
@@ -161,11 +171,27 @@ generate-wifi-config:
 # arm64 builds; the container provides the isolation boundary).
 BLOBS_SRC ?= $(LOCAL_BLOBS)
 LIBSDL3_SRC ?= $(LOCAL_LIBSDL3)
+KERNEL_TSP_SRC ?= $(LOCAL_KERNEL_TSP)
+GPU_KM_TSP_SRC ?= $(LOCAL_GPU_KM_TSP)
+
+# Substrate bind-mount flags (only when SUBSTRATE=owned)
+ifeq ($(SUBSTRATE),owned)
+SUBSTRATE_MOUNTS := -v "$(KERNEL_TSP_SRC):/work/kernel-tsp:ro" \
+                    -v "$(GPU_KM_TSP_SRC):/work/gpu-km-tsp:ro"
+SUBSTRATE_FLAG   := --substrate owned
+else
+SUBSTRATE_MOUNTS :=
+SUBSTRATE_FLAG   :=
+endif
 
 .PHONY: build-image
 build-image: generate-wifi-config
-	@echo "=== make build-image (variant=$(VARIANT), m1b=$(M1B_MODE)) ==="
+	@echo "=== make build-image (variant=$(VARIANT), m1b=$(M1B_MODE), substrate=$(SUBSTRATE)) ==="
 	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; echo "Set BLOBS_SRC= or LOCAL_BLOBS= to the blobs repo checkout"; exit 1; }
+ifeq ($(SUBSTRATE),owned)
+	@[ -f "$(KERNEL_TSP_SRC)/arch/arm64/boot/Image" ] || { echo "ERROR: kernel-tsp Image not found at $(KERNEL_TSP_SRC)/arch/arm64/boot/Image"; echo "Build kernel-tsp first, or set SUBSTRATE=vendor to use vendor blobs"; exit 1; }
+	@[ -f "$(GPU_KM_TSP_SRC)/pvrsrvkm.ko" ] || { echo "ERROR: gpu-km-tsp pvrsrvkm.ko not found at $(GPU_KM_TSP_SRC)/pvrsrvkm.ko"; echo "Build gpu-km-tsp first, or set SUBSTRATE=vendor to use vendor blobs"; exit 1; }
+endif
 ifeq ($(M1B_MODE),0)
 	@[ -f "$(LIBSDL3_SRC)/libSDL3-pocketforge.so.0" ] || { echo "ERROR: libSDL3-pocketforge.so.0 not found at $(LIBSDL3_SRC)"; echo "Set LIBSDL3_SRC= or LOCAL_LIBSDL3= to the build output directory"; exit 1; }
 endif
@@ -175,10 +201,11 @@ ifeq ($(M1B_MODE),1)
 		--user "$$(id -u):$$(id -g)" \
 		-v "$(CURDIR_ABS):/work/src:ro" \
 		-v "$(BLOBS_SRC):/work/blobs:ro" \
+		$(SUBSTRATE_MOUNTS) \
 		-v "$(OUT_DIR):/work/out:rw" \
 		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
 		$(CONTAINER) \
-		bash /work/src/scripts/build-sd-image.sh --m1b-mode --variant $(VARIANT)
+		bash /work/src/scripts/build-sd-image.sh --m1b-mode --variant $(VARIANT) $(SUBSTRATE_FLAG)
 else
 	docker run --rm \
 		-e CALLER_UID="$$(id -u)" -e CALLER_GID="$$(id -g)" \
@@ -187,18 +214,19 @@ else
 		--security-opt apparmor=unconfined \
 		-v "$(CURDIR_ABS):/work/src:ro" \
 		-v "$(BLOBS_SRC):/work/blobs:ro" \
+		$(SUBSTRATE_MOUNTS) \
 		-v "$(LIBSDL3_SRC):/work/libsdl3:ro" \
 		-v "$(OUT_DIR):/work/out:rw" \
 		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
 		$(CONTAINER) \
-		bash /work/src/scripts/build-sd-image.sh --variant $(VARIANT)
+		bash /work/src/scripts/build-sd-image.sh --variant $(VARIANT) $(SUBSTRATE_FLAG)
 endif
 
 # Build the rootfs ext4 only (no SD image composition).
 # Runs as root inside the container (mmdebstrap needs chroot/mount).
 .PHONY: build-rootfs
 build-rootfs:
-	@echo "=== make build-rootfs (variant=$(VARIANT)) ==="
+	@echo "=== make build-rootfs (variant=$(VARIANT), substrate=$(SUBSTRATE)) ==="
 	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; exit 1; }
 	@[ -f "$(LIBSDL3_SRC)/libSDL3-pocketforge.so.0" ] || { echo "ERROR: libSDL3 not found at $(LIBSDL3_SRC)"; exit 1; }
 	@mkdir -p "$(OUT_DIR)"
@@ -209,21 +237,23 @@ build-rootfs:
 		--security-opt apparmor=unconfined \
 		-v "$(CURDIR_ABS):/work/src:ro" \
 		-v "$(BLOBS_SRC):/work/blobs:ro" \
+		$(SUBSTRATE_MOUNTS) \
 		-v "$(LIBSDL3_SRC):/work/libsdl3:ro" \
 		-v "$(OUT_DIR):/work/out:rw" \
 		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
 		$(CONTAINER) \
-		bash /work/src/scripts/build-rootfs.sh --variant $(VARIANT) --owner "$$(id -u):$$(id -g)"
+		bash /work/src/scripts/build-rootfs.sh --variant $(VARIANT) --owner "$$(id -u):$$(id -g)" $(SUBSTRATE_FLAG)
 
 # Build the SD image directly on the host (no container; for debugging only)
 .PHONY: build-image-host
 build-image-host:
-	@echo "=== make build-image-host (variant=$(VARIANT), m1b=$(M1B_MODE)) ==="
+	@echo "=== make build-image-host (variant=$(VARIANT), m1b=$(M1B_MODE), substrate=$(SUBSTRATE)) ==="
 	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; exit 1; }
 	@mkdir -p "$(OUT_DIR)"
 	SRC_DIR="$(CURDIR_ABS)" BLOBS_DIR="$(BLOBS_SRC)" LIBSDL3_DIR="$(LIBSDL3_SRC)" OUT_DIR="$(OUT_DIR)" \
+		KERNEL_TSP_DIR="$(KERNEL_TSP_SRC)" GPU_KM_TSP_DIR="$(GPU_KM_TSP_SRC)" \
 		SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
-		bash scripts/build-sd-image.sh $(if $(filter 1,$(M1B_MODE)),--m1b-mode) --variant $(VARIANT)
+		bash scripts/build-sd-image.sh $(if $(filter 1,$(M1B_MODE)),--m1b-mode) --variant $(VARIANT) $(SUBSTRATE_FLAG)
 
 # ---- deploy (primary iteration target) --------------------------------------
 # Rsync rootfs-overlay configs + /opt/pocketforge/ to the running dev rootfs.
@@ -257,10 +287,11 @@ reflash-boot:
 		--user "$$(id -u):$$(id -g)" \
 		-v "$(CURDIR_ABS):/work/src:ro" \
 		-v "$(BLOBS_SRC):/work/blobs:ro" \
+		$(SUBSTRATE_MOUNTS) \
 		-v "$(OUT_DIR):/work/out:rw" \
 		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
 		$(CONTAINER) \
-		bash /work/src/scripts/build-sd-image.sh --boot-only --variant $(VARIANT)
+		bash /work/src/scripts/build-sd-image.sh --boot-only --variant $(VARIANT) $(SUBSTRATE_FLAG)
 ifeq ($(MODE),ssh)
 	@echo "Writing boot.img to device via SSH..."
 	scp -o BatchMode=yes -o ConnectTimeout=8 -i ~/.ssh/id_ed25519 \
@@ -289,7 +320,7 @@ wipe-userdata:
 		sudo mke2fs -t ext4 -L POCKETFORGE_DATA \
 			-U "$$USERDATA_FS_UUID" \
 			-E "hash_seed=$$USERDATA_HASH_SEED" \
-			-m 0 -O "^metadata_csum" \
+			-m 0 -O "^metadata_csum,^metadata_csum_seed,^orphan_file,^64bit" \
 			"$(USERDATA_PART)" && \
 		echo "userdata partition wiped. Fresh ext4 ready for first-boot."
 
@@ -336,6 +367,7 @@ help:
 	@echo "Environment variables:"
 	@echo "  VARIANT          Image variant: dev (default) or release"
 	@echo "  M1B_MODE         Set to 1 for M1.B busybox-shell image (default: 0)"
+	@echo "  SUBSTRATE        Substrate mode: owned (default if kernel-tsp built) or vendor"
 	@echo "  TSP_HOST         Deploy target (default: gamer@192.168.86.98)"
 	@echo "  MODE             reflash-boot write mode: sd (default) or ssh"
 	@echo "  BOOT_PART        Boot partition path (default: /dev/disk/by-partlabel/boot)"
@@ -343,6 +375,8 @@ help:
 	@echo "  SD_MAX_SIZE_BYTES  Max disk size safety cap (default: 128 GiB)"
 	@echo "  LOCAL_BLOBS      Path to local blobs repo checkout (default: ~/blobs)"
 	@echo "  LOCAL_LIBSDL3    Path to libSDL3 build dir (default: ~/libsdl3-sunxifb/_build)"
+	@echo "  LOCAL_KERNEL_TSP Path to kernel-tsp build tree (default: ~/kernel-tsp)"
+	@echo "  LOCAL_GPU_KM_TSP Path to gpu-km-tsp build tree (default: ~/gpu-km-tsp)"
 	@echo "  BLOBS_SRC        Override blobs source for build-image (default: LOCAL_BLOBS)"
 	@echo "  LIBSDL3_SRC      Override libsdl3 source (default: LOCAL_LIBSDL3)"
 	@echo "  IPFS_API         kubo API multiaddr (default: /ip4/127.0.0.1/tcp/5001)"

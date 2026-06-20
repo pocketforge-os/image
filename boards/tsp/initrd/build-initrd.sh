@@ -37,23 +37,56 @@ M1B_MODE=0
 SRC_DIR="${SRC_DIR:-/work/src}"
 BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 OUT_FILE="${OUT_FILE:-/work/out/initrd.gz}"
+KERNEL_TSP_DIR=""
+GPU_KM_DIR=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --m1b-mode) M1B_MODE=1; shift ;;
-        --blobs)    BLOBS_DIR="$2"; shift 2 ;;
-        --out)      OUT_FILE="$2"; shift 2 ;;
-        --src)      SRC_DIR="$2"; shift 2 ;;
+        --m1b-mode)        M1B_MODE=1; shift ;;
+        --blobs)           BLOBS_DIR="$2"; shift 2 ;;
+        --out)             OUT_FILE="$2"; shift 2 ;;
+        --src)             SRC_DIR="$2"; shift 2 ;;
+        --kernel-tsp-dir)  KERNEL_TSP_DIR="$2"; shift 2 ;;
+        --gpu-km-dir)      GPU_KM_DIR="$2"; shift 2 ;;
         *) echo "build-initrd.sh: unknown arg: $1" >&2; exit 2 ;;
     esac
 done
 
+# Determine substrate mode from args
+SUBSTRATE="vendor"
+if [ -n "$KERNEL_TSP_DIR" ] && [ -n "$GPU_KM_DIR" ]; then
+    SUBSTRATE="owned"
+fi
+
 # ---- inputs -----------------------------------------------------------------
 INITRD_SRC="${SRC_DIR}/boards/tsp/initrd"
-MODULES_DIR="${BLOBS_DIR}/tsp/kernel-4.9.191/modules"
-KERNEL_SHA="${BLOBS_DIR}/tsp/kernel-4.9.191/KERNEL.SHA256"
 
-# The PowerVR module set, in load order. NOTE: videobuf2-dma-contig.ko is
+if [ "$SUBSTRATE" = "owned" ]; then
+    # Phase 2: modules from kernel-tsp + gpu-km-tsp builds
+    echo "  substrate: owned (kernel-tsp + gpu-km-tsp)"
+
+    # videobuf2-dma-contig from kernel-tsp build tree
+    KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp build tree" >&2; exit 1; }
+
+    # GPU modules from gpu-km-tsp
+    GPU_PVRSRVKM="${GPU_KM_DIR}/pvrsrvkm.ko"
+    GPU_DC_SUNXI="${GPU_KM_DIR}/dc_sunxi.ko"
+    [ -f "${GPU_PVRSRVKM}" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_PVRSRVKM}" >&2; exit 1; }
+    [ -f "${GPU_DC_SUNXI}" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_DC_SUNXI}" >&2; exit 1; }
+
+    echo "  videobuf2: ${KERNEL_VB2}"
+    echo "  pvrsrvkm:  ${GPU_PVRSRVKM}"
+    echo "  dc_sunxi:  ${GPU_DC_SUNXI}"
+else
+    # Phase 1: modules from vendor blobs
+    echo "  substrate: vendor (blobs)"
+    MODULES_DIR="${BLOBS_DIR}/tsp/kernel-4.9.191/modules"
+    KERNEL_SHA="${BLOBS_DIR}/tsp/kernel-4.9.191/KERNEL.SHA256"
+    [ -d "${MODULES_DIR}" ] || { echo "FATAL: ${MODULES_DIR} not found (blobs checkout?)" >&2; exit 1; }
+fi
+
+# The initrd module set, in load order. NOTE: videobuf2-dma-contig.ko is
 # HYPHENATED on disk (runtime/lsmod name is underscored). Verified on blobs.
 MODULES="videobuf2-dma-contig.ko pvrsrvkm.ko dc_sunxi.ko"
 
@@ -76,18 +109,21 @@ echo "  mode:    $([ "$M1B_MODE" = 1 ] && echo 'M1.B (fall-through to shell)' ||
 echo "  epoch:   ${SOURCE_DATE_EPOCH}"
 
 [ -f "${INITRD_SRC}/init" ] || { echo "FATAL: ${INITRD_SRC}/init not found" >&2; exit 1; }
-[ -d "${MODULES_DIR}" ]     || { echo "FATAL: ${MODULES_DIR} not found (blobs checkout?)" >&2; exit 1; }
 
 # ---- verify module SHAs against the blobs manifest --------------------------
 # Guards against a corrupted/partial blobs checkout silently shipping a bad .ko.
-if [ -f "${KERNEL_SHA}" ]; then
-    echo "=== verifying module SHA-256 against KERNEL.SHA256 ==="
-    ( cd "${BLOBS_DIR}/tsp/kernel-4.9.191"
-      for m in $MODULES; do
-          grep -E "  modules/${m}\$" KERNEL.SHA256 | sha256sum -c -
-      done )
-else
-    echo "WARN: ${KERNEL_SHA} absent — skipping module SHA verification" >&2
+# (vendor substrate only — owned-substrate modules are build outputs, not pinned blobs)
+if [ "$SUBSTRATE" = "vendor" ]; then
+    [ -d "${MODULES_DIR}" ] || { echo "FATAL: ${MODULES_DIR} not found (blobs checkout?)" >&2; exit 1; }
+    if [ -f "${KERNEL_SHA}" ]; then
+        echo "=== verifying module SHA-256 against KERNEL.SHA256 ==="
+        ( cd "${BLOBS_DIR}/tsp/kernel-4.9.191"
+          for m in $MODULES; do
+              grep -E "  modules/${m}\$" KERNEL.SHA256 | sha256sum -c -
+          done )
+    else
+        echo "WARN: ${KERNEL_SHA} absent — skipping module SHA verification" >&2
+    fi
 fi
 
 # ---- staging tree -----------------------------------------------------------
@@ -125,9 +161,45 @@ echo "  busybox: AArch64, statically linked — OK"
 install -m 0755 "${INITRD_SRC}/init" "${STAGING}/init"
 
 # Module set (flat under /lib/modules to match the insmod paths in /init).
+if [ "$SUBSTRATE" = "owned" ]; then
+    # Owned substrate: videobuf2 from kernel-tsp, GPU modules from gpu-km-tsp
+    cp "${KERNEL_VB2}" "${STAGING}/lib/modules/videobuf2-dma-contig.ko"
+    cp "${GPU_PVRSRVKM}" "${STAGING}/lib/modules/pvrsrvkm.ko"
+    cp "${GPU_DC_SUNXI}" "${STAGING}/lib/modules/dc_sunxi.ko"
+else
+    # Vendor substrate: all modules from blobs
+    for m in $MODULES; do
+        cp "${MODULES_DIR}/${m}" "${STAGING}/lib/modules/${m}"
+    done
+fi
+# Ensure consistent permissions regardless of source
 for m in $MODULES; do
-    cp "${MODULES_DIR}/${m}" "${STAGING}/lib/modules/${m}"
     chmod 0644 "${STAGING}/lib/modules/${m}"
+done
+
+# GPU firmware — pvrsrvkm calls request_firmware() at insmod time, which looks
+# in /lib/firmware/ (the initrd's, since rootfs isn't mounted yet). Without these
+# files pvrsrvkm registers the BVNC but fails init with err=-19 (ENODEV) and
+# dc_sunxi cascades into "No such device". Firmware is always from blobs/ (the
+# closed DDK firmware is version-locked to the UM blobs, not to the KM source).
+GPU_FW_DIR="${BLOBS_DIR}/tsp/22.102.54.38/firmware"
+mkdir -p "${STAGING}/lib/firmware"
+for fw in rgx.fw.22.102.54.38 rgx.sh.22.102.54.38; do
+    [ -f "${GPU_FW_DIR}/${fw}" ] || { echo "FATAL: GPU firmware ${fw} not found at ${GPU_FW_DIR}" >&2; exit 1; }
+    cp "${GPU_FW_DIR}/${fw}" "${STAGING}/lib/firmware/${fw}"
+    chmod 0644 "${STAGING}/lib/firmware/${fw}"
+    echo "  firmware: ${fw} ($(stat -c%s "${GPU_FW_DIR}/${fw}") bytes)"
+done
+
+# Strip debug symbols from modules to minimize initrd size.
+# pvrsrvkm.ko: ~22 MB unstripped -> ~2 MB stripped (debug info is enormous).
+# insmod only needs the .text/.data/.symtab sections; .debug_* is unnecessary.
+echo "=== stripping debug symbols from initrd modules ==="
+for m in $MODULES; do
+    BEFORE="$(stat -c%s "${STAGING}/lib/modules/${m}")"
+    aarch64-none-linux-gnu-strip --strip-debug "${STAGING}/lib/modules/${m}"
+    AFTER="$(stat -c%s "${STAGING}/lib/modules/${m}")"
+    echo "  ${m}: ${BEFORE} -> ${AFTER} bytes"
 done
 
 # Version stamp (read by /init's banner).
