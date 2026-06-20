@@ -132,14 +132,17 @@ WIFI_TXT     := $(BOOT_RES_DIR)/wifi.txt
 generate-wifi-config:
 	@mkdir -p "$(BOOT_RES_DIR)"
 	@PSK=$$(secret-tool lookup service pocketforge type wifi-psk network "$(WIFI_SSID)" 2>/dev/null) || true; \
-	if [ -z "$$PSK" ]; then \
-		echo "WARN: No WiFi PSK found in keyring for network '$(WIFI_SSID)'"; \
-		echo "  WiFi will not be configured on the boot image."; \
-		echo "  To store: echo -n 'password' | secret-tool store --label='PocketForge WiFi PSK ($(WIFI_SSID))' service pocketforge type wifi-psk network $(WIFI_SSID)"; \
-		rm -f "$(WIFI_TXT)"; \
-	else \
+	if [ -n "$${PF_WIFI_PSK:-}" ]; then \
+		printf 'SSID=%s\nPSK=%s\n' "$(WIFI_SSID)" "$${PF_WIFI_PSK}" > "$(WIFI_TXT)"; \
+		echo "  wifi.txt generated from PF_WIFI_PSK env for SSID=$(WIFI_SSID)"; \
+	elif [ -n "$$PSK" ]; then \
 		printf 'SSID=%s\nPSK=%s\n' "$(WIFI_SSID)" "$$PSK" > "$(WIFI_TXT)"; \
-		echo "  wifi.txt generated for SSID=$(WIFI_SSID)"; \
+		echo "  wifi.txt generated from keyring for SSID=$(WIFI_SSID)"; \
+	elif grep -q '^SSID=' "$(WIFI_TXT)" 2>/dev/null && grep -q '^PSK=' "$(WIFI_TXT)" 2>/dev/null; then \
+		echo "  using pre-staged $(WIFI_TXT) (gitignored; no keyring/env PSK)"; \
+	else \
+		echo "WARN: No WiFi PSK (PF_WIFI_PSK env, keyring, or pre-staged wifi.txt) for '$(WIFI_SSID)' -- WiFi NOT configured"; \
+		rm -f "$(WIFI_TXT)"; \
 	fi
 
 # ---- build-image ------------------------------------------------------------
