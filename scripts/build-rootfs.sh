@@ -739,6 +739,17 @@ if [ "${VARIANT}" = "dev" ]; then
     chmod 0600 "${ROOTFS}/home/gamer/.ssh/authorized_keys"
     echo "[customize] dev: authorized_keys installed (${KEY_COUNT} keys)"
 
+    # Dev: give the serial 'debug' user the same authorized_keys so it is
+    # key-SSH-able over WiFi for iteration. sshd keeps PermitRootLogin no, but
+    # debug is non-root and no AllowUsers/AllowGroups excludes it, so key auth
+    # works. Mirrors the gamer keys above; removed with the debug user before
+    # release (tsp-iuz.2.9). Release ships no sshd/keys at all. bd: tsp-cv7.4.11.
+    install -d -m 0700 "${ROOTFS}/home/debug/.ssh"
+    install -m 0600 "${ROOTFS}/home/gamer/.ssh/authorized_keys" \
+        "${ROOTFS}/home/debug/.ssh/authorized_keys"
+    chroot "${ROOTFS}" chown -R debug:debug /home/debug/.ssh
+    echo "[customize] dev: debug authorized_keys installed (${KEY_COUNT} keys, SSH-over-WiFi)"
+
     # Dev: enable sshd (Debian's openssh-server postinst typically enables it,
     # but be explicit for belt-and-suspenders clarity)
     chroot "${ROOTFS}" systemctl enable ssh.service
