@@ -250,8 +250,12 @@ if [ "${VARIANT}" = "dev" ]; then
         [ -f "$pub" ] || continue
         cat "$pub" >> "${ROOTFS}/home/gamer/.ssh/authorized_keys"; KC=$((KC+1))
     done
-    chown 1000:1000 "${ROOTFS}/home/gamer/.ssh/authorized_keys"
     chmod 0600 "${ROOTFS}/home/gamer/.ssh/authorized_keys"
+    # Ensure gamer OWNS its home + .ssh. The host-side numeric `install -o 1000`/
+    # `chown 1000:1000` above landed as root:root in practice, so sshd StrictModes
+    # rejected the key (gamer key-auth failed -> rsync loop blocked). chroot chown
+    # BY NAME is reliable (mirrors the debug user below). bd: tsp-vuo.4.
+    chroot "$ROOTFS" chown -R gamer:gamer /home/gamer
     install -d -m 0700 "${ROOTFS}/home/debug/.ssh"
     install -m 0600 "${ROOTFS}/home/gamer/.ssh/authorized_keys" "${ROOTFS}/home/debug/.ssh/authorized_keys"
     chroot "$ROOTFS" chown -R debug:debug /home/debug/.ssh
