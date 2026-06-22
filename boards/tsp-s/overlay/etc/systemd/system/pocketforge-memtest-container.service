@@ -11,9 +11,12 @@ Slice=pocketforge-apps.slice
 # Same 64M cap as hello. The memtest container deliberately allocates past it so
 # the kernel OOM-kills it — proving the limit is ENFORCED, not just set. Started
 # on demand by container-memtest.sh; NOT enabled at boot (it is meant to die).
+# NO MemoryHigh here (unlike hello): MemoryHigh throttles the allocator into slow
+# reclaim near the cap, making the OOM take tens of seconds + unpredictable
+# (verified on tsp-vuo.4). A test fixture wants a fast, deterministic hard-OOM at
+# MemoryMax, so we omit the soft limit.
 MemoryAccounting=yes
 MemoryMax=64M
-MemoryHigh=56M
 
 ExecStartPre=-/usr/bin/crun --cgroup-manager=disabled delete --force pf-memtest
 ExecStart=/usr/bin/crun --cgroup-manager=disabled run --bundle /usr/lib/pocketforge/containers/memtest pf-memtest
