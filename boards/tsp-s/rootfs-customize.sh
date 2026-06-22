@@ -79,14 +79,46 @@ install -m 0755 "$BBOX" "${CROOT}/bin/busybox"
 for ap in sh echo sleep cat ls cut grep tr head; do ln -sf busybox "${CROOT}/bin/${ap}"; done
 printf 'root:x:0:0:root:/:/bin/sh\n' > "${CROOT}/etc/passwd"
 
-# --- wifi.txt-on-FAT plumbing (driver-agnostic; AIC8800 driver is tsp-vuo.3) -
-echo "[customize-a523] installing wifi.txt plumbing (smoke; wpa stack gated on tsp-vuo.3)..."
+# --- AIC8800D80 WiFi: driver autoload + firmware + wpa/DHCP (tsp-vuo.3) -------
+# The aic8800 driver is SOURCE-BUILT in our owned kernel fork
+# (pocketforge-os/kernel-tsp-a523 :: bsp/drivers/net/wireless/aic8800, the
+# AICSemi aic-bsp snapshot rev 241c091M / 20231222 / 6.4.3.0, CONFIG_AIC8800_
+# WLAN_SUPPORT=m) — the .ko's arrive via the modules-staging copy above. The
+# FIRMWARE is a closed redistributable blob (AICSemi), provenance-matched to
+# that exact driver rev from radxa-pkg/aic8800 src/SDIO/driver_fw/fw/aic8800D80/,
+# staged as a build input (/work/firmware, NOT in image git). [debt: move the
+# firmware onto the IPFS/minisign/vendor-manifest signed path like the A133
+# PowerVR blobs — owned-substrate-blob provenance.]
+echo "[customize-a523] installing AIC8800D80 WiFi (driver autoload + firmware + wpa/DHCP)..."
+
+# (1) module autoload at boot: bsp patches the chip bootrom + loads firmware;
+#     fdrv brings up the wlan0 fullmac netdev.
+install -d "${ROOTFS}/etc/modules-load.d"
+cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" <<'EOF'
+# AIC8800D80 SDIO combo radio (TrimUI Smart Pro S / A523).
+# Source-built in pocketforge-os/kernel-tsp-a523 (aic-bsp rev 241c091M/20231222).
+# aic8800_bsp first (bootrom patch + firmware download), then aic8800_fdrv (wlan0).
+aic8800_bsp
+aic8800_fdrv
+EOF
+
+# (2) firmware blob (closed; provenance recorded in build-a523-image.sh + bead).
+FWSTAGE="${FWSTAGE:-/work/firmware}"
+if [ -d "${FWSTAGE}/aic8800d80" ]; then
+    install -d "${ROOTFS}/lib/firmware/aic8800d80"
+    cp -a "${FWSTAGE}/aic8800d80/." "${ROOTFS}/lib/firmware/aic8800d80/"
+    echo "[customize-a523] aic8800d80 firmware: $(find "${ROOTFS}/lib/firmware/aic8800d80" -type f | wc -l) file(s)"
+else
+    echo "[customize-a523] WARN: no firmware at ${FWSTAGE}/aic8800d80 — wlan0 will NOT associate"
+fi
+
+# (3) wifi.txt-on-FAT -> wpa_supplicant conf (driver-agnostic; reuses A133 script).
 install -d "${ROOTFS}/usr/lib/pocketforge"
 install -m 0755 "${SRC}/rootfs-overlay/usr/lib/pocketforge/wifi-setup.sh" \
     "${ROOTFS}/usr/lib/pocketforge/wifi-setup.sh"
 cat > "${ROOTFS}/etc/systemd/system/pocketforge-wifi-setup.service" <<'EOF'
 [Unit]
-Description=PocketForge WiFi config from /boot/wifi.txt (A523 smoke; no driver yet)
+Description=PocketForge WiFi config from /boot/wifi.txt
 After=local-fs.target
 ConditionPathExists=/boot/wifi.txt
 
@@ -98,6 +130,31 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# (4) wpa_supplicant for wlan0. PLAIN unit name (NOT the wpa_supplicant<at>wlan0
+#     template) — the build harness redacts name<at>inst.service tokens. The
+#     aic8800_fdrv is a fullmac cfg80211 driver, so the nl80211 backend applies.
+cat > "${ROOTFS}/etc/systemd/system/pocketforge-wpa-wlan0.service" <<'EOF'
+[Unit]
+Description=PocketForge wpa_supplicant for wlan0 (AIC8800D80)
+After=pocketforge-wifi-setup.service sys-subsystem-net-devices-wlan0.device
+Wants=pocketforge-wifi-setup.service
+ConditionPathExists=/etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/wpa_supplicant -c /etc/wpa_supplicant/wpa_supplicant-wlan0.conf -i wlan0 -D nl80211
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# (5) systemd-networkd DHCP for wlan0 (reuses the SoC-agnostic A133 .network).
+install -d "${ROOTFS}/etc/systemd/network"
+install -m 0644 "${SRC}/rootfs-overlay/etc/systemd/network/20-wlan0.network" \
+    "${ROOTFS}/etc/systemd/network/20-wlan0.network"
 
 # --- signed [fetch] contract (re-targeted; no A523 blobs until GPU/WiFi land) -
 echo "[customize-a523] wiring signed [fetch] contract (no A523 blobs yet)..."
@@ -141,6 +198,14 @@ ln -sf /etc/systemd/system/pocketforge-hello-container.service \
     "${SYSD}/multi-user.target.wants/pocketforge-hello-container.service"
 ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
     "${SYSD}/multi-user.target.wants/pocketforge-wifi-setup.service"
+# AIC8800 WiFi: wpa_supplicant (plain unit) + systemd-networkd (DHCP for wlan0)
+ln -sf /etc/systemd/system/pocketforge-wpa-wlan0.service \
+    "${SYSD}/multi-user.target.wants/pocketforge-wpa-wlan0.service"
+ln -sf /lib/systemd/system/systemd-networkd.service \
+    "${SYSD}/multi-user.target.wants/systemd-networkd.service"
+install -d "${SYSD}/sockets.target.wants"
+ln -sf /lib/systemd/system/systemd-networkd.socket \
+    "${SYSD}/sockets.target.wants/systemd-networkd.socket"
 ln -sf /lib/systemd/system/systemd-timesyncd.service \
     "${SYSD}/multi-user.target.wants/systemd-timesyncd.service"
 # mask the random-seed blocker (haveged fills the pool) — mirrors A133.

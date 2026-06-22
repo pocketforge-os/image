@@ -21,6 +21,7 @@ work/
 
 # WiFi credentials (contains PSK — never commit)
 boards/tsp/boot-resource/wifi.txt
+boards/tsp-s/boot-resource/wifi.txt
 
 # Editor
 .vscode/
