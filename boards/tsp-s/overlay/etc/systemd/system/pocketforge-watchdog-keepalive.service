@@ -1,0 +1,19 @@
+[Unit]
+Description=PocketForge A523 hardware watchdog keepalive (sunxi-wdt 2050000, tsp-vuo.4)
+Documentation=https://github.com/pocketforge-os/image
+# The sunxi-wdt auto-arms at probe and cannot be stopped; systemd's native
+# RuntimeWatchdog did NOT engage on the A523 (works on the A133), so we feed the
+# device directly. Start as early as possible — before the ~16s reset window.
+DefaultDependencies=no
+After=systemd-tmpfiles-setup-dev.service
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/pocketforge/watchdog-keepalive.sh
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=sysinit.target

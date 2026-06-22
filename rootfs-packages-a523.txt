@@ -1,0 +1,38 @@
+# =============================================================================
+# rootfs-packages-a523.txt — base packages for the A523 (tsp-s) Debian rootfs
+# =============================================================================
+# mmdebstrap profile: bookworm, arm64, minbase. Frozen snapshot mirror
+# (snapshot-date.txt). This is the SoC-agnostic substrate re-targeted to the
+# A523 (tsp-vuo.4) — deliberately LEANER than the A133 list: NO PowerVR/Mesa/SDL
+# (the A523 GPU stack is tsp-vuo.2, not yet integrated) and NO ALSA (out of scope
+# for the substrate gate). Add those when A523-GPU / audio land.
+#
+# Dev-only packages (sshd, rsync) live in rootfs-packages-a523-dev.txt.
+
+# --- init + base ---
+systemd-sysv
+systemd-timesyncd
+udev
+dbus
+kmod
+# busybox-static (Provides: busybox) — a STATIC busybox usable both as a rootfs
+# utility AND as the OCI demo container's /bin (no libc in the container rootfs).
+busybox-static
+sudo
+iproute2
+iputils-ping
+ca-certificates
+haveged
+
+# --- filesystem + storage tooling ---
+e2fsprogs
+dosfstools
+
+# --- container runtime (the headline of this bead) ---
+# crun: OCI runtime; per-app cgroup-v2 limits enforced via systemd slices.
+crun
+
+# --- networking (WiFi plumbing; the AIC8800 driver itself is tsp-vuo.3) ---
+wpasupplicant
+iw
+openresolv

@@ -1,0 +1,25 @@
+[Unit]
+Description=PocketForge hello container (crun, per-app cgroup limits)
+Documentation=https://github.com/pocketforge-os/image
+After=local-fs.target
+AssertPathExists=/usr/lib/pocketforge/containers/hello/config.json
+
+[Service]
+Type=simple
+Slice=pocketforge-apps.slice
+
+# Per-app memory cap, enforced by the kernel memory controller on THIS unit's
+# cgroup. crun runs with --cgroup-manager=disabled so the container's processes
+# live directly in this systemd-managed cgroup (no nested cgroup) — the cap
+# below is exactly the cgroup the container runs in.
+MemoryAccounting=yes
+MemoryMax=64M
+MemoryHigh=56M
+
+ExecStartPre=-/usr/bin/crun --cgroup-manager=disabled delete --force pf-hello
+ExecStart=/usr/bin/crun --cgroup-manager=disabled run --bundle /usr/lib/pocketforge/containers/hello pf-hello
+ExecStopPost=-/usr/bin/crun --cgroup-manager=disabled delete --force pf-hello
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

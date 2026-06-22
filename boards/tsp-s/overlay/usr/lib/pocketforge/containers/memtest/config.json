@@ -1,0 +1,34 @@
+{
+  "ociVersion": "1.0.2",
+  "process": {
+    "terminal": false,
+    "user": { "uid": 0, "gid": 0 },
+    "args": ["/bin/sh", "-c", "echo 'pf-memtest: allocating until the cgroup MemoryMax kills me (proves enforcement)'; A=x; while true; do A=\"$A$A\"; done"],
+    "env": ["PATH=/bin:/usr/bin", "HOME=/", "TERM=dumb"],
+    "cwd": "/",
+    "capabilities": {
+      "bounding": ["CAP_KILL"],
+      "effective": ["CAP_KILL"],
+      "permitted": ["CAP_KILL"]
+    },
+    "rlimits": [{ "type": "RLIMIT_NOFILE", "hard": 1024, "soft": 1024 }],
+    "noNewPrivileges": true
+  },
+  "root": { "path": "/usr/lib/pocketforge/containers/_rootfs", "readonly": true },
+  "hostname": "pf-memtest",
+  "mounts": [
+    { "destination": "/proc", "type": "proc", "source": "proc" },
+    { "destination": "/dev", "type": "tmpfs", "source": "tmpfs", "options": ["nosuid", "strictatime", "mode=755", "size=2m"] }
+  ],
+  "linux": {
+    "namespaces": [
+      { "type": "pid" },
+      { "type": "ipc" },
+      { "type": "uts" },
+      { "type": "mount" },
+      { "type": "cgroup" }
+    ],
+    "maskedPaths": ["/proc/kcore", "/sys/firmware"],
+    "readonlyPaths": ["/proc/sys", "/proc/sysrq-trigger"]
+  }
+}

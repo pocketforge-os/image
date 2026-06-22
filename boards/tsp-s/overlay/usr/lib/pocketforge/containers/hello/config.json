@@ -1,0 +1,35 @@
+{
+  "ociVersion": "1.0.2",
+  "process": {
+    "terminal": false,
+    "user": { "uid": 0, "gid": 0 },
+    "args": ["/bin/sh", "-c", "echo 'pf-hello: container running under pocketforge-apps.slice (cgroup-v2)'; echo \"pf-hello: my cgroup = $(cat /proc/self/cgroup)\"; while true; do sleep 3600; done"],
+    "env": ["PATH=/bin:/usr/bin", "HOME=/", "TERM=dumb"],
+    "cwd": "/",
+    "capabilities": {
+      "bounding": ["CAP_KILL", "CAP_SETUID", "CAP_SETGID"],
+      "effective": ["CAP_KILL", "CAP_SETUID", "CAP_SETGID"],
+      "permitted": ["CAP_KILL", "CAP_SETUID", "CAP_SETGID"]
+    },
+    "rlimits": [{ "type": "RLIMIT_NOFILE", "hard": 1024, "soft": 1024 }],
+    "noNewPrivileges": true
+  },
+  "root": { "path": "/usr/lib/pocketforge/containers/_rootfs", "readonly": true },
+  "hostname": "pf-hello",
+  "mounts": [
+    { "destination": "/proc", "type": "proc", "source": "proc" },
+    { "destination": "/dev", "type": "tmpfs", "source": "tmpfs", "options": ["nosuid", "strictatime", "mode=755", "size=2m"] },
+    { "destination": "/tmp", "type": "tmpfs", "source": "tmpfs", "options": ["nosuid", "nodev", "mode=1777", "size=8m"] }
+  ],
+  "linux": {
+    "namespaces": [
+      { "type": "pid" },
+      { "type": "ipc" },
+      { "type": "uts" },
+      { "type": "mount" },
+      { "type": "cgroup" }
+    ],
+    "maskedPaths": ["/proc/kcore", "/sys/firmware"],
+    "readonlyPaths": ["/proc/sys", "/proc/sysrq-trigger"]
+  }
+}

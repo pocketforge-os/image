@@ -1,0 +1,11 @@
+[Unit]
+Description=PocketForge per-app container slice (cgroup-v2, memory-limited)
+Documentation=man:systemd.slice(5)
+Before=slices.target
+
+[Slice]
+# Slice-wide ceiling for ALL PocketForge app containers combined. Per-app caps
+# are set on each pocketforge-*-container.service unit placed in this slice.
+# Proves the memory controller (CONFIG_MEMCG=y, owned kernel tsp-vuo.4) is active.
+MemoryAccounting=yes
+MemoryMax=512M

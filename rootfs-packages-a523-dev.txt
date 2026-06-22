@@ -1,0 +1,6 @@
+# Dev-variant-only packages for the A523 (tsp-s) rootfs.
+# Omitted from the release variant (no sshd on a shipped device).
+# Mirrors rootfs-packages-dev.txt for the A133.
+openssh-server
+rsync
+systemd-coredump

@@ -1,0 +1,21 @@
+[Unit]
+Description=PocketForge memtest container (crun; proves MemoryMax enforcement via OOM)
+Documentation=https://github.com/pocketforge-os/image
+After=local-fs.target
+AssertPathExists=/usr/lib/pocketforge/containers/memtest/config.json
+
+[Service]
+Type=simple
+Slice=pocketforge-apps.slice
+
+# Same 64M cap as hello. The memtest container deliberately allocates past it so
+# the kernel OOM-kills it — proving the limit is ENFORCED, not just set. Started
+# on demand by container-memtest.sh; NOT enabled at boot (it is meant to die).
+MemoryAccounting=yes
+MemoryMax=64M
+MemoryHigh=56M
+
+ExecStartPre=-/usr/bin/crun --cgroup-manager=disabled delete --force pf-memtest
+ExecStart=/usr/bin/crun --cgroup-manager=disabled run --bundle /usr/lib/pocketforge/containers/memtest pf-memtest
+ExecStopPost=-/usr/bin/crun --cgroup-manager=disabled delete --force pf-memtest
+Restart=no

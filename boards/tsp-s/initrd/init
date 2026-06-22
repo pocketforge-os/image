@@ -1,0 +1,106 @@
+#!/bin/busybox sh
+# =============================================================================
+# PocketForge initrd /init — TrimUI Smart Pro S (Allwinner A523, owned 5.15.154)
+# -----------------------------------------------------------------------------
+# Boot-critical. A wrong /init = no boot. The A523 job is simpler than the A133:
+#   1. NO GPU module preload — the A523 GPU stack (tsp-vuo.2) is not yet
+#      integrated, and the A523 kernel builds MMC + ext4 in-tree, so nothing
+#      needs insmod-ing before we can read the rootfs.
+#   2. find the rootfs by FILESYSTEM LABEL (POCKETFORGE_DATA) — robust against
+#      the mmcblk0/mmcblk1 enumeration race when the eMMC is also present.
+#   3. switch_root into the real Debian rootfs (systemd).
+#
+# Observability mirrors the A133 initrd: every step logs to BOTH ttyAS0 and a
+# persistent file on the FAT boot partition, so a failed boot is diagnosable by
+# pulling the SD. Logging never blocks boot. On any failure we drop to an
+# interactive busybox shell on ttyAS0 rather than hanging silently.
+#
+# busybox findfs supports ONLY LABEL=/UUID= (no PARTLABEL=), so we resolve by
+# the filesystem volume label set at build time:
+#   FAT boot  -> label POCKETFORGE        (mkfs.vfat -n)
+#   ext4 root -> label POCKETFORGE_DATA   (mke2fs -L)
+# =============================================================================
+
+/bin/busybox --install -s /bin
+
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev
+
+# --- on-SD boot log (FAT boot partition, label POCKETFORGE) -------------------
+PFLOG=""
+mkdir -p /pflog
+LOGDEV="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
+if [ -n "$LOGDEV" ] && mount -t vfat -o rw,flush "$LOGDEV" /pflog 2>/dev/null; then
+    PFLOG=/pflog/bootlog.txt
+    : > "$PFLOG" 2>/dev/null || PFLOG=""
+fi
+
+log() {
+    echo "[pf-initrd] $*"
+    if [ -n "$PFLOG" ]; then
+        echo "[pf-initrd] $*" >> "$PFLOG" 2>/dev/null
+        sync 2>/dev/null
+    fi
+}
+
+fail() {
+    log "FAILURE: $*"
+    log "dropping to busybox shell (console=ttyAS0,115200)"
+    sync 2>/dev/null
+    exec /bin/sh
+}
+
+PF_INITRD_VERSION="$(cat /etc/pocketforge-initrd-version 2>/dev/null || echo dev)"
+log "STAGE: banner — PocketForge A523 initrd ${PF_INITRD_VERSION} booting"
+log "STAGE: kver $(cat /proc/version 2>/dev/null)"
+log "STAGE: model $(cat /proc/device-tree/model 2>/dev/null)"
+if [ -n "$PFLOG" ]; then
+    log "STAGE: on-SD log active at boot:/bootlog.txt ($LOGDEV)"
+else
+    log "STAGE: on-SD log UNAVAILABLE (boot FAT not mountable) — console only"
+fi
+
+# --- find + mount the rootfs by filesystem LABEL ------------------------------
+log "STAGE: locate rootfs by LABEL=POCKETFORGE_DATA"
+ROOT=""
+# udev/devtmpfs may need a beat to enumerate the second mmc; retry briefly.
+i=0
+while [ "$i" -lt 20 ]; do
+    ROOT="$(findfs LABEL=POCKETFORGE_DATA 2>/dev/null)"
+    [ -n "$ROOT" ] && break
+    sleep 0.5; i=$((i + 1))
+done
+[ -n "$ROOT" ] || fail "rootfs not found (LABEL=POCKETFORGE_DATA)"
+log "STAGE: rootfs is $ROOT"
+
+mkdir -p /newroot
+log "STAGE: mount $ROOT -> /newroot (ext4)"
+mount -t ext4 -o rw,noatime "$ROOT" /newroot || fail "mount $ROOT failed"
+
+# --- watchdog ping before handoff (harmless if no /dev/watchdog) --------------
+# If the A523 sunxi-wdt auto-armed, reset its counter so systemd has a full
+# window to take ownership. '\0' = keepalive ping (NOT 'V' = magic-close/disarm).
+if [ -c /dev/watchdog ]; then
+    printf '\0' > /dev/watchdog
+    log "STAGE: watchdog ping (counter reset for systemd handoff)"
+fi
+
+# --- pre-switch_root verification (catch ENOENT-from-exec before the PONR) ----
+if [ -n "$PFLOG" ]; then sync 2>/dev/null; umount /pflog 2>/dev/null; fi
+
+INIT=/usr/lib/systemd/systemd
+if [ ! -x "/newroot${INIT}" ]; then
+    log "WARN: ${INIT} not found, trying /sbin/init"
+    INIT=/sbin/init
+fi
+if [ ! -x "/newroot${INIT}" ]; then
+    log "ERROR: no init binary found on rootfs"
+    ls -la /newroot/usr/lib/systemd/ 2>&1 | while read -r line; do log "    $line"; done
+    fail "init binary not found on rootfs"
+fi
+if [ ! -f "/newroot/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" ]; then
+    fail "dynamic linker (ld-linux-aarch64.so.1) not found on rootfs"
+fi
+log "STAGE: switch_root /newroot $INIT"
+exec switch_root /newroot "$INIT" || fail "switch_root failed"
