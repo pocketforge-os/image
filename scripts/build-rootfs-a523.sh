@@ -90,6 +90,22 @@ mmdebstrap \
 echo "=== deterministic ext4 assembly ==="
 EXT="${WORK}/rootfs-extracted"; mkdir -p "${EXT}"
 tar -xf "${ROOTFS_TAR}" -C "${EXT}"
+
+# Re-assert user-home ownership in the extracted tree. In this build path the
+# mmdebstrap tar landed /home/<user> as root:root (the A133 build-rootfs.sh path
+# preserves it; this one didn't — tsp-vuo.4), so sshd StrictModes rejected the
+# dev keys and the rsync iteration loop was blocked. mke2fs -d preserves the
+# extract-dir ownership into the ext4 (verified), so fixing it here is reliable.
+# Drive it off the rootfs's own passwd (uid>=1000 human users with /home homes).
+echo "  re-asserting /home/<user> ownership from rootfs passwd..."
+awk -F: '$3>=1000 && $3<65534 && $6 ~ /^\/home\//{print $3":"$4" "$6}' "${EXT}/etc/passwd" | \
+while read -r ug home; do
+    if [ -d "${EXT}${home}" ]; then
+        chown -R "$ug" "${EXT}${home}"
+        echo "    chown -R ${ug} ${home}"
+    fi
+done
+
 ROOTFS_DU="$(du -sm "${EXT}" | cut -f1)"
 EXT4_SIZE_MB=1024
 [ "${ROOTFS_DU}" -gt 768 ] && EXT4_SIZE_MB=$(( ROOTFS_DU * 130 / 100 ))
