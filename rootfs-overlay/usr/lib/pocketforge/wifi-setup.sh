@@ -77,8 +77,29 @@ if [ -z "${KEY_MGMT}" ]; then
     KEY_MGMT="WPA-PSK"
 fi
 
+# --- roaming policy (tsp-008) -------------------------------------------------
+# The base unit's XR829 is a single-radio soft-MAC whose foreground scan is
+# NON-split, so each scan briefly stalls the associated link (and is the state
+# its firmware is most fragile in). We therefore roam CONSERVATIVELY — only when
+# the link is already weak — using the channel-LEARNING bgscan so a background
+# scan touches just this network's channels (~3-5) instead of all ~25+. The
+# firmware-offloaded CQM RSSI events drive the trigger. 802.11v BSS-TM is honored
+# by default (wpa_supplicant is built with WNM), letting the AP hand us a roam
+# target with no scan at all. There is NO 802.11r FT (the xr829 driver doesn't do
+# FT transitions), so each roam is a full reassociation — fine for general use /
+# dev-test reachability. A near-dormant "don't scan during an active stream"
+# profile is deferred to the kiosk supervisor (tsp-rcb).
+# Tunables — learn:<short_s>:<signal_threshold_dBm>:<long_s>:<db>. The threshold
+# is set a touch high (-72) to compensate for the driver's laggy 16-sample RCPI
+# averaging. The DB self-learns at runtime, so this works on ANY user network
+# with no per-network configuration; it persists across reboots under /var/lib.
+BGSCAN_DB_DIR="/var/lib/wpa_supplicant"
+SSID_SAFE="$(printf '%s' "${SSID}" | tr -c 'A-Za-z0-9._-' '_')"
+BGSCAN_DB="${BGSCAN_DB_DIR}/bgscan-${SSID_SAFE}.db"
+mkdir -p "${BGSCAN_DB_DIR}"
+
 # --- template wpa_supplicant config ------------------------------------------
-log "Generating ${WPA_CONF} (SSID=${SSID}, key_mgmt=${KEY_MGMT})"
+log "Generating ${WPA_CONF} (SSID=${SSID}, key_mgmt=${KEY_MGMT}, bgscan=learn)"
 
 mkdir -p "${WPA_DIR}"
 
@@ -87,13 +108,20 @@ cat > "${WPA_CONF}" << EOF
 # Do not edit directly — edit /boot/wifi.txt instead and reboot.
 ctrl_interface=/run/wpa_supplicant
 update_config=0
+# Keep BSSes seen in the table between our infrequent background scans, so a
+# learned roam target isn't aged out before the next (rare) scan (tsp-008).
+ap_scan=1
+bss_expiration_age=300
 
 network={
     ssid="${SSID}"
     psk="${PSK}"
     key_mgmt=${KEY_MGMT}
+    # Channel-learning background scan: roam only when the link is weak, with
+    # scans narrowed to this network's channels. Self-learns; works on any net.
+    bgscan="learn:45:-72:600:${BGSCAN_DB}"
 }
 EOF
 
 chmod 0600 "${WPA_CONF}"
-log "WiFi config written successfully"
+log "WiFi config written successfully (roaming: bgscan=learn, 802.11v BTM active)"
