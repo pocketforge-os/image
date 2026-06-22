@@ -169,16 +169,25 @@ they land they get an `s/tsp-s/<group>/BLOBS.SHA256` entry in vendor-manifest an
 travel this same signed path. Until then this is the wired-but-empty contract.
 EOF
 
-# --- hardware watchdog: direct keepalive daemon --------------------------------
-# The A523 sunxi-wdt (2050000.watchdog, 16s, cannot be stopped) auto-arms at
-# probe. systemd's native RuntimeWatchdog (RuntimeWatchdogSec=16 — the proven
-# A133 fix, tsp-iuz.2.3) did NOT engage on the A523 5.15 kernel: no "Using
-# hardware watchdog" log and the device reset ~16s after reaching login on the
-# first tsp-vuo.4 boot. So we feed /dev/watchdog0 directly via a keepalive
-# service (from the overlay), started in sysinit before the reset window.
-# [follow-up: root-cause why systemd RuntimeWatchdog won't engage on the A523
-#  and switch back to it for proper health-gated watchdog handling.]
-echo "[customize-a523] enabling hardware watchdog keepalive..."
+# --- hardware watchdog: systemd-native RuntimeWatchdog (proper owner) ----------
+# The A523 sunxi-wdt (2050000.watchdog, 16s) auto-arms at probe and cannot be
+# stopped, so PID1 must own + feed it. RuntimeWatchdogSec=16 makes systemd open
+# the device, program the timeout, and ping at half-interval (the initrd pings
+# once before switch_root so systemd has the window). This is the same proven
+# A133 mechanism (tsp-iuz.2.3); on the A523 we ALSO pin WatchdogDevice explicitly
+# to /dev/watchdog0 (both /dev/watchdog and /dev/watchdog0 exist). Verified live
+# on hardware (tsp-vuo.4): systemd opens 'sunxi-wdt' /dev/watchdog0 + feeds it.
+echo "[customize-a523] installing systemd RuntimeWatchdog drop-in..."
+install -d "${ROOTFS}/etc/systemd/system.conf.d"
+printf '[Manager]\nRuntimeWatchdogSec=16\nWatchdogDevice=/dev/watchdog0\n' \
+    > "${ROOTFS}/etc/systemd/system.conf.d/watchdog.conf"
+
+# Safety net (NOT a shortcut): a keepalive that YIELDS to systemd. It opens
+# /dev/watchdog0 only if systemd's open hasn't already claimed it (EBUSY ->
+# exit 0, "systemd owns it"); it only actually feeds the dog if systemd's early
+# RuntimeWatchdog open ever races/fails on this board, preventing a reset loop.
+# When systemd engages (the normal case) this no-ops. bd: tsp-vuo.4.
+echo "[customize-a523] installing watchdog keepalive safety net (yields to systemd)..."
 chmod 0755 "${ROOTFS}/usr/lib/pocketforge/watchdog-keepalive.sh"
 install -d "${ROOTFS}/etc/systemd/system/sysinit.target.wants"
 ln -sf /etc/systemd/system/pocketforge-watchdog-keepalive.service \

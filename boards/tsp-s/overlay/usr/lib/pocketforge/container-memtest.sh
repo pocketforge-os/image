@@ -49,33 +49,30 @@ fi
 crun --cgroup-manager=disabled list 2>/dev/null | sed 's/^/[memtest]   crun: /'
 
 say "=== 3. enforcement: memtest allocates past the cap -> OOM kill ==="
+# RELIABLE signal = the SLICE-level memory.events oom_kill: it propagates from
+# the (transient) memtest unit cgroup up to the slice AND the slice persists, so
+# it's stable. The unit cgroup is torn down faster than we can poll it, and
+# dmesg-count deltas are racy under kernel-log spam — both proved unreliable on
+# this device. (.local would be 0 — the OOM is in a descendant, not the slice.)
+SLICE_EVENTS="${SLICE_CG}/memory.events"
+oom_base="$(sed -n 's/^oom_kill //p' "${SLICE_EVENTS}" 2>/dev/null || echo 0)"
+say "slice memory.events oom_kill (before) = ${oom_base:-0}"
 systemctl reset-failed "$MEMTEST" 2>/dev/null
-MCG="${SLICE_CG}/${MEMTEST}"
-say "memtest cgroup = ${MCG}"
-# Baseline dmesg cgroup-OOM count (the kernel line persists even after the unit's
-# cgroup is torn down — it is the authoritative enforcement signal; crun exits 0
-# even when the container's process is OOM-killed, so systemd Result is unreliable).
-oom_base="$(dmesg 2>/dev/null | grep -c 'Memory cgroup out of memory')"
-OOMKILLS=0
-systemctl start "$MEMTEST" 2>/dev/null || true   # will OOM; start may return after exit
+systemctl start "$MEMTEST" 2>/dev/null || true   # allocates past the cap, OOMs, exits
+# wait for the memtest unit to finish (it OOMs + exits within a few seconds)
 for _ in $(seq 1 25); do
-    # capture the cgroup oom_kill counter LIVE (the cgroup is removed once the unit exits)
-    if [ -r "${MCG}/memory.events" ]; then
-        v="$(sed -n 's/^oom_kill //p' "${MCG}/memory.events" 2>/dev/null)"
-        [ -n "$v" ] && [ "$v" -gt 0 ] 2>/dev/null && { OOMKILLS="$v"; break; }
-    fi
-    [ "$(dmesg 2>/dev/null | grep -c 'Memory cgroup out of memory')" -gt "$oom_base" ] && break
+    systemctl is-active "$MEMTEST" >/dev/null 2>&1 || break
     sleep 1
 done
-oom_now="$(dmesg 2>/dev/null | grep -c 'Memory cgroup out of memory')"
-say "memtest cgroup oom_kill count = ${OOMKILLS}"
-DMESG_OOM="$(dmesg 2>/dev/null | grep 'Memory cgroup out of memory' | grep "${MEMTEST}" | tail -1)"
-[ -z "$DMESG_OOM" ] && DMESG_OOM="$(dmesg 2>/dev/null | grep 'Memory cgroup out of memory' | tail -1)"
+sleep 1
+oom_now="$(sed -n 's/^oom_kill //p' "${SLICE_EVENTS}" 2>/dev/null || echo 0)"
+say "slice memory.events oom_kill (after)  = ${oom_now:-0}"
+DMESG_OOM="$(dmesg 2>/dev/null | grep 'Memory cgroup out of memory' | tail -1)"
 [ -n "$DMESG_OOM" ] && say "dmesg: ${DMESG_OOM}"
-if [ "${OOMKILLS:-0}" -gt 0 ] || [ "$oom_now" -gt "$oom_base" ]; then
-    say "enforcement CONFIRMED (runaway allocator OOM-killed at the 64MiB cap)"
+if [ "${oom_now:-0}" -gt "${oom_base:-0}" ]; then
+    say "enforcement CONFIRMED (slice oom_kill incremented ${oom_base}->${oom_now}: runaway allocator OOM-killed at the 64MiB cap)"
 else
-    fail "no OOM kill observed — MemoryMax not enforced"
+    fail "no OOM kill recorded at the slice level — MemoryMax not enforced"
 fi
 
 systemctl stop "$HELLO" 2>/dev/null

@@ -10,10 +10,12 @@ Before=sysinit.target shutdown.target
 Conflicts=shutdown.target
 
 [Service]
+# Yields (exit 0) when systemd's RuntimeWatchdog already owns the device, so
+# on-failure (not always) avoids respawning on a clean yield.
 Type=exec
 ExecStart=/usr/lib/pocketforge/watchdog-keepalive.sh
-Restart=always
-RestartSec=1
+Restart=on-failure
+RestartSec=2
 
 [Install]
 WantedBy=sysinit.target
