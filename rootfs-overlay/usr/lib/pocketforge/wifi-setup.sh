@@ -72,9 +72,13 @@ if [ -z "${PSK}" ]; then
     exit 0
 fi
 
-# Default key management if not specified
+# Default key management if not specified.
+# We list FT-PSK alongside WPA-PSK so wpa_supplicant uses 802.11r Fast BSS
+# Transition when the AP advertises it (same Mobility Domain), and falls back to
+# plain WPA-PSK otherwise — see the FT note in the roaming-policy block below
+# (tsp-rcb). wpa_supplicant negotiates per-AP, so this is safe on any network.
 if [ -z "${KEY_MGMT}" ]; then
-    KEY_MGMT="WPA-PSK"
+    KEY_MGMT="WPA-PSK FT-PSK"
 fi
 
 # --- roaming policy (tsp-008) -------------------------------------------------
@@ -85,10 +89,13 @@ fi
 # scan touches just this network's channels (~3-5) instead of all ~25+. The
 # firmware-offloaded CQM RSSI events drive the trigger. 802.11v BSS-TM is honored
 # by default (wpa_supplicant is built with WNM), letting the AP hand us a roam
-# target with no scan at all. There is NO 802.11r FT (the xr829 driver doesn't do
-# FT transitions), so each roam is a full reassociation — fine for general use /
-# dev-test reachability. A near-dormant "don't scan during an active stream"
-# profile is deferred to the kiosk supervisor (tsp-rcb).
+# target with no scan at all. 802.11r FT-PSK is now also requested (key_mgmt
+# above): the xr829 is a soft-MAC and wpa_supplicant runs FT over-the-air via the
+# kernel's userspace-SME auth/assoc path, so an FT transition skips the 4-way
+# handshake and collapses the reassociation gap (tsp-rcb — under on-device
+# validation; falls back to a full reassoc on APs that don't advertise FT).
+# A near-dormant "don't scan during an active stream" profile is deferred to the
+# kiosk supervisor (tsp-rcb).
 # Tunables — learn:<short_s>:<signal_threshold_dBm>:<long_s>:<db>. The threshold
 # is set a touch high (-72) to compensate for the driver's laggy 16-sample RCPI
 # averaging. The DB self-learns at runtime, so this works on ANY user network
