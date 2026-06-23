@@ -156,6 +156,38 @@ install -d "${ROOTFS}/etc/systemd/network"
 install -m 0644 "${SRC}/rootfs-overlay/etc/systemd/network/20-wlan0.network" \
     "${ROOTFS}/etc/systemd/network/20-wlan0.network"
 
+# --- Mali-G57 GPU: source-rebuilt mali_kbase.ko + closed libmali r32p0 (tsp-vuo.2)
+# The KM (mali_kbase.ko) is SOURCE-REBUILT from the owned GPL DDK r42p0 source
+# (build-a523-gpu-km.sh, vermagic-matched to this kernel, of-match arm,mali-valhall)
+# and arrives via the modules staging above (lib/modules/<KREL>/extra/) — depmod
+# already ran. Mali-G57 = Valhall gen-1 = Job-Manager => NO CSF firmware needed.
+# The USERLAND (libmali.so.0.32.0 GBM + EGL/GLES/gbm wrappers) is a CLOSED
+# redistributable blob (knulli-cfw, extracted from Pro S stock firmware), staged
+# at /work/gpu-userland. [debt: move onto the IPFS/minisign/vendor-manifest signed
+# path like the AIC8800 firmware + A133 PowerVR blobs — owned-substrate-blob.]
+echo "[customize-a523] installing Mali-G57 GPU (mali_kbase autoload + libmali userland)..."
+
+# (1) autoload the source-rebuilt mali_kbase at boot (binds gpu@1800000).
+cat > "${ROOTFS}/etc/modules-load.d/pocketforge-gpu.conf" <<'EOF'
+# Mali-G57 (Valhall JM) kernel driver — SOURCE-REBUILT from GPL DDK r42p0
+# (pocketforge gpu-km-tsp-a523) against the owned 5.15.154 kernel. tsp-vuo.2.
+mali_kbase
+EOF
+
+# (2) closed libmali userland -> /usr/lib/mali, made first in the ld.so search so
+#     its libEGL/libGLESv2/libgbm sonames win over any mesa libs pulled in as deps.
+GPUUM="${GPUUM:-/work/gpu-userland}"
+if ls "${GPUUM}"/libmali.so.* >/dev/null 2>&1; then
+    install -d "${ROOTFS}/usr/lib/mali"
+    cp -a "${GPUUM}/." "${ROOTFS}/usr/lib/mali/"
+    echo "/usr/lib/mali" > "${ROOTFS}/etc/ld.so.conf.d/00-mali.conf"
+    echo "[customize-a523] libmali: $(find "${ROOTFS}/usr/lib/mali" -maxdepth 1 -name 'libmali.so.*' -printf '%f ')"
+    # refresh the linker cache so /usr/lib/mali sonames resolve (and win).
+    chroot "$ROOTFS" ldconfig
+else
+    echo "[customize-a523] WARN: no libmali at ${GPUUM} — GPU userland absent (no GLES)"
+fi
+
 # --- signed [fetch] contract (re-targeted; no A523 blobs until GPU/WiFi land) -
 echo "[customize-a523] wiring signed [fetch] contract (no A523 blobs yet)..."
 install -d "${ROOTFS}/usr/lib/pocketforge/fetch"

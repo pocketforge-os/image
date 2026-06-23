@@ -4,3 +4,11 @@
 openssh-server
 rsync
 systemd-coredump
+# modetest/modeprint — validate the DRM/KMS panel path (DE+TCON+DSI bring-up,
+# tsp-vuo.2) independent of the GPU: paint a test pattern on the panel, confirm
+# the DSI connector is connected + modes.
+libdrm-tests
+# glmark2-es2-drm — the GLES-on-DRM/KMS render gate for tsp-vuo.2 (GBM->EGL->GLES
+# via the closed libmali r32p0). Pulls mesa libegl1/libgles2/libgbm1 as deps; the
+# Mali userland in /usr/lib/mali wins via ld.so.conf.d/00-mali.conf at runtime.
+glmark2-es2-drm
