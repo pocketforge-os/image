@@ -5,12 +5,24 @@
 # No extra packages required (systemd-networkd is built into systemd).
 #
 # bd: tsp-iuz.2.2
+#
+# tsp-q75: keep the DHCP lease + routes across a roam's brief carrier flap.
+# When the xr829 driver roams between same-SSID APs it momentarily drops
+# carrier (reassoc = unjoin/rejoin). By default systemd-networkd tears down
+# the IPv4 address and routes on carrier loss, so every roam loses the lease
+# (observed: "wlan0: Lost carrier -> DHCP lease lost") and any active stream's
+# sockets break. We roam only within one same-subnet network, so the lease is
+# valid on every AP -- retain it across a flap. A timespan (not "yes") still
+# tears the config down on a genuine extended outage (walk out of all
+# coverage), which is the correct signal to upper layers.
 # =============================================================================
 [Match]
 Name=wlan0
 
 [Network]
 DHCP=yes
+# Retain addressing across a sub-flap roam (see tsp-q75 header note).
+IgnoreCarrierLoss=5s
 
 [DHCPv4]
 UseDomains=yes
