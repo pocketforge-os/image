@@ -170,6 +170,10 @@ RUN dpkg --add-architecture arm64 \
 #   Reproducibility (M1.E): faketime disorderfs e2fsprogs (>=1.47.1 from backports)
 #   Cross-readelf:        binutils-aarch64-linux-gnu  (for symver gate)
 #   Scripting glue:       python3 python3-pip
+#   U-Boot pylibfdt:      python3-dev python3-setuptools swig  (binman builds a
+#                         SWIG _libfdt extension; required to embed BL31 into
+#                         u-boot-sunxi-with-spl.bin from clean — tsp-vuo.9)
+#   U-Boot host tools:    libgnutls28-dev (tools/mkeficapsule needs gnutls.h)
 #   Kernel build (M2.B):  bc bison flex libssl-dev libelf-dev gcc
 #                         (SA-5 spike found these missing; required for
 #                         `make Image` in pocketforge-os/kernel-tsp.
@@ -218,11 +222,15 @@ RUN apt-get update \
         disorderfs \
         binutils-aarch64-linux-gnu \
         python3 \
+        python3-dev \
+        python3-setuptools \
+        swig \
         bc \
         bison \
         flex \
         gcc \
         libssl-dev \
+        libgnutls28-dev \
         libelf-dev \
         libasound2-dev:arm64 \
         libpulse-dev:arm64 \
