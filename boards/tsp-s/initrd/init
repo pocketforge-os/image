@@ -105,11 +105,12 @@ selfflash_write_flag() {
 
 selfflash_recover() {
     SD="$1"; NSECT="$2"; FLAG_LBA="$3"; FLAGTXT="$4"
-    # HARD GUARD: never write the eMMC (mmcblk0) — it holds the vendor OS / FEL
-    # fallback. The SD (our flash target) is mmcblk1.
-    case "$SD" in
-        *mmcblk0*) log "selfflash: REFUSING — target $SD is the eMMC (mmcblk0), not the SD"; return 1;;
-    esac
+    # SAFETY: the target SD is resolved by the rootfs LABEL (POCKETFORGE_DATA),
+    # which exists ONLY on our SD — never the eMMC's vendor OS — so the eMMC can
+    # never be selected regardless of enumeration. NOTE: on this owned kernel the
+    # SD enumerates as mmcblk0 (sdc0@4020000 probes before the eMMC sdc2@4022000),
+    # i.e. the OPPOSITE of the kickoff-doc assumption — so do NOT device-number-
+    # guard on mmcblk0 (that would refuse the real SD). The label is the guard.
     fget() { printf '%s\n' "$FLAGTXT" | sed -n "s/^$1=//p" | head -1; }
     state="$(fget state)";        stage_lba="$(fget stage_lba)"
     xz_bytes="$(fget xz_bytes)";  xz_sha="$(fget xz_sha256)"
