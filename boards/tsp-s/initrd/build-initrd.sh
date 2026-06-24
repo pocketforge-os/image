@@ -37,6 +37,22 @@ install -m 0755 "${INIT_SRC}" "${ROOT}/init"
 printf '%s\n' "${VERSION}" > "${ROOT}/etc/pocketforge-initrd-version"
 printf 'root:x:0:0:root:/root:/bin/sh\n' > "${ROOT}/etc/passwd"
 
+# --- self-flash gate marker (DEV images only; bd tsp-bcx.18) ------------------
+# The /init self-flash recovery branch only acts when this marker is present, so
+# a prod image never honors a stray flag. All A523 images are dev today; gate on
+# VARIANT so a future prod build omits it.
+VARIANT="${VARIANT:-dev}"
+if [ "${VARIANT}" = "dev" ]; then
+    : > "${ROOT}/etc/pocketforge-selfflash"
+    echo "build-initrd: staged /etc/pocketforge-selfflash (dev self-flash gate)"
+    # The recovery branch needs these busybox applets at boot — fail the BUILD
+    # (not a silent no-boot) if the baked busybox lacks any.
+    for ap in unxz sha256sum dd findfs head sed grep reboot sync mount umount; do
+        "${BUSYBOX}" 2>&1 | tr ', \t' '\n' | grep -qx "$ap" || \
+            { echo "FATAL: busybox lacks applet '$ap' (self-flash needs it)" >&2; exit 1; }
+    done
+fi
+
 # Static device nodes (best-effort; /init mounts devtmpfs which also provides
 # these. The kernel's "unable to open initial console" is non-fatal regardless).
 mknod -m 600 "${ROOT}/dev/console" c 5 1 2>/dev/null || true
