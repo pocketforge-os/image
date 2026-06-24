@@ -99,7 +99,7 @@ mkdir -p "${OUT_DIR}"
 # ---- step 1: build the initrd ----------------------------------------------
 echo ""
 echo "=== Step 1/6: Build initrd ==="
-INITRD_ARGS=(--src "${SRC_DIR}" --blobs "${BLOBS_DIR}" --out "${WORK}/initrd.gz")
+INITRD_ARGS=(--src "${SRC_DIR}" --blobs "${BLOBS_DIR}" --out "${WORK}/initrd.gz" --variant "${VARIANT}")
 if [ "$M1B_MODE" = 1 ]; then
     INITRD_ARGS+=(--m1b-mode)
 fi

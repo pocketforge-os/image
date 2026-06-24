@@ -652,6 +652,14 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/watchdog.con
     "${ROOTFS}/etc/systemd/system.conf.d/watchdog.conf"
 echo "[customize] Watchdog: systemd drop-in installed"
 
+# --- Build-id marker (provenance + self-flash A/B verification; bd tsp-bcx.17) -
+# Committed verbatim (no wall-clock content) so reproducibility is preserved;
+# bump the source file to make two builds trivially distinguishable on-device
+# (cat /etc/pocketforge-build-id) when validating a self-flash.
+echo "[customize] Installing build-id marker..."
+install -m 0644 "/work/src/rootfs-overlay/etc/pocketforge-build-id" \
+    "${ROOTFS}/etc/pocketforge-build-id"
+
 # --- Directory scaffolding ---------------------------------------------------
 echo "[customize] Creating directory scaffolding..."
 install -d "${ROOTFS}/etc/pocketforge/keys/release.d"

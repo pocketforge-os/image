@@ -39,6 +39,7 @@ BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 OUT_FILE="${OUT_FILE:-/work/out/initrd.gz}"
 KERNEL_TSP_DIR=""
 GPU_KM_DIR=""
+VARIANT="dev"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -46,6 +47,7 @@ while [ $# -gt 0 ]; do
         --blobs)           BLOBS_DIR="$2"; shift 2 ;;
         --out)             OUT_FILE="$2"; shift 2 ;;
         --src)             SRC_DIR="$2"; shift 2 ;;
+        --variant)         VARIANT="$2"; shift 2 ;;
         --kernel-tsp-dir)  KERNEL_TSP_DIR="$2"; shift 2 ;;
         --gpu-km-dir)      GPU_KM_DIR="$2"; shift 2 ;;
         *) echo "build-initrd.sh: unknown arg: $1" >&2; exit 2 ;;
@@ -157,6 +159,23 @@ if aarch64-linux-gnu-readelf -d "${STAGING}/bin/busybox" 2>/dev/null | grep -q '
 fi
 echo "  busybox: AArch64, statically linked — OK"
 
+# Self-flash recovery (dev) relies on these busybox applets in /init. Assert they
+# are compiled into this busybox so a missing applet fails the BUILD, not a boot.
+# (bd tsp-bcx.17) — qemu-user runs the arm64 binary; --list works without args.
+if [ "$VARIANT" = "dev" ]; then
+    echo "=== verifying busybox provides self-flash applets (unxz, sha256sum, dd, findfs) ==="
+    BB_APPLETS="$("${STAGING}/bin/busybox" --list 2>/dev/null || true)"
+    if [ -n "$BB_APPLETS" ]; then
+        for ap in unxz sha256sum dd findfs head sed tr reboot mount umount sync; do
+            printf '%s\n' "$BB_APPLETS" | grep -qx "$ap" \
+                || { echo "FATAL: busybox lacks applet '$ap' (needed by self-flash /init)" >&2; exit 1; }
+        done
+        echo "  busybox self-flash applets present — OK"
+    else
+        echo "  WARN: could not list busybox applets (no qemu-user?); skipping applet assert" >&2
+    fi
+fi
+
 # /init
 install -m 0755 "${INITRD_SRC}/init" "${STAGING}/init"
 
@@ -209,6 +228,15 @@ printf '%s\n' "${SOURCE_DATE_EPOCH}-$([ "$M1B_MODE" = 1 ] && echo m1b || echo no
 # M1.B-mode marker (presence-only switch in /init).
 if [ "$M1B_MODE" = 1 ]; then
     install -m 0644 "${INITRD_SRC}/m1b-mode" "${STAGING}/etc/pocketforge-m1b-mode"
+fi
+
+# Self-flash gate marker (presence-only switch in /init; dev variant only) so a
+# release image never honors a stray self-flash flag. (bd tsp-bcx.17)
+if [ "$VARIANT" = "dev" ]; then
+    printf 'self-flash recovery enabled (dev image) — bd tsp-bcx.17\n' \
+        > "${STAGING}/etc/pocketforge-selfflash"
+    chmod 0644 "${STAGING}/etc/pocketforge-selfflash"
+    echo "  staged /etc/pocketforge-selfflash (dev gate)"
 fi
 
 # ---- clamp mtimes for reproducibility ---------------------------------------

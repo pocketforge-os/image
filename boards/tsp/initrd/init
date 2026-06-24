@@ -85,6 +85,168 @@ else
     log "STAGE: on-SD log UNAVAILABLE (boot-resource not mountable) — console only"
 fi
 
+# =============================================================================
+# SELF-FLASH RECOVERY  (dev images only; bd tsp-bcx.17)
+# -----------------------------------------------------------------------------
+# In-place whole-image self-flash for swap-free dev iteration. A host pushes a
+# compressed image (.img.xz) to a RAW staging region in the UNALLOCATED TAIL of
+# the SD (past the image; a normal flash never writes there), then writes a
+# 512-byte flag record to a trailing sector and reboots. This branch — running
+# entirely from the RAM initramfs with the SD UNMOUNTED — reads the staged blob
+# from the high region and writes the decompressed whole image to the low region
+# [0,img) of the SAME unmounted SD (non-overlapping), SHA-verifies, then reboots
+# onto the new image. NO network, NO RAM staging, NOTHING from the SD mounted
+# during the dd.
+#
+# Power-safe: the flag stays state=armed until a VERIFIED flash completes, so a
+# power-loss mid-flash simply retries on the next boot (the destructive dd is
+# idempotent). A `tries` cap stops a bootloop on a persistently bad blob.
+#
+# No hard-coded offsets: stage_lba / sizes / SHAs are computed by the host pusher
+# (self-flash-device.sh) and read from the flag — /init only reads + validates +
+# acts. Gated on /etc/pocketforge-selfflash (staged into DEV initrds only) so a
+# prod image never honors a stray flag.  NOTE: if prod ever gains rootfs
+# auto-expand, it MUST preserve this trailing state region (not implemented here).
+#
+# busybox/initramfs portability: explicit byte block sizes (no 4M suffix), no
+# conv=fsync (uncertain in busybox dd) — durability via explicit `sync`.
+# =============================================================================
+SF_BS=4194304          # 4 MiB transfer block
+SF_ALIGN_SECT=8192     # 4 MiB in 512-byte sectors (stage_lba alignment)
+
+# Reconstruct + write the 512-byte flag record (NUL-padded full sector).
+# args: state tries stage_lba xz_bytes xz_sha img_bytes img_sha card SD FLAG_LBA
+selfflash_write_flag() {
+    sf_st="$1"; sf_tr="$2"; sf_sl="$3"; sf_xb="$4"; sf_xs="$5"
+    sf_ib="$6"; sf_is="$7"; sf_cs="$8"; sf_sd="$9"; sf_fl="${10}"
+    {
+        printf 'PF_FLAG=1\n'
+        printf 'ver=1\n'
+        printf 'state=%s\n'        "$sf_st"
+        printf 'stage_lba=%s\n'    "$sf_sl"
+        printf 'xz_bytes=%s\n'     "$sf_xb"
+        printf 'xz_sha256=%s\n'    "$sf_xs"
+        printf 'img_bytes=%s\n'    "$sf_ib"
+        printf 'img_sha256=%s\n'   "$sf_is"
+        printf 'tries=%s\n'        "$sf_tr"
+        printf 'card_sectors=%s\n' "$sf_cs"
+    } > /sf-flag.txt
+    dd if=/dev/zero of=/sf-flag.bin bs=512 count=1 2>/dev/null
+    dd if=/sf-flag.txt of=/sf-flag.bin conv=notrunc 2>/dev/null
+    dd if=/sf-flag.bin of="$sf_sd" bs=512 seek="$sf_fl" count=1 2>/dev/null
+    sync
+}
+
+# Perform recovery given the parsed flag text. Returns non-zero to fall through
+# to a normal boot; reboots (does not return) on a successful flash.
+selfflash_recover() {
+    SD="$1"; NSECT="$2"; FLAG_LBA="$3"; FLAGTXT="$4"
+    fget() { printf '%s\n' "$FLAGTXT" | sed -n "s/^$1=//p" | head -1; }
+    state="$(fget state)";        stage_lba="$(fget stage_lba)"
+    xz_bytes="$(fget xz_bytes)";  xz_sha="$(fget xz_sha256)"
+    img_bytes="$(fget img_bytes)"; img_sha="$(fget img_sha256)"
+    tries="$(fget tries)";        flag_card="$(fget card_sectors)"
+    [ -n "$tries" ] || tries=0
+
+    [ "$state" = "armed" ] || { log "selfflash: state=$state (not armed) — normal boot"; return 1; }
+    log "selfflash: ARMED stage_lba=$stage_lba xz_bytes=$xz_bytes img_bytes=$img_bytes tries=$tries"
+
+    for v in "$stage_lba" "$xz_bytes" "$img_bytes"; do
+        case "$v" in ''|*[!0-9]*) log "selfflash: bad numeric field — abort to normal boot"; return 1;; esac
+    done
+    [ "$flag_card" = "$NSECT" ] || log "selfflash: WARN card_sectors flag=$flag_card live=$NSECT"
+
+    xz_sectors=$(( (xz_bytes + 511) / 512 ))
+    img_sectors=$(( (img_bytes + 511) / 512 ))
+    [ $((stage_lba + xz_sectors)) -lt "$NSECT" ] || { log "selfflash: staged blob past card end — abort"; return 1; }
+    [ "$stage_lba" -gt "$img_sectors" ]          || { log "selfflash: staged blob overlaps image region — abort"; return 1; }
+    [ $(( stage_lba % SF_ALIGN_SECT )) -eq 0 ]   || { log "selfflash: stage_lba not 4MiB-aligned — abort"; return 1; }
+    skip4m=$(( stage_lba / SF_ALIGN_SECT ))
+
+    if [ "$tries" -ge 3 ]; then
+        log "selfflash: tries=$tries >= 3 — giving up; marking failed, normal boot"
+        selfflash_write_flag failed "$tries" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+        return 1
+    fi
+    # bump tries BEFORE the destructive write (raw flag sector; not in /pflog)
+    selfflash_write_flag armed "$((tries+1))" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+
+    # release the SD — NOTHING from the SD may be mounted during the dd
+    if [ -n "$PFLOG" ]; then sync; umount /pflog 2>/dev/null; PFLOG=""; fi
+    if mount | grep -q mmcblk; then
+        log "selfflash: FATAL — mmcblk still mounted, refusing to flash:"
+        mount | grep mmcblk | while read -r l; do log "  $l"; done
+        fail "selfflash: SD still mounted before dd"
+    fi
+    log "selfflash: SD unmounted; verified no mmcblk mounts"
+
+    log "selfflash: verifying staged .img.xz sha256..."
+    got_xz="$(dd if="$SD" bs="$SF_BS" skip="$skip4m" 2>/dev/null | head -c "$xz_bytes" | sha256sum | cut -d' ' -f1)"
+    if [ "$got_xz" != "$xz_sha" ]; then
+        log "selfflash: staged .xz SHA MISMATCH (got $got_xz want $xz_sha) — abort, retry next boot"
+        return 1
+    fi
+    log "selfflash: staged .xz verified OK"
+
+    # THE FLASH: read staged compressed from the high region, decompress, write
+    # the whole image to the low region [0,img) of the SAME unmounted SD.
+    log "selfflash: flashing — dd skip=$skip4m | unxz | dd of=$SD ..."
+    if ! dd if="$SD" bs="$SF_BS" skip="$skip4m" 2>/dev/null | head -c "$xz_bytes" | unxz | dd of="$SD" bs="$SF_BS" 2>/dev/null; then
+        log "selfflash: flash pipeline returned error — retry next boot"
+        return 1
+    fi
+    sync
+    log "selfflash: write complete; read-back verifying image sha256..."
+    got_img="$(dd if="$SD" bs="$SF_BS" 2>/dev/null | head -c "$img_bytes" | sha256sum | cut -d' ' -f1)"
+    if [ "$got_img" != "$img_sha" ]; then
+        log "selfflash: image read-back SHA MISMATCH (got $got_img want $img_sha) — retry next boot"
+        return 1
+    fi
+    log "selfflash: image verified OK — marking done, rebooting into new image"
+    selfflash_write_flag done "$((tries+1))" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+    sync
+    reboot -f
+    return 0   # not reached
+}
+
+# --- self-flash gate (dev images only) ----------------------------------------
+# Runs BEFORE the GPU insmods so recovery still works even if a bad image's GPU
+# modules would fail (fail() drops to a shell). The SD enumerates asynchronously
+# a few seconds into boot (mmc0 "new SDXC card" ~t=3.9s), AFTER /init starts — so
+# wait for the rootfs partition to appear before reading the flag, rather than
+# racing enumeration (the original rootfs mount below only wins that race because
+# the GPU insmods burn enough time first).
+if [ -f /etc/pocketforge-selfflash ]; then
+    log "STAGE: self-flash gate — waiting for SD enumeration"
+    SF_ROOTPART=""
+    SF_WAIT=0
+    while [ "$SF_WAIT" -lt 20 ]; do
+        SF_ROOTPART="$(findfs LABEL=POCKETFORGE_DATA 2>/dev/null)"
+        [ -n "$SF_ROOTPART" ] && [ -b "$SF_ROOTPART" ] && break
+        SF_ROOTPART=""
+        sleep 1
+        SF_WAIT=$((SF_WAIT + 1))
+    done
+    if [ -n "$SF_ROOTPART" ]; then
+        log "STAGE: self-flash gate — SD ready after ${SF_WAIT}s ($SF_ROOTPART)"
+        SF_SD="$(echo "$SF_ROOTPART" | sed 's/p[0-9]*$//')"   # /dev/mmcblk0p5 -> /dev/mmcblk0
+        SF_DISK="$(basename "$SF_SD")"
+        SF_NSECT="$(cat "/sys/block/${SF_DISK}/size" 2>/dev/null)"
+        if [ -n "$SF_NSECT" ] && [ "$SF_NSECT" -gt 4096 ]; then
+            SF_FLAG_LBA=$(( SF_NSECT - 2048 ))
+            SF_FLAGTXT="$(dd if="$SF_SD" bs=512 skip="$SF_FLAG_LBA" count=1 2>/dev/null | tr -d '\000' | tr -cd '[:print:]\n')"
+            if printf '%s\n' "$SF_FLAGTXT" | grep -q '^PF_FLAG=1'; then
+                log "STAGE: self-flash flag present on ${SF_SD} (sector ${SF_FLAG_LBA})"
+                selfflash_recover "$SF_SD" "$SF_NSECT" "$SF_FLAG_LBA" "$SF_FLAGTXT" \
+                    && log "selfflash: recovery returned without reboot — continuing normal boot" \
+                    || log "selfflash: not flashing — continuing normal boot"
+            else
+                log "STAGE: self-flash gate present, no armed flag — normal boot"
+            fi
+        fi
+    fi
+fi
+
 # --- PowerVR + buffer plumbing ------------------------------------------------
 # Load order: vb2 (DMA buffers) -> pvrsrvkm (GPU KMD) -> dc_sunxi (DC bridge).
 # Per-insmod trap: a silent skip past a vermagic mismatch would leave no
