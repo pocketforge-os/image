@@ -186,21 +186,35 @@ if [ -f /etc/pocketforge-selfflash ]; then
     done
     if [ -n "$SF_ROOTPART" ]; then
         log "STAGE: self-flash gate — SD ready after ${SF_WAIT}s ($SF_ROOTPART)"
-        SF_SD="$(echo "$SF_ROOTPART" | sed 's/p[0-9]*$//')"   # /dev/mmcblk1p5 -> /dev/mmcblk1
-        SF_DISK="$(basename "$SF_SD")"
-        SF_NSECT="$(cat "/sys/block/${SF_DISK}/size" 2>/dev/null)"
-        if [ -n "$SF_NSECT" ] && [ "$SF_NSECT" -gt 4096 ]; then
-            SF_FLAG_LBA=$(( SF_NSECT - 2048 ))
-            SF_FLAGTXT="$(dd if="$SF_SD" bs=512 skip="$SF_FLAG_LBA" count=1 2>/dev/null | tr -d '\000' | tr -cd '[:print:]\n')"
-            if printf '%s\n' "$SF_FLAGTXT" | grep -q '^PF_FLAG=1'; then
-                log "STAGE: self-flash flag present on ${SF_SD} (sector ${SF_FLAG_LBA})"
-                selfflash_recover "$SF_SD" "$SF_NSECT" "$SF_FLAG_LBA" "$SF_FLAGTXT" \
-                    && log "selfflash: recovery returned without reboot — continuing normal boot" \
-                    || log "selfflash: not flashing — continuing normal boot"
-            else
-                log "STAGE: self-flash gate present, no armed flag — normal boot"
+        # The two mmc controllers (SD sdc0@4020000 + eMMC sdc2@4022000) can still
+        # be settling their mmcblkN numbering / final capacity this early in boot
+        # (the very-eager "after 0s" probe raced: the flag was armed but read as
+        # absent, with the full-OS replay reading it fine). Re-resolve the SD by
+        # LABEL and read the flag in a short retry loop; act the instant a valid
+        # flag appears. Non-destructive, so retrying is safe. Logs each probe.
+        SF_FOUND=0; SF_TRY=0
+        while [ "$SF_TRY" -lt 6 ]; do
+            SF_ROOTPART="$(findfs LABEL=POCKETFORGE_DATA 2>/dev/null)"
+            SF_SD="$(echo "$SF_ROOTPART" | sed 's/p[0-9]*$//')"   # /dev/mmcblk0p2 -> /dev/mmcblk0
+            SF_DISK="$(basename "$SF_SD")"
+            SF_NSECT="$(cat "/sys/block/${SF_DISK}/size" 2>/dev/null)"
+            if [ -n "$SF_NSECT" ] && [ "$SF_NSECT" -gt 4096 ]; then
+                SF_FLAG_LBA=$(( SF_NSECT - 2048 ))
+                SF_FLAGTXT="$(dd if="$SF_SD" bs=512 skip="$SF_FLAG_LBA" count=1 2>/dev/null | tr -d '\000' | tr -cd '[:print:]\n')"
+                SF_HDR="$(printf '%s' "$SF_FLAGTXT" | head -c 11)"
+                log "STAGE: self-flash flag probe try=${SF_TRY} sd=${SF_SD} nsect=${SF_NSECT} flag_lba=${SF_FLAG_LBA} hdr=[${SF_HDR}]"
+                if printf '%s\n' "$SF_FLAGTXT" | grep -q '^PF_FLAG=1'; then
+                    SF_FOUND=1
+                    log "STAGE: self-flash flag present on ${SF_SD} (sector ${SF_FLAG_LBA})"
+                    selfflash_recover "$SF_SD" "$SF_NSECT" "$SF_FLAG_LBA" "$SF_FLAGTXT" \
+                        && log "selfflash: recovery returned without reboot — continuing normal boot" \
+                        || log "selfflash: not flashing — continuing normal boot"
+                    break
+                fi
             fi
-        fi
+            SF_TRY=$((SF_TRY + 1)); sleep 2
+        done
+        [ "$SF_FOUND" = 1 ] || log "STAGE: self-flash gate — no armed flag after settle (${SF_TRY} probes) — normal boot"
     fi
 fi
 
