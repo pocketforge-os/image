@@ -193,16 +193,26 @@ if [ -f /etc/pocketforge-selfflash ]; then
         # LABEL and read the flag in a short retry loop; act the instant a valid
         # flag appears. Non-destructive, so retrying is safe. Logs each probe.
         SF_FOUND=0; SF_TRY=0
-        while [ "$SF_TRY" -lt 6 ]; do
+        while [ "$SF_TRY" -lt 3 ]; do
             SF_ROOTPART="$(findfs LABEL=POCKETFORGE_DATA 2>/dev/null)"
             SF_SD="$(echo "$SF_ROOTPART" | sed 's/p[0-9]*$//')"   # /dev/mmcblk0p2 -> /dev/mmcblk0
             SF_DISK="$(basename "$SF_SD")"
+            SF_PART="$(basename "$SF_ROOTPART")"                   # mmcblk0p2
             SF_NSECT="$(cat "/sys/block/${SF_DISK}/size" 2>/dev/null)"
-            if [ -n "$SF_NSECT" ] && [ "$SF_NSECT" -gt 4096 ]; then
-                SF_FLAG_LBA=$(( SF_NSECT - 2048 ))
+            # Flag + staging live JUST PAST the rootfs partition (low LBA), NOT at
+            # the card end: the A523 early-boot MMC does not service the ~62 GB
+            # card-end LBA yet (reads return empty), though the full OS does. The
+            # region adjacent to the (provably-readable) rootfs partition reads
+            # fine. Both the gate and the host pusher derive flag_lba the same way
+            # from the partition table: align_up(part_end + 1 MiB, 4 MiB).
+            SF_PSTART="$(cat "/sys/class/block/${SF_PART}/start" 2>/dev/null)"
+            SF_PSIZE="$(cat "/sys/class/block/${SF_PART}/size" 2>/dev/null)"
+            if [ -n "$SF_PSTART" ] && [ -n "$SF_PSIZE" ] && [ -n "$SF_NSECT" ] && [ "$SF_NSECT" -gt 4096 ]; then
+                SF_PEND=$(( SF_PSTART + SF_PSIZE ))
+                SF_FLAG_LBA=$(( (SF_PEND + 2048 + 8191) / 8192 * 8192 ))
                 SF_FLAGTXT="$(dd if="$SF_SD" bs=512 skip="$SF_FLAG_LBA" count=1 2>/dev/null | tr -d '\000' | tr -cd '[:print:]\n')"
                 SF_HDR="$(printf '%s' "$SF_FLAGTXT" | head -c 11)"
-                log "STAGE: self-flash flag probe try=${SF_TRY} sd=${SF_SD} nsect=${SF_NSECT} flag_lba=${SF_FLAG_LBA} hdr=[${SF_HDR}]"
+                log "STAGE: self-flash flag probe try=${SF_TRY} sd=${SF_SD} pend=${SF_PEND} flag_lba=${SF_FLAG_LBA} hdr=[${SF_HDR}]"
                 if printf '%s\n' "$SF_FLAGTXT" | grep -q '^PF_FLAG=1'; then
                     SF_FOUND=1
                     log "STAGE: self-flash flag present on ${SF_SD} (sector ${SF_FLAG_LBA})"
