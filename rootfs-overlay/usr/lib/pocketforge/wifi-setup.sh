@@ -96,10 +96,15 @@ fi
 # validation; falls back to a full reassoc on APs that don't advertise FT).
 # A near-dormant "don't scan during an active stream" profile is deferred to the
 # kiosk supervisor (tsp-rcb).
-# Tunables — learn:<short_s>:<signal_threshold_dBm>:<long_s>:<db>. The threshold
-# is set a touch high (-72) to compensate for the driver's laggy 16-sample RCPI
-# averaging. The DB self-learns at runtime, so this works on ANY user network
-# with no per-network configuration; it persists across reboots under /var/lib.
+# Tunables — learn:<short_s>:<signal_threshold_dBm>:<long_s>:<db>. Threshold -67:
+# keep short-interval (30s) scanning whenever the link is NOT clearly strong, so we
+# roam OFF a weak mesh node back to the strongest AP instead of sticking on it
+# (also compensates for the driver's laggy 16-sample RCPI averaging). The long
+# interval stays 600s so a clearly-strong link scans rarely — the firmware-fragile
+# off-channel scan dwell is the costly moment on this single-radio non-split-scan
+# radio, so we minimise it when the link is already good. The DB self-learns at
+# runtime, so this works on ANY user network with no per-network configuration; it
+# persists across reboots under /var/lib (tsp-5f7 AP-selection / roam-stickiness).
 BGSCAN_DB_DIR="/var/lib/wpa_supplicant"
 SSID_SAFE="$(printf '%s' "${SSID}" | tr -c 'A-Za-z0-9._-' '_')"
 BGSCAN_DB="${BGSCAN_DB_DIR}/bgscan-${SSID_SAFE}.db"
@@ -116,17 +121,28 @@ cat > "${WPA_CONF}" << EOF
 ctrl_interface=/run/wpa_supplicant
 update_config=0
 # Keep BSSes seen in the table between our infrequent background scans, so a
-# learned roam target isn't aged out before the next (rare) scan (tsp-008).
+# learned roam target (incl. the strongest AP) isn't aged out before the next
+# (rare) scan — survives a transient missed scan during a recovery window, so the
+# strong AP stays selectable instead of leaving only a weak node (tsp-008, tsp-5f7).
 ap_scan=1
-bss_expiration_age=300
+bss_expiration_age=600
 
 network={
     ssid="${SSID}"
     psk="${PSK}"
     key_mgmt=${KEY_MGMT}
-    # Channel-learning background scan: roam only when the link is weak, with
-    # scans narrowed to this network's channels. Self-learns; works on any net.
-    bgscan="learn:45:-72:600:${BGSCAN_DB}"
+    # Active-probe the SSID on every scan so ALL member BSSes (incl. the strongest
+    # AP) are reliably present at initial / post-recovery selection — wpa_supplicant
+    # has no minimum-signal association floor and simply picks the strongest BSS
+    # present in the scan results, so "lands on a weak node" means the strong AP was
+    # missing from that scan; active probing closes that gap (tsp-5f7).
+    scan_ssid=1
+    # Channel-learning background scan: short-interval scan whenever the link is NOT
+    # clearly strong (< -67 dBm) so we discover + roam back to the strongest AP
+    # instead of sticking on a weak mesh node; a clearly-strong link uses the long
+    # interval (rare scans), keeping the firmware-fragile off-channel dwell minimal.
+    # Self-learns channels; works on any net (tsp-5f7).
+    bgscan="learn:30:-67:600:${BGSCAN_DB}"
 }
 EOF
 
