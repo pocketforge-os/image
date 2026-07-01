@@ -307,6 +307,29 @@ if [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] && [ -d /work/libsdl3/testbin ] && 
     echo "[customize] SDL test binaries installed to /opt/pocketforge/bin (dev variant)"
 fi
 
+# --- Owned wpa_supplicant install --------------------------------------------
+# When the owned arm64 wpa_supplicant binary (wpa-supplicant-tsp) is mounted at
+# /work/wpa, overwrite the stock Debian /sbin/wpa_supplicant with it. The Debian
+# "wpasupplicant" package still provides the runtime deps (libnl/openssl) and the
+# wpa_supplicant@wlan0 systemd wiring; we only replace the binary. If /work/wpa
+# is absent (the hermetic pf build does not mount it, or a non-owned build),
+# keep stock Debian's binary untouched.
+if [ -f /work/wpa/wpa_supplicant ]; then
+    echo "[customize] Installing owned wpa_supplicant (overwriting stock Debian /sbin/wpa_supplicant)..."
+    # Sanity: it must be an aarch64 ELF, or we would brick WiFi with a wrong-arch
+    # binary. Read the ELF e_machine (bytes 18-19) directly with od so this works
+    # even if `file` is not in the build container. aarch64 == 0x00B7 (LE).
+    E_MACHINE="$(od -An -tx1 -j18 -N2 /work/wpa/wpa_supplicant | tr -d ' ')"
+    if [ "${E_MACHINE}" != "b700" ]; then
+        echo "FATAL: /work/wpa/wpa_supplicant is not an aarch64 ELF (e_machine=${E_MACHINE}, want b700)" >&2
+        exit 1
+    fi
+    install -m 0755 /work/wpa/wpa_supplicant "${ROOTFS}/sbin/wpa_supplicant"
+    echo "[customize] owned wpa_supplicant installed at /sbin/wpa_supplicant (aarch64 ELF verified)"
+else
+    echo "[customize] No owned wpa_supplicant at /work/wpa — keeping stock Debian wpasupplicant"
+fi
+
 # --- Config files ------------------------------------------------------------
 echo "[customize] Writing config files..."
 
