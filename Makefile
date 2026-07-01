@@ -34,6 +34,11 @@ M1B_MODE ?= 0
 # Path to a local libsdl3-sunxifb build (contains libSDL3-pocketforge.so.0)
 LOCAL_LIBSDL3 ?= $(HOME)/libsdl3-sunxifb/_build
 
+# Path to a local wpa-supplicant-tsp build (contains our owned wpa_supplicant
+# arm64 binary). When present, build-rootfs.sh overwrites /sbin/wpa_supplicant
+# with this owned build; when absent, the stock Debian wpasupplicant is kept.
+LOCAL_WPA ?= $(HOME)/wpa-supplicant-tsp/_build
+
 # Phase 2 owned-substrate paths (kernel-tsp + gpu-km-tsp local builds).
 # When set, the image pipeline uses PocketForge-built kernel + GPU modules
 # instead of the vendor blobs in LOCAL_BLOBS.
@@ -173,6 +178,12 @@ BLOBS_SRC ?= $(LOCAL_BLOBS)
 LIBSDL3_SRC ?= $(LOCAL_LIBSDL3)
 KERNEL_TSP_SRC ?= $(LOCAL_KERNEL_TSP)
 GPU_KM_TSP_SRC ?= $(LOCAL_GPU_KM_TSP)
+WPA_SRC ?= $(LOCAL_WPA)
+
+# Owned wpa_supplicant bind-mount — only when the arm64 binary is actually
+# present, so a build without it (or a non-owned build) cleanly keeps stock
+# Debian wpasupplicant instead of failing on a missing mount source.
+WPA_MOUNT := $(if $(wildcard $(WPA_SRC)/wpa_supplicant),-v "$(WPA_SRC):/work/wpa:ro",)
 
 # Substrate bind-mount flags (only when SUBSTRATE=owned)
 ifeq ($(SUBSTRATE),owned)
@@ -216,6 +227,7 @@ else
 		-v "$(BLOBS_SRC):/work/blobs:ro" \
 		$(SUBSTRATE_MOUNTS) \
 		-v "$(LIBSDL3_SRC):/work/libsdl3:ro" \
+		$(WPA_MOUNT) \
 		-v "$(OUT_DIR):/work/out:rw" \
 		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
 		$(CONTAINER) \
@@ -239,6 +251,7 @@ build-rootfs:
 		-v "$(BLOBS_SRC):/work/blobs:ro" \
 		$(SUBSTRATE_MOUNTS) \
 		-v "$(LIBSDL3_SRC):/work/libsdl3:ro" \
+		$(WPA_MOUNT) \
 		-v "$(OUT_DIR):/work/out:rw" \
 		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
 		$(CONTAINER) \
@@ -375,6 +388,7 @@ help:
 	@echo "  SD_MAX_SIZE_BYTES  Max disk size safety cap (default: 128 GiB)"
 	@echo "  LOCAL_BLOBS      Path to local blobs repo checkout (default: ~/blobs)"
 	@echo "  LOCAL_LIBSDL3    Path to libSDL3 build dir (default: ~/libsdl3-sunxifb/_build)"
+	@echo "  LOCAL_WPA        Path to owned wpa_supplicant build dir (default: ~/wpa-supplicant-tsp/_build; overwrites /sbin/wpa_supplicant when present)"
 	@echo "  LOCAL_KERNEL_TSP Path to kernel-tsp build tree (default: ~/kernel-tsp)"
 	@echo "  LOCAL_GPU_KM_TSP Path to gpu-km-tsp build tree (default: ~/gpu-km-tsp)"
 	@echo "  BLOBS_SRC        Override blobs source for build-image (default: LOCAL_BLOBS)"
