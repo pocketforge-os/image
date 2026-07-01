@@ -807,6 +807,11 @@ chmod +x "${CUSTOMIZE_SCRIPT}"
 # --mode=root because this script runs as root inside the container
 # (mmdebstrap needs chroot/mount for cross-arch; container provides isolation).
 # --aptopt disables valid-until checking (snapshot mirrors have stale headers).
+# The Acquire::Retries / Timeout aptopts make the bulk package fetch ride through
+# snapshot.debian.org's intermittent "503 No healthy backends" flapping (its Fastly
+# +Cloudflare front-ends degrade for minutes at a time; a single un-retried 503
+# otherwise aborts the whole mmdebstrap). Retries only affect fetch resilience, not
+# the fetched bytes, so the resulting rootfs stays bit-identical/reproducible.
 # SOURCE_DATE_EPOCH is inherited for reproducibility.
 echo "  Running mmdebstrap (this may take several minutes under qemu...)..."
 POCKETFORGE_VARIANT="${VARIANT}" \
@@ -816,6 +821,8 @@ mmdebstrap \
     --variant=minbase \
     --mode=root \
     --aptopt='Acquire::Check-Valid-Until "false"' \
+    --aptopt='Acquire::Retries "20"' \
+    --aptopt='Acquire::http::Timeout "60"' \
     --aptopt='APT::Sandbox::User "root"' \
     --include="${PKG_LIST}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} POCKETFORGE_SUBSTRATE=${SUBSTRATE} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
