@@ -305,6 +305,28 @@ install -d "${ROOTFS}/opt/pocketforge/lib"
 LIBSDL3_SRC="$(find /work/libsdl3 -name 'libSDL3-pocketforge.so*' -type f | head -1)"
 install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketforge.so.0"
 
+# --- Owned wpa_supplicant install --------------------------------------------
+# When the owned arm64 wpa_supplicant binary (wpa-supplicant-tsp) is mounted at
+# /work/wpa, overwrite the stock Debian /sbin/wpa_supplicant with it. The Debian
+# "wpasupplicant" package still provides the runtime deps (libnl/openssl) and the
+# wpa_supplicant@wlan0 systemd wiring; we only replace the binary. If /work/wpa
+# is absent (non-owned build), keep stock Debian's binary untouched.
+if [ -f /work/wpa/wpa_supplicant ]; then
+    echo "[customize] Installing owned wpa_supplicant (overwriting stock Debian /sbin/wpa_supplicant)..."
+    # Sanity: it must be an aarch64 ELF, or we would brick WiFi with a wrong-arch
+    # binary. Read the ELF e_machine (bytes 18-19) directly with od so this works
+    # even if `file` is not in the build container. aarch64 == 0x00B7 (LE).
+    E_MACHINE="$(od -An -tx1 -j18 -N2 /work/wpa/wpa_supplicant | tr -d ' ')"
+    if [ "${E_MACHINE}" != "b700" ]; then
+        echo "FATAL: /work/wpa/wpa_supplicant is not an aarch64 ELF (e_machine=${E_MACHINE}, want b700)" >&2
+        exit 1
+    fi
+    install -m 0755 /work/wpa/wpa_supplicant "${ROOTFS}/sbin/wpa_supplicant"
+    echo "[customize] owned wpa_supplicant installed at /sbin/wpa_supplicant (aarch64 ELF verified)"
+else
+    echo "[customize] No owned wpa_supplicant at /work/wpa — keeping stock Debian wpasupplicant"
+fi
+
 # --- Config files ------------------------------------------------------------
 echo "[customize] Writing config files..."
 
@@ -785,6 +807,11 @@ chmod +x "${CUSTOMIZE_SCRIPT}"
 # --mode=root because this script runs as root inside the container
 # (mmdebstrap needs chroot/mount for cross-arch; container provides isolation).
 # --aptopt disables valid-until checking (snapshot mirrors have stale headers).
+# The Acquire::Retries / Timeout aptopts make the bulk package fetch ride through
+# snapshot.debian.org's intermittent "503 No healthy backends" flapping (its Fastly
+# +Cloudflare front-ends degrade for minutes at a time; a single un-retried 503
+# otherwise aborts the whole mmdebstrap). Retries only affect fetch resilience, not
+# the fetched bytes, so the resulting rootfs stays bit-identical/reproducible.
 # SOURCE_DATE_EPOCH is inherited for reproducibility.
 echo "  Running mmdebstrap (this may take several minutes under qemu...)..."
 POCKETFORGE_VARIANT="${VARIANT}" \
@@ -794,6 +821,8 @@ mmdebstrap \
     --variant=minbase \
     --mode=root \
     --aptopt='Acquire::Check-Valid-Until "false"' \
+    --aptopt='Acquire::Retries "20"' \
+    --aptopt='Acquire::http::Timeout "60"' \
     --aptopt='APT::Sandbox::User "root"' \
     --include="${PKG_LIST}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} POCKETFORGE_SUBSTRATE=${SUBSTRATE} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
