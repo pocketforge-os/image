@@ -834,12 +834,16 @@ chmod +x "${CUSTOMIZE_SCRIPT}"
 # --mode=root because this script runs as root inside the container
 # (mmdebstrap needs chroot/mount for cross-arch; container provides isolation).
 # --aptopt disables valid-until checking (snapshot mirrors have stale headers) and
-# sets Acquire::Retries so a transient snapshot.debian.org 503 (it is chronically
-# flaky/rate-limited — a Fastly outage blocked the first pipeline run 2026-07-02)
-# retries with apt's exponential backoff instead of aborting the whole build.
-# mmdebstrap runs its OWN apt in the target, so it does NOT inherit the base
-# container's /etc/apt Retries — it must be passed here. (Retries survive transient
-# 503s; a sustained total outage still needs a mirror fallback / local apt cache.)
+# sets Acquire::Retries + Acquire::http::Timeout so a transient snapshot.debian.org
+# 503 (it is chronically flaky/rate-limited — its Fastly+Cloudflare front-ends
+# degrade for minutes at a time; a Fastly outage blocked the first pipeline run
+# 2026-07-02) retries with apt's exponential backoff instead of aborting the whole
+# build. mmdebstrap runs its OWN apt in the target, so it does NOT inherit the base
+# container's /etc/apt Retries — they must be passed here. Retries/Timeout affect
+# fetch resilience only, not the fetched bytes (apt verifies every .deb against the
+# signed pinned-snapshot index), so the rootfs stays bit-identical/reproducible.
+# (Retries survive transient 503s; a sustained total outage still needs a mirror
+# fallback / local apt cache — see PF_APT_PROXY below.)
 # SOURCE_DATE_EPOCH is inherited for reproducibility.
 #
 # Optional transparent apt caching proxy. When PF_APT_PROXY is set (e.g. the NAS
@@ -863,8 +867,9 @@ mmdebstrap \
     --variant=minbase \
     --mode=root \
     --aptopt='Acquire::Check-Valid-Until "false"' \
+    --aptopt='Acquire::Retries "20"' \
+    --aptopt='Acquire::http::Timeout "60"' \
     --aptopt='APT::Sandbox::User "root"' \
-    --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
