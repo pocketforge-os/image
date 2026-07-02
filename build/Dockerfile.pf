@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1-labs
 #
 # image/build/Dockerfile.pf — the MULTISTAGE os-image build (B4 / tsp-1dl.4).
 # ==============================================================================
@@ -309,20 +309,45 @@ SDL
 FROM ${PF_CONTAINER} AS rootfs
 ARG PF_DEVICE_ID
 ARG PF_ARCH
+ARG PF_GPU_REPO
+ARG PF_VARIANT=dev
 ARG APT_SNAPSHOT_DATE
 ARG SOURCE_DATE_EPOCH
-COPY --from=image-src . /work/image
+# Inputs land at the EXACT default paths the image repo's build-rootfs script + its
+# customize-hook expect (SRC_DIR=/work/src, BLOBS_DIR=/work/blobs, GPU_KM_TSP_DIR=/work/gpu-km-tsp,
+# KERNEL_TSP_DIR=/work/kernel-tsp, LIBSDL3_DIR=/work/libsdl3, OUT_DIR=/work/out). This lets us call
+# the OWNED build script unchanged — the same script legacy `make build-image` runs — instead of
+# re-inlining its ~880 lines (which would drift from the proven, R1-comparable output). This is the
+# precedent the sdl stage set (it runs the driver repo's own build-libsdl3.sh). SUBSTRATE=owned wires
+# the kernel/GPU modules from the kernel + gpu-km stages, never vendor blobs.
+COPY --from=image-src . /work/src
 COPY --from=fetch  /out /work/blobs
-COPY --from=kernel /out/lib/modules /work/kernel-modules
-COPY --from=gpu-km /out/modules     /work/gpu-modules
-COPY --from=sdl    /out/lib         /work/sdl
-RUN set -eux; \
-    mkdir -p /out; \
-    # TODO(tsp-1dl.4.5): one core build_rootfs (mmdebstrap, arm64, SOURCE_DATE_EPOCH,
-    #   apt snapshot ${APT_SNAPSHOT_DATE}) param by /work/image/rootfs-packages-${PF_DEVICE_ID}.txt;
-    #   install kernel modules + GPU .ko + libSDL3 + firmware -> reproducible rootfs tar/ext4.
-    printf 'rootfs device=%s snapshot=%s (SCAFFOLD)\n' "${PF_DEVICE_ID}" "${APT_SNAPSHOT_DATE}" \
-        > /out/.pf-rootfs-provenance
+COPY --from=kernel /out/lib/modules /work/kernel-tsp
+COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
+COPY --from=sdl    /out/lib         /work/libsdl3
+# mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
+# RUN --security=insecure (labs frontend + a docker-container builder created with
+# --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
+# tsp-buildkit-insecure-mmdebstrap memory. Only THIS RUN is privileged; every other stage stays sandboxed.
+RUN --security=insecure <<'ROOTFS'
+set -eux
+mkdir -p /out
+case "${PF_GPU_REPO}" in
+  gpu-km-tsp)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
+    SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 \
+      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp OUT_DIR=/out \
+      SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
+      bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned
+    ;;
+  *)            # a523 (Mali) + future SoCs: the a523 rootfs needs Mali userland + AIC8800 firmware groups
+    #   that have NO manifest blobs yet (tsp-1dl.3) — emit a device-gated marker like the sdl stage until
+    #   the a523 blob groups are populated. build-rootfs-a523.sh is wired but its inputs are not fetchable.
+    printf 'rootfs NOT SHIPPED for device=%s gpu=%s: a523 Mali/AIC8800 blob groups unpopulated (tsp-1dl.3)\n' \
+        "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-rootfs-provenance
+    cat /out/.pf-rootfs-provenance
+    ;;
+esac
+ROOTFS
 
 # =============================================================================
 # assemble — family assemble_image: flashable .img + SHA (tsp-1dl.4.5).
@@ -332,24 +357,50 @@ RUN set -eux; \
 # =============================================================================
 FROM ${PF_CONTAINER} AS assemble
 ARG PF_DEVICE_ID
+ARG PF_GPU_REPO
+ARG PF_KERNEL_DTB
 ARG PF_IMAGE_NAME
 ARG PF_IMAGE_ASSEMBLER
 ARG PF_BOOT_PROTO
 ARG PF_BOOTCHAIN_MODEL
 ARG PF_BOOTCHAIN_BLOB_GROUP
+ARG PF_VARIANT=dev
 ARG SOURCE_DATE_EPOCH
-COPY --from=image-src . /work/image
-COPY --from=rootfs /out /work/rootfs
-COPY --from=kernel /out/boot /work/boot
-COPY --from=fetch  /out /work/blobs
-RUN set -eux; \
-    mkdir -p /out; \
-    # TODO(tsp-1dl.4.5): assemble ${PF_IMAGE_NAME} via ${PF_IMAGE_ASSEMBLER} (boot_proto
-    #   ${PF_BOOT_PROTO}); reproducibility_finalize (tar --sort/--clamp-mtime, pinned GPT/FS
-    #   UUIDs, xz -T1 -n); emit ${PF_IMAGE_NAME}.img(.xz) + .sha256 + provenance.
-    printf 'assemble %s assembler=%s boot_proto=%s (SCAFFOLD)\n' \
-        "${PF_IMAGE_NAME}" "${PF_IMAGE_ASSEMBLER}" "${PF_BOOT_PROTO}" > /out/.pf-assemble-provenance; \
-    : > /out/"${PF_IMAGE_NAME:-pocketforge}.img.SCAFFOLD"
+COPY --from=image-src . /work/src
+COPY --from=rootfs /out          /work/rootfs   # userdata.ext4 (+.sha256) or the a523 NOT-SHIPPED marker
+COPY --from=kernel /out/boot     /work/kboot    # Image + <dtb>
+COPY --from=gpu-km /out/modules  /work/gpu-km-tsp
+COPY --from=fetch  /out          /work/blobs    # boot-chain group (boot0/u-boot/monitor/scp/env)
+# genimage/dragonsecboot/abootimg/initrd may need mount/loop -> keep the same privilege the legacy
+# `docker run` gave them (tsp-buildkit-insecure-mmdebstrap). Only this RUN is privileged.
+RUN --security=insecure <<'ASM'
+set -eux
+mkdir -p /out
+case "${PF_GPU_REPO}" in
+  gpu-km-tsp)   # a133: vendor boot0 -> boot_package.fex (dragonsecboot) -> abootimg -> genimage GPT
+    # Shim the owned kernel-tsp build-tree layout build-sd-image.sh expects (arch/arm64/boot/{Image,
+    # dts/sunxi/<dtb>}) from the kernel stage's staged /out/boot — so build-sd-image.sh stays
+    # byte-identical to the legacy `make build-image` path (R1-comparable).
+    mkdir -p /work/kernel-tsp/arch/arm64/boot/dts/sunxi
+    cp /work/kboot/Image                    /work/kernel-tsp/arch/arm64/boot/Image
+    cp "/work/kboot/${PF_KERNEL_DTB}"       /work/kernel-tsp/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb
+    # Hand build-sd-image.sh the pre-built rootfs from the rootfs stage (M1B_MODE=0 consumes
+    # OUT_DIR/userdata.ext4 rather than rebuilding it).
+    cp /work/rootfs/userdata.ext4           /out/userdata.ext4
+    SRC_DIR=/work/src BLOBS_DIR=/work/blobs OUT_DIR=/out \
+      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
+      SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
+      bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned
+    ;;
+  *)            # a523: extlinux + SPL/U-Boot via boards/tsp-s/assemble-sd.sh — but the a523 rootfs
+    #   (Mali/AIC8800 blob groups) is not fetchable yet (tsp-1dl.3), so the rootfs stage emits a
+    #   NOT-SHIPPED marker; mirror that here rather than assemble an image with no rootfs.
+    printf 'assemble NOT SHIPPED for device=%s gpu=%s: a523 rootfs unpopulated (tsp-1dl.3)\n' \
+        "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-assemble-provenance
+    cat /out/.pf-assemble-provenance
+    ;;
+esac
+ASM
 
 # =============================================================================
 # export — the flashable artifact(s) only (FROM scratch → nothing but /out).
