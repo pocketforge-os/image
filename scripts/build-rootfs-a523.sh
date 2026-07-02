@@ -79,6 +79,7 @@ mmdebstrap \
     --arch=arm64 --variant=minbase --mode=root \
     --aptopt='Acquire::Check-Valid-Until "false"' \
     --aptopt='APT::Sandbox::User "root"' \
+    --aptopt='Acquire::Retries "5"' \
     --include="${PKG_LIST}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} KREL=${KREL} ${BOARD_DIR}/rootfs-customize.sh \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
