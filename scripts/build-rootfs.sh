@@ -784,7 +784,13 @@ chmod +x "${CUSTOMIZE_SCRIPT}"
 # Run mmdebstrap with the customize hook.
 # --mode=root because this script runs as root inside the container
 # (mmdebstrap needs chroot/mount for cross-arch; container provides isolation).
-# --aptopt disables valid-until checking (snapshot mirrors have stale headers).
+# --aptopt disables valid-until checking (snapshot mirrors have stale headers) and
+# sets Acquire::Retries so a transient snapshot.debian.org 503 (it is chronically
+# flaky/rate-limited — a Fastly outage blocked the first pipeline run 2026-07-02)
+# retries with apt's exponential backoff instead of aborting the whole build.
+# mmdebstrap runs its OWN apt in the target, so it does NOT inherit the base
+# container's /etc/apt Retries — it must be passed here. (Retries survive transient
+# 503s; a sustained total outage still needs a mirror fallback / local apt cache.)
 # SOURCE_DATE_EPOCH is inherited for reproducibility.
 echo "  Running mmdebstrap (this may take several minutes under qemu...)..."
 POCKETFORGE_VARIANT="${VARIANT}" \
@@ -795,6 +801,7 @@ mmdebstrap \
     --mode=root \
     --aptopt='Acquire::Check-Valid-Until "false"' \
     --aptopt='APT::Sandbox::User "root"' \
+    --aptopt='Acquire::Retries "5"' \
     --include="${PKG_LIST}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} POCKETFORGE_SUBSTRATE=${SUBSTRATE} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
