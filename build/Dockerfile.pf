@@ -375,6 +375,14 @@ COPY --from=image-src . /work/src
 COPY --from=rootfs /out          /work/rootfs
 # /work/kboot = kernel Image + <dtb>.
 COPY --from=kernel /out/boot     /work/kboot
+# /work/kernel-tsp/lib/modules = the owned kernel's modules_install tree. build-sd-image.sh's
+# initrd step (boards/tsp/initrd/build-initrd.sh) does `find ${KERNEL_TSP_DIR} -name
+# videobuf2-dma-contig.ko` — the legacy `make build-image` path had the full kernel BUILD tree
+# as KERNEL_TSP_DIR (Image + built .ko in place); here KERNEL_TSP_DIR is a shim, so supply the
+# modules from the kernel stage's /out/lib/modules. The .ko is byte-identical to legacy's
+# (modules_install copies the built module verbatim; build-initrd strips it either way) so the
+# initrd stays R1-comparable. The boot/ shim (Image + dtb) is added in the RUN below.
+COPY --from=kernel /out/lib/modules /work/kernel-tsp/lib/modules
 COPY --from=gpu-km /out/modules  /work/gpu-km-tsp
 # /work/blobs = the fetched vendor blobs incl. the boot-chain group (boot0/u-boot/monitor/scp/env).
 COPY --from=fetch  /out          /work/blobs
