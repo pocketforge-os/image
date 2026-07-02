@@ -160,13 +160,13 @@ if [ "$SUBSTRATE" = "owned" ]; then
     KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
     [ -n "${KERNEL_WIFI_MAC}" ] || { echo "FATAL: xr829_mac.ko not found in kernel-tsp" >&2; exit 1; }
     # WiFi firmware still from blobs (same firmware regardless of module name)
-    [ -f "${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
+    [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
     echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed (owned substrate)"
 else
     for f in \
         "${BLOBS_DIR}/sunxi/a133/22.102.54.38/modules/pvrsrvkm.ko" \
         "${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/modules/videobuf2-dma-contig.ko" \
-        "${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/firmware/fw_xr829.bin"; do
+        "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin"; do
         [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
     done
     echo "  blobs: spot-check passed (vendor substrate)"
@@ -292,9 +292,9 @@ install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.3
 install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.sh.22.102.54.38" "${ROOTFS}/lib/firmware/"
 
 # WiFi firmware
-install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/firmware/fw_xr829.bin" "${ROOTFS}/lib/firmware/"
-install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/firmware/boot_xr829.bin" "${ROOTFS}/lib/firmware/"
-install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/firmware/sdd_xr829.bin" "${ROOTFS}/lib/firmware/"
+install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin" "${ROOTFS}/lib/firmware/"
+install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/boot_xr829.bin" "${ROOTFS}/lib/firmware/"
+install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/sdd_xr829.bin" "${ROOTFS}/lib/firmware/"
 
 echo "[customize] Firmware: $(ls "${ROOTFS}/lib/firmware/" | wc -l) files"
 
