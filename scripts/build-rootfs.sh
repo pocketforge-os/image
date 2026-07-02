@@ -143,8 +143,8 @@ fi
 # Verify blobs exist
 # DDK userspace + firmware always from blobs (unchanged across substrate transition)
 for f in \
-    "${BLOBS_DIR}/tsp/22.102.54.38/lib/libEGL.so" \
-    "${BLOBS_DIR}/tsp/22.102.54.38/firmware/rgx.fw.22.102.54.38"; do
+    "${BLOBS_DIR}/sunxi/a133/22.102.54.38/lib/libEGL.so" \
+    "${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38"; do
     [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
 done
 
@@ -160,13 +160,13 @@ if [ "$SUBSTRATE" = "owned" ]; then
     KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
     [ -n "${KERNEL_WIFI_MAC}" ] || { echo "FATAL: xr829_mac.ko not found in kernel-tsp" >&2; exit 1; }
     # WiFi firmware still from blobs (same firmware regardless of module name)
-    [ -f "${BLOBS_DIR}/tsp/kernel-4.9.191/firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
+    [ -f "${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
     echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed (owned substrate)"
 else
     for f in \
-        "${BLOBS_DIR}/tsp/22.102.54.38/modules/pvrsrvkm.ko" \
-        "${BLOBS_DIR}/tsp/kernel-4.9.191/modules/videobuf2-dma-contig.ko" \
-        "${BLOBS_DIR}/tsp/kernel-4.9.191/firmware/fw_xr829.bin"; do
+        "${BLOBS_DIR}/sunxi/a133/22.102.54.38/modules/pvrsrvkm.ko" \
+        "${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/modules/videobuf2-dma-contig.ko" \
+        "${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/firmware/fw_xr829.bin"; do
         [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
     done
     echo "  blobs: spot-check passed (vendor substrate)"
@@ -218,7 +218,7 @@ echo "[customize] Installing PowerVR DDK userspace..."
 install -d "${ROOTFS}/usr/lib/pvr-rogue"
 for so in libEGL.so libGLESv2.so libGLES_CM.so libIMGegl.so \
           libsrv_um.so libusc.so libglslcompiler.so libpvrNULL_WSEGL.so; do
-    install -m 0644 "/work/blobs/tsp/22.102.54.38/lib/${so}" "${ROOTFS}/usr/lib/pvr-rogue/${so}"
+    install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/lib/${so}" "${ROOTFS}/usr/lib/pvr-rogue/${so}"
 done
 printf '/usr/lib/pvr-rogue\n' > "${ROOTFS}/etc/ld.so.conf.d/00-pvr.conf"
 chroot "$ROOTFS" ldconfig
@@ -262,16 +262,16 @@ else
     echo "[customize] Substrate: vendor (blobs)"
 
     # GPU modules (from DDK extraction)
-    install -m 0644 "/work/blobs/tsp/22.102.54.38/modules/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
-    install -m 0644 "/work/blobs/tsp/22.102.54.38/modules/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/modules/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/modules/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
 
     # DMA buffer plumbing (needed by dc_sunxi)
-    install -m 0644 "/work/blobs/tsp/kernel-4.9.191/modules/videobuf2-dma-contig.ko" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/modules/videobuf2-dma-contig.ko" "${ROOTFS}/lib/modules/4.9.191/"
 
     # WiFi driver triplet
-    install -m 0644 "/work/blobs/tsp/kernel-4.9.191/modules/xradio_mac.ko" "${ROOTFS}/lib/modules/4.9.191/"
-    install -m 0644 "/work/blobs/tsp/kernel-4.9.191/modules/xradio_core.ko" "${ROOTFS}/lib/modules/4.9.191/"
-    install -m 0644 "/work/blobs/tsp/kernel-4.9.191/modules/xradio_wlan.ko" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/modules/xradio_mac.ko" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/modules/xradio_core.ko" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/modules/xradio_wlan.ko" "${ROOTFS}/lib/modules/4.9.191/"
 fi
 
 chroot "$ROOTFS" depmod 4.9.191
@@ -288,13 +288,13 @@ echo "[customize] Installing firmware..."
 install -d "${ROOTFS}/lib/firmware"
 
 # GPU firmware (both files required — missing rgx.sh.* causes firmware-load failures)
-install -m 0644 "/work/blobs/tsp/22.102.54.38/firmware/rgx.fw.22.102.54.38" "${ROOTFS}/lib/firmware/"
-install -m 0644 "/work/blobs/tsp/22.102.54.38/firmware/rgx.sh.22.102.54.38" "${ROOTFS}/lib/firmware/"
+install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38" "${ROOTFS}/lib/firmware/"
+install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.sh.22.102.54.38" "${ROOTFS}/lib/firmware/"
 
 # WiFi firmware
-install -m 0644 "/work/blobs/tsp/kernel-4.9.191/firmware/fw_xr829.bin" "${ROOTFS}/lib/firmware/"
-install -m 0644 "/work/blobs/tsp/kernel-4.9.191/firmware/boot_xr829.bin" "${ROOTFS}/lib/firmware/"
-install -m 0644 "/work/blobs/tsp/kernel-4.9.191/firmware/sdd_xr829.bin" "${ROOTFS}/lib/firmware/"
+install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/firmware/fw_xr829.bin" "${ROOTFS}/lib/firmware/"
+install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/firmware/boot_xr829.bin" "${ROOTFS}/lib/firmware/"
+install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/firmware/sdd_xr829.bin" "${ROOTFS}/lib/firmware/"
 
 echo "[customize] Firmware: $(ls "${ROOTFS}/lib/firmware/" | wc -l) files"
 

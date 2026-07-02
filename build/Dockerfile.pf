@@ -37,25 +37,54 @@
 ARG PF_CONTAINER=pocketforge/build:10.3-2021.07-bookworm
 
 # =============================================================================
-# fetch — vendor blobs (irreducibly-closed originals), by CID.
-# tsp-1dl.3 (B3): kubo + minisign run ONLY here (never enter the image); dag-import the
-# vendor-manifest CARv2, verify signature + SHA-256, export the device's blob groups.
-# B4.0 scaffold: pass through the committed blobs-src tree (git-clone-blobs fallback).
+# fetch — vendor blobs (irreducibly-closed originals), by CID (B3 / tsp-1dl.3).
+# DECIDED mechanism: HERMETIC KUBO-IN-BUILD (owner + research, 2026-07-02). kubo (pinned
+# into the pocketforge/build base, image/build/Dockerfile kubo-fetch stage) runs ONLY here
+# and is discarded with the stage — it never enters the final artifact. Steps (hermetic):
+#   1. verify the vendor-originals.car sha256 (fail-closed) vs platform.lock's [car] pin
+#   2. `ipfs init` a THROWAWAY IPFS_PATH (no daemon, no network, no DHT)
+#   3. `ipfs dag import --pin-roots=false vendor-originals.car`
+#   4. per device profile group (sorted): fetch-group.py `ipfs cat --offline <cid>` -> /out,
+#      each blob sha256-verified (fetch-group.py's gate). Output paths = manifest path= (sunxi/a133/…).
+# Reproducibility anchor = per-blob CID + sha256; the .car sha256 is rot-detection on THIS copy only.
+# ⚠ RULE (footgun): NEVER `ipfs repo gc` here — the imported blocks are unpinned
+#   (--pin-roots=false), so a gc would delete them mid-fetch (kubo #9553 / #9765).
+# PF_FETCH_MODE=fallback keeps the git-clone-blobs path (binaries still in git on blobs
+# tsp-1dl.3 reorg-only) reachable for merge-1; hermetic is the reproducible-from-committed target.
 # =============================================================================
 FROM ${PF_CONTAINER} AS fetch
 ARG PF_DEVICE_ID
-ARG PF_BLOB_GROUPS
-ARG PF_BLOBS_SHA
-ARG PF_VENDOR_MANIFEST_SHA
+ARG PF_BLOB_GROUPS             # space-separated device profile groups (pf emits them sorted)
+ARG PF_VENDOR_MANIFEST_SHA     # pinned in platform.lock — provenance marker here
+ARG PF_CAR_SHA256              # pinned in platform.lock [car] — the SPECIFIC .car copy this build consumes
+ARG PF_FETCH_MODE=hermetic     # hermetic (default) | fallback (git-clone-blobs, merge-1 safety)
+ARG PF_BLOBS_SHA               # provenance marker for the fallback path
+# manifest.toml + fetch-group.py from the pinned vendor-manifest (git-archive build context;
+# context root = repo root, so fetch-group.py is at scripts/). Both land in /work/vm/ by basename.
+COPY --from=vendor-manifest-src manifest.toml scripts/fetch-group.py /work/vm/
+# the CARv2 of the vendor originals (content-addressed; CIDs unchanged by the path reorg):
+COPY --from=blobs-car vendor-originals.car /work/vendor-originals.car
+# merge-1 fallback source (git tree of binaries at sunxi/a133/…); dropped after the strip merges:
 COPY --from=blobs-src . /work/blobs-src
 RUN set -eux; \
     mkdir -p /out; \
-    # TODO(tsp-1dl.3): kubo+minisign fetch-by-CID for sorted groups [${PF_BLOB_GROUPS}];
-    #   verify each blob SHA-256 + the vendor-manifest minisign signature; export to /out.
-    cp -a /work/blobs-src/. /out/ 2>/dev/null || true; \
-    printf 'device=%s blobs_sha=%s vendor_manifest_sha=%s groups=[%s]\n' \
-        "${PF_DEVICE_ID}" "${PF_BLOBS_SHA}" "${PF_VENDOR_MANIFEST_SHA}" "${PF_BLOB_GROUPS}" \
-        > /out/.pf-fetch-provenance
+    if [ "${PF_FETCH_MODE}" = "hermetic" ]; then \
+      echo "${PF_CAR_SHA256}  /work/vendor-originals.car" | sha256sum -c -; \
+      export IPFS_PATH=/work/ipfs; \
+      ipfs init --profile server >/dev/null; \
+      ipfs dag import --pin-roots=false /work/vendor-originals.car; \
+      for g in $(echo "${PF_BLOB_GROUPS}" | tr ' ' '\n' | sort); do \
+        python3 /work/vm/fetch-group.py --manifest /work/vm/manifest.toml \
+          --group "$g" --out /out --offline ; \
+      done; \
+      printf 'fetch=hermetic car_sha256=%s vendor_manifest_sha=%s groups=[%s]\n' \
+        "${PF_CAR_SHA256}" "${PF_VENDOR_MANIFEST_SHA}" "${PF_BLOB_GROUPS}" > /out/.pf-fetch-provenance; \
+    else \
+      cp -a /work/blobs-src/. /out/ 2>/dev/null || true; \
+      printf 'fetch=fallback blobs_sha=%s vendor_manifest_sha=%s groups=[%s]\n' \
+        "${PF_BLOBS_SHA}" "${PF_VENDOR_MANIFEST_SHA}" "${PF_BLOB_GROUPS}" > /out/.pf-fetch-provenance; \
+    fi; \
+    cat /out/.pf-fetch-provenance
 
 # =============================================================================
 # kernel — build from a `git archive` of the platform.lock SHA (tsp-1dl.4.2).

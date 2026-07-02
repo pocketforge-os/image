@@ -83,8 +83,8 @@ if [ "$SUBSTRATE" = "owned" ]; then
 else
     # Phase 1: modules from vendor blobs
     echo "  substrate: vendor (blobs)"
-    MODULES_DIR="${BLOBS_DIR}/tsp/kernel-4.9.191/modules"
-    KERNEL_SHA="${BLOBS_DIR}/tsp/kernel-4.9.191/KERNEL.SHA256"
+    MODULES_DIR="${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/modules"
+    KERNEL_SHA="${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/KERNEL.SHA256"
     [ -d "${MODULES_DIR}" ] || { echo "FATAL: ${MODULES_DIR} not found (blobs checkout?)" >&2; exit 1; }
 fi
 
@@ -119,7 +119,7 @@ if [ "$SUBSTRATE" = "vendor" ]; then
     [ -d "${MODULES_DIR}" ] || { echo "FATAL: ${MODULES_DIR} not found (blobs checkout?)" >&2; exit 1; }
     if [ -f "${KERNEL_SHA}" ]; then
         echo "=== verifying module SHA-256 against KERNEL.SHA256 ==="
-        ( cd "${BLOBS_DIR}/tsp/kernel-4.9.191"
+        ( cd "${BLOBS_DIR}/sunxi/a133/kernel-4.9.191"
           for m in $MODULES; do
               grep -E "  modules/${m}\$" KERNEL.SHA256 | sha256sum -c -
           done )
@@ -201,7 +201,7 @@ done
 # files pvrsrvkm registers the BVNC but fails init with err=-19 (ENODEV) and
 # dc_sunxi cascades into "No such device". Firmware is always from blobs/ (the
 # closed DDK firmware is version-locked to the UM blobs, not to the KM source).
-GPU_FW_DIR="${BLOBS_DIR}/tsp/22.102.54.38/firmware"
+GPU_FW_DIR="${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware"
 mkdir -p "${STAGING}/lib/firmware"
 for fw in rgx.fw.22.102.54.38 rgx.sh.22.102.54.38; do
     [ -f "${GPU_FW_DIR}/${fw}" ] || { echo "FATAL: GPU firmware ${fw} not found at ${GPU_FW_DIR}" >&2; exit 1; }

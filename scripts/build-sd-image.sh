@@ -148,9 +148,9 @@ BOOTPKG_DIR="${WORK}/bootpkg"
 mkdir -p "${BOOTPKG_DIR}"
 
 # Copy vendor boot chain components into the working directory
-cp "${BLOBS_DIR}/tsp/boot-chain/u-boot.bin"  "${BOOTPKG_DIR}/u-boot.bin"
-cp "${BLOBS_DIR}/tsp/boot-chain/monitor.bin" "${BOOTPKG_DIR}/monitor.bin"
-cp "${BLOBS_DIR}/tsp/boot-chain/scp.bin"     "${BOOTPKG_DIR}/scp.bin"
+cp "${BLOBS_DIR}/sunxi/a133/boot-chain/u-boot.bin"  "${BOOTPKG_DIR}/u-boot.bin"
+cp "${BLOBS_DIR}/sunxi/a133/boot-chain/monitor.bin" "${BOOTPKG_DIR}/monitor.bin"
+cp "${BLOBS_DIR}/sunxi/a133/boot-chain/scp.bin"     "${BOOTPKG_DIR}/scp.bin"
 cp "${DTB_FILE}"                              "${BOOTPKG_DIR}/dtb.bin"
 cp "${BOARD_DIR}/boot_package.cfg"            "${BOOTPKG_DIR}/boot_package.cfg"
 
@@ -184,7 +184,7 @@ if [ "$SUBSTRATE" = "owned" ]; then
     KERNEL_IMAGE="${KERNEL_TSP_DIR}/arch/arm64/boot/Image"
     echo "  kernel: owned-substrate (kernel-tsp)"
 else
-    KERNEL_IMAGE="${BLOBS_DIR}/tsp/kernel-4.9.191/Image"
+    KERNEL_IMAGE="${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/Image"
     echo "  kernel: vendor blob"
 fi
 CMDLINE_FILE="${BOARD_DIR}/cmdline.txt"
@@ -250,10 +250,10 @@ GENIMAGE_ROOT="${WORK}/genimage-root"
 mkdir -p "${GENIMAGE_TMP}" "${GENIMAGE_INPUT}" "${GENIMAGE_OUTPUT}" "${GENIMAGE_ROOT}"
 
 # Stage all input images in the genimage input directory
-cp "${BLOBS_DIR}/tsp/boot-chain/boot0.img"  "${GENIMAGE_INPUT}/boot0.img"
+cp "${BLOBS_DIR}/sunxi/a133/boot-chain/boot0.img"  "${GENIMAGE_INPUT}/boot0.img"
 cp "${BOOTPKG_FILE}"                         "${GENIMAGE_INPUT}/boot_package.fex"
 cp "${BOOTIMG_FILE}"                         "${GENIMAGE_INPUT}/boot.img"
-cp "${BLOBS_DIR}/tsp/boot-chain/env.img"     "${GENIMAGE_INPUT}/env.img"
+cp "${BLOBS_DIR}/sunxi/a133/boot-chain/env.img"     "${GENIMAGE_INPUT}/env.img"
 
 # Create the empty FAT32 boot-resource partition image.
 # genimage's vfat{} handler runs 'mcopy rootpath/* ::' which fails when rootpath
