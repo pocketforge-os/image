@@ -313,6 +313,10 @@ ARG PF_GPU_REPO
 ARG PF_VARIANT=dev
 ARG APT_SNAPSHOT_DATE
 ARG SOURCE_DATE_EPOCH
+# Optional transparent apt cache proxy (e.g. the NAS apt-cacher-ng at :3142). Empty =
+# direct snapshot. Fetch transport only; apt verifies bytes vs the signed index so it
+# never changes output (R1 / G-reproducible safe). See build-rootfs.sh PF_APT_PROXY.
+ARG PF_APT_PROXY
 # Inputs land at the EXACT default paths the image repo's build-rootfs script + its
 # customize-hook expect (SRC_DIR=/work/src, BLOBS_DIR=/work/blobs, GPU_KM_TSP_DIR=/work/gpu-km-tsp,
 # KERNEL_TSP_DIR=/work/kernel-tsp, LIBSDL3_DIR=/work/libsdl3, OUT_DIR=/work/out). This lets us call
@@ -336,7 +340,7 @@ case "${PF_GPU_REPO}" in
   gpu-km-tsp)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp OUT_DIR=/out \
-      SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
+      SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" PF_APT_PROXY="${PF_APT_PROXY:-}" \
       bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned
     ;;
   *)            # a523 (Mali) + future SoCs: the a523 rootfs needs Mali userland + AIC8800 firmware groups

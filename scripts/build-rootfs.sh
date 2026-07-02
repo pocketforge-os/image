@@ -792,6 +792,20 @@ chmod +x "${CUSTOMIZE_SCRIPT}"
 # container's /etc/apt Retries — it must be passed here. (Retries survive transient
 # 503s; a sustained total outage still needs a mirror fallback / local apt cache.)
 # SOURCE_DATE_EPOCH is inherited for reproducibility.
+#
+# Optional transparent apt caching proxy. When PF_APT_PROXY is set (e.g. the NAS
+# apt-cacher-ng at http://10.0.32.86:3142, which fronts snapshot.debian.org and
+# routes the flaky .deb pool to a fast reproducible mirror), mmdebstrap's apt uses
+# it. This is a FETCH TRANSPORT ONLY and fully TRANSPARENT: apt verifies every .deb
+# against the signed InRelease->Packages chain from the pinned snapshot date, so the
+# proxy cannot change the bytes — G-reproducible / the R1 gate are preserved (a cache
+# HIT and a direct fetch yield identical rootfs contents). Empty by default = direct
+# snapshot. Not recorded in provenance; it never affects output bytes.
+APT_PROXY_OPT=()
+if [ -n "${PF_APT_PROXY:-}" ]; then
+    echo "  apt proxy: ${PF_APT_PROXY} (transparent cache; bytes verified vs signed index)"
+    APT_PROXY_OPT=( --aptopt="Acquire::http::Proxy \"${PF_APT_PROXY}\"" )
+fi
 echo "  Running mmdebstrap (this may take several minutes under qemu...)..."
 POCKETFORGE_VARIANT="${VARIANT}" \
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
@@ -802,6 +816,7 @@ mmdebstrap \
     --aptopt='Acquire::Check-Valid-Until "false"' \
     --aptopt='APT::Sandbox::User "root"' \
     --aptopt='Acquire::Retries "5"' \
+    "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} POCKETFORGE_SUBSTRATE=${SUBSTRATE} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
