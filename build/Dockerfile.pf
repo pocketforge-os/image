@@ -265,14 +265,41 @@ GPUKM
 # =============================================================================
 FROM ${PF_CONTAINER} AS sdl
 ARG PF_DEVICE_ID
+ARG PF_GPU_REPO
 ARG PF_LIBSDL3_SHA
-COPY --from=sdl-src . /work/libsdl3
+ARG SOURCE_DATE_EPOCH
+# Mount points match the canonical recipe (libsdl3-sunxifb/build/build-libsdl3.sh): source at
+# /work/src (the script builds /work/src/sdl3), blobs at /work/blobs (it links the PowerVR UM at
+# /work/blobs/tsp/<bvnc>). The UM comes from the fetch stage — NOT a host LOCAL_BLOBS/_build inject.
+COPY --from=sdl-src . /work/src
 COPY --from=fetch /out /work/blobs
-RUN set -eux; \
-    mkdir -p /out/lib; \
-    # TODO(tsp-1dl.4.4): cross-build libSDL3-pocketforge.so.0 (sunxifb backend) against the
-    #   PowerVR UM in /work/blobs; a523 ships no libSDL3 today (device-gated).
-    printf 'libsdl3-sunxifb@%s (SCAFFOLD)\n' "${PF_LIBSDL3_SHA}" > /out/lib/.pf-sdl-provenance
+RUN <<'SDL'
+set -eux
+mkdir -p /out/lib /work/out
+# libSDL3-pocketforge's sunxifb backend links the closed PowerVR UM, so it is meaningful ONLY on the
+# PowerVR IP (a133 / gpu-km-tsp). a523 (Mali) ships no sunxifb libSDL3 today — emit a device-gated marker.
+if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
+  printf 'libsdl3-sunxifb@%s NOT SHIPPED for device=%s (gpu=%s; sunxifb links the PowerVR UM — a133-only)\n' \
+    "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/lib/.pf-sdl-provenance
+  cat /out/lib/.pf-sdl-provenance
+  exit 0
+fi
+# Deterministic timestamp (image commit epoch, resolved from the pinned SHA — never wall-clock);
+# cmake/gcc honour SOURCE_DATE_EPOCH. Per-lib bit-for-bit repro is finished under B6 (tsp-1dl.6).
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+# Canonical recipe: cmake+ninja, sunxifb backend, with DYNAPI-export + glibc-symver self-checks.
+# In-container, no host injection. OUT is the writable artifact dir; SRC/BLOBS default to the mounts.
+OUT=/work/out bash /work/src/build/build-libsdl3.sh
+# Emit the shared-object set (real lib + soname/dev symlinks) for the a133 rootfs/assemble stage.
+cp -a /work/out/libSDL3-pocketforge.so* /out/lib/
+{
+  printf 'libsdl3-sunxifb@%s device=%s gpu=%s\n' "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}"
+  for f in /out/lib/libSDL3-pocketforge.so*; do
+    if [ -f "$f" ] && [ ! -L "$f" ]; then printf '  %s sha256=%s\n' "${f##*/}" "$(sha256sum "$f" | cut -d' ' -f1)"; fi
+  done
+} > /out/lib/.pf-sdl-provenance
+cat /out/lib/.pf-sdl-provenance
+SDL
 
 # =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
