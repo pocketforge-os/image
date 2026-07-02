@@ -188,13 +188,18 @@ ARG SOURCE_DATE_EPOCH
 COPY --from=kernel /work/kernel /work/kernel
 COPY --from=kernel /out/build/.pf-kernel-provenance /work/kernel-provenance
 COPY --from=gpu-src . /work/gpu
-# a133 PowerVR DDK needs pvr-buildopts.mk (vendor-matching CFLAGS/build-opts); it lives in the image repo.
-COPY --from=image-src build/pvr-buildopts.mk /work/pvr-buildopts.mk
+# The GPU driver's build-options (PVR_KM_CFLAGS + the Make-level SUPPORT_* gates) are OWNED BY and
+# ship WITH the driver source at gpu-km-tsp/build/pvr-buildopts.mk, which the DDK Makefile
+# auto-resolves as search-order #1 ($(DDK_SRC)/build/pvr-buildopts.mk). We deliberately do NOT COPY
+# or override a second copy from the image repo: that fork went stale and diverged (re-added
+# -DRELEASE → -Werror "redefined" vs the force-included config_kernel_sunxi_a133.h; re-enabled
+# SUPPORT_WORKLOAD_ESTIMATION → vendor-FW ABI mismatch; dropped the Make-level SUPPORT_DISPLAY_CLASS
+# gate → dc_sunxi MODPOST undefined symbols). Single source of truth lives with the driver (tsp-1dl.4.3).
 RUN <<'GPUKM'
 set -eux
 : "${PF_GPU_REPO:?}" "${PF_GPU_MODULES:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
 export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
-export ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- KCFLAGS=-Wno-error
+export ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu-
 # Deterministic module stamp (pinned to the kernel commit like the kernel stage; vermagic itself
 # is epoch-independent, but the .ko's embedded build id is not).
 SOURCE_DATE_EPOCH="${PF_KERNEL_SOURCE_DATE_EPOCH:-${SOURCE_DATE_EPOCH:-}}"
@@ -216,12 +221,17 @@ mkdir -p /out/modules
 # in the container — it does its own docker run — so its `make all` line is replicated here).
 case "$PF_GPU_REPO" in
   gpu-km-tsp)        # a133 PowerVR DDK 1.19 (GE8300 BVNC 22.102.54.38) -> pvrsrvkm.ko + dc_sunxi.ko
+    # PVR_BUILDOPTS_MK is intentionally UNSET → the DDK Makefile auto-resolves its own in-repo
+    # build/pvr-buildopts.mk (the validated tsp-cv7.4.3 config). No KCFLAGS=-Wno-error: the vendor
+    # DDK builds warning-clean under its own per-object -Werror once RELEASE isn't doubly-defined.
     make -C "$KDIR" M=/work/gpu ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- \
-      CONFIG_DRM_IMG_ROGUE=m PVR_SYSTEM=sunxi_a133 PVR_BUILDOPTS_MK=/work/pvr-buildopts.mk modules
+      CONFIG_DRM_IMG_ROGUE=m PVR_SYSTEM=sunxi_a133 modules
     ;;
   gpu-km-tsp-a523)   # Mali-G57 Valhall JM (CSF off) -> mali_kbase.ko
+    # KCFLAGS=-Wno-error matches the vendor build-a523-gpu-km.sh recipe (the midgard tree is not
+    # warning-clean); the a133 PowerVR build above deliberately does NOT set it.
     make -C /work/gpu/drivers/gpu/arm/midgard all \
-      KDIR="$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- \
+      KDIR="$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- KCFLAGS=-Wno-error \
       CONFIG_MALI_MIDGARD=m CONFIG_MALI_PLATFORM_NAME=sunxi CONFIG_MALI_CSF_SUPPORT=n \
       CONFIG_MALI_DEVFREQ=y CONFIG_MALI_DEBUG=n
     ;;
