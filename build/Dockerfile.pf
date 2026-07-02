@@ -1,0 +1,173 @@
+# syntax=docker/dockerfile:1.7
+#
+# image/build/Dockerfile.pf — the MULTISTAGE os-image build (B4 / tsp-1dl.4).
+# ==============================================================================
+# ONE `docker build` produces a flashable PocketForge SD image entirely inside the
+# owned, digest-pinned build container (`pocketforge/build`, image/build/Dockerfile,
+# pinned in image/container.pin) — from COMMITTED GIT REFS ONLY. This RETIRES (in
+# tsp-1dl.4.5, after the R1 regression gate) the legacy `make build-image` docker-RUN
+# that built kernel/GPU/SDL OUTSIDE the container and bind-mounted them read-only, plus
+# `build-image-host` (host toolchain) and `LOCAL_BLOBS`. Until then this file is ADDITIVE.
+#
+# Driven by `pf build --device <id> --artifact os-image` (platform/core/pf-build.sh),
+# which resolves every source repo THROUGH platform.lock to an exact SHA (never a branch
+# tip; the Yocto AUTOREV trap) and passes them as `--build-arg <REPO>_SHA=...`. Source
+# repos arrive as NAMED BUILD CONTEXTS, each a `git archive` of the lock SHA — NEVER a
+# clone inside the build (platform docs/KERNEL-SOURCE-STRATEGY.md §3: the archive of a
+# content-addressed SHA is byte-identical regardless of transport, and is air-gap-safe):
+#   --build-context image-src=<archive>  kernel-src=<archive>  gpu-src=<archive>
+#                    sdl-src=<archive>    blobs-src=<archive>
+#
+# Stage graph (COPY --from boundaries == the B6 component-repro-gate granularity):
+#   fetch ─┐                             vendor blobs by CID (B3 fills; B4.0 scaffolds)
+#   kernel ┼─▶ gpu-km ─┐                 kernel Image/dtbs/modules/Module.symvers  (tsp-1dl.4.2)
+#          │           │                 GPU .ko built vs kernel Module.symvers    (tsp-1dl.4.3)
+#   sdl ───┼───────────┼─┐               libSDL3-pocketforge.so                     (tsp-1dl.4.4)
+#          └─▶ rootfs ─┴─┴─▶ assemble ─▶ export   mmdebstrap + genimage/extlinux    (tsp-1dl.4.5)
+#
+# ⚠ B4.0 SCAFFOLDING (tsp-1dl.4.1): the per-stage RUNs below are documented STUBS that
+# create the expected output layout + provenance markers but do NOT yet build real
+# artifacts — each carries a TODO(tsp-1dl.4.N) for the child that fills it. The stage
+# GRAPH, the ARG surface, and the `pf build` command are complete and validated now
+# (`pf build … --dry-run`, `docker build --check`); real builds land per-child.
+# ==============================================================================
+
+# The owned, digest-pinned build container (image/container.pin). Overridable so a dev
+# can point at a locally-built tag; CI/`pf build` pass the pinned digest.
+ARG PF_CONTAINER=pocketforge/build:10.3-2021.07-bookworm
+
+# =============================================================================
+# fetch — vendor blobs (irreducibly-closed originals), by CID.
+# tsp-1dl.3 (B3): kubo + minisign run ONLY here (never enter the image); dag-import the
+# vendor-manifest CARv2, verify signature + SHA-256, export the device's blob groups.
+# B4.0 scaffold: pass through the committed blobs-src tree (git-clone-blobs fallback).
+# =============================================================================
+FROM ${PF_CONTAINER} AS fetch
+ARG PF_DEVICE_ID
+ARG PF_BLOB_GROUPS
+ARG PF_BLOBS_SHA
+ARG PF_VENDOR_MANIFEST_SHA
+COPY --from=blobs-src . /work/blobs-src
+RUN set -eux; \
+    mkdir -p /out; \
+    # TODO(tsp-1dl.3): kubo+minisign fetch-by-CID for sorted groups [${PF_BLOB_GROUPS}];
+    #   verify each blob SHA-256 + the vendor-manifest minisign signature; export to /out.
+    cp -a /work/blobs-src/. /out/ 2>/dev/null || true; \
+    printf 'device=%s blobs_sha=%s vendor_manifest_sha=%s groups=[%s]\n' \
+        "${PF_DEVICE_ID}" "${PF_BLOBS_SHA}" "${PF_VENDOR_MANIFEST_SHA}" "${PF_BLOB_GROUPS}" \
+        > /out/.pf-fetch-provenance
+
+# =============================================================================
+# kernel — build from a `git archive` of the platform.lock SHA (tsp-1dl.4.2).
+# MUST enforce (MODVERSIONS=n → vermagic is the ONLY .ko load gate): LOCALVERSION_AUTO=n,
+# a stamped LOCALVERSION, no submodules, pinned KBUILD_BUILD_{TIMESTAMP,USER,HOST} +
+# SOURCE_DATE_EPOCH. Emits Image + DTBs + /lib/modules + Module.symvers.
+# =============================================================================
+FROM ${PF_CONTAINER} AS kernel
+ARG PF_DEVICE_ID
+ARG PF_ARCH
+ARG PF_KERNEL_REPO
+ARG PF_KERNEL_SHA
+ARG PF_KERNEL_DEFCONFIG
+ARG PF_KERNEL_DTB
+ARG PF_TOOLCHAIN_GCC_VERSION
+ARG SOURCE_DATE_EPOCH
+COPY --from=kernel-src . /work/kernel
+RUN set -eux; \
+    mkdir -p /out/boot /out/lib/modules /out/build; \
+    # TODO(tsp-1dl.4.2): build ${PF_KERNEL_REPO}@${PF_KERNEL_SHA} with ${PF_KERNEL_DEFCONFIG}
+    #   (gcc ${PF_TOOLCHAIN_GCC_VERSION}, ARCH=arm64) -> Image + ${PF_KERNEL_DTB} + modules +
+    #   Module.symvers; hard-assert the vermagic/repro guards (build-kernel.sh).
+    printf 'kernel %s@%s defconfig=%s dtb=%s (SCAFFOLD)\n' \
+        "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}" "${PF_KERNEL_DEFCONFIG}" "${PF_KERNEL_DTB}" \
+        > /out/build/.pf-kernel-provenance
+
+# =============================================================================
+# gpu-km — GPU kernel module, built vs the SAME-tree Module.symvers (tsp-1dl.4.3).
+# COPY --from=kernel the build tree so vermagic matches (silent-load-failure gate).
+# Per-IP: a133 gpu-km-tsp (pvrsrvkm.ko+dc_sunxi.ko); a523 gpu-km-tsp-a523 (mali_kbase.ko).
+# =============================================================================
+FROM ${PF_CONTAINER} AS gpu-km
+ARG PF_GPU_REPO
+ARG PF_GPU_SHA
+ARG PF_GPU_MODULES
+COPY --from=kernel /out/build /work/kernel-build
+COPY --from=gpu-src . /work/gpu
+RUN set -eux; \
+    mkdir -p /out/modules; \
+    # TODO(tsp-1dl.4.3): build ${PF_GPU_REPO}@${PF_GPU_SHA} (${PF_GPU_MODULES}) against
+    #   /work/kernel-build/Module.symvers; assert .ko vermagic == kernel vermagic.
+    printf 'gpu-km %s@%s modules=[%s] (SCAFFOLD)\n' \
+        "${PF_GPU_REPO}" "${PF_GPU_SHA}" "${PF_GPU_MODULES}" > /out/modules/.pf-gpu-provenance
+
+# =============================================================================
+# sdl — libSDL3-pocketforge.so from the committed libsdl3-sunxifb ref (tsp-1dl.4.4).
+# Links the closed PowerVR UM from the fetch stage (blob group), not a host LOCAL_BLOBS.
+# =============================================================================
+FROM ${PF_CONTAINER} AS sdl
+ARG PF_DEVICE_ID
+ARG PF_LIBSDL3_SHA
+COPY --from=sdl-src . /work/libsdl3
+COPY --from=fetch /out /work/blobs
+RUN set -eux; \
+    mkdir -p /out/lib; \
+    # TODO(tsp-1dl.4.4): cross-build libSDL3-pocketforge.so.0 (sunxifb backend) against the
+    #   PowerVR UM in /work/blobs; a523 ships no libSDL3 today (device-gated).
+    printf 'libsdl3-sunxifb@%s (SCAFFOLD)\n' "${PF_LIBSDL3_SHA}" > /out/lib/.pf-sdl-provenance
+
+# =============================================================================
+# rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
+# rootfs-packages-<id>.txt (tsp-1dl.4.5 unifies the two forked build-rootfs scripts).
+# Composes the kernel modules + GPU .ko + libSDL3 + fetched firmware.
+# =============================================================================
+FROM ${PF_CONTAINER} AS rootfs
+ARG PF_DEVICE_ID
+ARG PF_ARCH
+ARG APT_SNAPSHOT_DATE
+ARG SOURCE_DATE_EPOCH
+COPY --from=image-src . /work/image
+COPY --from=fetch  /out /work/blobs
+COPY --from=kernel /out/lib/modules /work/kernel-modules
+COPY --from=gpu-km /out/modules     /work/gpu-modules
+COPY --from=sdl    /out/lib         /work/sdl
+RUN set -eux; \
+    mkdir -p /out; \
+    # TODO(tsp-1dl.4.5): one core build_rootfs (mmdebstrap, arm64, SOURCE_DATE_EPOCH,
+    #   apt snapshot ${APT_SNAPSHOT_DATE}) param by /work/image/rootfs-packages-${PF_DEVICE_ID}.txt;
+    #   install kernel modules + GPU .ko + libSDL3 + firmware -> reproducible rootfs tar/ext4.
+    printf 'rootfs device=%s snapshot=%s (SCAFFOLD)\n' "${PF_DEVICE_ID}" "${APT_SNAPSHOT_DATE}" \
+        > /out/.pf-rootfs-provenance
+
+# =============================================================================
+# assemble — family assemble_image: flashable .img + SHA (tsp-1dl.4.5).
+# Declarative per PF_IMAGE_ASSEMBLER / PF_BOOT_PROTO: a133 = genimage + vendor
+# boot0/boot_package.fex/abootimg; a523 = extlinux + SPL/U-Boot. Consumes the rootfs +
+# kernel boot + fetch-stage bootchain blobs. reproducibility_finalize lives here.
+# =============================================================================
+FROM ${PF_CONTAINER} AS assemble
+ARG PF_DEVICE_ID
+ARG PF_IMAGE_NAME
+ARG PF_IMAGE_ASSEMBLER
+ARG PF_BOOT_PROTO
+ARG PF_BOOTCHAIN_MODEL
+ARG PF_BOOTCHAIN_BLOB_GROUP
+ARG SOURCE_DATE_EPOCH
+COPY --from=image-src . /work/image
+COPY --from=rootfs /out /work/rootfs
+COPY --from=kernel /out/boot /work/boot
+COPY --from=fetch  /out /work/blobs
+RUN set -eux; \
+    mkdir -p /out; \
+    # TODO(tsp-1dl.4.5): assemble ${PF_IMAGE_NAME} via ${PF_IMAGE_ASSEMBLER} (boot_proto
+    #   ${PF_BOOT_PROTO}); reproducibility_finalize (tar --sort/--clamp-mtime, pinned GPT/FS
+    #   UUIDs, xz -T1 -n); emit ${PF_IMAGE_NAME}.img(.xz) + .sha256 + provenance.
+    printf 'assemble %s assembler=%s boot_proto=%s (SCAFFOLD)\n' \
+        "${PF_IMAGE_NAME}" "${PF_IMAGE_ASSEMBLER}" "${PF_BOOT_PROTO}" > /out/.pf-assemble-provenance; \
+    : > /out/"${PF_IMAGE_NAME:-pocketforge}.img.SCAFFOLD"
+
+# =============================================================================
+# export — the flashable artifact(s) only (FROM scratch → nothing but /out).
+# `pf build … --output type=local,dest=$PF_OUT_DIR` extracts this stage.
+# =============================================================================
+FROM scratch AS export
+COPY --from=assemble /out/ /
