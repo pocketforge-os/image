@@ -71,16 +71,103 @@ ARG PF_KERNEL_SHA
 ARG PF_KERNEL_DEFCONFIG
 ARG PF_KERNEL_DTB
 ARG PF_TOOLCHAIN_GCC_VERSION
+# Kernel repro epoch: pinned to the KERNEL commit (component reproducibility — the kernel
+# Image stays byte-identical from the kernel SHA alone, independent of image-repo churn).
+# Falls back to the image-wide SOURCE_DATE_EPOCH if the caller did not resolve a kernel one.
+ARG PF_KERNEL_SOURCE_DATE_EPOCH
 ARG SOURCE_DATE_EPOCH
 COPY --from=kernel-src . /work/kernel
-RUN set -eux; \
-    mkdir -p /out/boot /out/lib/modules /out/build; \
-    # TODO(tsp-1dl.4.2): build ${PF_KERNEL_REPO}@${PF_KERNEL_SHA} with ${PF_KERNEL_DEFCONFIG}
-    #   (gcc ${PF_TOOLCHAIN_GCC_VERSION}, ARCH=arm64) -> Image + ${PF_KERNEL_DTB} + modules +
-    #   Module.symvers; hard-assert the vermagic/repro guards (build-kernel.sh).
-    printf 'kernel %s@%s defconfig=%s dtb=%s (SCAFFOLD)\n' \
-        "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}" "${PF_KERNEL_DEFCONFIG}" "${PF_KERNEL_DTB}" \
-        > /out/build/.pf-kernel-provenance
+RUN <<'KERNEL'
+set -eux
+: "${PF_KERNEL_DEFCONFIG:?}" "${PF_KERNEL_DTB:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
+SOURCE_DATE_EPOCH="${PF_KERNEL_SOURCE_DATE_EPOCH:-${SOURCE_DATE_EPOCH:-}}"
+: "${SOURCE_DATE_EPOCH:?PF_KERNEL_SOURCE_DATE_EPOCH/SOURCE_DATE_EPOCH must be set (pinned kernel commit time)}"
+export SOURCE_DATE_EPOCH
+cd /work/kernel
+
+# --- Toolchain + reproducible-build environment (KERNEL-SOURCE-STRATEGY.md §4) ---------
+# The pinned cross toolchain ships in the owned container at /opt/arm-<ver>/bin.
+export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
+export ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu-
+# From the family toolchain contract (families/sunxi/family.toml): the A523/5.15 tree
+# needs -fcommon (host tools) + -Wno-error; harmless for the clean-building A133/4.9 tree.
+export HOSTCFLAGS=-fcommon KCFLAGS=-Wno-error
+# Pin the build identity deterministically. vermagic (the sole .ko load gate under
+# MODVERSIONS=n) does not embed these, but the kernel banner / Image bytes do, so a
+# floating timestamp/user/host would break the B6 cross-host bit-for-bit compare.
+export KBUILD_BUILD_USER=pocketforge KBUILD_BUILD_HOST=pocketforge
+export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%a %b %e %T UTC %Y')"
+
+# Stamp an empty .scmversion so the version string is transport-INDEPENDENT: with
+# LOCALVERSION_AUTO=n a git *clone* would still get a '+' suffix from scripts/setlocalversion
+# (scm present, HEAD not at a tag) while a *git archive* (no .git) would not — .scmversion
+# suppresses that scm probe entirely, so archive-build vermagic == clone-build vermagic
+# (KERNEL-SOURCE-STRATEGY.md §4). Empty => the release string is exactly the defconfig's.
+printf '' > .scmversion
+
+# --- Configure from the committed owned defconfig ---------------------------------------
+make "${PF_KERNEL_DEFCONFIG}"
+
+# --- VERMAGIC / REPRODUCIBILITY GUARDS (hard fail) -------------------------------------
+# Mirrors platform/families/sunxi/build-kernel.sh pf_kernel_assert_repro_guards() — keep
+# the two in lockstep. MODVERSIONS=n makes vermagic the ONLY .ko load gate, so any
+# archive-vs-clone version drift is a SILENT GPU-KM load failure, not merely a repro blemish.
+# The DEFINITIVE transport-independence anchor is the empty .scmversion stamped above: it
+# short-circuits scripts/setlocalversion regardless of CONFIG_LOCALVERSION_AUTO or .git, so
+# archive-build vermagic == clone-build vermagic (verified for a133/4.9 + a523/5.15,
+# tsp-1dl.4.2). LOCALVERSION_AUTO=n is therefore recommended-not-required (KERNEL-SOURCE-
+# STRATEGY.md §4) — a133's defconfig pins it, a523's leaves the Kconfig default y; both are
+# transport-safe here via .scmversion. So AUTO=y is a WARN; .scmversion-missing is a hard FAIL.
+rc=0
+[ -f .scmversion ] || { echo "GUARD FAIL: .scmversion missing -> version string is transport-dependent (archive vs clone)"; rc=1; }
+grep -Eq '^CONFIG_LOCALVERSION_AUTO=y' .config && echo "GUARD WARN: CONFIG_LOCALVERSION_AUTO=y (defconfig does not pin =n); .scmversion neutralizes the drift, but pinning =n in the defconfig is cleaner" || true
+grep -Eq '^CONFIG_MODVERSIONS=y'       .config && { echo "GUARD FAIL: CONFIG_MODVERSIONS=y -> vermagic is not the sole .ko load gate (contract assumes n)"; rc=1; } || true
+# A `git archive` carries no .git; assert the tree is archive-clean (no scm, no submodules).
+[ -e .git ] && { echo "GUARD FAIL: .git present -> build input must be a git archive, not a clone"; rc=1; } || true
+[ -f .gitmodules ] && { echo "GUARD FAIL: submodules present -> archive omits them -> divergence"; rc=1; } || true
+for v in SOURCE_DATE_EPOCH KBUILD_BUILD_TIMESTAMP KBUILD_BUILD_USER KBUILD_BUILD_HOST; do
+  eval "val=\${$v:-}"; [ -n "$val" ] || { echo "GUARD FAIL: $v unset -> non-reproducible kernel build"; rc=1; }
+done
+[ "$rc" -eq 0 ] || { echo "kernel repro/vermagic guards FAILED"; exit 1; }
+
+# --- Build Image + modules + exactly the profile's DTB --------------------------------
+# The DTB source subdir is family/line-specific (4.9=dts/sunxi, 5.15=dts/allwinner), so
+# resolve it from the committed tree rather than hard-coding a path. The kbuild dtb target
+# is relative to arch/arm64/boot/dts (the vendor 4.9 Makefile rejects a full-path target),
+# so strip that prefix.
+dts="$(find arch/arm64/boot/dts -name "${PF_KERNEL_DTB%.dtb}.dts" -print -quit)"
+[ -n "$dts" ] || { echo "DTB source ${PF_KERNEL_DTB%.dtb}.dts not found under arch/arm64/boot/dts"; exit 1; }
+dtb_target="${dts#arch/arm64/boot/dts/}"; dtb_target="${dtb_target%.dts}.dtb"
+make -j"$(nproc)" Image modules "${dtb_target}"
+
+# --- Stage artifacts: Image + DTB + /lib/modules + Module.symvers ----------------------
+krel="$(cat include/config/kernel.release)"
+install -D -m0644 arch/arm64/boot/Image      /out/boot/Image
+install -D -m0644 "${dts%.dts}.dtb"          "/out/boot/${PF_KERNEL_DTB}"
+make INSTALL_MOD_PATH=/out modules_install
+# modules_install leaves build/source symlinks pointing at /work/kernel (absent in the
+# rootfs) — drop them so they cannot leak a dangling link into the reproducible image.
+rm -f "/out/lib/modules/${krel}/build" "/out/lib/modules/${krel}/source"
+# Kernel build-tree handoff for the GPU-KM stage (tsp-1dl.4.3 links vs this Module.symvers;
+# it also COPYs the full built /work/kernel tree it needs for `make -C … M=…`).
+install -D -m0644 Module.symvers /out/build/Module.symvers
+install -D -m0644 .config        /out/build/config
+install -D -m0644 System.map     /out/build/System.map
+printf '%s\n' "${krel}" > /out/build/kernel.release
+
+# --- Provenance (captures vermagic for the B6 archive-vs-clone compare) -----------------
+ko="$(find /out/lib/modules -name '*.ko' -print -quit)"
+vermagic="$(aarch64-none-linux-gnu-objcopy -O binary --only-section=.modinfo "$ko" /dev/stdout | tr '\0' '\n' | sed -n 's/^vermagic=//p')"
+{
+  printf 'kernel %s@%s\n' "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}"
+  printf 'kernel.release=%s\n' "${krel}"
+  printf 'vermagic=%s\n' "${vermagic}"
+  printf 'defconfig=%s dtb=%s\n' "${PF_KERNEL_DEFCONFIG}" "${PF_KERNEL_DTB}"
+  printf 'source_date_epoch=%s\n' "${SOURCE_DATE_EPOCH}"
+  printf 'image_sha256=%s\n' "$(sha256sum /out/boot/Image | cut -d' ' -f1)"
+} > /out/build/.pf-kernel-provenance
+cat /out/build/.pf-kernel-provenance
+KERNEL
 
 # =============================================================================
 # gpu-km — GPU kernel module, built vs the SAME-tree Module.symvers (tsp-1dl.4.3).
