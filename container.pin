@@ -1,1 +1,7 @@
-pocketforge/build:10.3-2021.07-bookworm@sha256:4934e9b4b4006dd2458ba6afd8ef3106ba9388dbd1656e1fdf76e86499f8dd71
+# Owned build-container digest. Registry-hosted on the NAS shared registry (10.0.32.86:5555),
+# reachable by both build hosts (tsp-1dl.11). Re-pinned 2026-07-02 from the stale @4934e9b4 to
+# the actual current base @3038ccd4 (image ID 3038ccd4269a). The docker-container BuildKit
+# builder can only pull the base from a registry, so this is its durable home (superseding the
+# throwaway mm localhost:5000). agent-docqueue's kubo-in-base co-land rebuilds this base (adds
+# kubo) + pushes to the same registry + re-pins to the kubo-enabled digest.
+10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm@sha256:3038ccd4269a705261f46041bc2f7a4912585203a2331fe60486d1f9c669491a
