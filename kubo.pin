@@ -1,13 +1,23 @@
-# Kubo (go-ipfs) version pin for the build pipeline's blob fetcher.
-# The fetch script (make fetch-blobs) uses the local kubo daemon on the
-# build runner to retrieve vendor blobs by CID from the vendor-manifest.
+# Kubo (go-ipfs) version pin for the hermetic in-build blob fetcher (B3, tsp-1dl.3).
 #
-# CID profile: unixfs-v1-2025 (IPIP-499) — CIDv1, raw-leaves, sha2-256,
-# 1 MiB chunks. Re-adding the same file bytes with this profile MUST
-# produce the same CID.
+# kubo is installed into the digest-pinned pocketforge/build base builder
+# (image/build/Dockerfile, kubo-fetch stage) and runs ONLY in the discarded `fetch`
+# stage of the multistage os-image build (image/build/Dockerfile.pf): daemon-less
+# `ipfs init` throwaway repo -> `ipfs dag import --pin-roots=false vendor-originals.car`
+# -> fetch-group.py `ipfs cat --offline <cid>`. kubo NEVER enters the final artifact.
 #
-# Update these values when upgrading kubo on the build runner.
+# The base builder verifies BOTH the dist tarball (sha512, upstream-published) AND the
+# extracted binary (sha256) fail-closed. CID reproduction is deterministic per the
+# unixfs-v1-2025 profile (IPIP-499): CIDv1, raw-leaves, sha2-256, 1 MiB chunks — re-adding
+# the same bytes with `ipfs add --cid-version=1 --raw-leaves --chunker=size-1048576`
+# reproduces the manifest CID (validated 2026-07-02 vs the multi-block boot_package.fex).
+#
+# Source of truth: keep kubo_version in lockstep with vendor-manifest manifest.toml
+# kubo_version (enforced by image/build/lint-kubo-pin.sh). Values are the OFFICIAL dist
+# artifact from https://dist.ipfs.tech/kubo/v<ver>/kubo_v<ver>_linux-amd64.tar.gz — NOT
+# the ipfs/kubo docker image (whose binary differs).
 
 kubo_version=0.42.0
+kubo_tarball_sha512=054c38a0cf66f7d738e25085ad62cb3a42d03d4bac329b7dd25c1d71cf18e1ce87d55b1d1b705b04c65210dca9109973579e0eb1cd72f6341ecb3311d840d156
 kubo_binary_sha256=a2bcd470ee4c5df3cfc7f11d8acb7b10ab6cadbf0fd8cb079c77fd303746ee4d
 cid_profile=unixfs-v1-2025
