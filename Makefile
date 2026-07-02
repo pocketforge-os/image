@@ -1,10 +1,18 @@
 # =============================================================================
 # PocketForge image — top-level Makefile
 # =============================================================================
-# Phase 1 build pipeline entry points. Blob fetching runs on the host (outside
-# the container); image assembly runs inside the container via bind mounts.
+# The owned OS-image build lives in the platform: `pf build --device <id>
+# --artifact os-image` drives the multistage build/Dockerfile.pf entirely
+# in-container from committed refs (hermetic kubo .car blob fetch), resolving
+# every source THROUGH platform.lock. The legacy host-orchestrated image build
+# (`make build-image SUBSTRATE=owned LOCAL_*` + bind-mounted pre-built kernel/
+# GPU/SDL trees + `build-image-host`) was RETIRED in tsp-1dl.4.5 — this Makefile
+# no longer builds the image.
 #
-# bd: tsp-iby.3 (fetch-blobs, warm-cache), tsp-iuz.1.7 (build-image)
+# What remains here: the host-side vendor-blob fetch helpers (fetch-blobs,
+# warm-cache, update-manifest), dev wifi.txt generation, and SD-card helpers.
+#
+# bd: tsp-iby.3 (fetch-blobs, warm-cache)
 # =============================================================================
 
 SHELL := /bin/bash
@@ -15,34 +23,7 @@ SHELL := /bin/bash
 CURDIR_ABS := $(shell pwd)
 WORK       := $(CURDIR_ABS)/work
 BLOBS_DIR  := $(WORK)/blobs
-CACHE_DIR  := $(WORK)/cache
 OUT_DIR    := $(WORK)/out
-
-# Container image (local tag; pin by digest in container.pin for CI)
-CONTAINER  := pocketforge/build:10.3-2021.07-bookworm
-
-# Path to a local blobs repo checkout (used when IPFS is not available)
-LOCAL_BLOBS ?= $(HOME)/blobs
-
-# Image build variant (dev or release)
-VARIANT ?= dev
-
-# M1B mode: set M1B_MODE=1 for the M1.B busybox-shell image (no rootfs).
-# Default is off (full Debian rootfs via mmdebstrap).
-M1B_MODE ?= 0
-
-# Path to a local libsdl3-sunxifb build (contains libSDL3-pocketforge.so.0)
-LOCAL_LIBSDL3 ?= $(HOME)/libsdl3-sunxifb/_build
-
-# Phase 2 owned-substrate paths (kernel-tsp + gpu-km-tsp local builds).
-# When set, the image pipeline uses PocketForge-built kernel + GPU modules
-# instead of the vendor blobs in LOCAL_BLOBS.
-LOCAL_KERNEL_TSP ?= $(HOME)/kernel-tsp
-LOCAL_GPU_KM_TSP ?= $(HOME)/gpu-km-tsp
-
-# Substrate mode: "owned" (Phase 2: kernel-tsp + gpu-km-tsp) or "vendor"
-# (Phase 1: blobs only). Default "owned" if kernel-tsp Image exists.
-SUBSTRATE ?= $(shell [ -f "$(LOCAL_KERNEL_TSP)/arch/arm64/boot/Image" ] && echo owned || echo vendor)
 
 # Vendor manifest repo (private; requires GitHub auth for clone)
 MANIFEST_REPO  := https://github.com/pocketforge-os/vendor-manifest.git
@@ -155,155 +136,6 @@ generate-wifi-config:
 		rm -f "$(WIFI_TXT)"; \
 	fi
 
-# ---- build-image ------------------------------------------------------------
-# Build the SD image inside the container. Uses local blobs checkout by default.
-# For CI, run 'make fetch-blobs' first, then 'make build-image BLOBS_SRC=work/blobs'.
-#
-# The container gets bind mounts:
-#   /work/src     (ro) - this image repo
-#   /work/blobs   (ro) - blobs repo checkout
-#   /work/libsdl3 (ro) - libSDL3-pocketforge.so.0 release artifact
-#   /work/out     (rw) - build output
-#
-# M1B_MODE=1 builds the M1.B busybox-shell image (no rootfs, non-root container).
-# Default (M1B_MODE=0) builds the full Debian rootfs (M1.C+), which requires
-# running the container as root (mmdebstrap needs real chroot/mount for cross-arch
-# arm64 builds; the container provides the isolation boundary).
-BLOBS_SRC ?= $(LOCAL_BLOBS)
-LIBSDL3_SRC ?= $(LOCAL_LIBSDL3)
-KERNEL_TSP_SRC ?= $(LOCAL_KERNEL_TSP)
-GPU_KM_TSP_SRC ?= $(LOCAL_GPU_KM_TSP)
-
-# Substrate bind-mount flags (only when SUBSTRATE=owned)
-ifeq ($(SUBSTRATE),owned)
-SUBSTRATE_MOUNTS := -v "$(KERNEL_TSP_SRC):/work/kernel-tsp:ro" \
-                    -v "$(GPU_KM_TSP_SRC):/work/gpu-km-tsp:ro"
-SUBSTRATE_FLAG   := --substrate owned
-else
-SUBSTRATE_MOUNTS :=
-SUBSTRATE_FLAG   :=
-endif
-
-.PHONY: build-image
-build-image: generate-wifi-config
-	@echo "=== make build-image (variant=$(VARIANT), m1b=$(M1B_MODE), substrate=$(SUBSTRATE)) ==="
-	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; echo "Set BLOBS_SRC= or LOCAL_BLOBS= to the blobs repo checkout"; exit 1; }
-ifeq ($(SUBSTRATE),owned)
-	@[ -f "$(KERNEL_TSP_SRC)/arch/arm64/boot/Image" ] || { echo "ERROR: kernel-tsp Image not found at $(KERNEL_TSP_SRC)/arch/arm64/boot/Image"; echo "Build kernel-tsp first, or set SUBSTRATE=vendor to use vendor blobs"; exit 1; }
-	@[ -f "$(GPU_KM_TSP_SRC)/pvrsrvkm.ko" ] || { echo "ERROR: gpu-km-tsp pvrsrvkm.ko not found at $(GPU_KM_TSP_SRC)/pvrsrvkm.ko"; echo "Build gpu-km-tsp first, or set SUBSTRATE=vendor to use vendor blobs"; exit 1; }
-endif
-ifeq ($(M1B_MODE),0)
-	@[ -f "$(LIBSDL3_SRC)/libSDL3-pocketforge.so.0" ] || { echo "ERROR: libSDL3-pocketforge.so.0 not found at $(LIBSDL3_SRC)"; echo "Set LIBSDL3_SRC= or LOCAL_LIBSDL3= to the build output directory"; exit 1; }
-endif
-	@mkdir -p "$(OUT_DIR)"
-ifeq ($(M1B_MODE),1)
-	docker run --rm \
-		--user "$$(id -u):$$(id -g)" \
-		-v "$(CURDIR_ABS):/work/src:ro" \
-		-v "$(BLOBS_SRC):/work/blobs:ro" \
-		$(SUBSTRATE_MOUNTS) \
-		-v "$(OUT_DIR):/work/out:rw" \
-		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
-		$(CONTAINER) \
-		bash /work/src/scripts/build-sd-image.sh --m1b-mode --variant $(VARIANT) $(SUBSTRATE_FLAG)
-else
-	docker run --rm \
-		-e CALLER_UID="$$(id -u)" -e CALLER_GID="$$(id -g)" \
-		--cap-add SYS_ADMIN \
-		--security-opt seccomp=unconfined \
-		--security-opt apparmor=unconfined \
-		-v "$(CURDIR_ABS):/work/src:ro" \
-		-v "$(BLOBS_SRC):/work/blobs:ro" \
-		$(SUBSTRATE_MOUNTS) \
-		-v "$(LIBSDL3_SRC):/work/libsdl3:ro" \
-		-v "$(OUT_DIR):/work/out:rw" \
-		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
-		$(CONTAINER) \
-		bash /work/src/scripts/build-sd-image.sh --variant $(VARIANT) $(SUBSTRATE_FLAG)
-endif
-
-# Build the rootfs ext4 only (no SD image composition).
-# Runs as root inside the container (mmdebstrap needs chroot/mount).
-.PHONY: build-rootfs
-build-rootfs:
-	@echo "=== make build-rootfs (variant=$(VARIANT), substrate=$(SUBSTRATE)) ==="
-	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; exit 1; }
-	@[ -f "$(LIBSDL3_SRC)/libSDL3-pocketforge.so.0" ] || { echo "ERROR: libSDL3 not found at $(LIBSDL3_SRC)"; exit 1; }
-	@mkdir -p "$(OUT_DIR)"
-	docker run --rm \
-		-e CALLER_UID="$$(id -u)" -e CALLER_GID="$$(id -g)" \
-		--cap-add SYS_ADMIN \
-		--security-opt seccomp=unconfined \
-		--security-opt apparmor=unconfined \
-		-v "$(CURDIR_ABS):/work/src:ro" \
-		-v "$(BLOBS_SRC):/work/blobs:ro" \
-		$(SUBSTRATE_MOUNTS) \
-		-v "$(LIBSDL3_SRC):/work/libsdl3:ro" \
-		-v "$(OUT_DIR):/work/out:rw" \
-		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
-		$(CONTAINER) \
-		bash /work/src/scripts/build-rootfs.sh --variant $(VARIANT) --owner "$$(id -u):$$(id -g)" $(SUBSTRATE_FLAG)
-
-# Build the SD image directly on the host (no container; for debugging only)
-.PHONY: build-image-host
-build-image-host:
-	@echo "=== make build-image-host (variant=$(VARIANT), m1b=$(M1B_MODE), substrate=$(SUBSTRATE)) ==="
-	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; exit 1; }
-	@mkdir -p "$(OUT_DIR)"
-	SRC_DIR="$(CURDIR_ABS)" BLOBS_DIR="$(BLOBS_SRC)" LIBSDL3_DIR="$(LIBSDL3_SRC)" OUT_DIR="$(OUT_DIR)" \
-		KERNEL_TSP_DIR="$(KERNEL_TSP_SRC)" GPU_KM_TSP_DIR="$(GPU_KM_TSP_SRC)" \
-		SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
-		bash scripts/build-sd-image.sh $(if $(filter 1,$(M1B_MODE)),--m1b-mode) --variant $(VARIANT) $(SUBSTRATE_FLAG)
-
-# ---- deploy (primary iteration target) --------------------------------------
-# Rsync rootfs-overlay configs + /opt/pocketforge/ to the running dev rootfs.
-# Uses gamer@ with passwordless sudo (dev variant only).
-# SSH retry loop (5s x 60 attempts, silent) per AGENTS.md.
-TSP_HOST ?= gamer@192.168.86.98
-
-.PHONY: deploy
-deploy:
-	@echo "=== make deploy -> $(TSP_HOST) ==="
-	TSP_HOST="$(TSP_HOST)" LIBSDL3_DIR="$(LIBSDL3_SRC)" SRC_DIR="$(CURDIR_ABS)" \
-		bash "$(CURDIR_ABS)/scripts/deploy.sh"
-
-# ---- reflash-boot (rebuild boot.img + write to SD) --------------------------
-# Rebuilds boot.img (initrd + kernel + cmdline) inside the container, then
-# writes it to the SD's boot partition. Two modes:
-#   make reflash-boot              — SD in host reader (default)
-#   make reflash-boot MODE=ssh     — live-write via SSH to running device
-#
-# The build always runs in the container (needs cross readelf + abootimg);
-# the write runs on the host or via SSH.
-MODE ?= sd
-BOOT_PART ?= /dev/disk/by-partlabel/boot
-
-.PHONY: reflash-boot
-reflash-boot:
-	@echo "=== make reflash-boot (mode=$(MODE)) ==="
-	@[ -d "$(BLOBS_SRC)/tsp/boot-chain" ] || { echo "ERROR: blobs not found at $(BLOBS_SRC)"; exit 1; }
-	@mkdir -p "$(OUT_DIR)"
-	docker run --rm \
-		--user "$$(id -u):$$(id -g)" \
-		-v "$(CURDIR_ABS):/work/src:ro" \
-		-v "$(BLOBS_SRC):/work/blobs:ro" \
-		$(SUBSTRATE_MOUNTS) \
-		-v "$(OUT_DIR):/work/out:rw" \
-		-e SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" \
-		$(CONTAINER) \
-		bash /work/src/scripts/build-sd-image.sh --boot-only --variant $(VARIANT) $(SUBSTRATE_FLAG)
-ifeq ($(MODE),ssh)
-	@echo "Writing boot.img to device via SSH..."
-	scp -o BatchMode=yes -o ConnectTimeout=8 -i ~/.ssh/id_ed25519 \
-		"$(OUT_DIR)/boot.img" "$(TSP_HOST):/tmp/boot.img"
-	ssh -o BatchMode=yes -o ConnectTimeout=8 -i ~/.ssh/id_ed25519 \
-		"$(TSP_HOST)" 'sudo dd if=/tmp/boot.img of=/dev/disk/by-partlabel/boot bs=4M conv=fsync && rm /tmp/boot.img && echo "boot.img written; reboot to apply"'
-else
-	@bash "$(CURDIR_ABS)/scripts/sd-safety-check.sh" "$(BOOT_PART)" "$(SD_MAX_SIZE_BYTES)"
-	sudo dd if="$(OUT_DIR)/boot.img" of="$(BOOT_PART)" bs=4M conv=fsync status=progress
-	@echo "boot.img written to $(BOOT_PART). Safe to remove SD."
-endif
-
 # ---- wipe-userdata (fresh ext4 for first-boot UX testing) -------------------
 # SD-reader-ONLY: you cannot rewrite the partition you're running from.
 # Creates a fresh ext4 with the committed UUIDs from fs-uuids.env.
@@ -324,12 +156,6 @@ wipe-userdata:
 			"$(USERDATA_PART)" && \
 		echo "userdata partition wiped. Fresh ext4 ready for first-boot."
 
-# ---- full-image (alias for build-image with YYYY.MM naming) -----------------
-# Produces out/pocketforge-tsp-{dev-,}YYYY.MM.img.xz + SHA-256 manifest.
-# This is the gate before each Release publication.
-.PHONY: full-image
-full-image: build-image
-
 # ---- clean ------------------------------------------------------------------
 .PHONY: clean
 clean:
@@ -342,53 +168,29 @@ clean-all:
 # ---- help -------------------------------------------------------------------
 .PHONY: help
 help:
-	@echo "PocketForge image build targets:"
+	@echo "PocketForge image — remaining make targets:"
 	@echo ""
-	@echo "  Build:"
-	@echo "    build-image      Build the full SD image in the container"
-	@echo "    build-rootfs     Build only the rootfs ext4 in the container"
-	@echo "    build-image-host Build on host directly (debugging only, no container)"
-	@echo "    full-image       Alias for build-image (release gate)"
+	@echo "  The OWNED OS-image build is NOT here — run it from the platform repo:"
+	@echo "    pf build --device a133 --artifact os-image --target dev-modelmaker --no-dry-run"
+	@echo "  (in-container multistage build from committed refs; hermetic .car blob fetch)."
+	@echo "  The legacy 'make build-image SUBSTRATE=owned LOCAL_*' path was retired (tsp-1dl.4.5)."
 	@echo ""
-	@echo "  Iteration (fast dev loop):"
-	@echo "    deploy           Rsync configs + libs to running dev rootfs (seconds)"
-	@echo "    reflash-boot     Rebuild boot.img + write to SD boot partition (1-2 min)"
-	@echo "    wipe-userdata    Fresh ext4 on userdata partition, SD-reader only"
-	@echo ""
-	@echo "  Blob management:"
+	@echo "  Blob management (host-side vendor-blob fetch):"
 	@echo "    fetch-blobs      Fetch vendor blobs via IPFS (reads signed manifest)"
 	@echo "    warm-cache       Pin all blob CIDs in local kubo (run once per machine)"
 	@echo "    update-manifest  Force-update the vendor-manifest repo"
+	@echo ""
+	@echo "  Dev / SD helpers:"
+	@echo "    generate-wifi-config  Stage boards/tsp/boot-resource/wifi.txt from PF_WIFI_PSK/keyring"
+	@echo "    wipe-userdata         Fresh ext4 on the userdata partition (SD reader only)"
 	@echo ""
 	@echo "  Cleanup:"
 	@echo "    clean            Remove work/blobs and work/out"
 	@echo "    clean-all        Remove entire work/ directory"
 	@echo ""
 	@echo "Environment variables:"
-	@echo "  VARIANT          Image variant: dev (default) or release"
-	@echo "  M1B_MODE         Set to 1 for M1.B busybox-shell image (default: 0)"
-	@echo "  SUBSTRATE        Substrate mode: owned (default if kernel-tsp built) or vendor"
-	@echo "  TSP_HOST         Deploy target (default: gamer@192.168.86.98)"
-	@echo "  MODE             reflash-boot write mode: sd (default) or ssh"
-	@echo "  BOOT_PART        Boot partition path (default: /dev/disk/by-partlabel/boot)"
+	@echo "  WIFI_SSID        WiFi SSID for generate-wifi-config (default: Cobblejob)"
+	@echo "  PF_WIFI_PSK      WiFi PSK for generate-wifi-config (else keyring or pre-staged wifi.txt)"
 	@echo "  USERDATA_PART    Userdata partition path (default: /dev/disk/by-partlabel/userdata)"
 	@echo "  SD_MAX_SIZE_BYTES  Max disk size safety cap (default: 128 GiB)"
-	@echo "  LOCAL_BLOBS      Path to local blobs repo checkout (default: ~/blobs)"
-	@echo "  LOCAL_LIBSDL3    Path to libSDL3 build dir (default: ~/libsdl3-sunxifb/_build)"
-	@echo "  LOCAL_KERNEL_TSP Path to kernel-tsp build tree (default: ~/kernel-tsp)"
-	@echo "  LOCAL_GPU_KM_TSP Path to gpu-km-tsp build tree (default: ~/gpu-km-tsp)"
-	@echo "  BLOBS_SRC        Override blobs source for build-image (default: LOCAL_BLOBS)"
-	@echo "  LIBSDL3_SRC      Override libsdl3 source (default: LOCAL_LIBSDL3)"
 	@echo "  IPFS_API         kubo API multiaddr (default: /ip4/127.0.0.1/tcp/5001)"
-	@echo ""
-	@echo "Quick start (M1.C full image):"
-	@echo "  1. make build-image VARIANT=dev"
-	@echo "  2. xz -dc work/out/pocketforge-tsp-dev.img.xz | sudo dd of=/dev/sdX bs=4M conv=fsync"
-	@echo ""
-	@echo "Fast iteration loop:"
-	@echo "  1. (edit code)"
-	@echo "  2. make deploy                         # seconds"
-	@echo "  3. (verify on device)"
-	@echo ""
-	@echo "M1.B mode (busybox shell, no rootfs):"
-	@echo "  1. make build-image M1B_MODE=1"
