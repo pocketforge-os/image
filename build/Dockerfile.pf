@@ -175,17 +175,79 @@ KERNEL
 # Per-IP: a133 gpu-km-tsp (pvrsrvkm.ko+dc_sunxi.ko); a523 gpu-km-tsp-a523 (mali_kbase.ko).
 # =============================================================================
 FROM ${PF_CONTAINER} AS gpu-km
+ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
 ARG PF_GPU_SHA
 ARG PF_GPU_MODULES
-COPY --from=kernel /out/build /work/kernel-build
+ARG PF_TOOLCHAIN_GCC_VERSION
+ARG PF_KERNEL_SOURCE_DATE_EPOCH
+ARG SOURCE_DATE_EPOCH
+# The FULL built+configured kernel tree (autoconf.h + Module.symvers + generated headers): an
+# external-module build (`make -C KDIR M=…`) needs it, not just Module.symvers. Its .pf-kernel-
+# provenance carries the kernel vermagic we must match (MODVERSIONS=n → vermagic is the only gate).
+COPY --from=kernel /work/kernel /work/kernel
+COPY --from=kernel /out/build/.pf-kernel-provenance /work/kernel-provenance
 COPY --from=gpu-src . /work/gpu
-RUN set -eux; \
-    mkdir -p /out/modules; \
-    # TODO(tsp-1dl.4.3): build ${PF_GPU_REPO}@${PF_GPU_SHA} (${PF_GPU_MODULES}) against
-    #   /work/kernel-build/Module.symvers; assert .ko vermagic == kernel vermagic.
-    printf 'gpu-km %s@%s modules=[%s] (SCAFFOLD)\n' \
-        "${PF_GPU_REPO}" "${PF_GPU_SHA}" "${PF_GPU_MODULES}" > /out/modules/.pf-gpu-provenance
+# a133 PowerVR DDK needs pvr-buildopts.mk (vendor-matching CFLAGS/build-opts); it lives in the image repo.
+COPY --from=image-src build/pvr-buildopts.mk /work/pvr-buildopts.mk
+RUN <<'GPUKM'
+set -eux
+: "${PF_GPU_REPO:?}" "${PF_GPU_MODULES:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
+export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
+export ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- KCFLAGS=-Wno-error
+# Deterministic module stamp (pinned to the kernel commit like the kernel stage; vermagic itself
+# is epoch-independent, but the .ko's embedded build id is not).
+SOURCE_DATE_EPOCH="${PF_KERNEL_SOURCE_DATE_EPOCH:-${SOURCE_DATE_EPOCH:-}}"
+if [ -n "$SOURCE_DATE_EPOCH" ]; then
+  export SOURCE_DATE_EPOCH KBUILD_BUILD_USER=pocketforge KBUILD_BUILD_HOST=pocketforge
+  export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%a %b %e %T UTC %Y')"
+fi
+
+KDIR=/work/kernel
+[ -f "$KDIR/include/generated/autoconf.h" ] || { echo "GPU: kernel tree not configured (no autoconf.h) — the kernel stage must ship the full built tree"; exit 1; }
+[ -f "$KDIR/Module.symvers" ] || { echo "GPU: no Module.symvers from the kernel stage"; exit 1; }
+kver="$(cat "$KDIR/include/config/kernel.release")"
+kvm="$(sed -n 's/^vermagic=//p' /work/kernel-provenance)"
+[ -n "$kvm" ] || { echo "GPU: could not read kernel vermagic from /work/kernel-provenance"; exit 1; }
+mkdir -p /out/modules
+
+# PER-IP build (PowerVR vs Mali share no code). Recipes mirror the committed in-repo build scripts:
+# gpu-km-tsp/build-sunxi-a133.sh and gpu-km-tsp-a523/build-a523-gpu-km.sh (the latter cannot run as-is
+# in the container — it does its own docker run — so its `make all` line is replicated here).
+case "$PF_GPU_REPO" in
+  gpu-km-tsp)        # a133 PowerVR DDK 1.19 (GE8300 BVNC 22.102.54.38) -> pvrsrvkm.ko + dc_sunxi.ko
+    make -C "$KDIR" M=/work/gpu ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- \
+      CONFIG_DRM_IMG_ROGUE=m PVR_SYSTEM=sunxi_a133 PVR_BUILDOPTS_MK=/work/pvr-buildopts.mk modules
+    ;;
+  gpu-km-tsp-a523)   # Mali-G57 Valhall JM (CSF off) -> mali_kbase.ko
+    make -C /work/gpu/drivers/gpu/arm/midgard all \
+      KDIR="$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- \
+      CONFIG_MALI_MIDGARD=m CONFIG_MALI_PLATFORM_NAME=sunxi CONFIG_MALI_CSF_SUPPORT=n \
+      CONFIG_MALI_DEVFREQ=y CONFIG_MALI_DEBUG=n
+    ;;
+  *) echo "GPU: unknown per-IP repo '$PF_GPU_REPO'"; exit 1 ;;
+esac
+
+# Collect exactly the profile's module set and hard-assert each .ko vermagic == the kernel's
+# (a drift here = a SILENT .ko load failure on device under MODVERSIONS=n).
+rc=0
+for m in ${PF_GPU_MODULES}; do
+  ko="$(find /work/gpu -name "$m" -print -quit)"
+  [ -n "$ko" ] || { echo "GPU FAIL: expected module $m not produced"; rc=1; continue; }
+  vm="$(aarch64-none-linux-gnu-objcopy -O binary --only-section=.modinfo "$ko" /dev/stdout | tr '\0' '\n' | sed -n 's/^vermagic=//p')"
+  if [ "$vm" != "$kvm" ]; then echo "GPU FAIL: $m vermagic '$vm' != kernel '$kvm' -> silent load failure"; rc=1; fi
+  install -D -m0644 "$ko" "/out/modules/$m"
+done
+[ "$rc" -eq 0 ] || { echo "GPU kernel-module build/vermagic checks FAILED"; exit 1; }
+
+{
+  printf 'gpu-km %s@%s\n' "${PF_GPU_REPO}" "${PF_GPU_SHA}"
+  printf 'kernel.release=%s vermagic=%s\n' "${kver}" "${kvm}"
+  printf 'modules=[%s]\n' "${PF_GPU_MODULES}"
+  for m in ${PF_GPU_MODULES}; do printf '  %s sha256=%s\n' "$m" "$(sha256sum /out/modules/$m | cut -d' ' -f1)"; done
+} > /out/modules/.pf-gpu-provenance
+cat /out/modules/.pf-gpu-provenance
+GPUKM
 
 # =============================================================================
 # sdl — libSDL3-pocketforge.so from the committed libsdl3-sunxifb ref (tsp-1dl.4.4).
