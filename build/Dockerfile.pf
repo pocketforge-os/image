@@ -367,10 +367,13 @@ ARG PF_BOOTCHAIN_BLOB_GROUP
 ARG PF_VARIANT=dev
 ARG SOURCE_DATE_EPOCH
 COPY --from=image-src . /work/src
-COPY --from=rootfs /out          /work/rootfs   # userdata.ext4 (+.sha256) or the a523 NOT-SHIPPED marker
-COPY --from=kernel /out/boot     /work/kboot    # Image + <dtb>
+# /work/rootfs = userdata.ext4 (+.sha256) from the rootfs stage, or the a523 NOT-SHIPPED marker.
+COPY --from=rootfs /out          /work/rootfs
+# /work/kboot = kernel Image + <dtb>.
+COPY --from=kernel /out/boot     /work/kboot
 COPY --from=gpu-km /out/modules  /work/gpu-km-tsp
-COPY --from=fetch  /out          /work/blobs    # boot-chain group (boot0/u-boot/monitor/scp/env)
+# /work/blobs = the fetched vendor blobs incl. the boot-chain group (boot0/u-boot/monitor/scp/env).
+COPY --from=fetch  /out          /work/blobs
 # genimage/dragonsecboot/abootimg/initrd may need mount/loop -> keep the same privilege the legacy
 # `docker run` gave them (tsp-buildkit-insecure-mmdebstrap). Only this RUN is privileged.
 RUN --security=insecure <<'ASM'
