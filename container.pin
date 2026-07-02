@@ -1,1 +1,10 @@
-pocketforge/build:10.3-2021.07-bookworm@sha256:4934e9b4b4006dd2458ba6afd8ef3106ba9388dbd1656e1fdf76e86499f8dd71
+# Owned build-container digest. Registry-hosted on the NAS shared registry (10.0.32.86:5555),
+# reachable by both build hosts (tsp-1dl.11). This is the KUBO-ENABLED base (B3 co-land,
+# tsp-1dl.3): image/build/Dockerfile's kubo-fetch stage installs the pinned kubo 0.42.0
+# (image/kubo.pin) at /usr/local/bin/ipfs, used ONLY by Dockerfile.pf's discarded hermetic
+# fetch stage (never at device runtime). Re-pinned 2026-07-02: stale @4934e9b4 -> interim
+# @3038ccd4 (no kubo) -> @f37e83a0 (kubo). The docker-container BuildKit builder can only pull
+# the base from a registry (this is its durable home; the throwaway mm localhost:5000 mirrors it
+# for dev). Base build itself validates kubo via the kubo-fetch dual-checksum + the tool-inventory
+# `ipfs --version` smoke line.
+10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm@sha256:f37e83a08cbcf8b112f8fc2d3509c098e61cc71da6f21b7f7bece5f84da1f3d2

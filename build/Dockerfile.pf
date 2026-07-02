@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1-labs
 #
 # image/build/Dockerfile.pf — the MULTISTAGE os-image build (B4 / tsp-1dl.4).
 # ==============================================================================
@@ -37,25 +37,54 @@
 ARG PF_CONTAINER=pocketforge/build:10.3-2021.07-bookworm
 
 # =============================================================================
-# fetch — vendor blobs (irreducibly-closed originals), by CID.
-# tsp-1dl.3 (B3): kubo + minisign run ONLY here (never enter the image); dag-import the
-# vendor-manifest CARv2, verify signature + SHA-256, export the device's blob groups.
-# B4.0 scaffold: pass through the committed blobs-src tree (git-clone-blobs fallback).
+# fetch — vendor blobs (irreducibly-closed originals), by CID (B3 / tsp-1dl.3).
+# DECIDED mechanism: HERMETIC KUBO-IN-BUILD (owner + research, 2026-07-02). kubo (pinned
+# into the pocketforge/build base, image/build/Dockerfile kubo-fetch stage) runs ONLY here
+# and is discarded with the stage — it never enters the final artifact. Steps (hermetic):
+#   1. verify the vendor-originals.car sha256 (fail-closed) vs platform.lock's [car] pin
+#   2. `ipfs init` a THROWAWAY IPFS_PATH (no daemon, no network, no DHT)
+#   3. `ipfs dag import --pin-roots=false vendor-originals.car`
+#   4. per device profile group (sorted): fetch-group.py `ipfs cat --offline <cid>` -> /out,
+#      each blob sha256-verified (fetch-group.py's gate). Output paths = manifest path= (sunxi/a133/…).
+# Reproducibility anchor = per-blob CID + sha256; the .car sha256 is rot-detection on THIS copy only.
+# ⚠ RULE (footgun): NEVER `ipfs repo gc` here — the imported blocks are unpinned
+#   (--pin-roots=false), so a gc would delete them mid-fetch (kubo #9553 / #9765).
+# PF_FETCH_MODE=fallback keeps the git-clone-blobs path (binaries still in git on blobs
+# tsp-1dl.3 reorg-only) reachable for merge-1; hermetic is the reproducible-from-committed target.
 # =============================================================================
 FROM ${PF_CONTAINER} AS fetch
 ARG PF_DEVICE_ID
-ARG PF_BLOB_GROUPS
-ARG PF_BLOBS_SHA
-ARG PF_VENDOR_MANIFEST_SHA
+ARG PF_BLOB_GROUPS             # space-separated device profile groups (pf emits them sorted)
+ARG PF_VENDOR_MANIFEST_SHA     # pinned in platform.lock — provenance marker here
+ARG PF_CAR_SHA256              # pinned in platform.lock [car] — the SPECIFIC .car copy this build consumes
+ARG PF_FETCH_MODE=hermetic     # hermetic (default) | fallback (git-clone-blobs, merge-1 safety)
+ARG PF_BLOBS_SHA               # provenance marker for the fallback path
+# manifest.toml + fetch-group.py from the pinned vendor-manifest (git-archive build context;
+# context root = repo root, so fetch-group.py is at scripts/). Both land in /work/vm/ by basename.
+COPY --from=vendor-manifest-src manifest.toml scripts/fetch-group.py /work/vm/
+# the CARv2 of the vendor originals (content-addressed; CIDs unchanged by the path reorg):
+COPY --from=blobs-car vendor-originals.car /work/vendor-originals.car
+# merge-1 fallback source (git tree of binaries at sunxi/a133/…); dropped after the strip merges:
 COPY --from=blobs-src . /work/blobs-src
 RUN set -eux; \
     mkdir -p /out; \
-    # TODO(tsp-1dl.3): kubo+minisign fetch-by-CID for sorted groups [${PF_BLOB_GROUPS}];
-    #   verify each blob SHA-256 + the vendor-manifest minisign signature; export to /out.
-    cp -a /work/blobs-src/. /out/ 2>/dev/null || true; \
-    printf 'device=%s blobs_sha=%s vendor_manifest_sha=%s groups=[%s]\n' \
-        "${PF_DEVICE_ID}" "${PF_BLOBS_SHA}" "${PF_VENDOR_MANIFEST_SHA}" "${PF_BLOB_GROUPS}" \
-        > /out/.pf-fetch-provenance
+    if [ "${PF_FETCH_MODE}" = "hermetic" ]; then \
+      echo "${PF_CAR_SHA256}  /work/vendor-originals.car" | sha256sum -c -; \
+      export IPFS_PATH=/work/ipfs; \
+      ipfs init --profile server >/dev/null; \
+      ipfs dag import --pin-roots=false /work/vendor-originals.car; \
+      for g in $(echo "${PF_BLOB_GROUPS}" | tr ' ' '\n' | sort); do \
+        python3 /work/vm/fetch-group.py --manifest /work/vm/manifest.toml \
+          --group "$g" --out /out --offline ; \
+      done; \
+      printf 'fetch=hermetic car_sha256=%s vendor_manifest_sha=%s groups=[%s]\n' \
+        "${PF_CAR_SHA256}" "${PF_VENDOR_MANIFEST_SHA}" "${PF_BLOB_GROUPS}" > /out/.pf-fetch-provenance; \
+    else \
+      cp -a /work/blobs-src/. /out/ 2>/dev/null || true; \
+      printf 'fetch=fallback blobs_sha=%s vendor_manifest_sha=%s groups=[%s]\n' \
+        "${PF_BLOBS_SHA}" "${PF_VENDOR_MANIFEST_SHA}" "${PF_BLOB_GROUPS}" > /out/.pf-fetch-provenance; \
+    fi; \
+    cat /out/.pf-fetch-provenance
 
 # =============================================================================
 # kernel — build from a `git archive` of the platform.lock SHA (tsp-1dl.4.2).
@@ -309,20 +338,49 @@ SDL
 FROM ${PF_CONTAINER} AS rootfs
 ARG PF_DEVICE_ID
 ARG PF_ARCH
+ARG PF_GPU_REPO
+ARG PF_VARIANT=dev
 ARG APT_SNAPSHOT_DATE
 ARG SOURCE_DATE_EPOCH
-COPY --from=image-src . /work/image
+# Optional transparent apt cache proxy (e.g. the NAS apt-cacher-ng at :3142). Empty =
+# direct snapshot. Fetch transport only; apt verifies bytes vs the signed index so it
+# never changes output (R1 / G-reproducible safe). See build-rootfs.sh PF_APT_PROXY.
+ARG PF_APT_PROXY
+# Inputs land at the EXACT default paths the image repo's build-rootfs script + its
+# customize-hook expect (SRC_DIR=/work/src, BLOBS_DIR=/work/blobs, GPU_KM_TSP_DIR=/work/gpu-km-tsp,
+# KERNEL_TSP_DIR=/work/kernel-tsp, LIBSDL3_DIR=/work/libsdl3, OUT_DIR=/work/out). This lets us call
+# the OWNED build script unchanged — the same script legacy `make build-image` runs — instead of
+# re-inlining its ~880 lines (which would drift from the proven, R1-comparable output). This is the
+# precedent the sdl stage set (it runs the driver repo's own build-libsdl3.sh). SUBSTRATE=owned wires
+# the kernel/GPU modules from the kernel + gpu-km stages, never vendor blobs.
+COPY --from=image-src . /work/src
 COPY --from=fetch  /out /work/blobs
-COPY --from=kernel /out/lib/modules /work/kernel-modules
-COPY --from=gpu-km /out/modules     /work/gpu-modules
-COPY --from=sdl    /out/lib         /work/sdl
-RUN set -eux; \
-    mkdir -p /out; \
-    # TODO(tsp-1dl.4.5): one core build_rootfs (mmdebstrap, arm64, SOURCE_DATE_EPOCH,
-    #   apt snapshot ${APT_SNAPSHOT_DATE}) param by /work/image/rootfs-packages-${PF_DEVICE_ID}.txt;
-    #   install kernel modules + GPU .ko + libSDL3 + firmware -> reproducible rootfs tar/ext4.
-    printf 'rootfs device=%s snapshot=%s (SCAFFOLD)\n' "${PF_DEVICE_ID}" "${APT_SNAPSHOT_DATE}" \
-        > /out/.pf-rootfs-provenance
+COPY --from=kernel /out/lib/modules /work/kernel-tsp
+COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
+COPY --from=sdl    /out/lib         /work/libsdl3
+# mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
+# RUN --security=insecure (labs frontend + a docker-container builder created with
+# --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
+# tsp-buildkit-insecure-mmdebstrap memory. Only THIS RUN is privileged; every other stage stays sandboxed.
+RUN --security=insecure <<'ROOTFS'
+set -eux
+mkdir -p /out
+case "${PF_GPU_REPO}" in
+  gpu-km-tsp)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
+    SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 \
+      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp OUT_DIR=/out \
+      SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" PF_APT_PROXY="${PF_APT_PROXY:-}" \
+      bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned
+    ;;
+  *)            # a523 (Mali) + future SoCs: the a523 rootfs needs Mali userland + AIC8800 firmware groups
+    #   that have NO manifest blobs yet (tsp-1dl.3) — emit a device-gated marker like the sdl stage until
+    #   the a523 blob groups are populated. build-rootfs-a523.sh is wired but its inputs are not fetchable.
+    printf 'rootfs NOT SHIPPED for device=%s gpu=%s: a523 Mali/AIC8800 blob groups unpopulated (tsp-1dl.3)\n' \
+        "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-rootfs-provenance
+    cat /out/.pf-rootfs-provenance
+    ;;
+esac
+ROOTFS
 
 # =============================================================================
 # assemble — family assemble_image: flashable .img + SHA (tsp-1dl.4.5).
@@ -332,24 +390,61 @@ RUN set -eux; \
 # =============================================================================
 FROM ${PF_CONTAINER} AS assemble
 ARG PF_DEVICE_ID
+ARG PF_GPU_REPO
+ARG PF_KERNEL_DTB
 ARG PF_IMAGE_NAME
 ARG PF_IMAGE_ASSEMBLER
 ARG PF_BOOT_PROTO
 ARG PF_BOOTCHAIN_MODEL
 ARG PF_BOOTCHAIN_BLOB_GROUP
+ARG PF_VARIANT=dev
 ARG SOURCE_DATE_EPOCH
-COPY --from=image-src . /work/image
-COPY --from=rootfs /out /work/rootfs
-COPY --from=kernel /out/boot /work/boot
-COPY --from=fetch  /out /work/blobs
-RUN set -eux; \
-    mkdir -p /out; \
-    # TODO(tsp-1dl.4.5): assemble ${PF_IMAGE_NAME} via ${PF_IMAGE_ASSEMBLER} (boot_proto
-    #   ${PF_BOOT_PROTO}); reproducibility_finalize (tar --sort/--clamp-mtime, pinned GPT/FS
-    #   UUIDs, xz -T1 -n); emit ${PF_IMAGE_NAME}.img(.xz) + .sha256 + provenance.
-    printf 'assemble %s assembler=%s boot_proto=%s (SCAFFOLD)\n' \
-        "${PF_IMAGE_NAME}" "${PF_IMAGE_ASSEMBLER}" "${PF_BOOT_PROTO}" > /out/.pf-assemble-provenance; \
-    : > /out/"${PF_IMAGE_NAME:-pocketforge}.img.SCAFFOLD"
+COPY --from=image-src . /work/src
+# /work/rootfs = userdata.ext4 (+.sha256) from the rootfs stage, or the a523 NOT-SHIPPED marker.
+COPY --from=rootfs /out          /work/rootfs
+# /work/kboot = kernel Image + <dtb>.
+COPY --from=kernel /out/boot     /work/kboot
+# /work/kernel-tsp/lib/modules = the owned kernel's modules_install tree. build-sd-image.sh's
+# initrd step (boards/tsp/initrd/build-initrd.sh) does `find ${KERNEL_TSP_DIR} -name
+# videobuf2-dma-contig.ko` — the legacy `make build-image` path had the full kernel BUILD tree
+# as KERNEL_TSP_DIR (Image + built .ko in place); here KERNEL_TSP_DIR is a shim, so supply the
+# modules from the kernel stage's /out/lib/modules. The .ko is byte-identical to legacy's
+# (modules_install copies the built module verbatim; build-initrd strips it either way) so the
+# initrd stays R1-comparable. The boot/ shim (Image + dtb) is added in the RUN below.
+COPY --from=kernel /out/lib/modules /work/kernel-tsp/lib/modules
+COPY --from=gpu-km /out/modules  /work/gpu-km-tsp
+# /work/blobs = the fetched vendor blobs incl. the boot-chain group (boot0/u-boot/monitor/scp/env).
+COPY --from=fetch  /out          /work/blobs
+# genimage/dragonsecboot/abootimg/initrd may need mount/loop -> keep the same privilege the legacy
+# `docker run` gave them (tsp-buildkit-insecure-mmdebstrap). Only this RUN is privileged.
+RUN --security=insecure <<'ASM'
+set -eux
+mkdir -p /out
+case "${PF_GPU_REPO}" in
+  gpu-km-tsp)   # a133: vendor boot0 -> boot_package.fex (dragonsecboot) -> abootimg -> genimage GPT
+    # Shim the owned kernel-tsp build-tree layout build-sd-image.sh expects (arch/arm64/boot/{Image,
+    # dts/sunxi/<dtb>}) from the kernel stage's staged /out/boot — so build-sd-image.sh stays
+    # byte-identical to the legacy `make build-image` path (R1-comparable).
+    mkdir -p /work/kernel-tsp/arch/arm64/boot/dts/sunxi
+    cp /work/kboot/Image                    /work/kernel-tsp/arch/arm64/boot/Image
+    cp "/work/kboot/${PF_KERNEL_DTB}"       /work/kernel-tsp/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb
+    # Hand build-sd-image.sh the pre-built rootfs from the rootfs stage (M1B_MODE=0 consumes
+    # OUT_DIR/userdata.ext4 rather than rebuilding it).
+    cp /work/rootfs/userdata.ext4           /out/userdata.ext4
+    SRC_DIR=/work/src BLOBS_DIR=/work/blobs OUT_DIR=/out \
+      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
+      SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
+      bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned
+    ;;
+  *)            # a523: extlinux + SPL/U-Boot via boards/tsp-s/assemble-sd.sh — but the a523 rootfs
+    #   (Mali/AIC8800 blob groups) is not fetchable yet (tsp-1dl.3), so the rootfs stage emits a
+    #   NOT-SHIPPED marker; mirror that here rather than assemble an image with no rootfs.
+    printf 'assemble NOT SHIPPED for device=%s gpu=%s: a523 rootfs unpopulated (tsp-1dl.3)\n' \
+        "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-assemble-provenance
+    cat /out/.pf-assemble-provenance
+    ;;
+esac
+ASM
 
 # =============================================================================
 # export — the flashable artifact(s) only (FROM scratch → nothing but /out).

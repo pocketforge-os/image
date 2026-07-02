@@ -114,6 +114,41 @@ RUN "/opt/arm-${TOOLCHAIN_VERSION}/bin/${TOOLCHAIN_TRIPLET}-gcc" --version | \
         grep -F "10.3-2021.07"
 
 # =============================================================================
+# Stage — kubo-fetch (B3 / tsp-1dl.3)
+# Single-purpose: fetch + dual-checksum + unpack the pinned kubo (go-ipfs) binary.
+# kubo runs ONLY in the discarded `fetch` stage of Dockerfile.pf (daemon-less blob
+# fetch-by-CID); it never enters the final image. Pins in image/kubo.pin (kept in
+# lockstep with vendor-manifest manifest.toml kubo_version by build/lint-kubo-pin.sh).
+# OFFICIAL dist artifact — NOT the ipfs/kubo docker image (whose binary differs).
+# Modeled on toolchain-fetch (fetch -> dual-checksum -> smoke-test).
+# =============================================================================
+FROM debian:bookworm-slim AS kubo-fetch
+
+ARG KUBO_VERSION=0.42.0
+ARG KUBO_TARBALL_SHA512=054c38a0cf66f7d738e25085ad62cb3a42d03d4bac329b7dd25c1d71cf18e1ce87d55b1d1b705b04c65210dca9109973579e0eb1cd72f6341ecb3311d840d156
+ARG KUBO_BINARY_SHA256=a2bcd470ee4c5df3cfc7f11d8acb7b10ab6cadbf0fd8cb079c77fd303746ee4d
+ARG KUBO_TARBALL=kubo_v${KUBO_VERSION}_linux-amd64.tar.gz
+ARG KUBO_URL=https://dist.ipfs.tech/kubo/v${KUBO_VERSION}/${KUBO_TARBALL}
+
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp/kubo
+# Dual-checksum (both must pass; either failure aborts the build):
+#   sha512 on the dist tarball  = upstream-published authenticity anchor
+#   sha256 on the extracted ipfs = matches image/kubo.pin kubo_binary_sha256
+RUN set -eux; \
+    curl --fail --silent --show-error --location --output "${KUBO_TARBALL}" "${KUBO_URL}"; \
+    echo "${KUBO_TARBALL_SHA512}  ${KUBO_TARBALL}" | sha512sum -c -; \
+    tar -xzf "${KUBO_TARBALL}"; \
+    echo "${KUBO_BINARY_SHA256}  kubo/ipfs" | sha256sum -c -; \
+    install -D -m0755 kubo/ipfs /opt/kubo/ipfs; \
+    rm -rf /tmp/kubo; \
+    /opt/kubo/ipfs --version | grep -F "${KUBO_VERSION}"
+
+# =============================================================================
 # Stage 2 — final
 # Inherits the unpacked toolchain via COPY --from. apt-installs everything we
 # need across Phase 0 (SDL3 build) and Phase 1 (image composition) so we don't
@@ -326,6 +361,10 @@ RUN set -eux; \
 # Pull the unpacked toolchain across from stage 1.
 COPY --from=toolchain-fetch /opt/arm-${TOOLCHAIN_VERSION} /opt/arm-${TOOLCHAIN_VERSION}
 
+# kubo (go-ipfs) — hermetic in-build blob fetcher (runs ONLY in Dockerfile.pf's
+# discarded fetch stage; never used at device runtime). Pinned in image/kubo.pin.
+COPY --from=kubo-fetch /opt/kubo/ipfs /usr/local/bin/ipfs
+
 # PATH wiring: prepend toolchain bin/ for both login and non-login shells.
 # /etc/profile.d/ handles login shells; ENV PATH handles `docker run ...
 # bash -c "..."` invocations that don't source profile.
@@ -395,6 +434,7 @@ RUN set -eux; \
     dtc --version | head -1; \
     cpio --version | head -1; \
     sunxi-fel --version 2>&1 | head -1 || true; \
+    ipfs --version | head -1; \
     qemu-aarch64-static --version | head -1; \
     aarch64-linux-gnu-readelf --version | head -1; \
     bc --version | head -1; \
