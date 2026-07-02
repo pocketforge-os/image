@@ -360,10 +360,18 @@ cp "${SD_IMAGE}" "${FINAL_IMG}"
 
 # Release: single-threaded xz for bit-for-bit reproducibility (G-reproducible).
 # Dev: parallel xz at lowest scheduling priority for faster builds.
+#
+# --block-size is load-bearing for -T0: xz parallelizes across independent
+# blocks, one per thread, and at -9 the default block size is 192 MiB (3x the
+# 64 MiB dict). Our ~1.1 GiB image therefore splits into only ~6 blocks, so no
+# more than ~6 threads ever engage regardless of core count. Forcing 32 MiB
+# blocks yields ~36 blocks, saturating 16-32-core build hosts, for a ~1-2%
+# ratio penalty (per-block dictionary reset). Do NOT add this to the release
+# branch: multithreaded/blocked output is not bit-for-bit vs -T1.
 if [ "${VARIANT}" = "release" ]; then
     xz -9 --threads=1 --force "${FINAL_IMG}"
 else
-    nice -n 19 xz -9 -T0 --force "${FINAL_IMG}"
+    nice -n 19 xz -9 -T0 --block-size=32MiB --force "${FINAL_IMG}"
 fi
 
 FINAL_SHA="$(sha256sum "${FINAL_XZ}" | cut -d' ' -f1)"
