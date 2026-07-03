@@ -10,7 +10,7 @@
 # no longer builds the image.
 #
 # What remains here: the host-side vendor-blob fetch helpers (fetch-blobs,
-# warm-cache, update-manifest), dev wifi.txt generation, and SD-card helpers.
+# warm-cache, update-manifest) and dev wifi.txt generation.
 #
 # bd: tsp-iby.3 (fetch-blobs, warm-cache)
 # =============================================================================
@@ -136,26 +136,6 @@ generate-wifi-config:
 		rm -f "$(WIFI_TXT)"; \
 	fi
 
-# ---- wipe-userdata (fresh ext4 for first-boot UX testing) -------------------
-# SD-reader-ONLY: you cannot rewrite the partition you're running from.
-# Creates a fresh ext4 with the committed UUIDs from fs-uuids.env.
-USERDATA_PART ?= /dev/disk/by-partlabel/userdata
-SD_MAX_SIZE_BYTES ?= 137438953472
-
-.PHONY: wipe-userdata
-wipe-userdata:
-	@echo "=== make wipe-userdata (SD reader only) ==="
-	@bash "$(CURDIR_ABS)/scripts/sd-safety-check.sh" "$(USERDATA_PART)" "$(SD_MAX_SIZE_BYTES)"
-	@echo "Loading filesystem UUIDs..."
-	@. boards/tsp/fs-uuids.env && \
-		echo "  UUID=$$USERDATA_FS_UUID  hash_seed=$$USERDATA_HASH_SEED" && \
-		sudo mke2fs -t ext4 -L POCKETFORGE_DATA \
-			-U "$$USERDATA_FS_UUID" \
-			-E "hash_seed=$$USERDATA_HASH_SEED" \
-			-m 0 -O "^metadata_csum,^metadata_csum_seed,^orphan_file,^64bit" \
-			"$(USERDATA_PART)" && \
-		echo "userdata partition wiped. Fresh ext4 ready for first-boot."
-
 # ---- clean ------------------------------------------------------------------
 .PHONY: clean
 clean:
@@ -180,9 +160,8 @@ help:
 	@echo "    warm-cache       Pin all blob CIDs in local kubo (run once per machine)"
 	@echo "    update-manifest  Force-update the vendor-manifest repo"
 	@echo ""
-	@echo "  Dev / SD helpers:"
+	@echo "  Dev helpers:"
 	@echo "    generate-wifi-config  Stage boards/tsp/boot-resource/wifi.txt from PF_WIFI_PSK/keyring"
-	@echo "    wipe-userdata         Fresh ext4 on the userdata partition (SD reader only)"
 	@echo ""
 	@echo "  Cleanup:"
 	@echo "    clean            Remove work/blobs and work/out"
@@ -191,6 +170,4 @@ help:
 	@echo "Environment variables:"
 	@echo "  WIFI_SSID        WiFi SSID for generate-wifi-config (default: Cobblejob)"
 	@echo "  PF_WIFI_PSK      WiFi PSK for generate-wifi-config (else keyring or pre-staged wifi.txt)"
-	@echo "  USERDATA_PART    Userdata partition path (default: /dev/disk/by-partlabel/userdata)"
-	@echo "  SD_MAX_SIZE_BYTES  Max disk size safety cap (default: 128 GiB)"
 	@echo "  IPFS_API         kubo API multiaddr (default: /ip4/127.0.0.1/tcp/5001)"
