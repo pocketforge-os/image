@@ -517,6 +517,22 @@ ARG PF_BOOTCHAIN_BLOB_GROUP
 ARG PF_VARIANT=dev
 ARG SOURCE_DATE_EPOCH
 COPY --from=image-src . /work/src
+# WiFi credentials (bd tsp-8ba, the tsp-zbg#5 seam): the gitignored
+# boards/tsp/boot-resource/wifi.txt cannot come from the image-src lock-ref context, so
+# it arrives as a BuildKit secret — never a layer, never a committed file. No secret =
+# the image ships WiFi-unconfigured (wifi.txt.example only), exactly as before.
+# PF_WIFI_SHA (sha256 of the secret file, set by pf-build.sh alongside the secret)
+# cache-busts this RUN: BuildKit excludes secret CONTENT from the cache key, so a
+# rotated PSK would otherwise silently reuse the stale cached layer. mcopy stamps FAT
+# timestamps from SOURCE_DATE_EPOCH, so the staged file's mtime never reaches the image.
+ARG PF_WIFI_SHA=
+RUN --mount=type=secret,id=wifi,required=false \
+    if [ -f /run/secrets/wifi ]; then \
+        cp /run/secrets/wifi /work/src/boards/tsp/boot-resource/wifi.txt && \
+        echo "wifi.txt staged from secret (sha256=${PF_WIFI_SHA:-unset})"; \
+    else \
+        echo "no wifi secret provided -> image ships WiFi-unconfigured"; \
+    fi
 # /work/rootfs = userdata.ext4 (+.sha256) from the rootfs stage, or the a523 NOT-SHIPPED marker.
 COPY --from=rootfs /out          /work/rootfs
 # /work/kboot = kernel Image + <dtb>.

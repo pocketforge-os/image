@@ -567,6 +567,12 @@ install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
 ln -sf /lib/systemd/system/wpa_supplicant@.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service"
 
+# bd tsp-8ba: drop-in so an unconfigured-WiFi image SKIPS wpa_supplicant@wlan0
+# (ConditionPathExists on the generated conf) instead of failing it every boot.
+install -d "${ROOTFS}/etc/systemd/system/wpa_supplicant@wlan0.service.d"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-unconfigured-skip.conf" \
+    "${ROOTFS}/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-unconfigured-skip.conf"
+
 # Mask the global wpa_supplicant.service — we use the template instance
 # wpa_supplicant@wlan0.service instead. The global one fails without a
 # config file and causes systemd to report "degraded" status.
