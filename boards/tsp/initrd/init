@@ -145,75 +145,61 @@ selfflash_write_flag() {
     sync
 }
 
-# Perform recovery given the parsed flag text. Returns non-zero to fall through
-# to a normal boot; reboots (does not return) on a successful flash.
+# Perform recovery. FILE-BASED (tsp-bcx.17): the flag + staged .img.xz are FILES on
+# the rootfs partition (p5), which the initramfs PROVABLY mounts every boot — so we
+# never depend on the unreliable early-boot RAW high-sector read that defeated the
+# raw-flag design. Copy the .xz into RAM, unmount the SD, then flash [0,img).
+# args: SD  P5_MOUNT  FLAGTXT
+# Returns non-zero to fall through to normal boot; reboots (no return) on success.
 selfflash_recover() {
-    SD="$1"; NSECT="$2"; FLAG_LBA="$3"; FLAGTXT="$4"
+    SD="$1"; MNT="$2"; FLAGTXT="$3"
     fget() { printf '%s\n' "$FLAGTXT" | sed -n "s/^$1=//p" | head -1; }
-    state="$(fget state)";        stage_lba="$(fget stage_lba)"
+    state="$(fget state)";        xz_file="$(fget xz_file)"
     xz_bytes="$(fget xz_bytes)";  xz_sha="$(fget xz_sha256)"
     img_bytes="$(fget img_bytes)"; img_sha="$(fget img_sha256)"
-    tries="$(fget tries)";        flag_card="$(fget card_sectors)"
-    [ -n "$tries" ] || tries=0
+    tries="$(fget tries)";        [ -n "$tries" ] || tries=0
 
     [ "$state" = "armed" ] || { log "selfflash: state=$state (not armed) — normal boot"; return 1; }
-    log "selfflash: ARMED stage_lba=$stage_lba xz_bytes=$xz_bytes img_bytes=$img_bytes tries=$tries"
-
-    for v in "$stage_lba" "$xz_bytes" "$img_bytes"; do
-        case "$v" in ''|*[!0-9]*) log "selfflash: bad numeric field — abort to normal boot"; return 1;; esac
+    for v in "$xz_bytes" "$img_bytes"; do
+        case "$v" in ''|*[!0-9]*) log "selfflash: bad numeric field — normal boot"; return 1;; esac
     done
-    [ "$flag_card" = "$NSECT" ] || log "selfflash: WARN card_sectors flag=$flag_card live=$NSECT"
-
-    xz_sectors=$(( (xz_bytes + 511) / 512 ))
-    img_sectors=$(( (img_bytes + 511) / 512 ))
-    [ $((stage_lba + xz_sectors)) -lt "$NSECT" ] || { log "selfflash: staged blob past card end — abort"; return 1; }
-    [ "$stage_lba" -gt "$img_sectors" ]          || { log "selfflash: staged blob overlaps image region — abort"; return 1; }
-    [ $(( stage_lba % SF_ALIGN_SECT )) -eq 0 ]   || { log "selfflash: stage_lba not 4MiB-aligned — abort"; return 1; }
-    skip4m=$(( stage_lba / SF_ALIGN_SECT ))
+    case "$xz_file" in /*) ;; *) log "selfflash: bad xz_file=$xz_file — normal boot"; return 1;; esac
+    SRC="$MNT$xz_file"
+    log "selfflash: ARMED xz=$xz_file ($xz_bytes B) img=$img_bytes tries=$tries"
+    [ -f "$SRC" ] || { log "selfflash: staged .xz missing ($SRC) — normal boot"; return 1; }
 
     if [ "$tries" -ge 3 ]; then
-        log "selfflash: tries=$tries >= 3 — giving up; marking failed, normal boot"
-        selfflash_write_flag failed "$tries" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+        log "selfflash: tries=$tries >= 3 — giving up; clearing flag, normal boot"
+        mount -o remount,rw "$MNT" 2>/dev/null
+        rm -f "$MNT/var/tmp/pf-selfflash.flag" "$SRC"; sync
         return 1
     fi
-    # bump tries BEFORE the destructive write (raw flag sector; not in /pflog)
-    selfflash_write_flag armed "$((tries+1))" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+
+    # Copy the staged .xz into RAM (ramfs) so the SD can be FULLY unmounted before
+    # the destructive flash. 93 MB .xz + streaming unxz fits in the A133's 1 GB.
+    log "selfflash: copying staged .xz into RAM..."
+    cp "$SRC" /sf-staged.xz 2>/dev/null || { log "selfflash: cp staged .xz failed — normal boot"; rm -f /sf-staged.xz; return 1; }
+    got_xz="$(sha256sum /sf-staged.xz 2>/dev/null | cut -d' ' -f1)"
+    if [ "$got_xz" != "$xz_sha" ]; then
+        log "selfflash: RAM .xz SHA mismatch (got $got_xz want $xz_sha) — normal boot"
+        rm -f /sf-staged.xz; return 1
+    fi
+    log "selfflash: RAM .xz verified OK"
+
+    # Cap crash-loops: bump tries in the on-SD flag FILE BEFORE the destructive dd.
+    mount -o remount,rw "$MNT" 2>/dev/null
+    printf '%s\n' "$FLAGTXT" | sed "s/^tries=.*/tries=$((tries+1))/" > "$MNT/var/tmp/pf-selfflash.flag" 2>/dev/null
+    sync
 
     # release the SD — NOTHING from the SD may be mounted during the dd
     if [ -n "$PFLOG" ]; then sync; umount /pflog 2>/dev/null; PFLOG=""; fi
+    umount "$MNT" 2>/dev/null
     if mount | grep -q mmcblk; then
         log "selfflash: FATAL — mmcblk still mounted, refusing to flash:"
         mount | grep mmcblk | while read -r l; do log "  $l"; done
         fail "selfflash: SD still mounted before dd"
     fi
-    log "selfflash: SD unmounted; verified no mmcblk mounts"
-
-    # Read the staged .img.xz into RAM (initramfs ramfs) with retry. The high
-    # region read is intermittent in early boot (diagnostic-confirmed), so a
-    # single streaming read could hit an empty mid-stream and corrupt the flash.
-    # Re-read the whole blob until its SHA matches (the data IS physically there);
-    # then flash from RAM, immune to mid-stream intermittent empties. 93 MB .xz in
-    # ramfs + streaming unxz fits comfortably in the A133's 1 GB.
-    log "selfflash: reading staged .img.xz ($xz_bytes B) into RAM with retry..."
-    sf_xz_ok=0
-    sf_rd=0
-    while [ "$sf_rd" -lt 8 ]; do
-        sf_drop_cache
-        dd if="$SD" bs="$SF_BS" skip="$skip4m" 2>/dev/null | head -c "$xz_bytes" > /sf-staged.xz 2>/dev/null
-        got_xz="$(sha256sum /sf-staged.xz 2>/dev/null | cut -d' ' -f1)"
-        if [ "$got_xz" = "$xz_sha" ]; then sf_xz_ok=1; break; fi
-        log "selfflash: staged .xz read attempt $sf_rd SHA mismatch (got $got_xz) — retry"
-        sf_rd=$((sf_rd + 1)); sleep 1
-    done
-    if [ "$sf_xz_ok" != 1 ]; then
-        log "selfflash: staged .xz unreadable after retries — abort, retry next boot"
-        rm -f /sf-staged.xz; return 1
-    fi
-    log "selfflash: staged .xz verified in RAM OK"
-
-    # THE FLASH: decompress the RAM blob, write the whole image to the low region
-    # [0,img) of the SAME unmounted SD. Low-region writes/reads are reliable.
-    log "selfflash: flashing — unxz /sf-staged.xz | dd of=$SD ..."
+    log "selfflash: SD unmounted; flashing — unxz /sf-staged.xz | dd of=$SD ..."
     if ! unxz < /sf-staged.xz | dd of="$SD" bs="$SF_BS" 2>/dev/null; then
         log "selfflash: flash pipeline returned error — retry next boot"
         rm -f /sf-staged.xz; return 1
@@ -221,14 +207,13 @@ selfflash_recover() {
     rm -f /sf-staged.xz
     sync
     log "selfflash: write complete; read-back verifying image sha256..."
-    sf_drop_cache   # ensure the read-back reflects what's on the device, not cache
     got_img="$(dd if="$SD" bs="$SF_BS" 2>/dev/null | head -c "$img_bytes" | sha256sum | cut -d' ' -f1)"
     if [ "$got_img" != "$img_sha" ]; then
         log "selfflash: image read-back SHA MISMATCH (got $got_img want $img_sha) — retry next boot"
         return 1
     fi
-    log "selfflash: image verified OK — marking done, rebooting into new image"
-    selfflash_write_flag done "$((tries+1))" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+    # Success: the reflash overwrote p5, so the flag file is gone -> next boot normal.
+    log "selfflash: image verified OK — rebooting into the new image"
     sync
     reboot -f
     return 0   # not reached
@@ -264,54 +249,27 @@ if [ -f /etc/pocketforge-selfflash ]; then
     done
     if [ -n "$SF_ROOTPART" ]; then
         log "STAGE: self-flash gate — SD ready after ${SF_WAIT}s ($SF_ROOTPART)"
-        # The SD block layer can still be settling its read path / final capacity
-        # this early in boot (the original very-eager single probe raced: the flag
-        # was armed but read as absent at the ~62 GB card-end LBA, with the full-OS
-        # replay reading it fine). Re-resolve the SD by LABEL and read the flag in a
-        # short retry loop; act the instant a valid flag appears. Non-destructive,
-        # so retrying is safe. Logs each probe (tsp-bcx.17, ported from tsp-bcx.18).
-        SF_FOUND=0; SF_TRY=0
-        while [ "$SF_TRY" -lt 15 ]; do
-            SF_ROOTPART="$(findfs LABEL=POCKETFORGE_DATA 2>/dev/null)"
-            SF_SD="$(echo "$SF_ROOTPART" | sed 's/p[0-9]*$//')"   # /dev/mmcblk0p5 -> /dev/mmcblk0
-            SF_DISK="$(basename "$SF_SD")"
-            SF_PART="$(basename "$SF_ROOTPART")"                   # mmcblk0p5
-            SF_NSECT="$(cat "/sys/block/${SF_DISK}/size" 2>/dev/null)"
-            # Flag + staging live JUST PAST the rootfs partition (low LBA), NOT at
-            # the card end: the A133 early-boot MMC does not service the ~62 GB
-            # card-end LBA yet (reads return empty), though the full OS does. The
-            # region adjacent to the (provably-readable) rootfs partition reads
-            # fine. Both the gate and the host pusher derive flag_lba the same way
-            # from the partition table: align_up(part_end + 1 MiB, 4 MiB).
-            SF_PSTART="$(cat "/sys/class/block/${SF_PART}/start" 2>/dev/null)"
-            SF_PSIZE="$(cat "/sys/class/block/${SF_PART}/size" 2>/dev/null)"
-            if [ -n "$SF_PSTART" ] && [ -n "$SF_PSIZE" ] && [ -n "$SF_NSECT" ] && [ "$SF_NSECT" -gt 4096 ]; then
-                SF_PEND=$(( SF_PSTART + SF_PSIZE ))
-                SF_FLAG_LBA=$(( (SF_PEND + 2048 + 8191) / 8192 * 8192 ))
-                # The high-sector read is INTERMITTENT in early boot: a plain
-                # buffered read returns the real flag in good windows and empty in
-                # bad ones (diagnostic-confirmed; iflag=direct returns empty, so it
-                # is NOT a page-cache issue). Try a plain read, then a drop_caches
-                # re-read, each iteration; the 15-iteration loop rides the windows.
-                SF_FLAGTXT="$(dd if="$SF_SD" bs=512 skip="$SF_FLAG_LBA" count=1 2>/dev/null | tr -d '\000' | tr -cd '[:print:]\n')"
-                if ! printf '%s\n' "$SF_FLAGTXT" | grep -q '^PF_FLAG=1'; then
-                    sf_drop_cache
-                    SF_FLAGTXT="$(dd if="$SF_SD" bs=512 skip="$SF_FLAG_LBA" count=1 2>/dev/null | tr -d '\000' | tr -cd '[:print:]\n')"
-                fi
-                SF_HDR="$(printf '%s' "$SF_FLAGTXT" | head -c 11)"
-                log "STAGE: self-flash flag probe try=${SF_TRY} sd=${SF_SD} pend=${SF_PEND} flag_lba=${SF_FLAG_LBA} hdr=[${SF_HDR}]"
-                if printf '%s\n' "$SF_FLAGTXT" | grep -q '^PF_FLAG=1'; then
-                    SF_FOUND=1
-                    log "STAGE: self-flash flag present on ${SF_SD} (sector ${SF_FLAG_LBA})"
-                    selfflash_recover "$SF_SD" "$SF_NSECT" "$SF_FLAG_LBA" "$SF_FLAGTXT" \
-                        && log "selfflash: recovery returned without reboot — continuing normal boot" \
-                        || log "selfflash: not flashing — continuing normal boot"
-                    break
-                fi
+        SF_SD="$(echo "$SF_ROOTPART" | sed 's/p[0-9]*$//')"   # /dev/mmcblk0p5 -> /dev/mmcblk0
+        # FILE-BASED flag (tsp-bcx.17): mount the rootfs (p5) READ-ONLY and look for
+        # the flag FILE. The initramfs provably mounts p5 every boot, so this never
+        # depends on the unreliable early-boot RAW high-sector read (which missed an
+        # armed flag for all 15 retries on a bad boot). selfflash_recover copies the
+        # staged .xz into RAM, unmounts, and flashes [0,img).
+        mkdir -p /sfp5
+        if mount -t ext4 -o ro "$SF_ROOTPART" /sfp5 2>/dev/null; then
+            if [ -f /sfp5/var/tmp/pf-selfflash.flag ]; then
+                SF_FLAGTXT="$(cat /sfp5/var/tmp/pf-selfflash.flag 2>/dev/null)"
+                log "STAGE: self-flash flag FILE present on ${SF_ROOTPART}"
+                selfflash_recover "$SF_SD" "/sfp5" "$SF_FLAGTXT" \
+                    && log "selfflash: recovery returned without reboot — continuing normal boot" \
+                    || log "selfflash: not flashing — continuing normal boot"
+            else
+                log "STAGE: self-flash gate — no flag file — normal boot"
             fi
-            SF_TRY=$((SF_TRY + 1)); sleep 1
-        done
-        [ "$SF_FOUND" = 1 ] || log "STAGE: self-flash gate — no armed flag after settle (${SF_TRY} probes) — normal boot"
+            umount /sfp5 2>/dev/null || true
+        else
+            log "STAGE: self-flash gate — could not mount ${SF_ROOTPART} ro — normal boot"
+        fi
     fi
 fi
 
