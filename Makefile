@@ -11,7 +11,7 @@
 # update-manifest targets — pf build now fetches the .car in-container) were
 # removed in tsp-7xe. This Makefile no longer builds the image or fetches blobs.
 #
-# What remains here: dev wifi.txt generation and SD-card helpers.
+# What remains here: dev wifi.txt generation.
 # =============================================================================
 
 SHELL := /bin/bash
@@ -53,26 +53,6 @@ generate-wifi-config:
 		rm -f "$(WIFI_TXT)"; \
 	fi
 
-# ---- wipe-userdata (fresh ext4 for first-boot UX testing) -------------------
-# SD-reader-ONLY: you cannot rewrite the partition you're running from.
-# Creates a fresh ext4 with the committed UUIDs from fs-uuids.env.
-USERDATA_PART ?= /dev/disk/by-partlabel/userdata
-SD_MAX_SIZE_BYTES ?= 137438953472
-
-.PHONY: wipe-userdata
-wipe-userdata:
-	@echo "=== make wipe-userdata (SD reader only) ==="
-	@bash "$(CURDIR_ABS)/scripts/sd-safety-check.sh" "$(USERDATA_PART)" "$(SD_MAX_SIZE_BYTES)"
-	@echo "Loading filesystem UUIDs..."
-	@. boards/tsp/fs-uuids.env && \
-		echo "  UUID=$$USERDATA_FS_UUID  hash_seed=$$USERDATA_HASH_SEED" && \
-		sudo mke2fs -t ext4 -L POCKETFORGE_DATA \
-			-U "$$USERDATA_FS_UUID" \
-			-E "hash_seed=$$USERDATA_HASH_SEED" \
-			-m 0 -O "^metadata_csum,^metadata_csum_seed,^orphan_file,^64bit" \
-			"$(USERDATA_PART)" && \
-		echo "userdata partition wiped. Fresh ext4 ready for first-boot."
-
 # ---- clean ------------------------------------------------------------------
 .PHONY: clean clean-all
 clean clean-all:
@@ -89,9 +69,8 @@ help:
 	@echo "  The legacy 'make build-image SUBSTRATE=owned LOCAL_*' path was retired (tsp-1dl.4.5;"
 	@echo "  its host-side fetch-blobs/warm-cache/update-manifest helpers were removed in tsp-7xe)."
 	@echo ""
-	@echo "  Dev / SD helpers:"
+	@echo "  Dev helpers:"
 	@echo "    generate-wifi-config  Stage boards/tsp/boot-resource/wifi.txt from PF_WIFI_PSK/keyring"
-	@echo "    wipe-userdata         Fresh ext4 on the userdata partition (SD reader only)"
 	@echo ""
 	@echo "  Cleanup:"
 	@echo "    clean / clean-all     Remove the work/ directory"
@@ -99,5 +78,3 @@ help:
 	@echo "Environment variables:"
 	@echo "  WIFI_SSID        WiFi SSID for generate-wifi-config (default: Cobblejob)"
 	@echo "  PF_WIFI_PSK      WiFi PSK for generate-wifi-config (else keyring or pre-staged wifi.txt)"
-	@echo "  USERDATA_PART    Userdata partition path (default: /dev/disk/by-partlabel/userdata)"
-	@echo "  SD_MAX_SIZE_BYTES  Max disk size safety cap (default: 128 GiB)"
