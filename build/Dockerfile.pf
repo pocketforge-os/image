@@ -17,6 +17,9 @@
 # content-addressed SHA is byte-identical regardless of transport, and is air-gap-safe):
 #   --build-context image-src=<archive>  kernel-src=<archive>  gpu-src=<archive>
 #                    sdl-src=<archive>    blobs-src=<archive>
+#                    uboot-src=<archive>  tfa-src=<archive>    (a523 bootchain; EMPTY dirs
+#                                                               for a device with no source
+#                                                               bootchain, e.g. a133)
 #
 # Stage graph (COPY --from boundaries == the B6 component-repro-gate granularity):
 #   fetch ─┐                             vendor blobs by CID (B3 fills; B4.0 scaffolds)
@@ -24,6 +27,9 @@
 #          │           │                 GPU .ko built vs kernel Module.symvers    (tsp-1dl.4.3)
 #   sdl ───┼───────────┼─┐               libSDL3-pocketforge.so                     (tsp-1dl.4.4)
 #          └─▶ rootfs ─┴─┴─▶ assemble ─▶ export   mmdebstrap + genimage/extlinux    (tsp-1dl.4.5)
+#   bootchain ─────────────▶ (assemble)  a523 TF-A BL31 + U-Boot SPL → u-boot-sunxi-with-spl.bin
+#                                        (tsp-jet.1; the a523 assemble branch consumes it via
+#                                        COPY --from=bootchain when tsp-jet.4 lands)
 #
 # ⚠ B4.0 SCAFFOLDING (tsp-1dl.4.1): the per-stage RUNs below are documented STUBS that
 # create the expected output layout + provenance markers but do NOT yet build real
@@ -287,6 +293,117 @@ done
 } > /out/modules/.pf-gpu-provenance
 cat /out/modules/.pf-gpu-provenance
 GPUKM
+
+# =============================================================================
+# bootchain — a523 boot chain: TF-A BL31 + U-Boot SPL, source-built from the
+# platform.lock-pinned git archives (tsp-jet.1). Device-gated on the profile's
+# [bootchain] model: only "sunxi-spl-uboot" source-builds a boot chain — a133
+# ("sunxi-boot0-fex") boots the vendor blob group from the fetch stage, so this
+# stage emits a NOT-SHIPPED marker for it (mirrors the sdl stage's gating; its
+# uboot-src/tfa-src contexts are EMPTY dirs then — pf-build.sh stages them so).
+# Output: /out/u-boot-sunxi-with-spl.bin (BL31 embedded via binman), consumed by
+# the a523 assemble branch via COPY --from=bootchain (wired in tsp-jet.4).
+# Recipe translated from the legacy pocketforge-automation/scripts/
+# build-a523-bootchain.sh (tsp-vuo.7; retired by tsp-jet) INCLUDING its PR#39
+# BL31-path fix — binman resolves BL31 relative to the U-Boot tree it runs in,
+# so bl31.bin is staged INTO the U-Boot tree and referenced by an in-tree path
+# (an absolute path into the TF-A tree fails "[Errno 2] No such file", tsp-7uy).
+# =============================================================================
+FROM ${PF_CONTAINER} AS bootchain
+ARG PF_DEVICE_ID
+ARG PF_BOOTCHAIN_MODEL
+ARG PF_UBOOT_REPO
+ARG PF_UBOOT_SHA
+ARG PF_UBOOT_DEFCONFIG
+ARG PF_TFA_REPO
+ARG PF_TFA_SHA
+ARG PF_TFA_PLAT
+ARG PF_TOOLCHAIN_GCC_VERSION
+# Bootchain repro epoch: pinned to the U-BOOT commit (component reproducibility — the
+# boot-chain binary stays byte-identical from the bootchain SHAs alone, independent of
+# image-repo churn). Falls back to the image-wide SOURCE_DATE_EPOCH like the kernel stage.
+ARG PF_BOOTCHAIN_SOURCE_DATE_EPOCH
+ARG SOURCE_DATE_EPOCH
+COPY --from=tfa-src   . /work/tfa
+COPY --from=uboot-src . /work/uboot
+RUN <<'BOOTCHAIN'
+set -eux
+mkdir -p /out
+# Device gate (profile schema duality, core/profile.py: uboot.repo XOR blob_group).
+if [ "${PF_BOOTCHAIN_MODEL}" != "sunxi-spl-uboot" ]; then
+  printf 'bootchain NOT SHIPPED for device=%s (model=%s: boot chain comes from the vendor blob group via the fetch stage)\n' \
+    "${PF_DEVICE_ID}" "${PF_BOOTCHAIN_MODEL}" > /out/.pf-bootchain-provenance
+  cat /out/.pf-bootchain-provenance
+  exit 0
+fi
+: "${PF_UBOOT_REPO:?}" "${PF_UBOOT_SHA:?}" "${PF_UBOOT_DEFCONFIG:?}" \
+  "${PF_TFA_REPO:?}" "${PF_TFA_SHA:?}" "${PF_TFA_PLAT:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
+SOURCE_DATE_EPOCH="${PF_BOOTCHAIN_SOURCE_DATE_EPOCH:-${SOURCE_DATE_EPOCH:-}}"
+: "${SOURCE_DATE_EPOCH:?PF_BOOTCHAIN_SOURCE_DATE_EPOCH/SOURCE_DATE_EPOCH must be set (pinned bootchain commit time)}"
+export SOURCE_DATE_EPOCH
+export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
+CROSS=aarch64-none-linux-gnu-
+
+# --- REPRODUCIBILITY GUARDS (hard fail; the kernel stage's pattern) ---------------------
+rc=0
+for t in /work/tfa /work/uboot; do
+  [ -e "$t/.git" ] && { echo "GUARD FAIL: .git present in $t -> build input must be a git archive, not a clone"; rc=1; } || true
+  [ -f "$t/.gitmodules" ] && { echo "GUARD FAIL: submodules present in $t -> archive omits them -> divergence"; rc=1; } || true
+done
+[ "$rc" -eq 0 ] || { echo "bootchain repro guards FAILED"; exit 1; }
+
+# --- 1/2 TF-A BL31 -----------------------------------------------------------------------
+# DEBUG=1 matches the legacy recipe == the tsp-7uy-validated artifact. Determinism: the
+# Makefile's git-describe BUILD_STRING default is EMPTY on an archive (no .git) and floats
+# on a clone, so pin it to the TF-A commit; the __DATE__/__TIME__-based
+# BUILD_MESSAGE_TIMESTAMP default is deterministic under the exported SOURCE_DATE_EPOCH
+# (gcc >= 7 derives those macros from it).
+tfa_short="$(printf '%s' "${PF_TFA_SHA}" | cut -c1-12)"
+make -C /work/tfa -s -j"$(nproc)" PLAT="${PF_TFA_PLAT}" DEBUG=1 \
+  CROSS_COMPILE="$CROSS" BUILD_BASE=/work/tfa/build BUILD_STRING="g${tfa_short}" bl31
+BL31_BIN="/work/tfa/build/${PF_TFA_PLAT}/debug/bl31.bin"
+[ -f "$BL31_BIN" ] || { echo "bootchain FAIL: BL31 not produced at $BL31_BIN"; exit 1; }
+
+# --- 2/2 U-Boot SPL (BL31 embedded via binman) -------------------------------------------
+# .scmversion is DELIBERATELY the "-g<sha12>" suffix, NOT empty like the kernel stage's.
+# U-Boot's scripts/setlocalversion cats .scmversion when present; with LOCALVERSION_AUTO=y
+# (the Kconfig default; tg5050_defconfig does not override) a git CLONE build derives
+# exactly "-g<sha12>" from HEAD, while a git ARCHIVE (no .git) would silently produce a
+# bare version — a DIFFERENT identity from the tsp-7uy-validated boot
+# (2025.10-ge195dd28d540). Stamping the suffix, computed from the pinned SHA, keeps the
+# release string transport-INDEPENDENT and equal to the validated one. (The kernel stage
+# wants suffix SUPPRESSION, the bootchain wants the suffix PINNED — same mechanism,
+# opposite value, both deterministic.)
+ub_short="$(printf '%s' "${PF_UBOOT_SHA}" | cut -c1-12)"
+printf -- '-g%s' "${ub_short}" > /work/uboot/.scmversion
+
+# PR#39 BL31-path fix: stage bl31.bin INTO the U-Boot tree; binman opens the in-tree copy.
+cp -f "$BL31_BIN" /work/uboot/bl31.bin
+cd /work/uboot
+make -s "${PF_UBOOT_DEFCONFIG}"
+make -s -j"$(nproc)" CROSS_COMPILE="$CROSS" BL31=/work/uboot/bl31.bin
+[ -f u-boot-sunxi-with-spl.bin ] || { echo "bootchain FAIL: u-boot-sunxi-with-spl.bin not produced"; exit 1; }
+
+# --- Identity gate: release string pinned to the SHA, and embedded in the SPL binary ----
+rel="$(cat include/config/uboot.release)"
+case "$rel" in
+  *"-g${ub_short}") ;;
+  *) echo "bootchain FAIL: uboot.release '$rel' does not end in -g${ub_short} (transport-dependent version drift)"; exit 1 ;;
+esac
+grep -aq "U-Boot SPL ${rel}" u-boot-sunxi-with-spl.bin \
+  || { echo "bootchain FAIL: SPL binary does not embed 'U-Boot SPL ${rel}'"; exit 1; }
+
+install -D -m0644 u-boot-sunxi-with-spl.bin /out/u-boot-sunxi-with-spl.bin
+{
+  printf 'bootchain uboot=%s@%s tfa=%s@%s\n' "${PF_UBOOT_REPO}" "${PF_UBOOT_SHA}" "${PF_TFA_REPO}" "${PF_TFA_SHA}"
+  printf 'uboot.release=%s defconfig=%s\n' "${rel}" "${PF_UBOOT_DEFCONFIG}"
+  printf 'tfa_plat=%s tfa_build=debug tfa_build_string=g%s\n' "${PF_TFA_PLAT}" "${tfa_short}"
+  printf 'source_date_epoch=%s\n' "${SOURCE_DATE_EPOCH}"
+  printf 'bl31_sha256=%s\n' "$(sha256sum "$BL31_BIN" | cut -d' ' -f1)"
+  printf 'spl_sha256=%s\n' "$(sha256sum /out/u-boot-sunxi-with-spl.bin | cut -d' ' -f1)"
+} > /out/.pf-bootchain-provenance
+cat /out/.pf-bootchain-provenance
+BOOTCHAIN
 
 # =============================================================================
 # sdl — libSDL3-pocketforge.so from the committed libsdl3-sunxifb ref (tsp-1dl.4.4).
