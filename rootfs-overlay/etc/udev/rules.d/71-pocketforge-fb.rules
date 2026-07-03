@@ -1,0 +1,4 @@
+# bd tsp-ooe: expose fb0 as a systemd device unit (dev-fb0.device) so
+# pocketforge-fb-clear.service can order After= it instead of polling.
+# Graphics devices are not systemd-tagged by default.
+ACTION=="add", SUBSYSTEM=="graphics", KERNEL=="fb0", TAG+="systemd"

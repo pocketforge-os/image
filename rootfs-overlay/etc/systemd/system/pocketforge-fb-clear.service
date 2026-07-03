@@ -4,13 +4,19 @@
 # The disp2 pipeline scans out /dev/fb0 from CMA memory that is never
 # initialized; without this the panel shows colored static until something
 # draws. Zeroing fb0 gives a clean black panel. Retired when a real UI (or
-# fbcon — see the follow-up bead) owns the display.
+# fbcon — bead tsp-w3r) owns the display.
+#
+# Ordering: dev-fb0.device exists because 71-pocketforge-fb.rules tags fb0
+# for systemd. Wants= (not Requires=) so a panel-less boot degrades to the
+# ConditionPathExists skip instead of failing the unit.
 #
 # bd: tsp-ooe
 # =============================================================================
 [Unit]
 Description=PocketForge clear framebuffer (black panel instead of boot noise)
-After=local-fs.target
+Wants=dev-fb0.device
+After=dev-fb0.device local-fs.target
+ConditionPathExists=/dev/fb0
 
 [Service]
 Type=oneshot

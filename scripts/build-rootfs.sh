@@ -580,6 +580,8 @@ ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
 # pocketforge-fb-clear.service (bd tsp-ooe: black panel instead of boot noise)
 install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/fb-clear.sh" \
     "${ROOTFS}/usr/lib/pocketforge/fb-clear.sh"
+install -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/71-pocketforge-fb.rules" \
+    "${ROOTFS}/etc/udev/rules.d/71-pocketforge-fb.rules"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-fb-clear.service" \
     "${ROOTFS}/etc/systemd/system/pocketforge-fb-clear.service"
 ln -sf /etc/systemd/system/pocketforge-fb-clear.service \
