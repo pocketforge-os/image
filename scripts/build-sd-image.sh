@@ -35,7 +35,7 @@ TOOLS_DIR="${SRC_DIR}/tools"
 M1B_MODE=0
 BOOT_ONLY=0
 VARIANT="dev"
-SUBSTRATE="vendor"
+SUBSTRATE="owned"
 while [ $# -gt 0 ]; do
     case "$1" in
         --m1b-mode)    M1B_MODE=1; shift ;;
@@ -46,14 +46,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Phase 2 owned-substrate paths (bind-mounted by the Makefile when SUBSTRATE=owned)
+# Owned-substrate paths (bind-mounted by the build container)
 KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
 GPU_KM_TSP_DIR="${GPU_KM_TSP_DIR:-/work/gpu-km-tsp}"
 
-if [ "$SUBSTRATE" = "owned" ]; then
-    [ -f "${KERNEL_TSP_DIR}/arch/arm64/boot/Image" ] || { echo "FATAL: kernel-tsp Image not found at ${KERNEL_TSP_DIR}/arch/arm64/boot/Image" >&2; exit 1; }
-    [ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: gpu-km-tsp pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
-fi
+[ -f "${KERNEL_TSP_DIR}/arch/arm64/boot/Image" ] || { echo "FATAL: kernel-tsp Image not found at ${KERNEL_TSP_DIR}/arch/arm64/boot/Image" >&2; exit 1; }
+[ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: gpu-km-tsp pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
 
 # Reproducible timestamp from git head commit
 if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
@@ -87,10 +85,8 @@ echo "  boot-only: $([ "$BOOT_ONLY" = 1 ] && echo 'yes (initrd + boot.img only)'
 echo "  epoch:     ${SOURCE_DATE_EPOCH}"
 echo "  src:       ${SRC_DIR}"
 echo "  blobs:     ${BLOBS_DIR}"
-if [ "$SUBSTRATE" = "owned" ]; then
 echo "  kernel-tsp: ${KERNEL_TSP_DIR}"
 echo "  gpu-km-tsp: ${GPU_KM_TSP_DIR}"
-fi
 echo "  out:       ${OUT_DIR}"
 echo "========================================================================"
 
@@ -103,9 +99,7 @@ INITRD_ARGS=(--src "${SRC_DIR}" --blobs "${BLOBS_DIR}" --out "${WORK}/initrd.gz"
 if [ "$M1B_MODE" = 1 ]; then
     INITRD_ARGS+=(--m1b-mode)
 fi
-if [ "$SUBSTRATE" = "owned" ]; then
-    INITRD_ARGS+=(--kernel-tsp-dir "${KERNEL_TSP_DIR}" --gpu-km-dir "${GPU_KM_TSP_DIR}")
-fi
+INITRD_ARGS+=(--kernel-tsp-dir "${KERNEL_TSP_DIR}" --gpu-km-dir "${GPU_KM_TSP_DIR}")
 bash "${BOARD_DIR}/initrd/build-initrd.sh" "${INITRD_ARGS[@]}"
 
 # ---- step 2: compile DTB ---------------------------------------------------
@@ -114,28 +108,12 @@ bash "${BOARD_DIR}/initrd/build-initrd.sh" "${INITRD_ARGS[@]}"
 if [ "$BOOT_ONLY" != 1 ]; then
 echo ""
 echo "=== Step 2/6: Compile DTB ==="
-if [ "$SUBSTRATE" = "owned" ]; then
-    # Phase 2: use the pre-built DTB from kernel-tsp (compiled alongside the kernel)
-    KERNEL_DTB="${KERNEL_TSP_DIR}/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb"
-    [ -f "${KERNEL_DTB}" ] || { echo "FATAL: kernel-tsp DTB not found at ${KERNEL_DTB}" >&2; exit 1; }
-    DTB_FILE="${WORK}/dtb.bin"
-    cp "${KERNEL_DTB}" "${DTB_FILE}"
-    echo "  dtb: copied from kernel-tsp (pre-compiled)"
-else
-    # Phase 1: compile DTB from local .dts source
-    DTS_FILE="${BOARD_DIR}/trimui-smart-pro.dts"
-    DTB_FILE="${WORK}/dtb.bin"
-    [ -f "${DTS_FILE}" ] || { echo "FATAL: ${DTS_FILE} not found" >&2; exit 1; }
-    dtc -I dts -O dtb \
-        -W no-simple_bus_reg \
-        -W no-unique_unit_address \
-        -W no-alias_paths \
-        -W no-pwms_property \
-        -W no-interrupt_provider \
-        -W no-spi_bus_reg \
-        -o "${DTB_FILE}" \
-        "${DTS_FILE}"
-fi
+# Use the pre-built DTB from kernel-tsp (compiled alongside the kernel)
+KERNEL_DTB="${KERNEL_TSP_DIR}/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb"
+[ -f "${KERNEL_DTB}" ] || { echo "FATAL: kernel-tsp DTB not found at ${KERNEL_DTB}" >&2; exit 1; }
+DTB_FILE="${WORK}/dtb.bin"
+cp "${KERNEL_DTB}" "${DTB_FILE}"
+echo "  dtb: copied from kernel-tsp (pre-compiled)"
 
 DTB_SIZE="$(stat -c%s "${DTB_FILE}")"
 DTB_SHA="$(sha256sum "${DTB_FILE}" | cut -d' ' -f1)"
@@ -180,13 +158,8 @@ fi  # end of BOOT_ONLY != 1 (steps 2-3)
 # ---- step 4: create boot.img -----------------------------------------------
 echo ""
 echo "=== Step 4/6: Create boot.img (abootimg) ==="
-if [ "$SUBSTRATE" = "owned" ]; then
-    KERNEL_IMAGE="${KERNEL_TSP_DIR}/arch/arm64/boot/Image"
-    echo "  kernel: owned-substrate (kernel-tsp)"
-else
-    KERNEL_IMAGE="${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/Image"
-    echo "  kernel: vendor blob"
-fi
+KERNEL_IMAGE="${KERNEL_TSP_DIR}/arch/arm64/boot/Image"
+echo "  kernel: owned-substrate (kernel-tsp)"
 CMDLINE_FILE="${BOARD_DIR}/cmdline.txt"
 BOOTIMG_FILE="${WORK}/boot.img"
 
