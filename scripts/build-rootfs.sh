@@ -35,7 +35,7 @@ OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/tsp"
 
 VARIANT="dev"
-SUBSTRATE="vendor"
+SUBSTRATE="owned"
 OWNER_UID=""
 OWNER_GID=""
 while [ $# -gt 0 ]; do
@@ -86,10 +86,8 @@ echo "  substrate: ${SUBSTRATE}"
 echo "  epoch:     ${SOURCE_DATE_EPOCH}"
 echo "  snapshot:  ${SNAPSHOT_URL}"
 echo "  blobs:     ${BLOBS_DIR}"
-if [ "$SUBSTRATE" = "owned" ]; then
 echo "  kernel-tsp: ${KERNEL_TSP_DIR}"
 echo "  gpu-km-tsp: ${GPU_KM_TSP_DIR}"
-fi
 echo "  libsdl3:   ${LIBSDL3_DIR}"
 echo "  out:       ${OUT_DIR}"
 echo "========================================================================"
@@ -148,29 +146,19 @@ for f in \
     [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
 done
 
-if [ "$SUBSTRATE" = "owned" ]; then
-    # Owned substrate: GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
-    [ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
-    [ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
-    KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
-    [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
-    # WiFi modules: kernel-tsp builds xr829_* (not xradio_*)
-    KERNEL_WIFI_MAC="$(find "${KERNEL_TSP_DIR}" -name 'xr829_mac.ko' -type f | head -1)"
-    KERNEL_WIFI_CORE="$(find "${KERNEL_TSP_DIR}" -name 'xr829_core.ko' -type f | head -1)"
-    KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
-    [ -n "${KERNEL_WIFI_MAC}" ] || { echo "FATAL: xr829_mac.ko not found in kernel-tsp" >&2; exit 1; }
-    # WiFi firmware still from blobs (same firmware regardless of module name)
-    [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
-    echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed (owned substrate)"
-else
-    for f in \
-        "${BLOBS_DIR}/sunxi/a133/22.102.54.38/modules/pvrsrvkm.ko" \
-        "${BLOBS_DIR}/sunxi/a133/kernel-4.9.191/modules/videobuf2-dma-contig.ko" \
-        "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin"; do
-        [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
-    done
-    echo "  blobs: spot-check passed (vendor substrate)"
-fi
+# GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
+[ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
+[ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
+KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+[ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
+# WiFi modules: kernel-tsp builds xr829_* (not xradio_*)
+KERNEL_WIFI_MAC="$(find "${KERNEL_TSP_DIR}" -name 'xr829_mac.ko' -type f | head -1)"
+KERNEL_WIFI_CORE="$(find "${KERNEL_TSP_DIR}" -name 'xr829_core.ko' -type f | head -1)"
+KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
+[ -n "${KERNEL_WIFI_MAC}" ] || { echo "FATAL: xr829_mac.ko not found in kernel-tsp" >&2; exit 1; }
+# WiFi firmware still from blobs (same firmware regardless of module name)
+[ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
+echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
 
 # Verify libSDL3 artifact exists
 LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
@@ -238,41 +226,24 @@ echo "[customize] PowerVR DDK: SONAME symlinks verified (libEGL.so.1 exists)"
 echo "[customize] Installing kernel modules..."
 install -d "${ROOTFS}/lib/modules/4.9.191"
 
-if [ "${POCKETFORGE_SUBSTRATE:-vendor}" = "owned" ]; then
-    # Phase 2 owned substrate: GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
-    echo "[customize] Substrate: owned (kernel-tsp + gpu-km-tsp)"
+# Owned substrate: GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
+echo "[customize] Installing kernel + GPU modules (kernel-tsp + gpu-km-tsp)"
 
-    # GPU modules from gpu-km-tsp
-    install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
-    install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
+# GPU modules from gpu-km-tsp
+install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
+install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
 
-    # DMA buffer plumbing from kernel-tsp build tree
-    VB2_KO="$(find /work/kernel-tsp -name 'videobuf2-dma-contig.ko' -type f | head -1)"
-    install -m 0644 "${VB2_KO}" "${ROOTFS}/lib/modules/4.9.191/"
+# DMA buffer plumbing from kernel-tsp build tree
+VB2_KO="$(find /work/kernel-tsp -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+install -m 0644 "${VB2_KO}" "${ROOTFS}/lib/modules/4.9.191/"
 
-    # WiFi driver triplet: kernel-tsp builds xr829_* (vendor used xradio_*)
-    # Module aliases (xradio_core -> xr829_core etc) make modprobe transparent.
-    for mod in xr829_mac xr829_core xr829_wlan; do
-        MOD_KO="$(find /work/kernel-tsp -name "${mod}.ko" -type f | head -1)"
-        [ -n "${MOD_KO}" ] || { echo "FATAL: ${mod}.ko not found in kernel-tsp" >&2; exit 1; }
-        install -m 0644 "${MOD_KO}" "${ROOTFS}/lib/modules/4.9.191/"
-    done
-else
-    # Phase 1 vendor substrate: all modules from blobs
-    echo "[customize] Substrate: vendor (blobs)"
-
-    # GPU modules (from DDK extraction)
-    install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/modules/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
-    install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/modules/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
-
-    # DMA buffer plumbing (needed by dc_sunxi)
-    install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/modules/videobuf2-dma-contig.ko" "${ROOTFS}/lib/modules/4.9.191/"
-
-    # WiFi driver triplet
-    install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/modules/xradio_mac.ko" "${ROOTFS}/lib/modules/4.9.191/"
-    install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/modules/xradio_core.ko" "${ROOTFS}/lib/modules/4.9.191/"
-    install -m 0644 "/work/blobs/sunxi/a133/kernel-4.9.191/modules/xradio_wlan.ko" "${ROOTFS}/lib/modules/4.9.191/"
-fi
+# WiFi driver triplet: kernel-tsp builds xr829_* (vendor used xradio_*)
+# Module aliases (xradio_core -> xr829_core etc) make modprobe transparent.
+for mod in xr829_mac xr829_core xr829_wlan; do
+    MOD_KO="$(find /work/kernel-tsp -name "${mod}.ko" -type f | head -1)"
+    [ -n "${MOD_KO}" ] || { echo "FATAL: ${mod}.ko not found in kernel-tsp" >&2; exit 1; }
+    install -m 0644 "${MOD_KO}" "${ROOTFS}/lib/modules/4.9.191/"
+done
 
 chroot "$ROOTFS" depmod 4.9.191
 echo "[customize] Modules installed: $(ls "${ROOTFS}/lib/modules/4.9.191/"*.ko | wc -l) .ko files"
@@ -542,13 +513,11 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-wifi-po
     "${ROOTFS}/etc/systemd/system/pocketforge-wifi-powersave.service"
 
 # Module autoload for the WiFi driver triplet.
-# Vendor substrate: xradio_mac -> xradio_core -> xradio_wlan
 # Owned substrate: xr829_mac -> xr829_core -> xr829_wlan
 # (xr829_core/xr829_wlan have alias=xradio_* so modprobe can resolve either,
 #  but xr829_mac has NO alias, so we must use the correct file-based name.)
 install -d "${ROOTFS}/etc/modules-load.d"
-if [ "${POCKETFORGE_SUBSTRATE:-vendor}" = "owned" ]; then
-    cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
+cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
 # WiFi driver triplet for the XR829 (TrimUI Smart Pro, owned substrate).
 # Load order: mac -> core -> wlan (dependency chain).
 # cfg80211 + mac80211 are built into the 4.9.191 kernel (not modular).
@@ -557,10 +526,6 @@ xr829_mac
 xr829_core
 xr829_wlan
 WIFI_MODULES_EOF
-else
-    install -m 0644 "/work/src/rootfs-overlay/etc/modules-load.d/pocketforge-wifi.conf" \
-        "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf"
-fi
 
 # XR829 WiFi MAC address persistence directory.
 # The xr829 driver reads/writes /etc/wifi/xr_wifi.conf to persist the MAC
@@ -818,7 +783,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} POCKETFORGE_SUBSTRATE=${SUBSTRATE} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \

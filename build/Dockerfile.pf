@@ -7,7 +7,7 @@
 # pinned in image/container.pin) — from COMMITTED GIT REFS ONLY. This RETIRES (in
 # tsp-1dl.4.5, after the R1 regression gate) the legacy `make build-image` docker-RUN
 # that built kernel/GPU/SDL OUTSIDE the container and bind-mounted them read-only, plus
-# `build-image-host` (host toolchain) and `LOCAL_BLOBS`. Until then this file is ADDITIVE.
+# `build-image-host` (host toolchain) and `LOCAL_BLOBS`.
 #
 # Driven by `pf build --device <id> --artifact os-image` (platform/core/pf-build.sh),
 # which resolves every source repo THROUGH platform.lock to an exact SHA (never a branch
