@@ -276,6 +276,20 @@ install -d "${ROOTFS}/opt/pocketforge/lib"
 LIBSDL3_SRC="$(find /work/libsdl3 -name 'libSDL3-pocketforge.so*' -type f | head -1)"
 install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketforge.so.0"
 
+# SDL test binaries (bd tsp-tyt) — dev variant only; present only when the sdl
+# stage built them (a133/sunxifb). Lets the sunxifb functional gate
+# (SDL_VIDEODRIVER=sunxifb testgles2) run on-device without scp.
+if [ "${VARIANT}" = "dev" ] && [ -d /work/libsdl3/testbin ] && ls /work/libsdl3/testbin/* >/dev/null 2>&1; then
+    install -d "${ROOTFS}/opt/pocketforge/bin"
+    install -m 0755 /work/libsdl3/testbin/* "${ROOTFS}/opt/pocketforge/bin/"
+    # Let the test bins resolve their SDL DT_NEEDED (either soname spelling) from
+    # /opt/pocketforge/lib via the runtime linker.
+    ln -sf libSDL3-pocketforge.so.0 "${ROOTFS}/opt/pocketforge/lib/libSDL3.so.0"
+    printf '/opt/pocketforge/lib\n' > "${ROOTFS}/etc/ld.so.conf.d/01-pocketforge.conf"
+    chroot "$ROOTFS" ldconfig
+    echo "[customize] SDL test binaries installed to /opt/pocketforge/bin (dev variant)"
+fi
+
 # --- Config files ------------------------------------------------------------
 echo "[customize] Writing config files..."
 
