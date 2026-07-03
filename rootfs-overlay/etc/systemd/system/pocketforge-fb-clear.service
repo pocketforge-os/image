@@ -1,0 +1,21 @@
+# =============================================================================
+# pocketforge-fb-clear.service — clear the framebuffer at boot
+# =============================================================================
+# The disp2 pipeline scans out /dev/fb0 from CMA memory that is never
+# initialized; without this the panel shows colored static until something
+# draws. Zeroing fb0 gives a clean black panel. Retired when a real UI (or
+# fbcon — see the follow-up bead) owns the display.
+#
+# bd: tsp-ooe
+# =============================================================================
+[Unit]
+Description=PocketForge clear framebuffer (black panel instead of boot noise)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/pocketforge/fb-clear.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
