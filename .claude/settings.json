@@ -1,0 +1,19 @@
+{
+  "enabledPlugins": {
+    "pf@pocketforge": true
+  },
+  "extraKnownMarketplaces": {
+    "pocketforge": {
+      "source": {
+        "source": "github",
+        "repo": "pocketforge-os/claude-plugins"
+      }
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(bd *)",
+      "Bash(/home/matt/pocketforge-automation/scripts/*)"
+    ]
+  }
+}
