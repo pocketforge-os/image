@@ -157,6 +157,7 @@ selfflash_recover() {
     state="$(fget state)";        xz_file="$(fget xz_file)"
     xz_bytes="$(fget xz_bytes)";  xz_sha="$(fget xz_sha256)"
     img_bytes="$(fget img_bytes)"; img_sha="$(fget img_sha256)"
+    wifi_file="$(fget wifi_file)"     # D1 (tsp-bcx.22): staged WiFi creds to restore
     tries="$(fget tries)";        [ -n "$tries" ] || tries=0
 
     [ "$state" = "armed" ] || { log "selfflash: state=$state (not armed) — normal boot"; return 1; }
@@ -186,6 +187,25 @@ selfflash_recover() {
     fi
     log "selfflash: RAM .xz verified OK"
 
+    # --- D1 (tsp-bcx.22): preserve WiFi creds across the credential-less reflash --
+    # The whole-image dd below rewrites the boot-resource FAT that holds
+    # /boot/wifi.txt. Reproducible images carry NO wifi.txt (gitignored secret), so
+    # without this the reflashed device never rejoins WiFi. Copy the creds into RAM
+    # NOW, while the SD is still mounted; the post-flash block restores them into the
+    # freshly-written FAT. Prefer the orchestrator-staged copy on p5 (it also carries
+    # the pf-secret re-seed fallback); else the live boot-resource FAT (at /pflog).
+    # Best-effort: any failure here NEVER blocks the flash or the boot.
+    rm -f /sf-wifi.txt
+    if [ -n "$wifi_file" ] && [ -f "$MNT$wifi_file" ]; then
+        cp "$MNT$wifi_file" /sf-wifi.txt 2>/dev/null \
+            && log "selfflash: captured staged wifi.txt ($wifi_file) for restore"
+    fi
+    if [ ! -f /sf-wifi.txt ] && [ -n "$PFLOG" ] && [ -f /pflog/wifi.txt ]; then
+        cp /pflog/wifi.txt /sf-wifi.txt 2>/dev/null \
+            && log "selfflash: captured live boot-resource wifi.txt for restore"
+    fi
+    [ -f /sf-wifi.txt ] || log "selfflash: no wifi.txt to preserve (device may boot WiFi-less)"
+
     # Cap crash-loops: bump tries in the on-SD flag FILE BEFORE the destructive dd.
     mount -o remount,rw "$MNT" 2>/dev/null
     printf '%s\n' "$FLAGTXT" | sed "s/^tries=.*/tries=$((tries+1))/" > "$MNT/var/tmp/pf-selfflash.flag" 2>/dev/null
@@ -212,6 +232,36 @@ selfflash_recover() {
         log "selfflash: image read-back SHA MISMATCH (got $got_img want $img_sha) — retry next boot"
         return 1
     fi
+    # --- D1 (tsp-bcx.22): restore preserved WiFi creds into the freshly-written FAT
+    # The dd just rewrote the boot-resource FAT (same offsets — reproducible layout),
+    # so re-resolve it by LABEL (drop caches first: the old FAT superblock was cached
+    # while mounted at /pflog) and drop the WiFi creds back in at the FAT root
+    # (/wifi.txt == /boot/wifi.txt). Best-effort: a failure only means the device
+    # boots WiFi-less (same as pre-fix), never a hang — so it stays out of the flash
+    # success path and never returns non-zero.
+    if [ -f /sf-wifi.txt ]; then
+        sf_drop_cache
+        NEWFAT="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
+        [ -n "$NEWFAT" ] || NEWFAT="$LOGDEV"
+        if [ -n "$NEWFAT" ]; then
+            mkdir -p /sf-newfat
+            if mount -t vfat -o rw "$NEWFAT" /sf-newfat 2>/dev/null; then
+                if cp /sf-wifi.txt /sf-newfat/wifi.txt 2>/dev/null; then
+                    sync
+                    log "selfflash: restored wifi.txt into new boot-resource ($NEWFAT)"
+                else
+                    log "selfflash: WARN could not write wifi.txt to new FAT — WiFi may be unconfigured"
+                fi
+                umount /sf-newfat 2>/dev/null
+            else
+                log "selfflash: WARN could not mount new FAT ($NEWFAT) to restore wifi.txt"
+            fi
+        else
+            log "selfflash: WARN new boot-resource FAT not found — wifi.txt not restored"
+        fi
+        rm -f /sf-wifi.txt
+    fi
+
     # Success: the reflash overwrote p5, so the flag file is gone -> next boot normal.
     log "selfflash: image verified OK — rebooting into the new image"
     sync
