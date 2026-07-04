@@ -155,7 +155,11 @@ KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f |
 KERNEL_WIFI_MAC="$(find "${KERNEL_TSP_DIR}" -name 'xr829_mac.ko' -type f | head -1)"
 KERNEL_WIFI_CORE="$(find "${KERNEL_TSP_DIR}" -name 'xr829_core.ko' -type f | head -1)"
 KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
-[ -n "${KERNEL_WIFI_MAC}" ] || { echo "FATAL: xr829_mac.ko not found in kernel-tsp" >&2; exit 1; }
+# All three are required: the install loop below FATALs on any missing one and
+# modules-load.d/pocketforge-wifi.conf loads the full triplet at boot. Spot-check
+# all three here so a broken kernel-tsp wifi build fails fast, before mmdebstrap.
+[ -n "${KERNEL_WIFI_MAC}" ] && [ -n "${KERNEL_WIFI_CORE}" ] && [ -n "${KERNEL_WIFI_WLAN}" ] \
+    || { echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2; exit 1; }
 # WiFi firmware still from blobs (same firmware regardless of module name)
 [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
 echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
