@@ -517,6 +517,11 @@ install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/wifi-setup.sh" \
 install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/wifi-powersave.sh" \
     "${ROOTFS}/usr/lib/pocketforge/wifi-powersave.sh"
 
+# WiFi self-heal watchdog script (restarts wpa_supplicant@wlan0 when the
+# xr819/xr829 drops its DHCP lease). bd: tsp-h1o.
+install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/wifi-watchdog.sh" \
+    "${ROOTFS}/usr/lib/pocketforge/wifi-watchdog.sh"
+
 # WiFi templater systemd service (runs before wpa_supplicant@wlan0)
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-wifi-setup.service" \
     "${ROOTFS}/etc/systemd/system/pocketforge-wifi-setup.service"
@@ -525,6 +530,11 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-wifi-se
 # bd: tsp-cv7.4.12 — needs `iw` (added to rootfs-packages.txt).
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-wifi-powersave.service" \
     "${ROOTFS}/etc/systemd/system/pocketforge-wifi-powersave.service"
+
+# WiFi self-heal watchdog service (restart wpa_supplicant on lost lease).
+# bd: tsp-h1o — uses ip/ping (iproute2/busybox) + systemctl, already present.
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-wifi-watchdog.service" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-wifi-watchdog.service"
 
 # Module autoload for the WiFi driver triplet.
 # Owned substrate: xr829_mac -> xr829_core -> xr829_wlan
@@ -610,6 +620,10 @@ ln -sf /etc/systemd/system/pocketforge-fb-clear.service \
 # pocketforge-wifi-powersave.service (disable xradio power-save → stop flap)
 ln -sf /etc/systemd/system/pocketforge-wifi-powersave.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-powersave.service"
+
+# pocketforge-wifi-watchdog.service (self-heal wlan0 on lost lease — tsp-h1o)
+ln -sf /etc/systemd/system/pocketforge-wifi-watchdog.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-watchdog.service"
 
 # systemd-networkd (DHCP for wlan0)
 ln -sf /lib/systemd/system/systemd-networkd.service \
