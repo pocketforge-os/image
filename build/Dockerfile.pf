@@ -571,6 +571,7 @@ RUN --mount=type=secret,id=wifi,required=false \
           extlinux) WIFI_DST=/work/src/boards/tsp-s/boot-resource/wifi.txt ;; \
           *)        WIFI_DST=/work/src/boards/tsp/boot-resource/wifi.txt ;; \
         esac; \
+        mkdir -p "$(dirname "${WIFI_DST}")" && \
         cp /run/secrets/wifi "${WIFI_DST}" && \
         echo "wifi.txt staged from secret to ${WIFI_DST} (sha256=${PF_WIFI_SHA:-unset})"; \
     else \
