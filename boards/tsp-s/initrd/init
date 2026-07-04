@@ -115,17 +115,15 @@ sf_fail_retry() {
     if [ "$SF_WRITING" = 1 ]; then
         log "selfflash: a destructive write had begun — rebooting to RETRY recovery (refusing to boot a possibly half-written rootfs)"
         sync
-        reboot -f
         # reboot -f should never return. If it DOES (or is too slow), we must NEVER
         # fall through to `return 1` -> the caller's normal-boot mount path, which
         # would boot the half-written rootfs (the exact brick this guards against).
-        # Keep re-issuing reboot forever; if that is somehow impossible, drop into
-        # the fail() dead-end shell. This branch is NON-RETURNING by construction.
+        # So re-issue reboot forever: this infinite loop IS the non-returning
+        # guarantee (control cannot leave it), so no code after it is reachable.
         while :; do
-            sleep 5
             reboot -f
+            sleep 5
         done
-        fail "selfflash: reboot -f did not take after a destructive write — halting in recovery (do NOT boot a half-written rootfs)"
     fi
     return 1
 }
