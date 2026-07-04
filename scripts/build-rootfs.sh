@@ -216,6 +216,19 @@ printf '/usr/lib/pvr-rogue\n' > "${ROOTFS}/etc/ld.so.conf.d/00-pvr.conf"
 chroot "$ROOTFS" ldconfig
 echo "[customize] PowerVR DDK: ldconfig done"
 
+# libIMGegl.so discovers its client-API drivers by dlopen()ing the UNVERSIONED
+# dev names (libGLESv2.so / libGLES_CM.so). ldconfig keys ld.so.cache by SONAME
+# (libGLESv2.so.2 …), so those dev-name dlopens miss the cache, IMGegl's baked
+# vendor RPATH doesn't exist on device, and /usr/lib/pvr-rogue is not in
+# glibc's built-in fallback path — leaving EGL_CLIENT_APIS empty (no GLES)
+# unless LD_LIBRARY_PATH=/usr/lib/pvr-rogue happens to be exported (tsp-ve5).
+# Symlink the dev names into the multiarch dir (always searched by dlopen) so
+# EGL client discovery works regardless of launch environment.
+for so in libEGL.so libGLESv2.so libGLES_CM.so; do
+    ln -sf "/usr/lib/pvr-rogue/${so}" "${ROOTFS}/usr/lib/aarch64-linux-gnu/${so}"
+done
+echo "[customize] PowerVR DDK: dev-name dlopen symlinks installed in /usr/lib/aarch64-linux-gnu"
+
 # Verify SONAME symlinks were created by checking the filesystem directly
 # (ldconfig -p may not work reliably under qemu in all chroot configurations)
 if [ ! -L "${ROOTFS}/usr/lib/pvr-rogue/libEGL.so.1" ]; then
