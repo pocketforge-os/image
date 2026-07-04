@@ -1,0 +1,14 @@
+# PocketForge WiFi credentials for the boot-resource FAT partition (A523 / tsp-s).
+# Copy this file to wifi.txt and fill in your network details.
+# wifi.txt is gitignored — it contains your WiFi password.
+#
+# In the hermetic `pf build --device a523 --artifact os-image` path, this file
+# is not consumed from the checkout — pf-build.sh reads it from
+# ~/.config/pocketforge/secrets/wifi/tsp-s and mounts it as a BuildKit secret;
+# the assemble stage stages it into the FAT boot partition. See tsp-jet.4.
+#
+# Format: key=value, one per line. Comments (#) and blank lines are ok.
+# Required: SSID, PSK
+# Optional: KEY_MGMT  (default: WPA-PSK)
+SSID=YourNetworkName
+PSK=YourPassword

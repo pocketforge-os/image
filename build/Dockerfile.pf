@@ -28,8 +28,8 @@
 #   sdl ───┼───────────┼─┐               libSDL3-pocketforge.so                     (tsp-1dl.4.4)
 #          └─▶ rootfs ─┴─┴─▶ assemble ─▶ export   mmdebstrap + genimage/extlinux    (tsp-1dl.4.5)
 #   bootchain ─────────────▶ (assemble)  a523 TF-A BL31 + U-Boot SPL → u-boot-sunxi-with-spl.bin
-#                                        (tsp-jet.1; the a523 assemble branch consumes it via
-#                                        COPY --from=bootchain when tsp-jet.4 lands)
+#                                        (tsp-jet.1; consumed by the a523 assemble branch via
+#                                        COPY --from=bootchain — tsp-jet.4)
 #
 # ⚠ B4.0 SCAFFOLDING (tsp-1dl.4.1): the per-stage RUNs below are documented STUBS that
 # create the expected output layout + provenance markers but do NOT yet build real
@@ -533,10 +533,13 @@ esac
 ROOTFS
 
 # =============================================================================
-# assemble — family assemble_image: flashable .img + SHA (tsp-1dl.4.5).
-# Declarative per PF_IMAGE_ASSEMBLER / PF_BOOT_PROTO: a133 = genimage + vendor
-# boot0/boot_package.fex/abootimg; a523 = extlinux + SPL/U-Boot. Consumes the rootfs +
-# kernel boot + fetch-stage bootchain blobs. reproducibility_finalize lives here.
+# assemble — family assemble_image: flashable .img + SHA (tsp-1dl.4.5; tsp-jet.4).
+# Declarative per PF_BOOT_PROTO: a133 (sunxi-boot0-fex) = genimage GPT + vendor
+# boot0/boot_package.fex/abootimg via scripts/build-sd-image.sh; a523 (extlinux) =
+# MBR + FAT32(extlinux) + SPL@8KiB + ext4 via boards/tsp-s/assemble-sd.sh (genimage,
+# repro-anchored by boards/tsp-s/{board,fs-uuids}.env). Consumes the rootfs + kernel
+# boot + fetch-stage vendor blobs (a133) + bootchain SPL (a523). reproducibility_finalize
+# lives here.
 # =============================================================================
 FROM ${PF_CONTAINER} AS assemble
 ARG PF_DEVICE_ID
@@ -559,10 +562,18 @@ COPY --from=image-src . /work/src
 # rotated PSK would otherwise silently reuse the stale cached layer. mcopy stamps FAT
 # timestamps from SOURCE_DATE_EPOCH, so the staged file's mtime never reaches the image.
 ARG PF_WIFI_SHA=
+# Destination is board-specific: a133 → boards/tsp/boot-resource/wifi.txt (consumed by
+# build-sd-image.sh); a523 → boards/tsp-s/boot-resource/wifi.txt (assemble-sd.sh reads it
+# via the WIFI_TXT default). Both wifi/tsp and wifi/tsp-s are seeded on modelmaker.
 RUN --mount=type=secret,id=wifi,required=false \
     if [ -f /run/secrets/wifi ]; then \
-        cp /run/secrets/wifi /work/src/boards/tsp/boot-resource/wifi.txt && \
-        echo "wifi.txt staged from secret (sha256=${PF_WIFI_SHA:-unset})"; \
+        case "${PF_BOOT_PROTO}" in \
+          extlinux) WIFI_DST=/work/src/boards/tsp-s/boot-resource/wifi.txt ;; \
+          *)        WIFI_DST=/work/src/boards/tsp/boot-resource/wifi.txt ;; \
+        esac; \
+        mkdir -p "$(dirname "${WIFI_DST}")" && \
+        cp /run/secrets/wifi "${WIFI_DST}" && \
+        echo "wifi.txt staged from secret to ${WIFI_DST} (sha256=${PF_WIFI_SHA:-unset})"; \
     else \
         echo "no wifi secret provided -> image ships WiFi-unconfigured"; \
     fi
@@ -581,13 +592,58 @@ COPY --from=kernel /out/lib/modules /work/kernel-tsp/lib/modules
 COPY --from=gpu-km /out/modules  /work/gpu-km-tsp
 # /work/blobs = the fetched vendor blobs incl. the boot-chain group (boot0/u-boot/monitor/scp/env).
 COPY --from=fetch  /out          /work/blobs
+# /work/bootchain = the source-built a523 boot chain (u-boot-sunxi-with-spl.bin, BL31 embedded)
+# from the bootchain stage (tsp-jet.1). For a133 the bootchain stage emits a NOT-SHIPPED marker
+# (.pf-bootchain-provenance) — so this COPY is safe unconditionally; the a133 branch below just
+# ignores it. Consumed by the a523 assemble branch as UBOOT_SPL.
+COPY --from=bootchain /out       /work/bootchain
 # genimage/dragonsecboot/abootimg/initrd may need mount/loop -> keep the same privilege the legacy
 # `docker run` gave them (tsp-buildkit-insecure-mmdebstrap). Only this RUN is privileged.
 RUN --security=insecure <<'ASM'
 set -eux
 mkdir -p /out
-case "${PF_GPU_REPO}" in
-  gpu-km-tsp)   # a133: vendor boot0 -> boot_package.fex (dragonsecboot) -> abootimg -> genimage GPT
+# Dispatch on the profile-declared boot proto (declarative, not the PF_GPU_REPO proxy):
+#   extlinux         = a523 (mainline U-Boot SPL + extlinux/distro-boot from a FAT partition)
+#   sunxi-boot0-fex  = a133 (vendor boot0 -> boot_package.fex -> abootimg -> genimage GPT)
+case "${PF_BOOT_PROTO}" in
+  extlinux)     # a523: SPL@8KiB + MBR + FAT32(extlinux) + ext4 via boards/tsp-s/assemble-sd.sh
+    # Inputs are already staged: the rootfs stage's /out/userdata-a523.ext4 (tsp-jet.3), the
+    # kernel stage's /out/boot/{Image,<dtb>}, and the bootchain stage's
+    # /out/u-boot-sunxi-with-spl.bin (tsp-jet.1). Build the initramfs, then run the assemble
+    # script, which composes genimage per boards/tsp-s/genimage.cfg and emits
+    # pocketforge-tsp-s.img{,.xz} into /out (repro anchors: boards/tsp-s/{board,fs-uuids}.env).
+    mkdir -p /work/out
+    SRC_DIR=/work/src \
+    OUT=/work/out/initramfs-a523.gz \
+    VARIANT="${PF_VARIANT}" \
+    SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
+      bash /work/src/boards/tsp-s/initrd/build-initrd.sh
+    SRC_DIR=/work/src \
+    OUT_DIR=/out \
+    KERNEL_IMAGE=/work/kboot/Image \
+    KERNEL_DTB="/work/kboot/${PF_KERNEL_DTB}" \
+    UBOOT_SPL=/work/bootchain/u-boot-sunxi-with-spl.bin \
+    INITRAMFS=/work/out/initramfs-a523.gz \
+    ROOTFS_EXT4=/work/rootfs/userdata-a523.ext4 \
+    SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
+      bash /work/src/boards/tsp-s/assemble-sd.sh
+    # Emit .sha256 files alongside the artifacts (build-sd-image.sh does this for a133;
+    # assemble-sd.sh prints sha256sum but does not persist it — persist here for the export).
+    ( cd /out && \
+      sha256sum "${PF_IMAGE_NAME}.img"    > "${PF_IMAGE_NAME}.img.sha256" && \
+      sha256sum "${PF_IMAGE_NAME}.img.xz" > "${PF_IMAGE_NAME}.img.xz.sha256" )
+    {
+      printf 'assemble device=%s proto=%s image=%s\n' \
+        "${PF_DEVICE_ID}" "${PF_BOOT_PROTO}" "${PF_IMAGE_NAME}"
+      printf 'kernel_dtb=%s spl=%s(BL31-embedded) initramfs=%s rootfs=%s\n' \
+        "${PF_KERNEL_DTB}" 'u-boot-sunxi-with-spl.bin' 'initramfs-a523.gz' 'userdata-a523.ext4'
+      printf 'source_date_epoch=%s\n' "${SOURCE_DATE_EPOCH:-}"
+      printf 'img_sha256=%s\n'    "$(sha256sum "/out/${PF_IMAGE_NAME}.img"    | cut -d' ' -f1)"
+      printf 'img_xz_sha256=%s\n' "$(sha256sum "/out/${PF_IMAGE_NAME}.img.xz" | cut -d' ' -f1)"
+    } > /out/.pf-assemble-provenance
+    cat /out/.pf-assemble-provenance
+    ;;
+  *)            # a133: vendor boot0 -> boot_package.fex (dragonsecboot) -> abootimg -> genimage GPT
     # Shim the owned kernel-tsp build-tree layout build-sd-image.sh expects (arch/arm64/boot/{Image,
     # dts/sunxi/<dtb>}) from the kernel stage's staged /out/boot — so build-sd-image.sh stays
     # byte-identical to the legacy `make build-image` path (R1-comparable).
@@ -601,13 +657,6 @@ case "${PF_GPU_REPO}" in
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned
-    ;;
-  *)            # a523: extlinux + SPL/U-Boot via boards/tsp-s/assemble-sd.sh — but the a523 rootfs
-    #   (Mali/AIC8800 blob groups) is not fetchable yet (tsp-1dl.3), so the rootfs stage emits a
-    #   NOT-SHIPPED marker; mirror that here rather than assemble an image with no rootfs.
-    printf 'assemble NOT SHIPPED for device=%s gpu=%s: a523 rootfs unpopulated (tsp-1dl.3)\n' \
-        "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-assemble-provenance
-    cat /out/.pf-assemble-provenance
     ;;
 esac
 ASM
