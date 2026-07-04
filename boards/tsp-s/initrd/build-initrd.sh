@@ -58,9 +58,18 @@ fi
 mknod -m 600 "${ROOT}/dev/console" c 5 1 2>/dev/null || true
 mknod -m 666 "${ROOT}/dev/null"    c 1 3 2>/dev/null || true
 
-# Reproducible cpio: clamp mtimes, sort entries, gzip -n (no name/mtime header).
+# Reproducible cpio: clamp mtimes, sort entries, gzip -n (no name/mtime header),
+# and --reproducible so the newc headers carry NO per-build state. Without it,
+# `cpio -o -H newc` writes each staged file's real inode (c_ino) and device
+# (c_dev), which differ from one build/host to the next even when every file's
+# content, mode, owner, and mtime are identical — so the cpio (and thus the
+# gzip'd initramfs and the whole boot partition) diverged cross-host. GNU cpio's
+# --reproducible = --renumber-inodes (sequential ino by archive order) +
+# --ignore-devno (c_dev=0), the last non-determinism source in this initramfs.
+# (Caught by the tsp-jet.5 a523 cross-host reproducibility gate; c_ino was the
+# ONLY residual delta once mtimes/order/gzip-header were pinned.)
 find "${ROOT}" -depth -print0 | xargs -0 touch --no-dereference --date="@${SOURCE_DATE_EPOCH}" 2>/dev/null || true
 ( cd "${ROOT}" && find . -mindepth 1 -printf '%P\0' | LC_ALL=C sort -z | \
-    cpio --quiet --null -o -H newc --owner=0:0 ) | gzip -n -9 > "${OUT}"
+    cpio --quiet --null -o -H newc --owner=0:0 --reproducible ) | gzip -n -9 > "${OUT}"
 
 echo "initramfs-a523.gz: $(stat -c%s "${OUT}") bytes  sha256=$(sha256sum "${OUT}" | cut -d' ' -f1)  version=${VERSION}"
