@@ -497,10 +497,35 @@ case "${PF_GPU_REPO}" in
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" PF_APT_PROXY="${PF_APT_PROXY:-}" \
       bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned
     ;;
-  *)            # a523 (Mali) + future SoCs: the a523 rootfs needs Mali userland + AIC8800 firmware groups
-    #   that have NO manifest blobs yet (tsp-1dl.3) — emit a device-gated marker like the sdl stage until
-    #   the a523 blob groups are populated. build-rootfs-a523.sh is wired but its inputs are not fetchable.
-    printf 'rootfs NOT SHIPPED for device=%s gpu=%s: a523 Mali/AIC8800 blob groups unpopulated (tsp-1dl.3)\n' \
+  gpu-km-tsp-a523)   # a523 (Mali-G57 Valhall JM): source-rebuilt mali_kbase.ko + closed Mali userland + AIC8800 fw
+    # a523 uses its own build-rootfs-a523.sh (deliberately separate from the a133 path; a
+    # SoC-agnostic unify is tsp-1dl.14, decoupled so a133 isn't regressed for a dedup). The
+    # customize hook boards/tsp-s/rootfs-customize.sh HARDCODES MODSTAGE=/work/modules,
+    # FWSTAGE=/work/firmware, GPUUM=/work/gpu-userland (mmdebstrap forwards only
+    # POCKETFORGE_VARIANT + KREL to it), so arrange those trees here from the existing
+    # /work/blobs (fetch), /work/kernel-tsp (kernel modules_install), and /work/gpu-km-tsp
+    # (source-rebuilt mali_kbase.ko) stage outputs. No new COPYs — a133 stays byte-identical.
+    mkdir -p /work/gpu-userland /work/firmware/aic8800d80 /work/modules/lib/modules
+    cp -a /work/blobs/sunxi/a523/mali/.          /work/gpu-userland/
+    cp -a /work/blobs/sunxi/a523/wifi-firmware/. /work/firmware/aic8800d80/
+    cp -a /work/kernel-tsp/.                     /work/modules/lib/modules/
+    # Place the source-rebuilt mali_kbase.ko into the owned kernel modules tree under extra/
+    # so the customize hook's depmod picks it up (the aic8800 driver is source-built INTO
+    # the kernel modules_install already; only mali_kbase is out-of-tree). KREL comes from
+    # the modules_install tree itself, so no hardcoded 5.15.154 that could drift.
+    krel_a523="$(ls -1 /work/modules/lib/modules | head -1)"
+    [ -n "${krel_a523}" ] || { echo "rootfs a523 FAIL: no kernel release dir under /work/modules/lib/modules"; exit 1; }
+    install -d "/work/modules/lib/modules/${krel_a523}/extra"
+    install -m 0644 /work/gpu-km-tsp/mali_kbase.ko "/work/modules/lib/modules/${krel_a523}/extra/mali_kbase.ko"
+    # Call the OWNED a523 rootfs builder unchanged (mirrors sdl/a133-rootfs: run the recipe
+    # living with the source, don't re-inline it). SOURCE_DATE_EPOCH is honoured transparently;
+    # PF_APT_PROXY plumbing is a133-only today (tsp-1dl.14 unify carries it to a523).
+    SRC_DIR=/work/src OUT_DIR=/out \
+      SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
+      bash /work/src/scripts/build-rootfs-a523.sh --variant "${PF_VARIANT}"
+    ;;
+  *)            # unknown per-IP: emit a device-gated marker (mirrors the sdl stage's gating)
+    printf 'rootfs NOT SHIPPED for device=%s gpu=%s (unknown IP)\n' \
         "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-rootfs-provenance
     cat /out/.pf-rootfs-provenance
     ;;
