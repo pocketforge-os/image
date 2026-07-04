@@ -112,10 +112,21 @@ else
     echo "[customize-a523] WARN: no firmware at ${FWSTAGE}/aic8800d80 — wlan0 will NOT associate"
 fi
 
-# (3) wifi.txt-on-FAT -> wpa_supplicant conf (driver-agnostic; reuses A133 script).
+# (3) wifi.txt-on-FAT -> wpa_supplicant conf (reuses the shared A133 script,
+#     which is board-scoped by the roam-profile marker written just below).
 install -d "${ROOTFS}/usr/lib/pocketforge"
 install -m 0755 "${SRC}/rootfs-overlay/usr/lib/pocketforge/wifi-setup.sh" \
     "${ROOTFS}/usr/lib/pocketforge/wifi-setup.sh"
+# Board-scoped roaming profile (tsp-j31): the shared wifi-setup.sh defaults to
+# the A133 XR829 soft-MAC policy (userspace FT-PSK + channel-learning bgscan).
+# The A523's fullmac AIC8800D80 does roaming/scan in its own firmware, so opt
+# into the "fullmac" profile — a minimal WPA-PSK config with no userspace
+# bgscan/FT, matching the vendor stock config proven to associate on this radio.
+install -d "${ROOTFS}/etc/pocketforge"
+cat > "${ROOTFS}/etc/pocketforge/wifi-roam.conf" <<'EOF'
+# Consumed (sourced) by /usr/lib/pocketforge/wifi-setup.sh. tsp-j31.
+WIFI_ROAM_PROFILE=fullmac
+EOF
 cat > "${ROOTFS}/etc/systemd/system/pocketforge-wifi-setup.service" <<'EOF'
 [Unit]
 Description=PocketForge WiFi config from /boot/wifi.txt
