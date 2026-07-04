@@ -245,11 +245,18 @@ fi
 find "${STAGING}" -exec touch --no-dereference --date="@${SOURCE_DATE_EPOCH}" {} +
 
 # ---- assemble reproducible cpio ---------------------------------------------
+# --reproducible (= --renumber-inodes --ignore-devno) is REQUIRED for cross-host
+# determinism: without it `cpio -o -H newc` writes each staged file's real inode
+# (c_ino) + device (c_dev), which vary by build host/filesystem — so two hosts
+# produce byte-different initrds from identical inputs. Renumbering inodes
+# sequentially by (already LC_ALL=C-sorted) archive order makes the newc headers
+# carry no per-build state. (Same latent bug fixed for a523 in tsp-jet.5/image#25;
+# a133 = tsp-3q4.)
 echo "=== assembling cpio -> ${OUT_FILE} ==="
 mkdir -p "$(dirname "${OUT_FILE}")"
 ( cd "${STAGING}" \
   && find . -mindepth 1 | LC_ALL=C sort \
-  | cpio --quiet -o -H newc --owner 0:0 ) \
+  | cpio --quiet -o -H newc --owner 0:0 --reproducible ) \
   | gzip -n -9 > "${OUT_FILE}"
 
 SHA="$(sha256sum "${OUT_FILE}" | cut -d' ' -f1)"

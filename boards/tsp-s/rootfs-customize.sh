@@ -102,7 +102,7 @@ aic8800_bsp
 aic8800_fdrv
 EOF
 
-# (2) firmware blob (closed; provenance recorded in build-a523-image.sh + bead).
+# (2) firmware blob (closed; provenance recorded in the bead + pf build metadata).
 FWSTAGE="${FWSTAGE:-/work/firmware}"
 if [ -d "${FWSTAGE}/aic8800d80" ]; then
     install -d "${ROOTFS}/lib/firmware/aic8800d80"
@@ -158,7 +158,8 @@ install -m 0644 "${SRC}/rootfs-overlay/etc/systemd/network/20-wlan0.network" \
 
 # --- Mali-G57 GPU: source-rebuilt mali_kbase.ko + closed libmali r32p0 (tsp-vuo.2)
 # The KM (mali_kbase.ko) is SOURCE-REBUILT from the owned GPL DDK r42p0 source
-# (build-a523-gpu-km.sh, vermagic-matched to this kernel, of-match arm,mali-valhall)
+# (built by the Dockerfile.pf gpu-km stage from gpu-km-tsp-a523, vermagic-matched
+# to this kernel, of-match arm,mali-valhall)
 # and arrives via the modules staging above (lib/modules/<KREL>/extra/) — depmod
 # already ran. Mali-G57 = Valhall gen-1 = Job-Manager => NO CSF firmware needed.
 # The USERLAND (libmali.so.0.32.0 GBM + EGL/GLES/gbm wrappers) is a CLOSED
