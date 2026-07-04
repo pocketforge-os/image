@@ -309,13 +309,22 @@ fi
 
 # --- Owned wpa_supplicant install --------------------------------------------
 # When the owned arm64 wpa_supplicant binary (wpa-supplicant-tsp) is mounted at
-# /work/wpa, overwrite the stock Debian /sbin/wpa_supplicant with it. The Debian
+# /work/wpa, overwrite the stock Debian wpa_supplicant with it. The Debian
 # "wpasupplicant" package still provides the runtime deps (libnl/openssl) and the
 # wpa_supplicant@wlan0 systemd wiring; we only replace the binary. If /work/wpa
 # is absent (the hermetic pf build does not mount it, or a non-owned build),
 # keep stock Debian's binary untouched.
+#
+# Install to /usr/sbin/wpa_supplicant — the CANONICAL path. On our merged-/usr
+# bookworm rootfs /sbin is a symlink to /usr/sbin, so /sbin/wpa_supplicant and
+# /usr/sbin/wpa_supplicant are the same inode; but the in-repo systemd units run
+# the daemon by its /usr/sbin path (e.g. boards/tsp-s/rootfs-customize.sh's
+# ExecStart=/usr/sbin/wpa_supplicant, and Debian's own wpa_supplicant@.service),
+# so installing to /usr/sbin makes the owned binary the one that actually runs
+# regardless of /usr-merge status — closing the latent non-merged-/usr footgun of
+# writing to /sbin only.
 if [ -f /work/wpa/wpa_supplicant ]; then
-    echo "[customize] Installing owned wpa_supplicant (overwriting stock Debian /sbin/wpa_supplicant)..."
+    echo "[customize] Installing owned wpa_supplicant (overwriting stock Debian /usr/sbin/wpa_supplicant)..."
     # Sanity: it must be an aarch64 ELF, or we would brick WiFi with a wrong-arch
     # binary. Read the ELF e_machine (bytes 18-19) directly with od so this works
     # even if `file` is not in the build container. aarch64 == 0x00B7 (LE).
@@ -324,8 +333,10 @@ if [ -f /work/wpa/wpa_supplicant ]; then
         echo "FATAL: /work/wpa/wpa_supplicant is not an aarch64 ELF (e_machine=${E_MACHINE}, want b700)" >&2
         exit 1
     fi
-    install -m 0755 /work/wpa/wpa_supplicant "${ROOTFS}/sbin/wpa_supplicant"
-    echo "[customize] owned wpa_supplicant installed at /sbin/wpa_supplicant (aarch64 ELF verified)"
+    # -D creates /usr/sbin if a future rootfs layout ever lacks it (harmless when
+    # it already exists); guarantees the canonical target is present.
+    install -D -m 0755 /work/wpa/wpa_supplicant "${ROOTFS}/usr/sbin/wpa_supplicant"
+    echo "[customize] owned wpa_supplicant installed at /usr/sbin/wpa_supplicant (aarch64 ELF verified)"
 else
     echo "[customize] No owned wpa_supplicant at /work/wpa — keeping stock Debian wpasupplicant"
 fi
