@@ -279,7 +279,7 @@ install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketfo
 # SDL test binaries (bd tsp-tyt) — dev variant only; present only when the sdl
 # stage built them (a133/sunxifb). Lets the sunxifb functional gate
 # (SDL_VIDEODRIVER=sunxifb testgles2) run on-device without scp.
-if [ "${VARIANT}" = "dev" ] && [ -d /work/libsdl3/testbin ] && ls /work/libsdl3/testbin/* >/dev/null 2>&1; then
+if [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] && [ -d /work/libsdl3/testbin ] && ls /work/libsdl3/testbin/* >/dev/null 2>&1; then
     install -d "${ROOTFS}/opt/pocketforge/bin"
     install -m 0755 /work/libsdl3/testbin/* "${ROOTFS}/opt/pocketforge/bin/"
     # Let the test bins resolve their SDL DT_NEEDED (either soname spelling) from
