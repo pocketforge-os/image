@@ -307,6 +307,40 @@ if [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] && [ -d /work/libsdl3/testbin ] && 
     echo "[customize] SDL test binaries installed to /opt/pocketforge/bin (dev variant)"
 fi
 
+# --- Owned wpa_supplicant install --------------------------------------------
+# When the owned arm64 wpa_supplicant binary (wpa-supplicant-tsp) is mounted at
+# /work/wpa, overwrite the stock Debian wpa_supplicant with it. The Debian
+# "wpasupplicant" package still provides the runtime deps (libnl/openssl) and the
+# wpa_supplicant@wlan0 systemd wiring; we only replace the binary. If /work/wpa
+# is absent (the hermetic pf build does not mount it, or a non-owned build),
+# keep stock Debian's binary untouched.
+#
+# Install to /usr/sbin/wpa_supplicant — the CANONICAL path. On our merged-/usr
+# bookworm rootfs /sbin is a symlink to /usr/sbin, so /sbin/wpa_supplicant and
+# /usr/sbin/wpa_supplicant are the same inode; but the in-repo systemd units run
+# the daemon by its /usr/sbin path (e.g. boards/tsp-s/rootfs-customize.sh's
+# ExecStart=/usr/sbin/wpa_supplicant, and Debian's own wpa_supplicant@.service),
+# so installing to /usr/sbin makes the owned binary the one that actually runs
+# regardless of /usr-merge status — closing the latent non-merged-/usr footgun of
+# writing to /sbin only.
+if [ -f /work/wpa/wpa_supplicant ]; then
+    echo "[customize] Installing owned wpa_supplicant (overwriting stock Debian /usr/sbin/wpa_supplicant)..."
+    # Sanity: it must be an aarch64 ELF, or we would brick WiFi with a wrong-arch
+    # binary. Read the ELF e_machine (bytes 18-19) directly with od so this works
+    # even if `file` is not in the build container. aarch64 == 0x00B7 (LE).
+    E_MACHINE="$(od -An -tx1 -j18 -N2 /work/wpa/wpa_supplicant | tr -d ' ')"
+    if [ "${E_MACHINE}" != "b700" ]; then
+        echo "FATAL: /work/wpa/wpa_supplicant is not an aarch64 ELF (e_machine=${E_MACHINE}, want b700)" >&2
+        exit 1
+    fi
+    # -D creates /usr/sbin if a future rootfs layout ever lacks it (harmless when
+    # it already exists); guarantees the canonical target is present.
+    install -D -m 0755 /work/wpa/wpa_supplicant "${ROOTFS}/usr/sbin/wpa_supplicant"
+    echo "[customize] owned wpa_supplicant installed at /usr/sbin/wpa_supplicant (aarch64 ELF verified)"
+else
+    echo "[customize] No owned wpa_supplicant at /work/wpa — keeping stock Debian wpasupplicant"
+fi
+
 # --- Config files ------------------------------------------------------------
 echo "[customize] Writing config files..."
 
@@ -811,12 +845,16 @@ chmod +x "${CUSTOMIZE_SCRIPT}"
 # --mode=root because this script runs as root inside the container
 # (mmdebstrap needs chroot/mount for cross-arch; container provides isolation).
 # --aptopt disables valid-until checking (snapshot mirrors have stale headers) and
-# sets Acquire::Retries so a transient snapshot.debian.org 503 (it is chronically
-# flaky/rate-limited — a Fastly outage blocked the first pipeline run 2026-07-02)
-# retries with apt's exponential backoff instead of aborting the whole build.
-# mmdebstrap runs its OWN apt in the target, so it does NOT inherit the base
-# container's /etc/apt Retries — it must be passed here. (Retries survive transient
-# 503s; a sustained total outage still needs a mirror fallback / local apt cache.)
+# sets Acquire::Retries + Acquire::http::Timeout so a transient snapshot.debian.org
+# 503 (it is chronically flaky/rate-limited — its Fastly+Cloudflare front-ends
+# degrade for minutes at a time; a Fastly outage blocked the first pipeline run
+# 2026-07-02) retries with apt's exponential backoff instead of aborting the whole
+# build. mmdebstrap runs its OWN apt in the target, so it does NOT inherit the base
+# container's /etc/apt Retries — they must be passed here. Retries/Timeout affect
+# fetch resilience only, not the fetched bytes (apt verifies every .deb against the
+# signed pinned-snapshot index), so the rootfs stays bit-identical/reproducible.
+# (Retries survive transient 503s; a sustained total outage still needs a mirror
+# fallback / local apt cache — see PF_APT_PROXY below.)
 # SOURCE_DATE_EPOCH is inherited for reproducibility.
 #
 # Optional transparent apt caching proxy. When PF_APT_PROXY is set (e.g. the NAS
@@ -840,8 +878,9 @@ mmdebstrap \
     --variant=minbase \
     --mode=root \
     --aptopt='Acquire::Check-Valid-Until "false"' \
+    --aptopt='Acquire::Retries "20"' \
+    --aptopt='Acquire::http::Timeout "60"' \
     --aptopt='APT::Sandbox::User "root"' \
-    --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} ${CUSTOMIZE_SCRIPT} \"\$1\"" \

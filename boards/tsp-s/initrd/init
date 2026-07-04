@@ -103,8 +103,34 @@ selfflash_write_flag() {
     sync
 }
 
+# A recovery-write failure handler. Once the destructive dd has begun (SF_WRITING=1),
+# the rootfs [0,img) is presumed PARTIALLY WRITTEN — we must NEVER fall through to the
+# normal-boot mount path (that mounts a corrupt rootfs -> fail() -> dead-end shell, the
+# observed "device inoperable" brick). Instead reboot to retry recovery; the flag stays
+# in the writing state with tries bounded, so retries converge to either a clean flash
+# or the tries>=3 halt-in-recovery branch. Before any write (rootfs still intact) it is
+# safe to return 1 and let the caller continue a NORMAL boot.
+sf_fail_retry() {
+    log "selfflash: $1"
+    if [ "$SF_WRITING" = 1 ]; then
+        log "selfflash: a destructive write had begun — rebooting to RETRY recovery (refusing to boot a possibly half-written rootfs)"
+        sync
+        # reboot -f should never return. If it DOES (or is too slow), we must NEVER
+        # fall through to `return 1` -> the caller's normal-boot mount path, which
+        # would boot the half-written rootfs (the exact brick this guards against).
+        # So re-issue reboot forever: this infinite loop IS the non-returning
+        # guarantee (control cannot leave it), so no code after it is reachable.
+        while :; do
+            reboot -f
+            sleep 5
+        done
+    fi
+    return 1
+}
+
 selfflash_recover() {
     SD="$1"; NSECT="$2"; FLAG_LBA="$3"; FLAGTXT="$4"
+    SF_WRITING=0
     # SAFETY: the target SD is resolved by the rootfs LABEL (POCKETFORGE_DATA),
     # which exists ONLY on our SD — never the eMMC's vendor OS — so the eMMC can
     # never be selected regardless of enumeration. NOTE: on this owned kernel the
@@ -118,8 +144,15 @@ selfflash_recover() {
     tries="$(fget tries)";        flag_card="$(fget card_sectors)"
     [ -n "$tries" ] || tries=0
 
-    [ "$state" = "armed" ] || { log "selfflash: state=$state (not armed) — normal boot"; return 1; }
-    log "selfflash: ARMED stage_lba=$stage_lba xz_bytes=$xz_bytes img_bytes=$img_bytes tries=$tries"
+    # Enter recovery for BOTH armed (freshly pushed) and writing (a destructive
+    # write began on a prior boot and was interrupted — must finish, never normal-
+    # boot the half-written rootfs). Any other state (done/failed/unknown) -> normal.
+    case "$state" in
+        armed)   ;;
+        writing) SF_WRITING=1 ;;   # a prior attempt already started writing -> rootfs presumed corrupt
+        *) log "selfflash: state=$state (not armed) — normal boot"; return 1;;
+    esac
+    log "selfflash: ENTER state=$state stage_lba=$stage_lba xz_bytes=$xz_bytes img_bytes=$img_bytes tries=$tries"
 
     for v in "$stage_lba" "$xz_bytes" "$img_bytes"; do
         case "$v" in ''|*[!0-9]*) log "selfflash: bad numeric field — abort to normal boot"; return 1;; esac
@@ -134,11 +167,33 @@ selfflash_recover() {
     skip4m=$(( stage_lba / SF_ALIGN_SECT ))
 
     if [ "$tries" -ge 3 ]; then
-        log "selfflash: tries=$tries >= 3 — giving up; marking failed, normal boot"
+        log "selfflash: tries=$tries >= 3 — giving up"
+        if [ "$SF_WRITING" = 1 ]; then
+            # A destructive write began on an earlier attempt -> the rootfs is
+            # partially written. Do NOT fall through to mount it, and — critically —
+            # do NOT downgrade the on-disk flag from `writing` to `failed`: `failed`
+            # hits the case "*" default on the NEXT power-cycle and would normal-boot
+            # the corrupt rootfs (the exact brick). KEEP state=writing so every
+            # subsequent boot re-enters recovery via the `writing` case and halts
+            # here again — the rootfs can never be normal-booted. tries stays >=3
+            # (the flag is only re-armed on the pre-write success path below), so
+            # this converges to a stable halt, not an ever-growing retry count.
+            fail "selfflash: retries exhausted AFTER a destructive write began — rootfs is partially written and must NOT be booted. On-disk flag stays state=writing so future boots re-enter recovery (never normal-boot). Reflash via Dell: flash-owned-image.sh --target dell --slot pros. Halting in recovery."
+        fi
+        # No destructive write ever began -> the rootfs is fully intact. Record the
+        # terminal `failed` state (so future boots take the normal-boot default) and
+        # continue a normal boot. Safe: state=failed only ever normal-boots a rootfs
+        # that was never written.
         selfflash_write_flag failed "$tries" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+        log "selfflash: retries exhausted but NO destructive write had begun (rootfs intact) — normal boot"
         return 1
     fi
-    selfflash_write_flag armed "$((tries+1))" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+    # Re-arm before attempting. Preserve the writing state once a destructive write
+    # has begun (across interrupted reboots) so the rootfs is never assumed intact.
+    sf_rearm=armed
+    [ "$SF_WRITING" = 1 ] && sf_rearm=writing
+    selfflash_write_flag "$sf_rearm" "$((tries+1))" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+    tries=$((tries + 1))
 
     if [ -n "$PFLOG" ]; then sync; umount /pflog 2>/dev/null; PFLOG=""; fi
     if mount | grep -q mmcblk; then
@@ -151,25 +206,56 @@ selfflash_recover() {
     log "selfflash: verifying staged .img.xz sha256..."
     got_xz="$(dd if="$SD" bs="$SF_BS" skip="$skip4m" 2>/dev/null | head -c "$xz_bytes" | sha256sum | cut -d' ' -f1)"
     if [ "$got_xz" != "$xz_sha" ]; then
-        log "selfflash: staged .xz SHA MISMATCH (got $got_xz want $xz_sha) — abort, retry next boot"
+        # Pre-write check: rootfs still intact unless a prior interrupted attempt
+        # already wrote (SF_WRITING). sf_fail_retry routes correctly for both.
+        sf_fail_retry "staged .xz SHA MISMATCH (got $got_xz want $xz_sha) — staged blob bad/incomplete"
         return 1
     fi
     log "selfflash: staged .xz verified OK"
 
+    # POINT OF NO RETURN. Commit state=writing to the flag BEFORE touching [0,img):
+    # if power is lost mid-dd, the next boot reads state=writing and re-enters
+    # recovery (never normal-boots the half-written rootfs). The "valid image"
+    # marker (state=done) is written LAST, only after a full read-back SHA verify.
+    #
+    # The point-of-no-return guarantee depends ENTIRELY on this flag being durably
+    # persisted: if the flag-sector write silently fails (dd errors are swallowed),
+    # the next boot would read the STALE state and normal-boot AFTER a partial
+    # write. So write it, then READ IT BACK and confirm it reads state=writing
+    # before we let THIS boot touch [0,img). If the read-back does not confirm,
+    # REFUSE to begin the destructive dd and halt in recovery (never boot):
+    #   - fresh arm (state was 'armed'): the rootfs is still fully intact, so
+    #     halting is safe and loses nothing.
+    #   - re-entry (state was already 'writing' from an interrupted prior boot):
+    #     the rootfs may already be partial, so halting (never booting) is exactly
+    #     what we must do.
+    # Either way, halt-not-boot is correct. Do NOT set SF_WRITING for THIS boot
+    # until the flag is verified persisted (in the fresh-arm case that keeps the
+    # halt pre-destructive; the re-entry case already had SF_WRITING=1 set above).
+    selfflash_write_flag writing "$tries" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+    sync
+    sf_rb="$(dd if="$SD" bs=512 skip="$FLAG_LBA" count=1 2>/dev/null | tr -d '\000' | tr -cd '[:print:]\n')"
+    if ! printf '%s\n' "$sf_rb" | grep -q '^state=writing$'; then
+        log "selfflash: state=writing flag read-back FAILED (flag sector did not persist) — refusing the destructive write"
+        fail "selfflash: could not persist the point-of-no-return flag (state=writing) — NOT beginning the destructive dd. Reflash via Dell if needed: flash-owned-image.sh --target dell --slot pros. Halting in recovery."
+    fi
+    SF_WRITING=1
+    log "selfflash: state=writing committed + read-back verified — destructive write begins (point of no return)"
+
     log "selfflash: flashing — dd skip=$skip4m | unxz | dd of=$SD ..."
     if ! dd if="$SD" bs="$SF_BS" skip="$skip4m" 2>/dev/null | head -c "$xz_bytes" | unxz | dd of="$SD" bs="$SF_BS" 2>/dev/null; then
-        log "selfflash: flash pipeline returned error — retry next boot"
+        sf_fail_retry "flash pipeline returned error"
         return 1
     fi
     sync
     log "selfflash: write complete; read-back verifying image sha256..."
     got_img="$(dd if="$SD" bs="$SF_BS" 2>/dev/null | head -c "$img_bytes" | sha256sum | cut -d' ' -f1)"
     if [ "$got_img" != "$img_sha" ]; then
-        log "selfflash: image read-back SHA MISMATCH (got $got_img want $img_sha) — retry next boot"
+        sf_fail_retry "image read-back SHA MISMATCH (got $got_img want $img_sha)"
         return 1
     fi
     log "selfflash: image verified OK — marking done, rebooting into new image"
-    selfflash_write_flag done "$((tries+1))" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+    selfflash_write_flag done "$tries" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
     sync
     reboot -f
     return 0   # not reached
