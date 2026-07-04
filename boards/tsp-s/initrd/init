@@ -170,12 +170,23 @@ selfflash_recover() {
 
     if [ "$tries" -ge 3 ]; then
         log "selfflash: tries=$tries >= 3 — giving up"
-        selfflash_write_flag failed "$tries" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
         if [ "$SF_WRITING" = 1 ]; then
             # A destructive write began on an earlier attempt -> the rootfs is
-            # partially written. Do NOT fall through to mount it. Halt in recovery.
-            fail "selfflash: retries exhausted AFTER a destructive write began — rootfs is partially written and must NOT be booted. Reflash via Dell: flash-owned-image.sh --target dell --slot pros. Halting in recovery."
+            # partially written. Do NOT fall through to mount it, and — critically —
+            # do NOT downgrade the on-disk flag from `writing` to `failed`: `failed`
+            # hits the case "*" default on the NEXT power-cycle and would normal-boot
+            # the corrupt rootfs (the exact brick). KEEP state=writing so every
+            # subsequent boot re-enters recovery via the `writing` case and halts
+            # here again — the rootfs can never be normal-booted. tries stays >=3
+            # (the flag is only re-armed on the pre-write success path below), so
+            # this converges to a stable halt, not an ever-growing retry count.
+            fail "selfflash: retries exhausted AFTER a destructive write began — rootfs is partially written and must NOT be booted. On-disk flag stays state=writing so future boots re-enter recovery (never normal-boot). Reflash via Dell: flash-owned-image.sh --target dell --slot pros. Halting in recovery."
         fi
+        # No destructive write ever began -> the rootfs is fully intact. Record the
+        # terminal `failed` state (so future boots take the normal-boot default) and
+        # continue a normal boot. Safe: state=failed only ever normal-boots a rootfs
+        # that was never written.
+        selfflash_write_flag failed "$tries" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
         log "selfflash: retries exhausted but NO destructive write had begun (rootfs intact) — normal boot"
         return 1
     fi
