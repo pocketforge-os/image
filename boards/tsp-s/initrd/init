@@ -208,10 +208,30 @@ selfflash_recover() {
     # if power is lost mid-dd, the next boot reads state=writing and re-enters
     # recovery (never normal-boots the half-written rootfs). The "valid image"
     # marker (state=done) is written LAST, only after a full read-back SHA verify.
-    SF_WRITING=1
+    #
+    # The point-of-no-return guarantee depends ENTIRELY on this flag being durably
+    # persisted: if the flag-sector write silently fails (dd errors are swallowed),
+    # the next boot would read the STALE state and normal-boot AFTER a partial
+    # write. So write it, then READ IT BACK and confirm it reads state=writing
+    # before we let THIS boot touch [0,img). If the read-back does not confirm,
+    # REFUSE to begin the destructive dd and halt in recovery (never boot):
+    #   - fresh arm (state was 'armed'): the rootfs is still fully intact, so
+    #     halting is safe and loses nothing.
+    #   - re-entry (state was already 'writing' from an interrupted prior boot):
+    #     the rootfs may already be partial, so halting (never booting) is exactly
+    #     what we must do.
+    # Either way, halt-not-boot is correct. Do NOT set SF_WRITING for THIS boot
+    # until the flag is verified persisted (in the fresh-arm case that keeps the
+    # halt pre-destructive; the re-entry case already had SF_WRITING=1 set above).
     selfflash_write_flag writing "$tries" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
     sync
-    log "selfflash: state=writing committed — destructive write begins (point of no return)"
+    sf_rb="$(dd if="$SD" bs=512 skip="$FLAG_LBA" count=1 2>/dev/null | tr -d '\000' | tr -cd '[:print:]\n')"
+    if ! printf '%s\n' "$sf_rb" | grep -q '^state=writing$'; then
+        log "selfflash: state=writing flag read-back FAILED (flag sector did not persist) — refusing the destructive write"
+        fail "selfflash: could not persist the point-of-no-return flag (state=writing) — NOT beginning the destructive dd. Reflash via Dell if needed: flash-owned-image.sh --target dell --slot pros. Halting in recovery."
+    fi
+    SF_WRITING=1
+    log "selfflash: state=writing committed + read-back verified — destructive write begins (point of no return)"
 
     log "selfflash: flashing — dd skip=$skip4m | unxz | dd of=$SD ..."
     if ! dd if="$SD" bs="$SF_BS" skip="$skip4m" 2>/dev/null | head -c "$xz_bytes" | unxz | dd of="$SD" bs="$SF_BS" 2>/dev/null; then
