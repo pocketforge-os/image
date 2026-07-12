@@ -1,0 +1,9 @@
+# Sibling artifacts PRODUCED by the sign-and-scan CI packaging path (E8), NEVER committed:
+# the OCI image-layout is addressed BY DIGEST and published out-of-band; the signatures + SBOM
+# + scan report are regenerated per build. Only the committed inputs (app.toml, launch,
+# slice.conf) + the CI-emitted oci.digest pin live in git.
+/oci/
+oci.sig
+app.toml.sig
+sbom.spdx.json
+grype-report.json

@@ -1,0 +1,48 @@
+#!/bin/sh
+# apps/hello-pocketforge/launch — the on-device Phase-2 launch script.
+#
+# The kiosk supervisor invokes this AFTER it has verified the two-signature pair
+# (app.toml.sig + oci.sig) against /etc/pocketforge/keys/release.d/*.pub. It runs the app's
+# OCI bundle under a per-app systemd transient slice (slice.conf) via crun. SDL3_DYNAMIC_API
+# swaps in the platform SDL3 (libSDL3-pocketforge.so.0) without relinking.
+#
+# NOTE: the fielded supervisor's verify+exec (both sigs, WITHOUT a reflash) is a SEPARATE,
+# owner-gated HARDWARE phase (E8 packaging built + proved the bundle OFF-device; the on-silicon
+# launch-verify tail is not this deliverable). This script is the committed on-device sibling
+# that phase consumes. See container-runtime-architecture.md §2.3 + §4.
+set -eu
+
+APP_ID="com.pocketforge.hello"
+APP_DIR="/opt/pocketforge/apps/${APP_ID}"
+OCI_LAYOUT="${APP_DIR}/oci"
+SLICE_CONF="${APP_DIR}/slice.conf"
+KEYDIR="/etc/pocketforge/keys/release.d"
+
+# Source common environment (sets SDL_DYNAMIC_API, DISPLAY, XDG_RUNTIME_DIR, etc.)
+[ -r /etc/pocketforge/display-env.sh ] && . /etc/pocketforge/display-env.sh
+
+# Belt-and-suspenders: verify oci.sig (cosign bundle over the OCI Merkle root index.json)
+# against ANY release pub in the key directory before running. The supervisor also does this
+# (and the minisign app.toml.sig check); a second gate here refuses a tampered bundle even if
+# launched directly. cosign v3 verifies the sigstore bundle with --bundle.
+verified=0
+for pub in "$KEYDIR"/*.pub; do
+    [ -r "$pub" ] || continue
+    if cosign verify-blob --key "$pub" --bundle "${APP_DIR}/oci.sig" "${OCI_LAYOUT}/index.json" >/dev/null 2>&1; then
+        verified=1; break
+    fi
+done
+[ "$verified" = 1 ] || { logger -t pocketforge "oci.sig verification failed for ${APP_ID}; refusing to launch"; exit 1; }
+
+# Run the OCI container inside a per-app transient slice.
+exec systemd-run --user --pty \
+    --slice="pocketforge-${APP_ID}.slice" \
+    --unit="pocketforge-${APP_ID}-run" \
+    --property-from-file="$SLICE_CONF" \
+    --setenv=SDL_DYNAMIC_API \
+    --setenv=DISPLAY \
+    --setenv=XDG_RUNTIME_DIR \
+    crun run \
+        --bundle "$OCI_LAYOUT" \
+        --pid-file "/run/pocketforge-${APP_ID}.pid" \
+        "${APP_ID}-instance"
