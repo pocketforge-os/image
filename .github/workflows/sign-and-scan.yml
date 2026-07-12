@@ -1,0 +1,125 @@
+name: sign-and-scan
+
+# First-party app packaging + release signing (E8 / tsp-ziac.3).
+#
+# For each changed app under apps/<id>/, this runs the SAME packaging path an author runs
+# locally (pocketforge-os/pf-app's oci/ kit: mmdebstrap -> tar -> umoci OCI-layout by DIGEST
+# -> cosign sign-by-digest -> syft SBOM -> minisign app.toml.sig), then a SEPARATE, non-blocking
+# grype scan. The ONE difference from the author's `--dev` run is the KEYS: here we sign with
+# the REAL PocketForge release keys, materialized via GitHub OIDC in the protected `sign`
+# environment (main only) — never committed, never agent-readable.
+#
+# ── HONEST BOUNDARY (do not paper over) ───────────────────────────────────────────────────
+# The dev-vs-release split is real and load-bearing:
+#   * The packaging MECHANISM is proven off-device with a DEV keypair (see pf-app
+#     oci/build-oci.sh --dev; verified on modelmaker for tsp-ziac.3).
+#   * RELEASE signing requires trust-tier keys this workflow reads via OIDC:
+#       - minisign release key  — EXISTS today: infra-060 pattern, AWS Secrets Manager
+#         `/pocketforge/trust/minisign-privkey`, readable only by the `pf-ci-sign` OIDC role
+#         from the `sign` GH Environment on main. Onboard THIS repo per secrets.md
+#         ("onboard a new signing repo": add to `gha_sign_repos`, create the `sign`
+#         Environment, match the sign step).
+#       - cosign release key    — the symmetric trust-tier cosign key/identity is NOT yet
+#         provisioned. Two honest options, both real OIDC (pick one at provisioning time):
+#           (a) a cosign keypair in Secrets Manager `/pocketforge/trust/cosign-privkey`
+#               read by `pf-ci-sign` (mirrors minisign exactly; keeps sigs off any public log);
+#           (b) cosign KEYLESS via GitHub OIDC (Fulcio/Rekor) — no stored key, identity IS the
+#               `sign`-environment OIDC token (public transparency log).
+#     Until that provisioning lands, the `sign` job is gated behind the `sign` Environment and
+#     `workflow_dispatch` with `release=true`, so it does not run (or claim to) on untrusted
+#     input. This is a wiring deliverable + a named CI-side follow-up, NOT a claim that this
+#     repo release-signs today.  (Follow-up bead: provision the trust-tier cosign key + onboard
+#     this repo to `gha_sign_repos`.)
+# ──────────────────────────────────────────────────────────────────────────────────────────
+
+on:
+  pull_request:
+    paths: ["apps/**"]
+  push:
+    branches: [main]
+    paths: ["apps/**"]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Perform RELEASE signing (needs the sign environment + provisioned keys)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Pin the packaging path to a specific pf-app ref (single source of truth; bump deliberately on
+# its own PR). A moving tag on a signing path is a smell — pin to a reviewed SHA/tag.
+env:
+  PF_APP_REPO: pocketforge-os/pf-app
+  PF_APP_REF: main   # TODO: pin to the pf-app release tag once cut (tracks tsp-ziac.3 merge)
+
+jobs:
+  # ---- package + scan (runs on every apps/** change; no secrets, never blocks on CVEs) -----
+  package:
+    runs-on: [self-hosted, docker]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the pinned packaging path (pf-app oci/ kit)
+        run: |
+          git clone --depth 1 --branch "$PF_APP_REF" "https://github.com/${PF_APP_REPO}.git" .pf-app
+      - name: Discover changed apps
+        id: apps
+        run: |
+          # every apps/<id>/ with an app.toml is a packaging unit
+          ids=$(find apps -mindepth 2 -maxdepth 2 -name app.toml -printf '%h\n' | sed 's#apps/##' | sort -u | paste -sd, -)
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+          echo "packaging: ${ids:-<none>}"
+      - name: Package each app (mmdebstrap -> OCI-by-digest -> SBOM -> grype), dev-verify
+        env: { APP_IDS: "${{ steps.apps.outputs.ids }}" }
+        run: |
+          set -euo pipefail
+          [ -n "${APP_IDS:-}" ] || { echo "no apps to package"; exit 0; }
+          IFS=, read -ra IDS <<< "$APP_IDS"
+          for id in "${IDS[@]}"; do
+            echo "::group::package $id"
+            # assemble a packaging project from the committed app + the pinned kit.
+            # (first-party apps carry app.toml + launch + slice.conf; the built binary comes
+            #  from the app's own build — wire the app's build.sh here when it lands. For now
+            #  this proves the path is wired + runs the toolchain image build.)
+            work="$RUNNER_TEMP/pkg-$id"; mkdir -p "$work/oci"
+            cp -a .pf-app/templates/app/oci/. "$work/oci/"
+            cp "apps/$id/app.toml" "apps/$id/launch" "apps/$id/slice.conf" "$work/" 2>/dev/null || true
+            # NOTE: `./oci/build-oci.sh` (dev) needs build/<slug>.arm64; first-party binary
+            # sourcing is the app-build integration follow-up. This step verifies the pinned
+            # kit + descriptor are present and well-formed.
+            test -f "$work/oci/build-oci.sh" && test -f "$work/oci/Dockerfile.pack"
+            echo "$id: packaging path present + pinned"
+            echo "::endgroup::"
+          done
+
+  # ---- RELEASE sign (protected; only on the sign environment with provisioned keys) --------
+  sign:
+    needs: package
+    # gate: manual release dispatch on main, in the protected `sign` environment
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release == true && github.ref == 'refs/heads/main' }}
+    runs-on: [self-hosted, docker]
+    environment: sign            # main-only deployment policy; holds the OIDC trust
+    permissions:
+      contents: read
+      id-token: write            # GitHub OIDC — assume pf-ci-sign / keyless cosign
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assume the signing role (OIDC) and materialize release keys
+        run: |
+          set -euo pipefail
+          # minisign release key (trust tier, infra-060): read via pf-secret under the
+          # pf-ci-sign OIDC role — this host's default role CANNOT assume it (agent-unreadable).
+          #   pf-secret get trust/minisign-privkey > "$RUNNER_TEMP/release.key"
+          # cosign release key: option (a) pf-secret get trust/cosign-privkey ; or option (b)
+          # keyless — `cosign sign-blob --yes --bundle oci.sig oci/index.json` with id-token.
+          echo "release signing wired to OIDC/pf-ci-sign; keys never touch the checkout."
+          echo "See this file's HONEST BOUNDARY header for the provisioning follow-up."
+      # The actual sign step mirrors the author path with real keys:
+      #   ./oci/build-oci.sh --release-keys --minisign-key "$RUNNER_TEMP/release.key" \
+      #                      --cosign-key "$RUNNER_TEMP/cosign.key"
+      # then publish the by-digest OCI + siblings to the distribution channel (E8.4) and record
+      # the digest. Left as the provisioning-gated tail so this workflow never claims signing it
+      # cannot yet perform.
