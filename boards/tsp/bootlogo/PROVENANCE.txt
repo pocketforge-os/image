@@ -1,5 +1,5 @@
 # bootlogo provenance (regen.sh output)
 source_png:      pocketforge-boot.png sha256=ed689555505f644a859f1b7082275935f145ced3d7093e82929ab3701109faed
-intermediate_bmp: 1280x720 24bpp BI_RGB sha256=ca129cd492dab467a67bdb8004f50ed54d9b26047db33f416f29e293d1c9d504
+uncompressed_bmp: bootlogo.bmp 1280x720 24bpp BI_RGB sha256=ca129cd492dab467a67bdb8004f50ed54d9b26047db33f416f29e293d1c9d504
 output_lzma:     bootlogo.bmp.lzma sha256=1fbc8fcd3d21b3b425b8bfb6051308d3ce6f2eec0c6fc3cfa16f5301cd8c81c6
-commit both pocketforge-boot.png and bootlogo.bmp.lzma together.
+commit pocketforge-boot.png + bootlogo.bmp + bootlogo.bmp.lzma together.
