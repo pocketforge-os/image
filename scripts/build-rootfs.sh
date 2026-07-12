@@ -624,15 +624,48 @@ echo "[customize] Masked global wpa_supplicant.service (template instance used i
 ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-setup.service"
 
-# pocketforge-fb-clear.service (bd tsp-ooe: black panel instead of boot noise)
-install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/fb-clear.sh" \
-    "${ROOTFS}/usr/lib/pocketforge/fb-clear.sh"
+# pocketforge-boot-animator (bd tsp-3rd3.4: kernel-handoff fb0 boot animator).
+# Supersedes pocketforge-fb-clear — the animator owns fb0 from kernel-fb0
+# registration and unbinds fbcon itself, so a separate "zero fb0 to hide
+# console noise" service is no longer needed. Kept: the udev rule that tags
+# fb0 as dev-fb0.device (unit ordering depends on it).
 install -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/71-pocketforge-fb.rules" \
     "${ROOTFS}/etc/udev/rules.d/71-pocketforge-fb.rules"
-install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-fb-clear.service" \
-    "${ROOTFS}/etc/systemd/system/pocketforge-fb-clear.service"
-ln -sf /etc/systemd/system/pocketforge-fb-clear.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-fb-clear.service"
+
+# pocketforge-boot-animator (bd tsp-3rd3.4). The binary is cross-compiled
+# BEFORE mmdebstrap in the outer script and exported via PF_ANIMATOR_BIN;
+# see "Cross-compile the boot animator" below. stb_image.h is vendored
+# (public domain, single header) so only libc/libm are linked.
+ANIMATOR_SRC="/work/src/apps/pocketforge-boot-animator"
+install -d "${ROOTFS}/opt/pocketforge/bin"
+install -m 0755 "${PF_ANIMATOR_BIN}" "${ROOTFS}/opt/pocketforge/bin/pocketforge-boot-animator"
+echo "[customize] Animator installed: $(du -h "${PF_ANIMATOR_BIN}" | awk '{print $1}') stripped"
+
+# Frame assets (48× 1280×720 RGBA PNG, ~5.5 MiB). Frame 000 is byte-identical
+# to the u-boot static logo (sha ed689555…) so the u-boot → animator handoff
+# is seamless by construction.
+echo "[customize] Installing boot animation frame set..."
+install -d "${ROOTFS}/opt/pocketforge/boot-anim/frames"
+install -m 0644 "${ANIMATOR_SRC}/frames/"frame-*.png \
+    "${ROOTFS}/opt/pocketforge/boot-anim/frames/"
+# Provenance stamp: pin frame-000's sha so a rootfs drift on the u-boot handoff
+# frame is caught by grep-in-image tests.
+sha256sum "${ROOTFS}/opt/pocketforge/boot-anim/frames/frame-000.png" \
+    | awk '{print "frame-000.png sha256=" $1}' \
+    > "${ROOTFS}/opt/pocketforge/boot-anim/PROVENANCE"
+
+# Systemd unit + handoff target + interim default-handoff oneshot.
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-boot-animator.service" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-boot-animator.service"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-splash-handoff.target" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-splash-handoff.target"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-splash-handoff-default.service" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-splash-handoff-default.service"
+install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"
+ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
+    "${ROOTFS}/etc/systemd/system/basic.target.wants/pocketforge-boot-animator.service"
+ln -sf /etc/systemd/system/pocketforge-splash-handoff-default.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-splash-handoff-default.service"
 
 # pocketforge-wifi-powersave.service (disable xradio power-save → stop flap)
 ln -sf /etc/systemd/system/pocketforge-wifi-powersave.service \
@@ -832,6 +865,26 @@ if [ -n "${PF_APT_PROXY:-}" ]; then
     echo "  apt proxy: ${PF_APT_PROXY} (transparent cache; bytes verified vs signed index)"
     APT_PROXY_OPT=( --aptopt="Acquire::http::Proxy \"${PF_APT_PROXY}\"" )
 fi
+# ---- Cross-compile the boot animator (bd: tsp-3rd3.4) ----------------------
+# Built before mmdebstrap so the customize hook (which cannot see the outer
+# ${WORK}) just installs a ready-to-copy binary. Deterministic: same source +
+# same toolchain -> byte-identical binary (SOURCE_DATE_EPOCH already exported).
+ANIMATOR_SRC_DIR="${SRC_DIR}/apps/pocketforge-boot-animator"
+PF_ANIMATOR_BIN="${WORK}/pocketforge-boot-animator"
+CROSS_CC="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-gcc"
+CROSS_STRIP="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-strip"
+echo "  Cross-compiling pocketforge-boot-animator (aarch64)..."
+"${CROSS_CC}" \
+    -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+    -static-libgcc \
+    -I"${ANIMATOR_SRC_DIR}/src" \
+    -o "${PF_ANIMATOR_BIN}" \
+    "${ANIMATOR_SRC_DIR}/src/main.c" \
+    -lm
+"${CROSS_STRIP}" "${PF_ANIMATOR_BIN}"
+echo "    -> $(du -h "${PF_ANIMATOR_BIN}" | awk '{print $1}') stripped"
+export PF_ANIMATOR_BIN
+
 echo "  Running mmdebstrap (this may take several minutes under qemu...)..."
 POCKETFORGE_VARIANT="${VARIANT}" \
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
@@ -844,7 +897,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \

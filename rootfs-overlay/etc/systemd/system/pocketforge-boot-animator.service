@@ -1,0 +1,54 @@
+# pocketforge-boot-animator.service — kernel-handoff fb0 boot animator.
+#
+# The moment the kernel registers /dev/fb0 (via the 71-pocketforge-fb.rules
+# udev tag → dev-fb0.device), this unit starts the animator: it mmaps fb0,
+# unbinds the framebuffer console (so kernel text cannot bleed through
+# between frames), and blits the tsp-3rd3.2 48-frame ember-sweep set at
+# 16 fps — frame 000 is byte-identical to the u-boot static logo, so the
+# u-boot → animator handoff is seamless by construction.
+#
+# The animator runs until a successor UI activates
+# pocketforge-splash-handoff.target: Conflicts= on that target makes systemd
+# stop the animator, which clears fb0 to black on SIGTERM and exits 0.
+# Today (no MainUI yet) a paired oneshot activates the target once
+# multi-user.target is reached, so a clean bring-up still ends on a black
+# panel instead of a stuck animator.
+#
+# Ordering rationale:
+#   - Wants=/After=dev-fb0.device — same as the retired fb-clear unit.
+#   - Before=basic.target          — pull start FORWARD off multi-user.target
+#                                    so the animator draws during boot, not
+#                                    after login. DefaultDependencies=no plus
+#                                    an explicit After=sysinit.target avoids
+#                                    circular ordering.
+#   - Conflicts=pocketforge-splash-handoff.target
+#                                  — one systemctl start = one clean stop.
+#
+# bd: tsp-3rd3.4 (supersedes pocketforge-fb-clear / bd tsp-ooe)
+
+[Unit]
+Description=PocketForge boot animator (fb0 kernel-handoff splash)
+Documentation=https://github.com/pocketforge-os/image/tree/main/apps/pocketforge-boot-animator
+DefaultDependencies=no
+After=sysinit.target dev-fb0.device local-fs.target
+Wants=dev-fb0.device
+Before=basic.target
+Conflicts=pocketforge-splash-handoff.target shutdown.target
+ConditionPathExists=/dev/fb0
+ConditionPathExists=/opt/pocketforge/boot-anim/frames/frame-000.png
+
+[Service]
+Type=simple
+ExecStart=/opt/pocketforge/bin/pocketforge-boot-animator
+# systemd default KillSignal=SIGTERM is exactly the handoff contract; the
+# animator's SIGTERM handler clears fb0 to black and exits 0. A 2s timeout
+# is plenty for the clear+munmap.
+KillSignal=SIGTERM
+TimeoutStopSec=2s
+Restart=no
+# The animator is small and non-critical — keep the memory guardrail modest.
+MemoryMax=32M
+Nice=-5
+
+[Install]
+WantedBy=basic.target
