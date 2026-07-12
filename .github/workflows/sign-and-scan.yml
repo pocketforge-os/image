@@ -28,7 +28,7 @@ name: sign-and-scan
 #     Until that provisioning lands, the `sign` job is gated behind the `sign` Environment and
 #     `workflow_dispatch` with `release=true`, so it does not run (or claim to) on untrusted
 #     input. This is a wiring deliverable + a named CI-side follow-up, NOT a claim that this
-#     repo release-signs today.  (Follow-up bead: provision the trust-tier cosign key + onboard
+#     repo release-signs today.  (Follow-up bead tsp-ziac.6: provision the trust-tier cosign key + onboard
 #     this repo to `gha_sign_repos`.)
 # ──────────────────────────────────────────────────────────────────────────────────────────
 
@@ -52,7 +52,7 @@ permissions:
 # its own PR). A moving tag on a signing path is a smell — pin to a reviewed SHA/tag.
 env:
   PF_APP_REPO: pocketforge-os/pf-app
-  PF_APP_REF: main   # TODO: pin to the pf-app release tag once cut (tracks tsp-ziac.3 merge)
+  PF_APP_REF: main   # TODO: pin to the pf-app release tag once cut (tracks tsp-ziac.3 merge / tsp-ziac.6)
 
 jobs:
   # ---- package + scan (runs on every apps/** change; no secrets, never blocks on CVEs) -----
