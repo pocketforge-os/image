@@ -9,7 +9,8 @@ Builds the bootable SD card image for the TrimUI Smart Pro. Composes:
   `libsdl3-sunxifb`)
 - Steam Link first-boot bootstrap (signed-manifest `[fetch]` contract via the
   `pocketforge-kiosk-supervisor`)
-- App install trees (from the `apps` monorepo)
+- App install trees (from the `apps` monorepo) — each app ships the canonical
+  `app.toml` + per-SoC-family Platform ABI pin (`docs/APP-DESCRIPTOR.md`)
 - SD-boot layout (vendor SPL/BL31/U-Boot at raw offsets, mkbootimg `boot.img`
   on a named GPT partition)
 
