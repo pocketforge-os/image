@@ -35,8 +35,19 @@ Note the per-app first-boot **`[fetch]`** (HTTPS binary, plan §9.4) is a **diff
 from this image's vendor-**blob** `[fetch]` (`scripts/ipfs-fetch.sh`, `manifest.toml` `[[blobs]]`,
 IPFS/CID — `tsp-iby`): same word, different trust anchor. They are not unified.
 
+## First real example (this repo)
+
+- **`apps/hello-pocketforge/app.toml`** — the first real app descriptor wired into the image's
+  `apps/` tree (`tsp-ziac.2`). It is the exact output of `pf-app new "Hello PocketForge"
+  --device a523`; source + build + off-hardware sim proof live in
+  [`pocketforge-os/pf-app`](https://github.com/pocketforge-os/pf-app). The packaged payload +
+  sibling files (`app.toml.sig`, `oci/`, `oci.sig`, `sbom.spdx.json`, `slice.conf`) land beside
+  it with the packaging path (`tsp-ziac.3`).
+
 ## Authoritative sources (do not fork these here)
 
+- **Authoring SDK (`pf-app new` scaffold + "build your own app" guide):** `pocketforge-os/pf-app`
+  (`docs/BUILD-YOUR-OWN-APP.md`)
 - **Machine schema:** `platform` repo → `abi/app.schema.json`
 - **Reference examples:** `platform/abi/examples/app-{a133-powervr,a523-mali}.toml`
 - **Static validator:** `platform` repo → `pf app-validate <app.toml>` (`core/appmanifest.py`)
