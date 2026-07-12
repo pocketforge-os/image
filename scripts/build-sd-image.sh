@@ -131,6 +131,11 @@ cp "${BLOBS_DIR}/sunxi/a133/boot-chain/monitor.bin" "${BOOTPKG_DIR}/monitor.bin"
 cp "${BLOBS_DIR}/sunxi/a133/boot-chain/scp.bin"     "${BOOTPKG_DIR}/scp.bin"
 cp "${DTB_FILE}"                              "${BOOTPKG_DIR}/dtb.bin"
 cp "${BOARD_DIR}/boot_package.cfg"            "${BOOTPKG_DIR}/boot_package.cfg"
+# tsp-myp1.5: PocketForge boot logo. Pre-generated .bmp.lzma is committed
+# next to its .png source (regen via boards/tsp/bootlogo/regen.sh when the
+# PNG changes). The `bootlogo` item in boot_package.cfg pulls it into
+# boot_package.fex; vendor u-boot 2018.05 LZMA-decompresses + draws it.
+cp "${BOARD_DIR}/bootlogo/bootlogo.bmp.lzma"  "${BOOTPKG_DIR}/bootlogo.bmp.lzma"
 
 export PATH="${TOOLS_DIR}/dragonsecboot:${PATH}"
 
