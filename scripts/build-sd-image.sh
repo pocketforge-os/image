@@ -137,6 +137,26 @@ cp "${BOARD_DIR}/boot_package.cfg"            "${BOOTPKG_DIR}/boot_package.cfg"
 # boot_package.fex; vendor u-boot 2018.05 LZMA-decompresses + draws it.
 cp "${BOARD_DIR}/bootlogo/bootlogo.bmp.lzma"  "${BOOTPKG_DIR}/bootlogo.bmp.lzma"
 
+# DEV-ONLY (obj-3, tsp-bcx.31): u-boot charger-shutdown-defeat. For the DEV variant,
+# apply the deterministic committed blob patch to u-boot.bin BEFORE the pack, so
+# dragonsecboot recomputes the boot_package checksum over the PATCHED u-boot (a surgical
+# post-pack byte-patch is rejected by boot0's boot_package integrity check — proven on HW).
+# This lets a dev image boot to the OS on VBUS/AC (relay) power instead of the vendor
+# charger auto-shutdown. Gated on the DEV variant (release is never touched — a shipped
+# device keeps stock charger behavior). Safe for non-charger boots: the patch makes the
+# charger-shutdown branch unconditional, and for a non-charger reason the vendor code
+# already took that branch, so battery/normal boots are byte-for-byte unchanged.
+if [ "${VARIANT}" = dev ]; then
+    command -v python3 >/dev/null 2>&1 || { echo "FATAL: dev charger-defeat needs python3 in the build image" >&2; exit 1; }
+    CHARGER_PATCH="${BLOBS_DIR}/sunxi/a133/boot-chain/patches/uboot-charger-boot/apply-uboot-charger-boot.py"
+    [ -f "${CHARGER_PATCH}" ] || { echo "FATAL: charger-defeat apply script not found: ${CHARGER_PATCH} (blobs patches text tree must be staged into the build)" >&2; exit 1; }
+    echo "  DEV-ONLY: applying u-boot charger-shutdown-defeat patch (tsp-bcx.31) before pack"
+    # apply-uboot-charger-boot.py verifies the vendor u-boot SHA before patching (tripwire),
+    # then writes the patched bytes in place (reads fully first, so same-path is safe).
+    python3 "${CHARGER_PATCH}" --vendor "${BOOTPKG_DIR}/u-boot.bin" --out "${BOOTPKG_DIR}/u-boot.bin"
+    echo "  patched u-boot.bin sha256: $(sha256sum "${BOOTPKG_DIR}/u-boot.bin" | cut -d' ' -f1) (expect 2793aeb5…)"
+fi
+
 export PATH="${TOOLS_DIR}/dragonsecboot:${PATH}"
 
 # dragonsecboot embeds wall-clock timestamps; use faketime for reproducibility.

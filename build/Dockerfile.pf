@@ -592,6 +592,12 @@ COPY --from=kernel /out/lib/modules /work/kernel-tsp/lib/modules
 COPY --from=gpu-km /out/modules  /work/gpu-km-tsp
 # /work/blobs = the fetched vendor blobs incl. the boot-chain group (boot0/u-boot/monitor/scp/env).
 COPY --from=fetch  /out          /work/blobs
+# tsp-bcx.31 (DEV-ONLY): the boot-chain patches/ TEXT tree (apply scripts + patch.spec.json)
+# is NOT in the hermetic fetch /out (that carries only manifest binaries by CID), so stage it
+# from the pinned blobs-src git tree. build-sd-image.sh's dev charger-defeat step runs
+# apply-uboot-charger-boot.py from here BEFORE dragonsecboot -pack. Text-only + output-identical
+# unless the dev hook fires. (Requires the pinned blobs ref to include blobs#7's patches/.)
+COPY --from=blobs-src sunxi/a133/boot-chain/patches /work/blobs/sunxi/a133/boot-chain/patches
 # /work/bootchain = the source-built a523 boot chain (u-boot-sunxi-with-spl.bin, BL31 embedded)
 # from the bootchain stage (tsp-jet.1). For a133 the bootchain stage emits a NOT-SHIPPED marker
 # (.pf-bootchain-provenance) — so this COPY is safe unconditionally; the a133 branch below just
