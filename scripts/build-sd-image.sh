@@ -272,6 +272,29 @@ if [ -d "${BOOT_RES_DIR}" ] && ls "${BOOT_RES_DIR}"/* >/dev/null 2>&1; then
     done
 fi
 
+# tsp-myp1.5 (charger-boot logo): vendor u-boot 2018.05 chooses splash by boot
+# reason. The `bootlogo` item in boot_package.fex is drawn ONLY on the normal-boot
+# path; on `boot reason=charger` (VBUS-powered — the harness and any real user who
+# boots with the cable plugged in) u-boot instead tries `bat/battery_charge.bmp`
+# from THIS FAT partition, and `fastbootlogo.bmp` from the FAT root in fastboot
+# mode. Empirical trace (2026-07-12, pf-node-01):
+#   [05.262]sunxi bmp info error : unable to open logo file bat\battery_charge.bmp
+# Without these files u-boot falls to a white screen. Cover every code path with
+# the same PocketForge logo (uncompressed 24bpp BI_RGB 1280x720 — matches the FB
+# geometry, and u-boot does NOT lzma-decode these FAT-partition BMPs, only the
+# `bootlogo` item inside boot_package.fex).
+BOOTLOGO_BMP="${BOARD_DIR}/bootlogo/bootlogo.bmp"
+if [ -f "${BOOTLOGO_BMP}" ]; then
+    mmd -i "${GENIMAGE_INPUT}/boot-resource.vfat" ::/bat 2>/dev/null || true
+    mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${BOOTLOGO_BMP}" ::/bat/battery_charge.bmp
+    mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${BOOTLOGO_BMP}" ::/bat/bat0.bmp
+    mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${BOOTLOGO_BMP}" ::/bat/low_pwr.bmp
+    mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${BOOTLOGO_BMP}" ::/fastbootlogo.bmp
+    echo "  boot-resource: added PocketForge logo BMPs (bat/battery_charge.bmp, bat/bat0.bmp, bat/low_pwr.bmp, fastbootlogo.bmp)"
+else
+    echo "WARN: bootlogo.bmp missing at ${BOOTLOGO_BMP} — charger-boot path will fall through to white" >&2
+fi
+
 # Create the userdata (rootfs) partition image.
 if [ "$M1B_MODE" = 1 ]; then
     # M1.B mode: empty 64 MiB ext4 (no rootfs — initrd falls through to shell)
