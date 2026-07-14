@@ -84,9 +84,21 @@ window_login_verdict="$(extract window_login_verdict)"
 t_login_s="$(extract t_login)"
 RUN_DIR="${RUN_DIR:-$(extract run_dir)}"
 
-# Step 2: animator per-frame timing from the DUT journal. The unit ships
-# without --measure by default; the flash-time drop-in (below) adds it for
-# this run so we get numbers, then we revert.
+# Step 2: animator per-frame timing from the DUT journal.
+#
+# The unit ships CLEAN by default (no --measure). Timing lines exist in the
+# journal ONLY if this boot was the "measure boot" — meaning
+# apps/pocketforge-boot-animator/measure.conf.example was installed as
+# /etc/systemd/system/pocketforge-boot-animator.service.d/measure.conf and
+# systemd was daemon-reloaded before this boot. If not present, decode_*
+# fields report n/a and the run is fine — the OWNER-SIGNOFF boot deliberately
+# does NOT carry --measure (coord directive 2026-07-14). Sequence:
+#   a. Cold-POR boot #1: CLEAN (no drop-in) → owner-signoff panel look +
+#      windows/rotation/fbcon/t_login/RSS. This is the run acceptance.sh is
+#      designed for by default.
+#   b. Cold-POR boot #2: measure drop-in installed → decode_p50/p95 + over-
+#      budget count. Run acceptance.sh again; it will find the timing lines.
+#   c. Remove the drop-in + daemon-reload.
 echo "== acceptance: animator per-frame timing =="
 timing_raw="$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$DUT_DEVICE_HOST" \
     "journalctl -u pocketforge-boot-animator.service --no-pager -o cat 2>/dev/null | grep -E 'tick=' || true")"

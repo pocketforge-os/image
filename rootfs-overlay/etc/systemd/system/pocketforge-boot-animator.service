@@ -39,11 +39,15 @@ ConditionPathExists=/opt/pocketforge/boot-anim/frames/frame-000.png
 
 [Service]
 Type=simple
-# --measure emits per-tick "decode=Xms blit=Yms" to the journal (~150 B/frame,
-# ~3 KB across a whole animation) so acceptance and any future regression
-# have on-device timing data by default. Cheap; remove in a release-hardening
-# pass if desired.
-ExecStart=/opt/pocketforge/bin/pocketforge-boot-animator --measure
+# The default boot runs CLEAN — no per-tick journal chatter, no diagnostic
+# argv. For the deliberate decode-timing measurement boot, install the drop-in
+#   /etc/systemd/system/pocketforge-boot-animator.service.d/measure.conf
+# (contents in apps/pocketforge-boot-animator/measure.conf.example on the
+# image branch), `systemctl daemon-reload`, cold-POR, harvest `tick=` lines
+# from `journalctl -u pocketforge-boot-animator -o cat`, then remove the
+# drop-in + daemon-reload back to clean. tsp-3rd3.4 acceptance script does
+# this end-to-end.
+ExecStart=/opt/pocketforge/bin/pocketforge-boot-animator
 # systemd default KillSignal=SIGTERM is exactly the handoff contract; the
 # animator's SIGTERM handler clears fb0 to black and exits 0. A 2s timeout
 # is plenty for the clear+munmap.
