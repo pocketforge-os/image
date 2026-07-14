@@ -654,18 +654,24 @@ sha256sum "${ROOTFS}/opt/pocketforge/boot-anim/frames/frame-000.png" \
     | awk '{print "frame-000.png sha256=" $1}' \
     > "${ROOTFS}/opt/pocketforge/boot-anim/PROVENANCE"
 
-# Systemd unit + handoff target + interim default-handoff oneshot.
+# Systemd unit + handoff target. NO default-handoff oneshot: it was in the
+# first cut of this bead and shipped SIGTERM'ing the animator ~1.7s in
+# (multi-user.target reached fast; the +500ms oneshot then activated
+# splash-handoff.target -> Conflicts= killed the animator before it even
+# finished the intro). Real evidence on the v5 combined image (rootfs
+# 3200a999) confirmed: animator started clean, drew, was killed at
+# Duration=1.687s. Fix (2026-07-14): DELETE the default-handoff; with no
+# MainUI in this image, the animator LOOPS FOREVER until a real UI ships
+# and activates pocketforge-splash-handoff.target itself. That is the
+# correct "no MainUI yet" behavior — the splash IS the state until a
+# successor exists.
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-boot-animator.service" \
     "${ROOTFS}/etc/systemd/system/pocketforge-boot-animator.service"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-splash-handoff.target" \
     "${ROOTFS}/etc/systemd/system/pocketforge-splash-handoff.target"
-install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-splash-handoff-default.service" \
-    "${ROOTFS}/etc/systemd/system/pocketforge-splash-handoff-default.service"
 install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"
 ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
     "${ROOTFS}/etc/systemd/system/basic.target.wants/pocketforge-boot-animator.service"
-ln -sf /etc/systemd/system/pocketforge-splash-handoff-default.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-splash-handoff-default.service"
 
 # pocketforge-wifi-powersave.service (disable xradio power-save → stop flap)
 ln -sf /etc/systemd/system/pocketforge-wifi-powersave.service \

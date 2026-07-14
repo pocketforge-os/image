@@ -12,6 +12,14 @@
 # and the boot ordering hands the display off automatically. No sentinel file,
 # no ad-hoc socket — one service edit is the entire integration.
 #
+# Nothing else activates this target today. The v5 combined image's first cut
+# shipped a `pocketforge-splash-handoff-default.service` oneshot that
+# activated it 500ms after multi-user.target as an "interim safety net" — but
+# real evidence showed that killed the animator at Duration=1.687s, before
+# the intro even finished. That oneshot has been DELETED; the animator
+# correctly loops forever until a real UI ships and activates this target
+# itself.
+#
 # bd: tsp-3rd3.4
 
 [Unit]

@@ -10,9 +10,15 @@
 # The animator runs until a successor UI activates
 # pocketforge-splash-handoff.target: Conflicts= on that target makes systemd
 # stop the animator, which clears fb0 to black on SIGTERM and exits 0.
-# Today (no MainUI yet) a paired oneshot activates the target once
-# multi-user.target is reached, so a clean bring-up still ends on a black
-# panel instead of a stuck animator.
+# Today (no MainUI yet) NOTHING activates that target — the animator loops
+# forever, which is the correct "no MainUI yet" behavior: the splash IS
+# the state until a successor UI ships. The v5 combined image's first cut
+# shipped an over-aggressive `pocketforge-splash-handoff-default.service`
+# oneshot that fired 500ms after multi-user.target and killed the animator
+# at Duration=1.687s (before the intro even finished looping). That
+# oneshot has been DELETED; a successor UI declares Requires=/After= on
+# pocketforge-splash-handoff.target itself and the boot ordering hands off
+# automatically.
 #
 # Ordering rationale:
 #   - Wants=/After=dev-fb0.device — same as the retired fb-clear unit.

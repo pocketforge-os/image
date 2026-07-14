@@ -35,10 +35,17 @@ Requires=pocketforge-splash-handoff.target
 After=pocketforge-splash-handoff.target
 ```
 
-Until then, the paired oneshot
-`pocketforge-splash-handoff-default.service` activates the target once
-`multi-user.target` is reached (+500 ms settle), so the boot still ends on a
-defined clean-black panel instead of a stuck animator.
+Until then, **nothing activates the target** — the animator loops forever.
+That is the correct "no MainUI yet" behavior: the animated splash IS the
+device's steady state until a real successor exists.
+
+**History (2026-07-14 fix):** the first cut of this bead shipped a paired
+oneshot `pocketforge-splash-handoff-default.service` that fired the target
+500 ms after `multi-user.target` as an "interim safety net". On the v5
+combined image (rootfs `3200a999`) tsp-431c.2's captured evidence showed the
+oneshot killed the animator at `Duration=1.687s` — before the intro even
+finished (owner saw no logo). The oneshot has been deleted; the animator
+loops forever until a real UI arrives.
 
 ## Footprint
 
