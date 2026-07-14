@@ -87,15 +87,21 @@ if [ -r /etc/pocketforge/wifi-roam.conf ]; then
     . /etc/pocketforge/wifi-roam.conf
 fi
 
-# Default key management if not specified in wifi.txt — profile-dependent.
-# xr829: list FT-PSK alongside WPA-PSK so wpa_supplicant uses 802.11r Fast BSS
-# Transition when the AP advertises it and falls back to plain WPA-PSK otherwise
-# (negotiated per-AP, safe on any network). fullmac: plain WPA-PSK only.
+# Default key management if not specified in wifi.txt — plain WPA-PSK on BOTH
+# profiles.
+# tsp-p6p5: FT-PSK was REMOVED from the xr829 default. The xr829 has NO working
+# 802.11r Fast BSS Transition (tsp-rcb source audit: no `.update_ft_ies` op, the
+# umac FT path is "TODO not supported", vendor states 11r "not supported by XR
+# solution"). Requesting FT-PSK made wpa_supplicant attempt FT transitions across
+# a multi-AP mesh (e.g. Cobblejob, 2 same-SSID APs on ch3+ch11); on the FT reassoc
+# the driver's join state stays UNJOINED when mac80211 programs the key
+# (`[AP_WRN] BSS_CHANGED_ASSOC but driver is unjoined` → `set_key` with no join
+# context → `[RX] No key found` → data plane dead, with `[WSM] unjoin TMO` churn).
+# Plain WPA-PSK forces a full reassociation + 4-way handshake on every roam, which
+# programs the key with a valid join context (the only path this radio supports).
+# fullmac (A523): plain WPA-PSK too — its chip firmware owns roaming.
 if [ -z "${KEY_MGMT}" ]; then
-    case "${WIFI_ROAM_PROFILE}" in
-        fullmac) KEY_MGMT="WPA-PSK" ;;
-        *)       KEY_MGMT="WPA-PSK FT-PSK" ;;
-    esac
+    KEY_MGMT="WPA-PSK"
 fi
 
 # --- template wpa_supplicant config ------------------------------------------
@@ -133,11 +139,12 @@ EOF
     # scan touches just this network's channels (~3-5) instead of all ~25+. The
     # firmware-offloaded CQM RSSI events drive the trigger. 802.11v BSS-TM is honored
     # by default (wpa_supplicant is built with WNM), letting the AP hand us a roam
-    # target with no scan at all. 802.11r FT-PSK is now also requested (key_mgmt
-    # above): the xr829 is a soft-MAC and wpa_supplicant runs FT over-the-air via the
-    # kernel's userspace-SME auth/assoc path, so an FT transition skips the 4-way
-    # handshake and collapses the reassociation gap (tsp-rcb — under on-device
-    # validation; falls back to a full reassoc on APs that don't advertise FT).
+    # target with no scan at all. 802.11r FT-PSK is deliberately NOT requested
+    # (key_mgmt above is plain WPA-PSK): the xr829 has no working FT support, so an
+    # FT transition leaves the driver unjoined when the key is programmed and wedges
+    # the data plane on a mesh (tsp-p6p5). Roams therefore use a full reassociation +
+    # 4-way handshake — the reassociation gap is real but the link stays usable;
+    # seamless/FT roaming remains future work on the driver side (tsp-rcb).
     # A near-dormant "don't scan during an active stream" profile is deferred to the
     # kiosk supervisor (tsp-rcb).
     # Tunables — learn:<short_s>:<signal_threshold_dBm>:<long_s>:<db>. The threshold
