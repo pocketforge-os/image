@@ -38,6 +38,7 @@ RSS_CEILING_KIB=20480                    # coord-approved 20 MiB
 TICK_BUDGET_MS=62                        # 62.5 ms rounded down (16 fps)
 RUN_LABEL="tsp-3rd3.4-acceptance"
 RUN_DIR=""
+CONSUME_RUN=0                            # 1 = re-verdict existing --run-dir (no fresh cold-POR)
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -45,6 +46,7 @@ while [ "$#" -gt 0 ]; do
         --device)              DUT_DEVICE_HOST="$2"; shift ;;
         --baseline-t-login)    BASELINE_T_LOGIN_S="$2"; shift ;;
         --run-dir)             RUN_DIR="$2"; shift ;;
+        --consume-run)         CONSUME_RUN=1 ;;
         --label)               RUN_LABEL="$2"; shift ;;
         -h|--help)
             sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -52,6 +54,12 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
+
+# --consume-run requires a --run-dir (nothing to consume without one).
+if [ "$CONSUME_RUN" = 1 ] && [ -z "$RUN_DIR" ]; then
+    echo "accept_status=failed reason=consume_run_needs_run_dir"
+    exit 2
+fi
 
 # tsp-3rd3.1 comment recorded t_uboot_splash=5.103s and the run ended before
 # kernel handoff on the drained battery. Baseline for t_login is TBD — coord
@@ -62,11 +70,20 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" >/dev/null 2>&1 && pwd)"
 HARNESS="/home/matt/pocketforge-automation/scripts/boot-splash-verify.sh"
 [ -x "$HARNESS" ] || { echo "accept_status=failed reason=harness_missing path=$HARNESS"; exit 1; }
 
-# Step 1: drive cold POR + capture + per-window review via the tsp-3rd3.1
-# harness. Contract lines are captured; whole logs stay on the node.
-echo "== acceptance: boot-splash-verify.sh =="
+# Step 1: drive (or re-verdict) the tsp-3rd3.1 harness. With --consume-run
+# we ADD --dry-run to the harness call so it re-verdicts the existing
+# --run-dir instead of triggering a fresh cold-POR — this is the shared
+# cold-POR flow (tsp-myp1.5.1 drives ONE boot, both lanes read the same
+# frames). Contract lines only leave the harness; whole logs stay on-node.
+echo "== acceptance: boot-splash-verify.sh (consume=$CONSUME_RUN) =="
 HARNESS_OUT="$(mktemp)"
-if ! "$HARNESS" --host "$DUT_HOST" --label "$RUN_LABEL" ${RUN_DIR:+--run-dir "$RUN_DIR"} >"$HARNESS_OUT" 2>&1; then
+if [ "$CONSUME_RUN" = 1 ]; then
+    HARNESS_ARGS=(--dry-run --run-dir "$RUN_DIR" --label "$RUN_LABEL")
+else
+    HARNESS_ARGS=(--host "$DUT_HOST" --label "$RUN_LABEL")
+    [ -n "$RUN_DIR" ] && HARNESS_ARGS+=(--run-dir "$RUN_DIR")
+fi
+if ! "$HARNESS" "${HARNESS_ARGS[@]}" >"$HARNESS_OUT" 2>&1; then
     tail -20 "$HARNESS_OUT" >&2
     echo "accept_status=failed reason=harness_error"
     exit 1
