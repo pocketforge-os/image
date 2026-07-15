@@ -1,0 +1,30 @@
+# pocketforge-splash-handoff.target — the takeover signal for the boot animator.
+#
+# The animator (pocketforge-boot-animator.service) has Conflicts= this target,
+# so activating it stops the animator (systemd sends SIGTERM). The animator
+# then clears fb0 to black and exits 0, leaving the panel clean for whatever
+# owns the display next.
+#
+# A future MainUI / kiosk service wires itself in with:
+#     [Unit]
+#     Requires=pocketforge-splash-handoff.target
+#     After=pocketforge-splash-handoff.target
+# and the boot ordering hands the display off automatically. No sentinel file,
+# no ad-hoc socket — one service edit is the entire integration.
+#
+# Nothing else activates this target today. The v5 combined image's first cut
+# shipped a `pocketforge-splash-handoff-default.service` oneshot that
+# activated it 500ms after multi-user.target as an "interim safety net" — but
+# real evidence showed that killed the animator at Duration=1.687s, before
+# the intro even finished. That oneshot has been DELETED; the animator
+# correctly loops forever until a real UI ships and activates this target
+# itself.
+#
+# bd: tsp-3rd3.4
+
+[Unit]
+Description=PocketForge splash-to-UI handoff signal (takeover from boot animator)
+Documentation=man:systemd.target(5)
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target

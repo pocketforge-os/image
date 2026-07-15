@@ -1,0 +1,17 @@
+# tsp-3rd3.4 acceptance drop-in — enables per-tick decode/blit timing.
+#
+# Copy this to
+#   /etc/systemd/system/pocketforge-boot-animator.service.d/measure.conf
+# then `systemctl daemon-reload`, cold-POR, and harvest with
+#   journalctl -u pocketforge-boot-animator -o cat | grep 'tick='
+# Remove the drop-in + daemon-reload back to clean when done.
+#
+# Cost of --measure: one fprintf per frame at 16 fps -> ~16 write(2)/sec into
+# the journal, ~150 bytes/frame, ~3 KB across a whole animation. Zero visible
+# effect on the panel; kept off by default so an owner-signoff boot has NO
+# diagnostic chatter in the journal.
+
+[Service]
+# Wipe the inherited ExecStart and replace with the --measure variant.
+ExecStart=
+ExecStart=/opt/pocketforge/bin/pocketforge-boot-animator --measure
