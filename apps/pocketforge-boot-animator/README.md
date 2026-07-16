@@ -14,12 +14,42 @@ for whatever owns the display next.
 3. Plays frames **000..015 once** (the intro — the motion field ramps in from
    the static logo), then **loops frames 016..047 forever** (`loop_start=16`;
    the loop is periodic by construction, so wrap has no visible discontinuity).
-4. On SIGTERM: clears fb0 to black, `msync`, `munmap`, and exits 0.
+4. **Presents each frame with `FBIOPAN_DISPLAY`** — blit the back page, pan
+   to it, alternating pages on the double-buffered fb0 (see below).
+5. On SIGTERM: clears fb0 to black, `msync`, pans once (so the black lands
+   on-panel), `munmap`, and exits 0.
 
 Frame `000` is byte-identical to the u-boot static logo
 (`sha256=ed689555…09faed` = `assets/boot-logo/pocketforge-boot.png` in
 `mission-control`), so the u-boot → animator handoff is seamless by
 construction — no re-scale, no format drift.
+
+## Pan-to-present — why every frame MUST pan (bd tsp-woy3)
+
+On the A133 the panel is portrait-native and fb0 presents landscape: fb0's
+scan-out is a **g2d-rotated copy** of fb0
+(`CONFIG_SUNXI_DISP2_FB_HW_ROTATION_SUPPORT`, the tsp-myp1.5.1.1 deferred-rot
+design in `kernel-sunxi-4.9` `dev_fb.c`/`fb_g2d_rot.c`). The disp driver
+refreshes that copy from fb0 in exactly two runtime places: once at boot
+(the deferred workqueue snapshot when g2d comes ready), and **on every
+`FBIOPAN_DISPLAY`** (`fb_g2d_rot` `apply()` rotates the panned page —
+sourced at `line_length * yoffset` — then `set_layer_config` commits).
+**mmap writes alone never reach the panel.**
+
+The first cut of this animator blitted without panning: it painted 16 fps
+at ~100% of a core into memory nothing scanned, while the panel stayed
+frozen on the boot-time snapshot (the static logo). Its frames became
+visible only when a concurrently-running SDL app's pans happened to carry
+them through — the intermittent splash/app alternation root-caused in
+tsp-7kpp as the "z-fight". The tsp-ikk0.11 single-writer seam removed that
+accidental pan-carrier and exposed the gap (bd tsp-woy3).
+
+The animator therefore blits into the **back** page and pans to it,
+alternating pages (`yres_virtual` ≥ 2×`yres` on this platform — 1280×1440),
+which also kills tearing; on a hypothetical single-page fb0 it degrades to
+blit-in-place + pan(yoffset=0), which still drives the rot refresh. A pan
+failure is logged once (`frames may not reach the panel`) rather than
+spamming the journal at 16 Hz.
 
 ## Exit contract (takeover handshake)
 
