@@ -785,6 +785,10 @@ if [ "${VARIANT}" = "dev" ]; then
     # MUST BE REMOVED BEFORE RELEASE — tracked by bead tsp-iuz.2.9.
     chroot "$ROOTFS" useradd -m -d /home/debug -s /bin/bash debug
     echo "debug:pocketforge" | chroot "$ROOTFS" chpasswd
+    # video/render/input so diagnostics (testgles2, cube-fps.sh, pf-hwprobe) can
+    # open /dev/fb0 + DRM/input nodes without sudo — same hw-access groups the
+    # udev rules above gate on, mirroring gamer (bd tsp-ikk0.3).
+    chroot "$ROOTFS" usermod -aG video,render,input debug
     printf 'debug ALL=(ALL:ALL) NOPASSWD: ALL\n' >> "${ROOTFS}/etc/sudoers.d/pocketforge-dev"
     echo "[customize] dev: debug user created (password: pocketforge) — serial console access"
 
