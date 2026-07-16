@@ -22,6 +22,21 @@
  * (3.52 MiB), decoded synchronously from the PNG file with a vendored
  * stb_image (single-header, public-domain, no external deps beyond libc).
  * Whole-program RSS steady-state is well under the 20 MiB ceiling.
+ *
+ * Pan-to-present (bd: tsp-woy3): on this platform fb0's scan-out is a
+ * g2d-ROTATED COPY of fb0 (CONFIG_SUNXI_DISP2_FB_HW_ROTATION_SUPPORT — the
+ * panel is portrait-native, fb0 presents landscape), and the disp driver
+ * refreshes that copy ONLY on FBIOPAN_DISPLAY (dev_fb.c: fb_g2d_rot apply()
+ * sources from line_length * var.yoffset, then set_layer_config commits).
+ * mmap writes alone NEVER reach the panel — the first cut of this animator
+ * blitted without panning and painted 16 fps into memory nothing scanned
+ * (panel frozen on the boot-time rot snapshot; visible only when a
+ * concurrently-running SDL app's pans happened to carry a frame through —
+ * the tsp-7kpp "z-fight"). So: blit the BACK page, then pan to it,
+ * alternating pages when fb0 is double-buffered (yres_virtual >= 2*yres,
+ * the platform norm), degrading to blit-then-pan on a single page when it
+ * is not. The SIGTERM clear pans once too, so the clean-black handoff
+ * actually lands on-panel.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -203,7 +218,9 @@ int main(int argc, char **argv) {
     }
 
     /* The full mapping — double-buffered virtual y is common on this SoC.
-     * We only ever draw into the first (yres_visible rows) buffer. */
+     * With two pages we draw into the back page and pan to it; with one we
+     * draw in place and pan(yoffset=0), which still drives the g2d-rot
+     * refresh (see the pan-to-present header note). */
     size_t map_bytes = (size_t)finfo.line_length * vinfo.yres_virtual;
     if (map_bytes == 0) map_bytes = (size_t)finfo.line_length * vinfo.yres;
     unsigned char *fbmap = mmap(NULL, map_bytes, PROT_READ | PROT_WRITE,
@@ -214,8 +231,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    const unsigned int n_pages =
+        (vinfo.yres_virtual >= 2 * vinfo.yres) ? 2 : 1;
+    fprintf(stderr, "animator: presenting via FBIOPAN_DISPLAY, %u page(s) "
+            "(yres_virtual=%u)\n", n_pages, vinfo.yres_virtual);
+
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    unsigned int page = 0;          /* page we blit into (then pan to) */
+    int pan_err_logged = 0;
 
     for (unsigned int k = 0; !g_stop; k++) {
         unsigned int fidx = frame_for_tick(k);
@@ -227,9 +252,27 @@ int main(int argc, char **argv) {
         long blit_ns = 0;
         if (rgba) {
             struct timespec tb0; clock_gettime(CLOCK_MONOTONIC, &tb0);
-            blit_bgra(fbmap, finfo.line_length, rgba);
+            blit_bgra(fbmap + (size_t)page * vinfo.yres * finfo.line_length,
+                      finfo.line_length, rgba);
             blit_ns = ns_since(&tb0);
             stbi_image_free(rgba);
+
+            /* Present: pan to the page just blitted — this is what pushes
+             * the frame through the g2d-rot copy to the panel. On decode
+             * failure we skip the pan too, so the panel keeps the last
+             * good frame rather than a stale back page. */
+            vinfo.yoffset = page * vinfo.yres;
+            vinfo.xoffset = 0;
+            if (ioctl(fb, FBIOPAN_DISPLAY, &vinfo) < 0) {
+                if (!pan_err_logged) {
+                    fprintf(stderr, "animator: FBIOPAN_DISPLAY: %s "
+                            "(frames may not reach the panel)\n",
+                            strerror(errno));
+                    pan_err_logged = 1;
+                }
+            } else if (n_pages == 2) {
+                page ^= 1;
+            }
         } else {
             fprintf(stderr, "animator: decode failed for frame %u; holding previous\n", fidx);
         }
@@ -253,9 +296,17 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Handoff: leave the panel clean-black for the successor UI. */
+    /* Handoff: leave the panel clean-black for the successor UI. Clear
+     * every page, then pan once so the black actually propagates through
+     * the g2d-rot scan-out (a bare memset is invisible — the same reason
+     * the frame loop pans). */
     memset(fbmap, 0, map_bytes);
     msync(fbmap, map_bytes, MS_SYNC);
+    vinfo.xoffset = 0;
+    vinfo.yoffset = 0;
+    if (ioctl(fb, FBIOPAN_DISPLAY, &vinfo) < 0)
+        fprintf(stderr, "animator: handoff FBIOPAN_DISPLAY: %s\n",
+                strerror(errno));
     munmap(fbmap, map_bytes);
     close(fb);
     return 0;
