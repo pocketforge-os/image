@@ -170,15 +170,25 @@ EOF
     # seamless/FT roaming remains future work on the driver side (tsp-rcb).
     # A near-dormant "don't scan during an active stream" profile is deferred to the
     # kiosk supervisor (tsp-rcb).
-    # Tunables — learn:<short_s>:<signal_threshold_dBm>:<long_s>:<db>. Threshold -67:
-    # keep short-interval (30s) scanning whenever the link is NOT clearly strong, so we
-    # roam OFF a weak mesh node back to the strongest AP instead of sticking on it
-    # (also compensates for the driver's laggy 16-sample RCPI averaging). The long
-    # interval stays 600s so a clearly-strong link scans rarely — the firmware-fragile
-    # off-channel scan dwell is the costly moment on this single-radio non-split-scan
-    # radio, so we minimise it when the link is already good. The DB self-learns at
-    # runtime, so this works on ANY user network with no per-network configuration; it
-    # persists across reboots under /var/lib (tsp-5f7 AP-selection / roam-stickiness).
+    # Tunables — learn:<short_s>:<signal_threshold_dBm>:<long_s>:<db>. RETUNED
+    # 30:-67 → 60:-72 (tsp-myp1.8.5 Fix 2): the v4 live A/B showed learn:30:-67
+    # costing 56-62ms AVG idle RTT with >100ms spikes + packet loss — even at
+    # -34dBm — vs 4.3ms with bgscan off (scans steal airtime on this single-radio
+    # non-split-scan chip, and in practice the SHORT-interval regime stays engaged
+    # at strong signal: the laggy 16-sample RCPI averaging and the DB's
+    # learning-probe scans keep it active). bgscan is NOT removed because it owns
+    # weak→strong roam-back — `wpa_cli reassociate` deterministically re-picked a
+    # -78dBm far AP twice in the same window; bgscan is what un-sticks that
+    # (tsp-5f7's original purpose). The retune trades roam-back detection latency
+    # for idle airtime: short interval 30s→60s halves worst-case scan theft
+    # (weak-link roam-back now ~1-2 min, acceptable — a weak link is already
+    # degraded); threshold -67→-72 widens the strong-signal long-interval band so
+    # RCPI dips don't spuriously re-enter short-interval mode, while a genuinely
+    # stuck weak link (the -78dBm case) still sits below threshold and keeps
+    # short-interval roam-back scanning. Long interval stays 600s. Full tradeoff
+    # record: bd tsp-5f7 + tsp-myp1.8.5. The DB self-learns at runtime, so this
+    # works on ANY user network with no per-network configuration; it persists
+    # across reboots under /var/lib (tsp-5f7 AP-selection / roam-stickiness).
     BGSCAN_DB_DIR="/var/lib/wpa_supplicant"
     SSID_SAFE="$(printf '%s' "${SSID}" | tr -c 'A-Za-z0-9._-' '_')"
     BGSCAN_DB="${BGSCAN_DB_DIR}/bgscan-${SSID_SAFE}.db"
@@ -210,7 +220,7 @@ network={
     # Channel-learning background scan: roam off a weak link toward the strongest
     # AP, with scans narrowed to this network's channels. Self-learns; works on
     # any net.
-    bgscan="learn:30:-67:600:${BGSCAN_DB}"
+    bgscan="learn:60:-72:600:${BGSCAN_DB}"
 }
 EOF
     ;;
