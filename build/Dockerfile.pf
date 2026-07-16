@@ -440,9 +440,11 @@ OUT=/work/out bash /work/src/build/build-libsdl3.sh
 cp -a /work/out/libSDL3-pocketforge.so* /out/lib/
 # SDL test binaries (bd tsp-tyt): SDL_TESTS=ON already builds them — ship the small
 # set the on-device sunxifb functional gate needs (SDL_VIDEODRIVER=sunxifb testgles2).
-# The rootfs stage installs them into the DEV image only.
+# pf-gfxbench (bd tsp-147u.8.5) is the owned ramping GPU+CPU stress benchmark the
+# pf-regress gfx-bench HIL test drives. The rootfs stage installs them into the
+# DEV image only.
 mkdir -p /out/lib/testbin
-for t in testgles2 testsprite; do
+for t in testgles2 testsprite pf-gfxbench; do
   if [ -f "/work/out/test/$t" ]; then cp "/work/out/test/$t" /out/lib/testbin/; fi
 done
 ls -la /out/lib/testbin/
