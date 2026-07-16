@@ -39,6 +39,23 @@ Until then, **nothing activates the target** — the animator loops forever.
 That is the correct "no MainUI yet" behavior: the animated splash IS the
 device's steady state until a real successor exists.
 
+## Transient takeover (the foreground-app slot — tsp-ikk0.11)
+
+The permanent handoff above is for a successor UI that never gives the
+panel back. For a **transient** display app (testgles2, pf-gfxbench, HIL
+tests, a game), the seam is `pocketforge-foreground.target`: the app joins
+it with the same two lines (`Requires=`/`After=` that target), the animator
+stops **before** the app starts (its `Conflicts=`/`Before=` on the target),
+and when the last joined app exits the target deactivates
+(`StopWhenUnneeded`) and its `OnSuccess=` **restores the animator** — the
+device returns to the splash steady-state on its own. Manual/test launches
+use the `pf-take-panel` wrapper (a `systemd-run` shim that joins the
+transient unit to the target). Launching a display app WITHOUT joining the
+seam leaves two writers pan-fighting the double-buffered fb0 — the panel
+alternates splash/app frames (owner-reported as "z-fighting"; root cause
+proven in bead tsp-7kpp). A brief black flash at each handoff edge is
+accepted; seamless handoff is deferred (tsp-3rd3.4).
+
 **History (2026-07-14 fix):** the first cut of this bead shipped a paired
 oneshot `pocketforge-splash-handoff-default.service` that fired the target
 500 ms after `multi-user.target` as an "interim safety net". On the v5

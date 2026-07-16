@@ -1,0 +1,40 @@
+#!/bin/sh
+# pf-take-panel — run a display app in the foreground-app slot (tsp-ikk0.11).
+#
+# The boot animator owns fb0 from early boot and loops forever until a
+# successor takes over (tsp-3rd3.4 design). A GLES/fbdev app launched
+# outside that contract pan-fights the animator on the double-buffered fb0:
+# the panel alternates splash/app frames ("two layers fighting" — the
+# tsp-7kpp owner report, initially misread as GLES z-fighting).
+#
+# This wrapper is the sanctioned MANUAL/TEST launch path. It runs the app as
+# a transient systemd unit joined to pocketforge-foreground.target — the
+# app-agnostic seam:
+#   start:  target activates → animator stops FIRST (Conflicts=/Before=,
+#           its SIGTERM handler clears fb0 and exits 0) → app starts.
+#   exit:   target deactivates (StopWhenUnneeded) → OnSuccess restores the
+#           animator. Device returns to its splash steady-state.
+#
+# Unit-file apps (launcher, benchmark services) do NOT need this wrapper —
+# they join the seam directly with:
+#     [Unit]
+#     Requires=pocketforge-foreground.target
+#     After=pocketforge-foreground.target
+#
+# stdio is piped through (--pipe), so FPS-line parsing (HIL cube-fps) works:
+#     pf-take-panel env SDL_VIDEODRIVER=sunxifb \
+#         /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
+# Environment does not cross into the transient unit — pass it via `env`
+# inside the command line, as above. Needs root (system-level systemd-run);
+# HIL/test users already launch via sudo -n.
+set -eu
+
+if [ "$#" -lt 1 ]; then
+    echo "usage: pf-take-panel <command> [args...]" >&2
+    exit 64
+fi
+
+exec systemd-run --pipe --collect --quiet \
+    --property=Requires=pocketforge-foreground.target \
+    --property=After=pocketforge-foreground.target \
+    -- "$@"

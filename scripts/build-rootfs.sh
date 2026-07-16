@@ -709,6 +709,21 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-boot-an
     "${ROOTFS}/etc/systemd/system/pocketforge-boot-animator.service"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-splash-handoff.target" \
     "${ROOTFS}/etc/systemd/system/pocketforge-splash-handoff.target"
+
+# pocketforge-foreground.target — the app-agnostic foreground-app slot
+# (tsp-ikk0.11): display apps join it (Requires=/After=), the animator's
+# Conflicts=/Before= stops it BEFORE the app starts (single fb0 writer —
+# kills the splash/app pan-fight the owner reported as "z-fighting",
+# tsp-7kpp), and the target's StopWhenUnneeded+OnSuccess restore the
+# animator when the last app exits.
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-foreground.target"
+
+# pf-take-panel — the sanctioned manual/test launch path for display apps:
+# runs the command as a transient unit joined to pocketforge-foreground.target
+# (see above). Unit-file apps join the target directly and don't need it.
+install -m 0755 "/work/src/rootfs-overlay/usr/bin/pf-take-panel" \
+    "${ROOTFS}/usr/bin/pf-take-panel"
 install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"
 ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
     "${ROOTFS}/etc/systemd/system/basic.target.wants/pocketforge-boot-animator.service"
