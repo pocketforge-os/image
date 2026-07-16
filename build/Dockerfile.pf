@@ -649,6 +649,27 @@ case "${PF_BOOT_PROTO}" in
     } > /out/.pf-assemble-provenance
     cat /out/.pf-assemble-provenance
     ;;
+  sunxi-spl-booti)  # a133 OWNED-SPL (tsp-147u.13): owned u-boot-sunxi-with-spl.bin @0x20000 (from the
+    # bootchain stage, replacing vendor boot0) + booti Image/dtb.bin/initrd.gz from FAT p4 (mmc 0:4).
+    # SAME GPT layout as the vendor a133 path below (boot-resource stays p4); the vendor
+    # boot_package/env slots are packed as INERT placeholders (behind-flag fallback until the
+    # owner-accepted flip). This reproduces the tsp-147u.7/.11-validated hand-assembly (vendor base
+    # + owned SPL swap + FAT-p4 boot payload). Selected only by the a133-owned opt-in profile;
+    # the shipped `a133` default keeps boot_proto=boot_package_fex (the *) branch), UNCHANGED.
+    UBOOT_SPL=/work/bootchain/u-boot-sunxi-with-spl.bin
+    [ -f "${UBOOT_SPL}" ] || { echo "assemble FAIL: boot_proto=sunxi-spl-booti but ${UBOOT_SPL} is missing — the bootchain stage must build it (needs [bootchain] model=sunxi-spl-uboot)"; exit 1; }
+    # Same kernel-tsp build-tree shim as the vendor a133 path (build-sd-image.sh reads Image + dtb
+    # from KERNEL_TSP_DIR); build-sd-image.sh also stages that Image/dtb + the initrd onto FAT p4.
+    mkdir -p /work/kernel-tsp/arch/arm64/boot/dts/sunxi
+    cp /work/kboot/Image                    /work/kernel-tsp/arch/arm64/boot/Image
+    cp "/work/kboot/${PF_KERNEL_DTB}"       /work/kernel-tsp/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb
+    cp /work/rootfs/userdata.ext4           /out/userdata.ext4
+    SRC_DIR=/work/src BLOBS_DIR=/work/blobs OUT_DIR=/out \
+      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
+      SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
+      bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned \
+        --boot-chain owned-spl --uboot-spl "${UBOOT_SPL}"
+    ;;
   *)            # a133: vendor boot0 -> boot_package.fex (dragonsecboot) -> abootimg -> genimage GPT
     # Shim the owned kernel-tsp build-tree layout build-sd-image.sh expects (arch/arm64/boot/{Image,
     # dts/sunxi/<dtb>}) from the kernel stage's staged /out/boot — so build-sd-image.sh stays

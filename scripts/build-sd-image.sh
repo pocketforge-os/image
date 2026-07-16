@@ -36,15 +36,33 @@ M1B_MODE=0
 BOOT_ONLY=0
 VARIANT="dev"
 SUBSTRATE="owned"
+# Boot chain (tsp-147u.13): "vendor" (default) = vendor boot0 in the 0x20000 slot + Android
+# boot.img loaded by vendor u-boot (the SHIPPED a133 path, unchanged). "owned-spl" = the owned
+# mainline u-boot-sunxi-with-spl.bin (from the bootchain stage) in the 0x20000 slot, replacing
+# vendor boot0, and Image/dtb.bin/initrd.gz staged on the FAT p4 boot-resource for the owned
+# u-boot's `booti` from mmc 0:4. Same GPT layout either way (boot-resource stays p4).
+BOOT_CHAIN="vendor"
+UBOOT_SPL=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --m1b-mode)    M1B_MODE=1; shift ;;
         --boot-only)   BOOT_ONLY=1; shift ;;
         --variant)     VARIANT="$2"; shift 2 ;;
         --substrate)   SUBSTRATE="$2"; shift 2 ;;
+        --boot-chain)  BOOT_CHAIN="$2"; shift 2 ;;
+        --uboot-spl)   UBOOT_SPL="$2"; shift 2 ;;
         *) echo "build-sd-image.sh: unknown arg: $1" >&2; exit 2 ;;
     esac
 done
+case "${BOOT_CHAIN}" in
+    vendor|owned-spl) ;;
+    *) echo "build-sd-image.sh: --boot-chain must be vendor|owned-spl (got '${BOOT_CHAIN}')" >&2; exit 2 ;;
+esac
+if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
+    [ -n "${UBOOT_SPL}" ] && [ -f "${UBOOT_SPL}" ] || {
+        echo "FATAL: --boot-chain owned-spl requires --uboot-spl <u-boot-sunxi-with-spl.bin> (got '${UBOOT_SPL}')" >&2
+        exit 1; }
+fi
 
 # Owned-substrate paths (bind-mounted by the build container)
 KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
@@ -247,8 +265,18 @@ GENIMAGE_ROOT="${WORK}/genimage-root"
 
 mkdir -p "${GENIMAGE_TMP}" "${GENIMAGE_INPUT}" "${GENIMAGE_OUTPUT}" "${GENIMAGE_ROOT}"
 
-# Stage all input images in the genimage input directory
-cp "${BLOBS_DIR}/sunxi/a133/boot-chain/boot0.img"  "${GENIMAGE_INPUT}/boot0.img"
+# Stage all input images in the genimage input directory.
+# The boot0 slot @0x20000 (genimage.cfg partition boot0): vendor boot0.img by default, OR the
+# owned u-boot-sunxi-with-spl.bin for --boot-chain owned-spl (tsp-147u.13). The A133 BROM loads
+# whatever eGON.BT0 image sits at 0x20000, so swapping the slot content is the owned-SPL flip;
+# the vendor boot_package/env slots below stay as inert placeholders (keep the GPT numbering, so
+# boot-resource remains p4 = the owned u-boot's `mmc 0:4`).
+if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
+    cp "${UBOOT_SPL}"                        "${GENIMAGE_INPUT}/boot0.img"
+    echo "  boot0 slot @0x20000: OWNED u-boot-sunxi-with-spl.bin ($(stat -c%s "${UBOOT_SPL}") B, sha256 $(sha256sum "${UBOOT_SPL}" | cut -d' ' -f1)) — vendor boot0 replaced"
+else
+    cp "${BLOBS_DIR}/sunxi/a133/boot-chain/boot0.img"  "${GENIMAGE_INPUT}/boot0.img"
+fi
 cp "${BOOTPKG_FILE}"                         "${GENIMAGE_INPUT}/boot_package.fex"
 cp "${BOOTIMG_FILE}"                         "${GENIMAGE_INPUT}/boot.img"
 cp "${BLOBS_DIR}/sunxi/a133/boot-chain/env.img"     "${GENIMAGE_INPUT}/env.img"
@@ -270,6 +298,21 @@ if [ -d "${BOOT_RES_DIR}" ] && ls "${BOOT_RES_DIR}"/* >/dev/null 2>&1; then
         mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "$f" "::/$(basename "$f")"
         echo "  boot-resource: added $(basename "$f")"
     done
+fi
+
+# Owned-SPL boot payload (tsp-147u.13): the owned u-boot's CONFIG_BOOTCOMMAND does
+#   load mmc 0:4 <Image> && load mmc 0:4 <dtb.bin> && load mmc 0:4 <initrd.gz> && booti ...
+# so the FAT p4 (this boot-resource partition, = mmc 0:4) must carry Image/dtb.bin/initrd.gz.
+# The vendor path leaves them out (it boots the Android boot.img via vendor u-boot instead).
+# Exact filenames are load-bearing — they match the merged tg5040_defconfig bootcmd.
+if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
+    [ -f "${KERNEL_IMAGE}" ] || { echo "FATAL: owned-spl: kernel Image not found at ${KERNEL_IMAGE}" >&2; exit 1; }
+    [ -f "${DTB_FILE}" ]     || { echo "FATAL: owned-spl: dtb not found at ${DTB_FILE}" >&2; exit 1; }
+    [ -f "${WORK}/initrd.gz" ] || { echo "FATAL: owned-spl: initrd not found at ${WORK}/initrd.gz" >&2; exit 1; }
+    mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${KERNEL_IMAGE}"   "::/Image"
+    mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${DTB_FILE}"       "::/dtb.bin"
+    mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${WORK}/initrd.gz" "::/initrd.gz"
+    echo "  boot-resource: owned-SPL boot payload staged on FAT p4 (mmc 0:4) — Image ($(stat -c%s "${KERNEL_IMAGE}") B), dtb.bin ($(stat -c%s "${DTB_FILE}") B), initrd.gz ($(stat -c%s "${WORK}/initrd.gz") B)"
 fi
 
 # tsp-myp1.5 (charger-boot logo): vendor u-boot 2018.05 chooses splash by boot
@@ -362,6 +405,29 @@ if ! echo "${SPL_MAGIC}" | grep -q '6547 4f4e 2e42 5430'; then
     exit 1
 fi
 echo "  SPL: eGON.BT0 magic verified"
+
+# Owned-SPL structural spot-check (tsp-147u.13): eGON.BT0 alone does NOT distinguish the OWNED
+# SPL from vendor boot0 (both carry it), so assert the OWNED u-boot's SPL landed at 0x20000 by
+# matching the exact bytes we staged into the boot0 slot against the image at 128 KiB. This
+# catches an assemble bug where the vendor blob (or nothing) ended up in the slot before we ever
+# burn a DUT. Also confirm the owned u-boot's booti payload is present on the FAT p4 boot-resource.
+if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
+    SPL_LEN="$(stat -c%s "${UBOOT_SPL}")"
+    # 128 KiB offset = 128 1-KiB blocks; read ceil(SPL_LEN/1024) blocks then trim to exact length.
+    IMG_SPL_SHA="$(dd if="${SD_IMAGE}" bs=1024 skip=128 count=$(( (SPL_LEN + 1023) / 1024 )) 2>/dev/null | head -c "${SPL_LEN}" | sha256sum | cut -d' ' -f1)"
+    OWNED_SPL_SHA="$(sha256sum "${UBOOT_SPL}" | cut -d' ' -f1)"
+    if [ "${IMG_SPL_SHA}" != "${OWNED_SPL_SHA}" ]; then
+        echo "FATAL: owned-spl: bytes at 0x20000 (sha ${IMG_SPL_SHA}) do NOT match the owned u-boot-sunxi-with-spl.bin (sha ${OWNED_SPL_SHA}) — wrong SPL in the boot0 slot" >&2
+        exit 1
+    fi
+    echo "  SPL: OWNED u-boot-sunxi-with-spl.bin verified @0x20000 (${SPL_LEN} B, sha ${OWNED_SPL_SHA})"
+    FAT_LIST="$(mdir -b -i "${GENIMAGE_INPUT}/boot-resource.vfat" ::/ 2>/dev/null || true)"
+    for bf in Image dtb.bin initrd.gz; do
+        printf '%s\n' "${FAT_LIST}" | grep -qiE "(^|/)${bf}\$" \
+            || { echo "FATAL: owned-spl: FAT p4 boot-resource is missing ${bf} (the owned u-boot booti's it from mmc 0:4)" >&2; exit 1; }
+    done
+    echo "  boot-resource p4: owned-SPL booti payload verified (Image, dtb.bin, initrd.gz present)"
+fi
 
 # ---- step 6: compress + checksum -------------------------------------------
 echo ""
