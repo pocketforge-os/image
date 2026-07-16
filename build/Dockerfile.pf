@@ -16,7 +16,7 @@
 # clone inside the build (platform docs/KERNEL-SOURCE-STRATEGY.md §3: the archive of a
 # content-addressed SHA is byte-identical regardless of transport, and is air-gap-safe):
 #   --build-context image-src=<archive>  kernel-src=<archive>  gpu-src=<archive>
-#                    sdl-src=<archive>    blobs-src=<archive>
+#                    sdl-src=<archive>    blobs-src=<archive>   wpa-src=<archive>
 #                    uboot-src=<archive>  tfa-src=<archive>    (a523 bootchain; EMPTY dirs
 #                                                               for a device with no source
 #                                                               bootchain, e.g. a133)
@@ -26,7 +26,8 @@
 #   kernel ┼─▶ gpu-km ─┐                 kernel Image/dtbs/modules/Module.symvers  (tsp-1dl.4.2)
 #          │           │                 GPU .ko built vs kernel Module.symvers    (tsp-1dl.4.3)
 #   sdl ───┼───────────┼─┐               libSDL3-pocketforge.so                     (tsp-1dl.4.4)
-#          └─▶ rootfs ─┴─┴─▶ assemble ─▶ export   mmdebstrap + genimage/extlinux    (tsp-1dl.4.5)
+#   wpa ───┼───────────┼─┼─┐             owned wpa_supplicant (a133 xr829 fork)     (tsp-myp1.8.2)
+#          └─▶ rootfs ─┴─┴─┴─▶ assemble ─▶ export mmdebstrap + genimage/extlinux    (tsp-1dl.4.5)
 #   bootchain ─────────────▶ (assemble)  a523 TF-A BL31 + U-Boot SPL → u-boot-sunxi-with-spl.bin
 #                                        (tsp-jet.1; consumed by the a523 assemble branch via
 #                                        COPY --from=bootchain — tsp-jet.4)
@@ -456,9 +457,103 @@ cat /out/lib/.pf-sdl-provenance
 SDL
 
 # =============================================================================
+# wpa — owned wpa_supplicant from the committed wpa-supplicant-tsp ref (tsp-myp1.8.2).
+# Upstream 2.10 + the GREAT_SNR 25->45 roam-hysteresis fork (tsp-urq.7, bench-
+# validated). a133-only: the fork exists for the xr829 soft-MAC's roam behavior;
+# the a523 fullmac (AIC8800D80) keeps stock Debian wpasupplicant untouched.
+# The repo's own build-arm64.sh wraps docker-in-docker (unusable in-stage), so its
+# INNER recipe (cp config-pocketforge .config; make wpa_supplicant) is run here
+# directly with the pinned cross toolchain — the kernel-stage precedent for an
+# in-Dockerfile recipe. arm64 dev libs (libnl/openssl) come from the SAME frozen
+# snapshot the base container + mmdebstrap already use ([check-valid-until=no] =>
+# deterministic resolution) — stage-local so the pinned base container needs no
+# rebuild (they are an a133-only need).
+# =============================================================================
+FROM ${PF_CONTAINER} AS wpa
+ARG PF_DEVICE_ID
+ARG PF_GPU_REPO
+ARG PF_WPA_SHA
+ARG PF_TOOLCHAIN_GCC_VERSION
+ARG SOURCE_DATE_EPOCH
+COPY --from=wpa-src . /work/src
+RUN <<'WPA'
+set -eux
+mkdir -p /out
+# Device gate — mirrors the sdl stage: non-PowerVR (= non-a133) devices get a
+# NOT-SHIPPED marker and an empty output the downstream COPY consumes harmlessly.
+if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
+  printf 'wpa-supplicant-tsp@%s NOT SHIPPED for device=%s (gpu=%s; xr829 roam-hysteresis fork — a133-only)\n' \
+    "${PF_WPA_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-wpa-provenance
+  cat /out/.pf-wpa-provenance
+  exit 0
+fi
+: "${PF_TOOLCHAIN_GCC_VERSION:?}"
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+# arm64 build deps from the frozen snapshot (sources already configured in the
+# base container; multiarch arm64 enabled there too).
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  libnl-3-dev:arm64 libnl-genl-3-dev:arm64 libnl-route-3-dev:arm64 libssl-dev:arm64
+# Cross-COMPILE with the pinned ARM toolchain (its glibc 2.33 sysroot headers,
+# with Debian arm64 multiarch headers -idirafter for what the sysroot lacks:
+# openssl, libnl3). Cross-LINK fully against the Debian bookworm arm64 libs the
+# binary will run with: -B picks bookworm's crt1.o so start files and libc are
+# the SAME glibc (mixing the sysroot's 2.33 crt with bookworm's 2.36 libc leaves
+# __libc_csu_* undefined — 2.34 removed them). This mirrors the environment of
+# the bench-validated tsp-urq.7 artifact (built natively in arm64 bookworm) and
+# is consistent with the rootfs this binary ships INSIDE (bookworm, mmdebstrap).
+export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
+cd /work/src/wpa_supplicant
+cp config-pocketforge .config
+# PKG_CONFIG_LIBDIR rides the ENVIRONMENT (not a make var): drivers.mak resolves
+# libnl via $(shell pkg-config ...), and $(shell) sees make's env but NOT
+# command-line make variables. LIBNL_INC is the drivers.mak-native override —
+# belt and suspenders with the env.
+PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
+make -j"$(nproc)" wpa_supplicant \
+  CC=aarch64-none-linux-gnu-gcc \
+  LIBNL_INC=/usr/include/libnl3 \
+  EXTRA_CFLAGS="-idirafter /usr/include -idirafter /usr/include/aarch64-linux-gnu -Wno-deprecated-declarations" \
+  LDFLAGS="-B/usr/lib/aarch64-linux-gnu -L/usr/lib/aarch64-linux-gnu"
+# ^ -Wno-deprecated-declarations: wpa_supplicant 2.10 predates the OpenSSL 3.0
+#   API migration, so its crypto_openssl.c emits ~134 deprecation warnings
+#   (ENGINE_*/EC_KEY_* — upstream builds identically); left on, they would
+#   permanently classify every a133 build-log review as WARN (review-build-log
+#   escalates deprecated-declarations) and mask NEW warnings. Remove the flag
+#   when the fork rebases onto wpa_supplicant >= 2.11 (migrated off those APIs).
+# Gates. (1) must be an aarch64 ELF (e_machine 0xB7). (2) NEEDED-SONAME
+# allowlist: every DT_NEEDED must be in the strict subset of the Debian
+# wpasupplicant package's own deps — that subset property is what lets the
+# rootfs keep the stock package for runtime libs while only the binary is
+# replaced (and it pins that no new dep sneaks in via config drift).
+# NOTE: check-glibc-symver is deliberately NOT used here — it enforces the
+# <=2.33 floor for artifacts deployed onto the VENDOR rootfs (glibc 2.33);
+# this binary ships inside our own bookworm rootfs (glibc 2.36) and links
+# bookworm glibc, whose __libc_start_main binds @GLIBC_2.34 by design (same
+# as the bench-validated tsp-urq.7 artifact, which ran on-device).
+E_MACHINE="$(od -An -tx1 -j18 -N2 wpa_supplicant | tr -d ' ')"
+[ "${E_MACHINE}" = "b700" ] || { echo "FATAL: wpa_supplicant is not aarch64 (e_machine=${E_MACHINE}, want b700)"; exit 1; }
+aarch64-none-linux-gnu-readelf -d wpa_supplicant | awk '/NEEDED/{gsub(/[][]/,"",$NF); print $NF}' > /tmp/needed.txt
+cat /tmp/needed.txt
+while read -r so; do
+  case "$so" in
+    libnl-3.so.200|libnl-genl-3.so.200|libnl-route-3.so.200|libssl.so.3|libcrypto.so.3|libc.so.6|ld-linux-aarch64.so.1) : ;;
+    *) echo "FATAL: unexpected DT_NEEDED ${so} (outside the Debian wpasupplicant dep subset)"; exit 1 ;;
+  esac
+done < /tmp/needed.txt
+install -m 0755 wpa_supplicant /out/wpa_supplicant
+cp .config /out/config.used
+{
+  printf 'wpa-supplicant-tsp@%s device=%s gpu=%s\n' "${PF_WPA_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}"
+  printf '  wpa_supplicant sha256=%s\n' "$(sha256sum /out/wpa_supplicant | cut -d' ' -f1)"
+} > /out/.pf-wpa-provenance
+cat /out/.pf-wpa-provenance
+WPA
+
+# =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
 # rootfs-packages-<id>.txt (tsp-1dl.4.5 unifies the two forked build-rootfs scripts).
-# Composes the kernel modules + GPU .ko + libSDL3 + fetched firmware.
+# Composes the kernel modules + GPU .ko + libSDL3 + owned wpa_supplicant + fetched firmware.
 # =============================================================================
 FROM ${PF_CONTAINER} AS rootfs
 ARG PF_DEVICE_ID
@@ -483,6 +578,7 @@ COPY --from=fetch  /out /work/blobs
 COPY --from=kernel /out/lib/modules /work/kernel-tsp
 COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
 COPY --from=sdl    /out/lib         /work/libsdl3
+COPY --from=wpa    /out             /work/wpa
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -492,7 +588,7 @@ set -eux
 mkdir -p /out
 case "${PF_GPU_REPO}" in
   gpu-km-tsp)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
-    SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 \
+    SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp OUT_DIR=/out \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" PF_APT_PROXY="${PF_APT_PROXY:-}" \
       bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned

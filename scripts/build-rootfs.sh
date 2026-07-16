@@ -31,6 +31,7 @@ set -euo pipefail
 SRC_DIR="${SRC_DIR:-/work/src}"
 BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
+WPA_DIR="${WPA_DIR:-/work/wpa}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/tsp"
 
@@ -169,6 +170,13 @@ LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | he
 [ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
 echo "  libsdl3: ${LIBSDL3_SO}"
 
+# Verify the owned wpa_supplicant artifact exists (wpa stage output; tsp-myp1.8.2).
+# The a133 wlan supplicant is the owned wpa-supplicant-tsp fork — a missing
+# artifact means a broken wpa stage, so fail fast (mirrors the libSDL3 gate)
+# rather than silently shipping stock Debian wpasupplicant.
+[ -f "${WPA_DIR}/wpa_supplicant" ] || { echo "FATAL: owned wpa_supplicant not found at ${WPA_DIR}/wpa_supplicant" >&2; exit 1; }
+echo "  wpa: ${WPA_DIR}/wpa_supplicant"
+
 # ---- step 3: mmdebstrap + customize ----------------------------------------
 echo ""
 echo "=== Step 3/4: mmdebstrap rootfs build ==="
@@ -306,6 +314,30 @@ if [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] && [ -d /work/libsdl3/testbin ] && 
     chroot "$ROOTFS" ldconfig
     echo "[customize] SDL test binaries installed to /opt/pocketforge/bin (dev variant)"
 fi
+
+# --- Owned wpa_supplicant install (tsp-myp1.8.2; pattern from tsp-urq.7) -------
+# Overwrite the stock Debian /sbin/wpa_supplicant with the owned
+# wpa-supplicant-tsp build (2.10 + GREAT_SNR 25->45 roam hysteresis) from the
+# hermetic wpa stage. The Debian "wpasupplicant" package still provides the
+# runtime deps (libnl/openssl — the fork links a strict subset), wpa_cli, and
+# the wpa_supplicant@wlan0 systemd wiring; only the binary is replaced (the
+# Debian unit's ExecStart resolves /sbin/wpa_supplicant, so no unit edit).
+# Presence was gated fail-fast in step 2; re-verify the arch here at install.
+echo "[customize] Installing owned wpa_supplicant (overwriting stock Debian /sbin/wpa_supplicant)..."
+# Sanity: must be an aarch64 ELF, or we would brick WiFi with a wrong-arch
+# binary. Read the ELF e_machine (bytes 18-19) directly with od so this works
+# even if `file` is not in the build container. aarch64 == 0x00B7 (LE).
+E_MACHINE="$(od -An -tx1 -j18 -N2 /work/wpa/wpa_supplicant | tr -d ' ')"
+if [ "${E_MACHINE}" != "b700" ]; then
+    echo "FATAL: /work/wpa/wpa_supplicant is not an aarch64 ELF (e_machine=${E_MACHINE}, want b700)" >&2
+    exit 1
+fi
+install -m 0755 /work/wpa/wpa_supplicant "${ROOTFS}/sbin/wpa_supplicant"
+# Provenance marker (pinned-ref stamp travels with the wpa stage output).
+if [ -f /work/wpa/.pf-wpa-provenance ]; then
+    install -D -m 0644 /work/wpa/.pf-wpa-provenance "${ROOTFS}/usr/share/pocketforge/wpa-provenance"
+fi
+echo "[customize] owned wpa_supplicant installed at /sbin/wpa_supplicant (aarch64 ELF verified)"
 
 # --- Config files ------------------------------------------------------------
 echo "[customize] Writing config files..."
