@@ -553,6 +553,14 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-wifi-po
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-wifi-watchdog.service" \
     "${ROOTFS}/etc/systemd/system/pocketforge-wifi-watchdog.service"
 
+# Network latency-under-load sysctls (fq_codel default qdisc + TCP buffer caps
+# sized for the lossy ~30 Mbit/s XR829 link). Applied by systemd-sysctl.service
+# (static, sysinit.target — ships with the systemd package; no procps needed).
+# bd: tsp-myp1.8.2 (epic tsp-myp1.8 — Steam Link latency).
+install -d "${ROOTFS}/etc/sysctl.d"
+install -m 0644 "/work/src/rootfs-overlay/etc/sysctl.d/10-pocketforge-net-latency.conf" \
+    "${ROOTFS}/etc/sysctl.d/10-pocketforge-net-latency.conf"
+
 # Module autoload for the WiFi driver triplet.
 # Owned substrate: xr829_mac -> xr829_core -> xr829_wlan
 # (xr829_core/xr829_wlan have alias=xradio_* so modprobe can resolve either,
