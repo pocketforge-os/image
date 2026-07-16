@@ -39,7 +39,16 @@ DefaultDependencies=no
 After=sysinit.target dev-fb0.device local-fs.target
 Wants=dev-fb0.device
 Before=basic.target
-Conflicts=pocketforge-splash-handoff.target shutdown.target
+# Two takeover seams stop the animator (both SIGTERM → clear fb0 → exit 0):
+#   - pocketforge-splash-handoff.target — the PERMANENT successor-UI handoff
+#     (a future MainUI activates it once; the animator does not return).
+#   - pocketforge-foreground.target — the TRANSIENT foreground-app slot
+#     (tsp-ikk0.11): a display app joins it (Requires=/After=), the animator
+#     stops BEFORE the app starts (single fb0 writer, no splash/app
+#     pan-fight — root cause tsp-7kpp), and the target's OnSuccess restores
+#     the animator when the last app exits.
+Before=pocketforge-foreground.target
+Conflicts=pocketforge-splash-handoff.target pocketforge-foreground.target shutdown.target
 ConditionPathExists=/dev/fb0
 ConditionPathExists=/opt/pocketforge/boot-anim/frames/frame-000.png
 

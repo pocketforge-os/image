@@ -1,22 +1,32 @@
 #!/bin/sh
-# pf-take-panel — run a display app with the panel properly handed off (tsp-7kpp).
+# pf-take-panel — run a display app in the foreground-app slot (tsp-ikk0.11).
 #
-# The boot animator (pocketforge-boot-animator.service) owns fb0 from early
-# boot and — by design (tsp-3rd3.4) — loops forever until a successor
-# activates pocketforge-splash-handoff.target. Launching a GLES/fbdev app
-# WITHOUT that handoff leaves TWO writers panning the double-buffered fb0:
-# the panel alternates between the splash frame and the app frame ("two
-# layers fighting" — the tsp-7kpp owner report, initially mistaken for
-# GLES z-fighting).
+# The boot animator owns fb0 from early boot and loops forever until a
+# successor takes over (tsp-3rd3.4 design). A GLES/fbdev app launched
+# outside that contract pan-fights the animator on the double-buffered fb0:
+# the panel alternates splash/app frames ("two layers fighting" — the
+# tsp-7kpp owner report, initially misread as GLES z-fighting).
 #
-# This wrapper is the sanctioned manual/test launch path:
-#   pf-take-panel /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
-# It activates the handoff target (SIGTERMs the animator, which clears fb0
-# and exits 0), runs the app, and on exit restores the animator by stopping
-# the target and starting the animator service again — leaving the device
-# in its boot steady-state.
+# This wrapper is the sanctioned MANUAL/TEST launch path. It runs the app as
+# a transient systemd unit joined to pocketforge-foreground.target — the
+# app-agnostic seam:
+#   start:  target activates → animator stops FIRST (Conflicts=/Before=,
+#           its SIGTERM handler clears fb0 and exits 0) → app starts.
+#   exit:   target deactivates (StopWhenUnneeded) → OnSuccess restores the
+#           animator. Device returns to its splash steady-state.
 #
-# Needs root for systemctl (test users run via sudo -n, per HIL practice).
+# Unit-file apps (launcher, benchmark services) do NOT need this wrapper —
+# they join the seam directly with:
+#     [Unit]
+#     Requires=pocketforge-foreground.target
+#     After=pocketforge-foreground.target
+#
+# stdio is piped through (--pipe), so FPS-line parsing (HIL cube-fps) works:
+#     pf-take-panel env SDL_VIDEODRIVER=sunxifb \
+#         /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
+# Environment does not cross into the transient unit — pass it via `env`
+# inside the command line, as above. Needs root (system-level systemd-run);
+# HIL/test users already launch via sudo -n.
 set -eu
 
 if [ "$#" -lt 1 ]; then
@@ -24,16 +34,7 @@ if [ "$#" -lt 1 ]; then
     exit 64
 fi
 
-restore_animator() {
-    # Stop the target first (Conflicts= is bidirectional), then bring the
-    # animator back. Best-effort: restore must never mask the app's exit.
-    systemctl stop pocketforge-splash-handoff.target 2>/dev/null || true
-    systemctl start pocketforge-boot-animator.service 2>/dev/null || true
-}
-
-# Take the panel: this SIGTERMs the animator via Conflicts=; the animator
-# clears fb0 to black and exits 0 (its documented handoff contract).
-systemctl start pocketforge-splash-handoff.target
-trap restore_animator EXIT INT TERM
-
-"$@"
+exec systemd-run --pipe --collect --quiet \
+    --property=Requires=pocketforge-foreground.target \
+    --property=After=pocketforge-foreground.target \
+    -- "$@"

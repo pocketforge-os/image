@@ -1,0 +1,44 @@
+# pocketforge-foreground.target — the exclusive foreground display-app slot.
+#
+# THE SEAM (tsp-ikk0.11, design ruled by tsp-3rd3-coord 2026-07-16): any app
+# that takes the panel joins this target DECLARATIVELY — no per-app
+# animator-kill hardcoding anywhere. An app unit (or a `pf-take-panel`
+# transient unit) declares:
+#
+#     [Unit]
+#     Requires=pocketforge-foreground.target
+#     After=pocketforge-foreground.target
+#
+# Starting the app then:
+#   1. activates this target, whose activation — via the animator's
+#      Conflicts=/Before= on it — first STOPS pocketforge-boot-animator
+#      (SIGTERM → clears fb0 to black → exit 0, the tsp-3rd3.4 contract),
+#   2. and only then starts the app (After= orders it behind the stop),
+#      so fb0 has exactly ONE writer at all times. This kills the
+#      splash/app pan-fight on the double-buffered fb0 that the owner saw
+#      as "z-fighting" (root cause proven in bead tsp-7kpp).
+#
+# StopWhenUnneeded: when the last joined app unit exits, the target
+# deactivates on its own; OnSuccess then restores the boot animator, so the
+# device returns to its splash steady-state. A brief black flash during
+# handoff is ACCEPTED by design ruling — seamless splash→app handoff is
+# deferred to tsp-3rd3.4.
+#
+# KNOWN FUTURE EDGE (for tsp-y2di, the launcher milestone): OnSuccess
+# restores the animator unconditionally. When a persistent MainUI ships
+# (owning the panel via pocketforge-splash-handoff.target), a game exiting
+# this slot would wrongly revive the animator over the MainUI — the
+# launcher integration must define that interaction (e.g. the launcher
+# itself joins this target persistently, or replaces the OnSuccess=). Do
+# not "fix" it here pre-launcher.
+#
+# bd: tsp-ikk0.11 (root cause: tsp-7kpp; design intent: tsp-3rd3.4)
+
+[Unit]
+Description=PocketForge foreground display-app slot (exclusive fb0 ownership)
+Documentation=https://github.com/pocketforge-os/image/tree/main/apps/pocketforge-boot-animator
+DefaultDependencies=no
+StopWhenUnneeded=yes
+OnSuccess=pocketforge-boot-animator.service
+Conflicts=shutdown.target
+Before=shutdown.target
