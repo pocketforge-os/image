@@ -40,5 +40,15 @@ Documentation=https://github.com/pocketforge-os/image/tree/main/apps/pocketforge
 DefaultDependencies=no
 StopWhenUnneeded=yes
 OnSuccess=pocketforge-boot-animator.service
-Conflicts=shutdown.target
+# The Conflicts=/After= on the animator MUST be declared HERE (target-side),
+# not only animator-side: when this target is pulled in as a Requires=
+# dependency of an app unit (systemd-run/pf-take-panel — the normal path!),
+# systemd does NOT enforce the *conflicting unit's* declaration — the target
+# activates and the animator keeps running (proven on-device AND in a local
+# systemd repro, tsp-ikk0.11 window 2026-07-16; a direct `systemctl start`
+# of the target DOES honor it, which is why the splash-handoff precedent
+# never hit this). Target-side Conflicts= is enforced in the dependency-pull
+# transaction; validated on-device via drop-in before landing.
+Conflicts=pocketforge-boot-animator.service shutdown.target
+After=pocketforge-boot-animator.service
 Before=shutdown.target

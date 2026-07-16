@@ -46,7 +46,10 @@ Before=basic.target
 #     (tsp-ikk0.11): a display app joins it (Requires=/After=), the animator
 #     stops BEFORE the app starts (single fb0 writer, no splash/app
 #     pan-fight — root cause tsp-7kpp), and the target's OnSuccess restores
-#     the animator when the last app exits.
+#     the animator when the last app exits. NOTE: the LOAD-BEARING
+#     Conflicts=/After= for the dependency-pull path live on the TARGET
+#     (see its unit file for why); the declarations below cover the
+#     animator-anchor direction (starting the animator reclaims the slot).
 Before=pocketforge-foreground.target
 Conflicts=pocketforge-splash-handoff.target pocketforge-foreground.target shutdown.target
 ConditionPathExists=/dev/fb0
