@@ -108,17 +108,28 @@ if [ -z "${KEY_MGMT}" ]; then
     KEY_MGMT="WPA-PSK"
 fi
 
-# --- regulatory domain (tsp-myp1.8.2) -----------------------------------------
+# --- regulatory domain (tsp-myp1.8.2; mechanism diagnosed tsp-myp1.8.5) -------
 # Nothing in the image set a regdomain before this, so the kernel stayed on the
 # world domain ("00" — the most-restrictive intersection: lower TX power caps and
 # no-IR on several channels). Set it explicitly via wpa_supplicant `country=`
-# (an nl80211 regdomain hint applied when the interface comes up — no extra
-# service or iw call needed, and it rides the same generated conf that already
-# survives the profile split). Optional COUNTRY= in wifi.txt overrides; default
-# US. Applied to the xr829/A133 profile only — the fullmac/A523 profile stays a
-# minimal vendor-parity config (its chip firmware manages its own regulatory
-# behavior; do not disturb a proven-associating config). Verify on-device with
-# `iw reg get` before/after (epic tsp-myp1.8 verify-item (d)).
+# (an nl80211 regdomain hint applied when the interface comes up). Optional
+# COUNTRY= in wifi.txt overrides; default US. Applied to the xr829/A133 profile
+# only — the fullmac/A523 profile stays a minimal vendor-parity config (its chip
+# firmware manages its own regulatory behavior; do not disturb a proven-
+# associating config).
+# ⚠ KERNEL DEPENDENCY (tsp-myp1.8.5 Fix 3 diagnosis, 2026-07-16): this hint is
+# INERT until the kernel carries a working regulatory backend. The 4.9 tree
+# resolves hints via internal regdb (compiled OUT: CONFIG_CFG80211_INTERNAL_REGDB
+# unset, and net/wireless/db.txt is the empty upstream placeholder) then CRDA —
+# whose userspace half no longer exists in Debian (crda removed from the archive;
+# modern wireless-regdb ships only the >=4.15 firmware-format regulatory.db this
+# kernel cannot read). So the hint times out (~3.1s) and `iw reg get` stays 00.
+# A boot-time `iw reg set` drives the IDENTICAL kernel path and fails the same
+# way — do NOT add one. The fix is kernel-side (pocketforge_tsp_defconfig
+# CONFIG_CFG80211_INTERNAL_REGDB=y + a real db.txt) + a platform.lock bump —
+# tracked on epic tsp-myp1.8 (kernel lane). This config line is correct as-is
+# and becomes live the moment that kernel lands; verify on-device with
+# `iw reg get` (epic verify-item (d)).
 COUNTRY="$(printf '%s' "${COUNTRY}" | tr 'a-z' 'A-Z')"
 case "${COUNTRY}" in
     [A-Z][A-Z]) : ;;   # exactly two letters — keep
@@ -170,15 +181,25 @@ EOF
     # seamless/FT roaming remains future work on the driver side (tsp-rcb).
     # A near-dormant "don't scan during an active stream" profile is deferred to the
     # kiosk supervisor (tsp-rcb).
-    # Tunables — learn:<short_s>:<signal_threshold_dBm>:<long_s>:<db>. Threshold -67:
-    # keep short-interval (30s) scanning whenever the link is NOT clearly strong, so we
-    # roam OFF a weak mesh node back to the strongest AP instead of sticking on it
-    # (also compensates for the driver's laggy 16-sample RCPI averaging). The long
-    # interval stays 600s so a clearly-strong link scans rarely — the firmware-fragile
-    # off-channel scan dwell is the costly moment on this single-radio non-split-scan
-    # radio, so we minimise it when the link is already good. The DB self-learns at
-    # runtime, so this works on ANY user network with no per-network configuration; it
-    # persists across reboots under /var/lib (tsp-5f7 AP-selection / roam-stickiness).
+    # Tunables — learn:<short_s>:<signal_threshold_dBm>:<long_s>:<db>. RETUNED
+    # 30:-67 → 60:-72 (tsp-myp1.8.5 Fix 2): the v4 live A/B showed learn:30:-67
+    # costing 56-62ms AVG idle RTT with >100ms spikes + packet loss — even at
+    # -34dBm — vs 4.3ms with bgscan off (scans steal airtime on this single-radio
+    # non-split-scan chip, and in practice the SHORT-interval regime stays engaged
+    # at strong signal: the laggy 16-sample RCPI averaging and the DB's
+    # learning-probe scans keep it active). bgscan is NOT removed because it owns
+    # weak→strong roam-back — `wpa_cli reassociate` deterministically re-picked a
+    # -78dBm far AP twice in the same window; bgscan is what un-sticks that
+    # (tsp-5f7's original purpose). The retune trades roam-back detection latency
+    # for idle airtime: short interval 30s→60s halves worst-case scan theft
+    # (weak-link roam-back now ~1-2 min, acceptable — a weak link is already
+    # degraded); threshold -67→-72 widens the strong-signal long-interval band so
+    # RCPI dips don't spuriously re-enter short-interval mode, while a genuinely
+    # stuck weak link (the -78dBm case) still sits below threshold and keeps
+    # short-interval roam-back scanning. Long interval stays 600s. Full tradeoff
+    # record: bd tsp-5f7 + tsp-myp1.8.5. The DB self-learns at runtime, so this
+    # works on ANY user network with no per-network configuration; it persists
+    # across reboots under /var/lib (tsp-5f7 AP-selection / roam-stickiness).
     BGSCAN_DB_DIR="/var/lib/wpa_supplicant"
     SSID_SAFE="$(printf '%s' "${SSID}" | tr -c 'A-Za-z0-9._-' '_')"
     BGSCAN_DB="${BGSCAN_DB_DIR}/bgscan-${SSID_SAFE}.db"
@@ -210,7 +231,7 @@ network={
     # Channel-learning background scan: roam off a weak link toward the strongest
     # AP, with scans narrowed to this network's channels. Self-learns; works on
     # any net.
-    bgscan="learn:30:-67:600:${BGSCAN_DB}"
+    bgscan="learn:60:-72:600:${BGSCAN_DB}"
 }
 EOF
     ;;
