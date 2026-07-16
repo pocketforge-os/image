@@ -8,3 +8,4 @@
 openssh-server
 rsync
 systemd-coredump
+iperf3
