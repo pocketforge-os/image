@@ -108,17 +108,28 @@ if [ -z "${KEY_MGMT}" ]; then
     KEY_MGMT="WPA-PSK"
 fi
 
-# --- regulatory domain (tsp-myp1.8.2) -----------------------------------------
+# --- regulatory domain (tsp-myp1.8.2; mechanism diagnosed tsp-myp1.8.5) -------
 # Nothing in the image set a regdomain before this, so the kernel stayed on the
 # world domain ("00" — the most-restrictive intersection: lower TX power caps and
 # no-IR on several channels). Set it explicitly via wpa_supplicant `country=`
-# (an nl80211 regdomain hint applied when the interface comes up — no extra
-# service or iw call needed, and it rides the same generated conf that already
-# survives the profile split). Optional COUNTRY= in wifi.txt overrides; default
-# US. Applied to the xr829/A133 profile only — the fullmac/A523 profile stays a
-# minimal vendor-parity config (its chip firmware manages its own regulatory
-# behavior; do not disturb a proven-associating config). Verify on-device with
-# `iw reg get` before/after (epic tsp-myp1.8 verify-item (d)).
+# (an nl80211 regdomain hint applied when the interface comes up). Optional
+# COUNTRY= in wifi.txt overrides; default US. Applied to the xr829/A133 profile
+# only — the fullmac/A523 profile stays a minimal vendor-parity config (its chip
+# firmware manages its own regulatory behavior; do not disturb a proven-
+# associating config).
+# ⚠ KERNEL DEPENDENCY (tsp-myp1.8.5 Fix 3 diagnosis, 2026-07-16): this hint is
+# INERT until the kernel carries a working regulatory backend. The 4.9 tree
+# resolves hints via internal regdb (compiled OUT: CONFIG_CFG80211_INTERNAL_REGDB
+# unset, and net/wireless/db.txt is the empty upstream placeholder) then CRDA —
+# whose userspace half no longer exists in Debian (crda removed from the archive;
+# modern wireless-regdb ships only the >=4.15 firmware-format regulatory.db this
+# kernel cannot read). So the hint times out (~3.1s) and `iw reg get` stays 00.
+# A boot-time `iw reg set` drives the IDENTICAL kernel path and fails the same
+# way — do NOT add one. The fix is kernel-side (pocketforge_tsp_defconfig
+# CONFIG_CFG80211_INTERNAL_REGDB=y + a real db.txt) + a platform.lock bump —
+# tracked on epic tsp-myp1.8 (kernel lane). This config line is correct as-is
+# and becomes live the moment that kernel lands; verify on-device with
+# `iw reg get` (epic verify-item (d)).
 COUNTRY="$(printf '%s' "${COUNTRY}" | tr 'a-z' 'A-Z')"
 case "${COUNTRY}" in
     [A-Z][A-Z]) : ;;   # exactly two letters — keep
