@@ -669,6 +669,14 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-boot-an
     "${ROOTFS}/etc/systemd/system/pocketforge-boot-animator.service"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-splash-handoff.target" \
     "${ROOTFS}/etc/systemd/system/pocketforge-splash-handoff.target"
+
+# pf-take-panel — the sanctioned manual/test launch path for display apps:
+# activates splash-handoff.target (animator exits cleanly), runs the app,
+# restores the animator on exit. Without it, a hand-launched GLES app and
+# the forever-looping animator PAN-FIGHT the double-buffered fb0 (the panel
+# alternates splash/app frames — owner-reported as "z-fighting", tsp-7kpp).
+install -m 0755 "/work/src/rootfs-overlay/usr/bin/pf-take-panel" \
+    "${ROOTFS}/usr/bin/pf-take-panel"
 install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"
 ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
     "${ROOTFS}/etc/systemd/system/basic.target.wants/pocketforge-boot-animator.service"

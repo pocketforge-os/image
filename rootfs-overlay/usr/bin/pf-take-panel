@@ -1,0 +1,39 @@
+#!/bin/sh
+# pf-take-panel — run a display app with the panel properly handed off (tsp-7kpp).
+#
+# The boot animator (pocketforge-boot-animator.service) owns fb0 from early
+# boot and — by design (tsp-3rd3.4) — loops forever until a successor
+# activates pocketforge-splash-handoff.target. Launching a GLES/fbdev app
+# WITHOUT that handoff leaves TWO writers panning the double-buffered fb0:
+# the panel alternates between the splash frame and the app frame ("two
+# layers fighting" — the tsp-7kpp owner report, initially mistaken for
+# GLES z-fighting).
+#
+# This wrapper is the sanctioned manual/test launch path:
+#   pf-take-panel /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
+# It activates the handoff target (SIGTERMs the animator, which clears fb0
+# and exits 0), runs the app, and on exit restores the animator by stopping
+# the target and starting the animator service again — leaving the device
+# in its boot steady-state.
+#
+# Needs root for systemctl (test users run via sudo -n, per HIL practice).
+set -eu
+
+if [ "$#" -lt 1 ]; then
+    echo "usage: pf-take-panel <command> [args...]" >&2
+    exit 64
+fi
+
+restore_animator() {
+    # Stop the target first (Conflicts= is bidirectional), then bring the
+    # animator back. Best-effort: restore must never mask the app's exit.
+    systemctl stop pocketforge-splash-handoff.target 2>/dev/null || true
+    systemctl start pocketforge-boot-animator.service 2>/dev/null || true
+}
+
+# Take the panel: this SIGTERMs the animator via Conflicts=; the animator
+# clears fb0 to black and exits 0 (its documented handoff contract).
+systemctl start pocketforge-splash-handoff.target
+trap restore_animator EXIT INT TERM
+
+"$@"
