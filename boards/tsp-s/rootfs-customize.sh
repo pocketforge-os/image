@@ -278,6 +278,10 @@ if [ "${VARIANT}" = "dev" ]; then
     # serial-console debug user (known pw; remove before release — mirrors A133)
     chroot "$ROOTFS" useradd -m -d /home/debug -s /bin/bash debug
     echo "debug:pocketforge" | chroot "$ROOTFS" chpasswd
+    # video/input so diagnostics can open /dev/fb0 + DRM/input nodes without sudo —
+    # mirrors the a523 gamer convention (no render: the a523 stack has no render-
+    # gated node, no render group is created, and gamer omits it). bd tsp-ikk0.4.
+    chroot "$ROOTFS" usermod -aG video,input debug
     printf 'debug ALL=(ALL:ALL) NOPASSWD: ALL\n' >> "${ROOTFS}/etc/sudoers.d/pocketforge-dev"
 
     # sshd hardening drop-in (reuse the A133 one — PermitRootLogin no, no pw auth)
