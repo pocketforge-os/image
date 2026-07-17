@@ -31,6 +31,19 @@ name: sign-and-scan
 #     repo release-signs today.  (Follow-up bead tsp-ziac.6: provision the trust-tier cosign key + onboard
 #     this repo to `gha_sign_repos`.)
 # ──────────────────────────────────────────────────────────────────────────────────────────
+#
+# ── RUNNER ROUTING (tsp-ikk0.22) ──────────────────────────────────────────────────────────
+# The [self-hosted, docker] jobs target the trimui-build-lab runner (the org's only docker-
+# labelled runner), but the `image` repo is NOT yet on the build-lab runner group's allow-list,
+# so these jobs cannot schedule (they queue unassigned) until the OWNER adds `image` to the
+# build-lab runner group (org-admin; listed on bead tsp-ikk0.22's owner batch). Because `image`
+# is PUBLIC, that add extends the fork-PR surface bounded by the build-lab confinement invariant
+# (BUILD_PIPELINE.md) — hence the job-level fork guard on `package` below (the sim#23 /
+# pf-hwprobe#11 pattern), landed BEFORE the group add so the add is safe to make.
+# (Historical: every run before 2026-07-17 ended conclusion=startup_failure regardless of
+# routing — unpinned `actions/checkout@v4` under the org's sha_pinning_required Actions policy;
+# the checkouts below are now SHA-pinned.)
+# ──────────────────────────────────────────────────────────────────────────────────────────
 
 on:
   pull_request:
@@ -57,10 +70,15 @@ env:
 jobs:
   # ---- package + scan (runs on every apps/** change; no secrets, never blocks on CVEs) -----
   package:
+    # Fork guard (build-lab confinement invariant, BUILD_PIPELINE.md): never execute fork /
+    # public-PR code on the self-hosted docker runner — same-repo PRs and pushes only
+    # (sim#23 / pf-hwprobe#11 pattern).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, docker]
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned (org Actions policy sha_pinning_required=true; bare @v4 = startup_failure)
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - name: Fetch the pinned packaging path (pf-app oci/ kit)
         run: |
           git clone --depth 1 --branch "$PF_APP_REF" "https://github.com/${PF_APP_REPO}.git" .pf-app
@@ -106,7 +124,8 @@ jobs:
       id-token: write            # GitHub OIDC — assume pf-ci-sign / keyless cosign
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned (org Actions policy sha_pinning_required=true; bare @v4 = startup_failure)
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - name: Assume the signing role (OIDC) and materialize release keys
         run: |
           set -euo pipefail
