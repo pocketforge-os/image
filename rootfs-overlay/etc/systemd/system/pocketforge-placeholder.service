@@ -1,0 +1,46 @@
+# pocketforge-placeholder.service (bd: tsp-147u.21)
+#
+# ⚠ THROWAWAY / PROOF-OF-LIFE. Starts the minimal static placeholder screen once
+# the system is up, superseding the boot animator so the panel presents a stable
+# "we're up" screen instead of looping the animation forever. This is NOT the
+# product UI — the real launcher/MainUI is a separate future design effort and
+# nothing here is reused (owner ruling 2026-07-17 on tsp-147u.15). Delete this
+# unit + apps/pocketforge-placeholder when the real launcher lands.
+#
+# CLEAN fb0 HANDOFF — the crux:
+#   Conflicts= and After= pocketforge-boot-animator.service are declared HERE, on
+#   the unit that gets STARTED. systemd enforces the STARTED unit's own Conflicts=
+#   ("starting the former stops the latter"), so activating this service first
+#   STOPS the animator (SIGTERM → the animator clears fb0 to black and exits 0),
+#   and After= orders our start behind that stop — exactly ONE fb0 writer at all
+#   times, no pan-fight (root cause tsp-7kpp). A brief black flash during the
+#   handoff is accepted by design (see pocketforge-foreground.target).
+#
+#   We deliberately do NOT wire in via Requires=pocketforge-splash-handoff.target:
+#   that path relies on the ANIMATOR-side Conflicts= firing during a dependency
+#   pull, which tsp-ikk0.11 proved on-device it does NOT (only a conflict on the
+#   unit actually being started is enforced in a pull transaction). Declaring the
+#   conflict on this service is the direction that reliably stops the animator.
+
+[Unit]
+Description=PocketForge minimal placeholder screen (throwaway post-boot splash successor)
+Documentation=https://github.com/pocketforge-os/image/tree/main/apps/pocketforge-placeholder
+DefaultDependencies=no
+After=sysinit.target local-fs.target multi-user.target pocketforge-boot-animator.service
+Conflicts=pocketforge-boot-animator.service shutdown.target
+Before=shutdown.target
+ConditionPathExists=/dev/fb0
+
+[Service]
+Type=simple
+ExecStart=/opt/pocketforge/bin/pocketforge-placeholder
+# On stop the process exits cleanly; the presented page stays on the panel.
+KillSignal=SIGTERM
+TimeoutStopSec=2s
+# Redraw the static screen if the process ever dies unexpectedly.
+Restart=on-failure
+MemoryMax=16M
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
