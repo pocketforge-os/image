@@ -262,6 +262,32 @@ selfflash_recover() {
         rm -f /sf-wifi.txt
     fi
 
+    # --- tsp-147u.20: per-build corroboration stamp (FAIL-SAFE, DATA ONLY) ------
+    # Stamp the just-applied image sha into the freshly-written boot-resource FAT so
+    # the orchestrator's reup-confirm can prove the DUT booted THIS build, not a
+    # stale same-variant card (companion to tsp-147u.19's /etc/pocketforge-build-id
+    # presence check, which only proves it booted A PocketForge image). The booted
+    # system mounts this FAT at /boot, so reup-confirm reads /boot/pocketforge-flashed-sha.
+    # STRICTLY ADDITIVE + BEST-EFFORT: every step is guarded and a failure here NEVER
+    # aborts or wedges the flash/boot — it only means the corroboration reads 'absent'
+    # and the HOST-SIDE check decides (an absent stamp is non-fatal; NO gating lives
+    # in /init). Own mountpoint so it can't disturb the wifi-restore mount above.
+    if [ -n "$img_sha" ]; then
+        sf_drop_cache
+        STAMPFAT="$(findfs LABEL=POCKETFORGE 2>/dev/null)"; [ -n "$STAMPFAT" ] || STAMPFAT="$LOGDEV"
+        if [ -n "$STAMPFAT" ] && mkdir -p /sf-stampfat 2>/dev/null \
+                && mount -t vfat -o rw "$STAMPFAT" /sf-stampfat 2>/dev/null; then
+            if printf '%s\n' "$img_sha" > /sf-stampfat/pocketforge-flashed-sha 2>/dev/null; then
+                sync; log "selfflash: stamped pocketforge-flashed-sha=$img_sha"
+            else
+                log "selfflash: WARN could not stamp flashed-sha (corroboration reads absent — non-fatal)"
+            fi
+            umount /sf-stampfat 2>/dev/null
+        else
+            log "selfflash: WARN stamp FAT not mounted — flashed-sha not written (non-fatal)"
+        fi
+    fi
+
     # Success: the reflash overwrote p5, so the flag file is gone -> next boot normal.
     log "selfflash: image verified OK — rebooting into the new image"
     sync
