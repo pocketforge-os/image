@@ -643,10 +643,36 @@ HOSTS_EOF
 
 # Enable services via symlinks (systemctl enable doesn't work under qemu
 # in all chroot configurations — create the symlinks directly).
-# wpa_supplicant@wlan0.service (template instance)
 install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+
+# wpa_supplicant@wlan0.service (template instance).
+#
+# bd tsp-mc9m.14.8: pull the supplicant in via the wlan0 DEVICE unit's .wants/
+# directory (the canonical systemd device-Wants-service "hotplug" pattern),
+# NOT multi-user.target.wants/. Why: the stock template
+# /lib/systemd/system/wpa_supplicant@.service has
+#   Requires=sys-subsystem-net-devices-%i.device
+#   After=sys-subsystem-net-devices-%i.device
+# When enabled under multi-user.target.wants/, an ABSENT wlan0 (a driver-less
+# mainline A133 kernel with no xradio/xr819 module) pulls that .device unit
+# into the boot transaction as a start job, which times out at
+# DefaultDeviceTimeoutSec (~90s, = DefaultTimeoutStartSec) and — because it is
+# a hard Requires — stalls multi-user.target the full ~90s (login at ~93s).
+# That idle window is also what triggers the mainline PMIC cldo3 SD-resume
+# wedge (tsp-mc9m.13.3). Gating on the device's .wants/ instead makes this
+# INERT when wlan0 is present (4.9 product kernel + mainline builds that DO
+# carry the driver, e.g. tsp-mc9m.14.4: the .device activates from udev the
+# instant wlan0 appears, pulls the supplicant, ordered correctly After the
+# now-active device — no race, associates exactly as before) and NON-BLOCKING
+# when wlan0 is absent (the .device never activates, so nothing pulls the
+# supplicant into the boot transaction — zero 90s stall). Nothing else
+# hard-Requires wpa_supplicant@wlan0 (powersave/watchdog only order After= it),
+# so no other unit re-introduces the stall. The tsp-8ba conf-condition drop-in
+# below is orthogonal and unchanged (skips the supplicant cleanly when WiFi is
+# unconfigured).
+install -d "${ROOTFS}/etc/systemd/system/sys-subsystem-net-devices-wlan0.device.wants"
 ln -sf /lib/systemd/system/wpa_supplicant@.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service"
+    "${ROOTFS}/etc/systemd/system/sys-subsystem-net-devices-wlan0.device.wants/wpa_supplicant@wlan0.service"
 
 # bd tsp-8ba: drop-in so an unconfigured-WiFi image SKIPS wpa_supplicant@wlan0
 # (ConditionPathExists on the generated conf) instead of failing it every boot.
@@ -743,12 +769,27 @@ ln -sf /etc/systemd/system/pocketforge-placeholder.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-placeholder.service"
 
 # pocketforge-wifi-powersave.service (disable xradio power-save → stop flap)
+# bd tsp-mc9m.14.8: like wpa_supplicant@wlan0 above, pull this in via the wlan0
+# .device unit's .wants/ (device-Wants-service hotplug), NOT multi-user.target.
+# It has After=sys-subsystem-net-devices-wlan0.device — so even though it uses a
+# SOFT Wants= (not Requires=), that Wants= still enqueues a start job for the
+# absent wlan0.device and the After= waits for it, timing out at
+# DefaultDeviceTimeoutSec (~90s); under multi-user.target.wants/ that delays
+# boot-to-login the full ~90s on a driver-less mainline kernel (soft-vs-hard
+# only changes failure propagation, not the enqueue/ordering wait; the
+# ConditionPathExists is evaluated only AFTER that wait, so it does not save it).
+# Pulled by the device instead → never enters the boot transaction when wlan0 is
+# absent (no stall); when wlan0 appears the device pulls it, ordered After the
+# device + wpa_supplicant exactly as before (inert on the present path).
 ln -sf /etc/systemd/system/pocketforge-wifi-powersave.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-powersave.service"
+    "${ROOTFS}/etc/systemd/system/sys-subsystem-net-devices-wlan0.device.wants/pocketforge-wifi-powersave.service"
 
 # pocketforge-wifi-watchdog.service (self-heal wlan0 on lost lease — tsp-h1o)
+# bd tsp-mc9m.14.8: same as powersave above — device-Wants-service via the wlan0
+# .device .wants/ so its After=sys-subsystem-net-devices-wlan0.device does not
+# stall boot ~90s on absent wlan0.
 ln -sf /etc/systemd/system/pocketforge-wifi-watchdog.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-watchdog.service"
+    "${ROOTFS}/etc/systemd/system/sys-subsystem-net-devices-wlan0.device.wants/pocketforge-wifi-watchdog.service"
 
 # systemd-networkd (DHCP for wlan0)
 ln -sf /lib/systemd/system/systemd-networkd.service \
