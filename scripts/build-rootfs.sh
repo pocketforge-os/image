@@ -643,10 +643,36 @@ HOSTS_EOF
 
 # Enable services via symlinks (systemctl enable doesn't work under qemu
 # in all chroot configurations — create the symlinks directly).
-# wpa_supplicant@wlan0.service (template instance)
 install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+
+# wpa_supplicant@wlan0.service (template instance).
+#
+# bd tsp-mc9m.14.8: pull the supplicant in via the wlan0 DEVICE unit's .wants/
+# directory (the canonical systemd device-Wants-service "hotplug" pattern),
+# NOT multi-user.target.wants/. Why: the stock template
+# /lib/systemd/system/wpa_supplicant@.service has
+#   Requires=sys-subsystem-net-devices-%i.device
+#   After=sys-subsystem-net-devices-%i.device
+# When enabled under multi-user.target.wants/, an ABSENT wlan0 (a driver-less
+# mainline A133 kernel with no xradio/xr819 module) pulls that .device unit
+# into the boot transaction as a start job, which times out at
+# DefaultDeviceTimeoutSec (~90s, = DefaultTimeoutStartSec) and — because it is
+# a hard Requires — stalls multi-user.target the full ~90s (login at ~93s).
+# That idle window is also what triggers the mainline PMIC cldo3 SD-resume
+# wedge (tsp-mc9m.13.3). Gating on the device's .wants/ instead makes this
+# INERT when wlan0 is present (4.9 product kernel + mainline builds that DO
+# carry the driver, e.g. tsp-mc9m.14.4: the .device activates from udev the
+# instant wlan0 appears, pulls the supplicant, ordered correctly After the
+# now-active device — no race, associates exactly as before) and NON-BLOCKING
+# when wlan0 is absent (the .device never activates, so nothing pulls the
+# supplicant into the boot transaction — zero 90s stall). Nothing else
+# hard-Requires wpa_supplicant@wlan0 (powersave/watchdog only order After= it),
+# so no other unit re-introduces the stall. The tsp-8ba conf-condition drop-in
+# below is orthogonal and unchanged (skips the supplicant cleanly when WiFi is
+# unconfigured).
+install -d "${ROOTFS}/etc/systemd/system/sys-subsystem-net-devices-wlan0.device.wants"
 ln -sf /lib/systemd/system/wpa_supplicant@.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service"
+    "${ROOTFS}/etc/systemd/system/sys-subsystem-net-devices-wlan0.device.wants/wpa_supplicant@wlan0.service"
 
 # bd tsp-8ba: drop-in so an unconfigured-WiFi image SKIPS wpa_supplicant@wlan0
 # (ConditionPathExists on the generated conf) instead of failing it every boot.
