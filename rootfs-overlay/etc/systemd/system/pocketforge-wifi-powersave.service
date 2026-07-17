@@ -19,7 +19,14 @@
 Description=PocketForge: apply WiFi power-save policy to wlan0 (default off — xradio flap mitigation)
 # wlan0 is created when the xradio module triplet loads (modules-load.d). Order
 # after the device node and after wpa_supplicant so the interface exists.
-Wants=sys-subsystem-net-devices-wlan0.device
+# bd tsp-mc9m.14.8: this unit is pulled in via the wlan0 .device unit's .wants/
+# (see [Install]) rather than multi-user.target, so it is only in the boot
+# transaction when wlan0 actually appears. That is why there is NO
+# Wants=sys-subsystem-net-devices-wlan0.device here: a soft Wants= on an absent
+# device still enqueues a start job that After= waits on, timing out at
+# DefaultDeviceTimeoutSec (~90s) and stalling boot on a driver-less mainline
+# kernel. Being device-.wants pulled avoids that entirely; After= below keeps the
+# ordering (after the device is active + after wpa_supplicant) when wlan0 exists.
 After=sys-subsystem-net-devices-wlan0.device wpa_supplicant@wlan0.service
 # Skip cleanly on hardware/builds where wlan0 never appears.
 ConditionPathExists=/sys/class/net/wlan0
@@ -30,4 +37,8 @@ RemainAfterExit=yes
 ExecStart=/usr/lib/pocketforge/wifi-powersave.sh
 
 [Install]
-WantedBy=multi-user.target
+# Device-Wants-service (hotplug): WantedBy the wlan0 device, NOT multi-user.target
+# — so an absent wlan0 never pulls this unit into the boot transaction (no ~90s
+# device-timeout stall). build-rootfs.sh symlinks it into the matching
+# sys-subsystem-net-devices-wlan0.device.wants/ directory.
+WantedBy=sys-subsystem-net-devices-wlan0.device

@@ -769,12 +769,27 @@ ln -sf /etc/systemd/system/pocketforge-placeholder.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-placeholder.service"
 
 # pocketforge-wifi-powersave.service (disable xradio power-save → stop flap)
+# bd tsp-mc9m.14.8: like wpa_supplicant@wlan0 above, pull this in via the wlan0
+# .device unit's .wants/ (device-Wants-service hotplug), NOT multi-user.target.
+# It has After=sys-subsystem-net-devices-wlan0.device — so even though it uses a
+# SOFT Wants= (not Requires=), that Wants= still enqueues a start job for the
+# absent wlan0.device and the After= waits for it, timing out at
+# DefaultDeviceTimeoutSec (~90s); under multi-user.target.wants/ that delays
+# boot-to-login the full ~90s on a driver-less mainline kernel (soft-vs-hard
+# only changes failure propagation, not the enqueue/ordering wait; the
+# ConditionPathExists is evaluated only AFTER that wait, so it does not save it).
+# Pulled by the device instead → never enters the boot transaction when wlan0 is
+# absent (no stall); when wlan0 appears the device pulls it, ordered After the
+# device + wpa_supplicant exactly as before (inert on the present path).
 ln -sf /etc/systemd/system/pocketforge-wifi-powersave.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-powersave.service"
+    "${ROOTFS}/etc/systemd/system/sys-subsystem-net-devices-wlan0.device.wants/pocketforge-wifi-powersave.service"
 
 # pocketforge-wifi-watchdog.service (self-heal wlan0 on lost lease — tsp-h1o)
+# bd tsp-mc9m.14.8: same as powersave above — device-Wants-service via the wlan0
+# .device .wants/ so its After=sys-subsystem-net-devices-wlan0.device does not
+# stall boot ~90s on absent wlan0.
 ln -sf /etc/systemd/system/pocketforge-wifi-watchdog.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-watchdog.service"
+    "${ROOTFS}/etc/systemd/system/sys-subsystem-net-devices-wlan0.device.wants/pocketforge-wifi-watchdog.service"
 
 # systemd-networkd (DHCP for wlan0)
 ln -sf /lib/systemd/system/systemd-networkd.service \
