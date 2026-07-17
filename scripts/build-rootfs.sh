@@ -728,6 +728,20 @@ install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"
 ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
     "${ROOTFS}/etc/systemd/system/basic.target.wants/pocketforge-boot-animator.service"
 
+# pocketforge-placeholder (bd tsp-147u.21) — THROWAWAY static post-boot screen.
+# Supersedes the boot animator once the system is up so the panel presents a
+# stable "we're up" screen instead of looping forever. Its unit declares
+# Conflicts=/After=pocketforge-boot-animator on ITSELF (the reliable direction
+# per tsp-ikk0.11), so starting it cleanly stops the animator — one fb0 writer.
+# NOT the product UI; delete with apps/pocketforge-placeholder when a real
+# launcher ships (owner ruling 2026-07-17, tsp-147u.15).
+install -m 0755 "${PF_PLACEHOLDER_BIN}" "${ROOTFS}/opt/pocketforge/bin/pocketforge-placeholder"
+echo "[customize] Placeholder installed: $(du -h "${PF_PLACEHOLDER_BIN}" | awk '{print $1}') stripped"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-placeholder.service" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-placeholder.service"
+ln -sf /etc/systemd/system/pocketforge-placeholder.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-placeholder.service"
+
 # pocketforge-wifi-powersave.service (disable xradio power-save → stop flap)
 ln -sf /etc/systemd/system/pocketforge-wifi-powersave.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-powersave.service"
@@ -950,6 +964,23 @@ echo "  Cross-compiling pocketforge-boot-animator (aarch64)..."
 echo "    -> $(du -h "${PF_ANIMATOR_BIN}" | awk '{print $1}') stripped"
 export PF_ANIMATOR_BIN
 
+# ---- Cross-compile the throwaway placeholder screen (bd: tsp-147u.21) -------
+# THROWAWAY / proof-of-life: a static post-boot screen that supersedes the boot
+# animator (see apps/pocketforge-placeholder). Same deterministic cross-compile
+# as the animator; libc only (no image decode, no assets).
+PLACEHOLDER_SRC_DIR="${SRC_DIR}/apps/pocketforge-placeholder"
+PF_PLACEHOLDER_BIN="${WORK}/pocketforge-placeholder"
+echo "  Cross-compiling pocketforge-placeholder (aarch64)..."
+"${CROSS_CC}" \
+    -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+    -static-libgcc \
+    -I"${PLACEHOLDER_SRC_DIR}/src" \
+    -o "${PF_PLACEHOLDER_BIN}" \
+    "${PLACEHOLDER_SRC_DIR}/src/main.c"
+"${CROSS_STRIP}" "${PF_PLACEHOLDER_BIN}"
+echo "    -> $(du -h "${PF_PLACEHOLDER_BIN}" | awk '{print $1}') stripped"
+export PF_PLACEHOLDER_BIN
+
 echo "  Running mmdebstrap (this may take several minutes under qemu...)..."
 POCKETFORGE_VARIANT="${VARIANT}" \
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
@@ -962,7 +993,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
