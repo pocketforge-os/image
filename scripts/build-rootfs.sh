@@ -755,18 +755,25 @@ ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
     "${ROOTFS}/etc/systemd/system/basic.target.wants/pocketforge-boot-animator.service"
 
 # pocketforge-placeholder (bd tsp-147u.21) — THROWAWAY static post-boot screen.
-# Supersedes the boot animator once the system is up so the panel presents a
-# stable "we're up" screen instead of looping forever. Its unit declares
-# Conflicts=/After=pocketforge-boot-animator on ITSELF (the reliable direction
-# per tsp-ikk0.11), so starting it cleanly stops the animator — one fb0 writer.
-# NOT the product UI; delete with apps/pocketforge-placeholder when a real
-# launcher ships (owner ruling 2026-07-17, tsp-147u.15).
+# bd tsp-ga7s.1: SUPERSEDED by pocketforge-menu (installed below). The binary
+# and unit stay installed for one-symlink-swap recovery, but the enable symlink
+# under multi-user.target.wants/ is now on pocketforge-menu.service, NOT this.
 install -m 0755 "${PF_PLACEHOLDER_BIN}" "${ROOTFS}/opt/pocketforge/bin/pocketforge-placeholder"
-echo "[customize] Placeholder installed: $(du -h "${PF_PLACEHOLDER_BIN}" | awk '{print $1}') stripped"
+echo "[customize] Placeholder installed (unenabled — menu supersedes): $(du -h "${PF_PLACEHOLDER_BIN}" | awk '{print $1}') stripped"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-placeholder.service" \
     "${ROOTFS}/etc/systemd/system/pocketforge-placeholder.service"
-ln -sf /etc/systemd/system/pocketforge-placeholder.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-placeholder.service"
+
+# pocketforge-menu (bd tsp-ga7s.1) — MVP 3-entry static launcher, LRADC-nav.
+# Supersedes pocketforge-placeholder at boot via the enable-symlink swap: this
+# unit declares Conflicts=/After= on both the boot animator AND the placeholder
+# on ITSELF (the reliable direction per tsp-ikk0.11), so starting it cleanly
+# stops the animator/placeholder and takes over fb0 — one fb0 writer.
+install -m 0755 "${PF_MENU_BIN}" "${ROOTFS}/opt/pocketforge/bin/pocketforge-menu"
+echo "[customize] Menu installed: $(du -h "${PF_MENU_BIN}" | awk '{print $1}') stripped"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.service" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-menu.service"
+ln -sf /etc/systemd/system/pocketforge-menu.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-menu.service"
 
 # pocketforge-wifi-powersave.service (disable xradio power-save → stop flap)
 # bd tsp-mc9m.14.8: like wpa_supplicant@wlan0 above, pull this in via the wlan0
@@ -1009,6 +1016,9 @@ export PF_ANIMATOR_BIN
 # THROWAWAY / proof-of-life: a static post-boot screen that supersedes the boot
 # animator (see apps/pocketforge-placeholder). Same deterministic cross-compile
 # as the animator; libc only (no image decode, no assets).
+# bd tsp-ga7s.1: the MENU below supersedes THIS placeholder at boot — the
+# placeholder binary + unit stay installed but not enabled (one-symlink-swap
+# recovery). Still cross-compiled so the recovery ExecStart works.
 PLACEHOLDER_SRC_DIR="${SRC_DIR}/apps/pocketforge-placeholder"
 PF_PLACEHOLDER_BIN="${WORK}/pocketforge-placeholder"
 echo "  Cross-compiling pocketforge-placeholder (aarch64)..."
@@ -1022,6 +1032,26 @@ echo "  Cross-compiling pocketforge-placeholder (aarch64)..."
 echo "    -> $(du -h "${PF_PLACEHOLDER_BIN}" | awk '{print $1}') stripped"
 export PF_PLACEHOLDER_BIN
 
+# ---- Cross-compile the MVP static menu (bd: tsp-ga7s.1) --------------------
+# MVP 3-entry launcher — Button Tester / Steam Link / poolside.fm, LRADC volume
+# keys nav (KEY_VOLUMEUP / KEY_VOLUMEDOWN, wrapping), no select action. Same
+# deterministic cross-compile pattern as the placeholder; libc only (no assets,
+# no image decode, no freetype — an 8x16 bitmap font is embedded in main.c).
+# The menu SUPERSEDES the placeholder at boot (see the enable-symlink swap
+# further down); the placeholder stays installed unenabled as one-swap recovery.
+MENU_SRC_DIR="${SRC_DIR}/apps/pocketforge-menu"
+PF_MENU_BIN="${WORK}/pocketforge-menu"
+echo "  Cross-compiling pocketforge-menu (aarch64)..."
+"${CROSS_CC}" \
+    -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+    -static-libgcc \
+    -I"${MENU_SRC_DIR}/src" \
+    -o "${PF_MENU_BIN}" \
+    "${MENU_SRC_DIR}/src/main.c"
+"${CROSS_STRIP}" "${PF_MENU_BIN}"
+echo "    -> $(du -h "${PF_MENU_BIN}" | awk '{print $1}') stripped"
+export PF_MENU_BIN
+
 echo "  Running mmdebstrap (this may take several minutes under qemu...)..."
 POCKETFORGE_VARIANT="${VARIANT}" \
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
@@ -1034,7 +1064,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
