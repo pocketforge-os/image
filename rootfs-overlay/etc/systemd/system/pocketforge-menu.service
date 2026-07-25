@@ -1,0 +1,39 @@
+# pocketforge-menu.service (bd: tsp-ga7s.1)
+#
+# MVP static launcher — supersedes pocketforge-boot-animator.service so the
+# panel shows the 3-entry menu (Button Tester / Steam Link / poolside.fm)
+# instead of holding the boot animation. Displaces the throwaway
+# pocketforge-placeholder.service too: only one is enabled at build-time
+# (see scripts/build-rootfs.sh — the enable symlink is swapped there).
+#
+# CLEAN fb0 HANDOFF — same pattern as pocketforge-placeholder.service:
+#   Conflicts= and After= pocketforge-boot-animator.service declared HERE on
+#   the unit being STARTED. systemd enforces the STARTED unit's Conflicts=
+#   ("starting the former stops the latter" — the reliable direction proven
+#   by tsp-ikk0.11), so activating this service SIGTERMs the animator, which
+#   clears fb0 to black and exits 0; After= orders our start behind that
+#   stop — exactly ONE fb0 writer at all times, no pan-fight (root cause
+#   tsp-7kpp). Brief black flash during the handoff is accepted by design.
+
+[Unit]
+Description=PocketForge MVP menu (3-entry LRADC-navigable launcher)
+Documentation=https://github.com/pocketforge-os/image/tree/main/apps/pocketforge-menu
+DefaultDependencies=no
+After=sysinit.target local-fs.target multi-user.target pocketforge-boot-animator.service dev-fb0.device
+Requires=dev-fb0.device
+Conflicts=pocketforge-boot-animator.service pocketforge-placeholder.service shutdown.target
+Before=shutdown.target
+ConditionPathExists=/dev/fb0
+
+[Service]
+Type=simple
+ExecStart=/opt/pocketforge/bin/pocketforge-menu
+KillSignal=SIGTERM
+TimeoutStopSec=2s
+Restart=on-failure
+RestartSec=2
+MemoryMax=16M
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
