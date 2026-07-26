@@ -553,6 +553,81 @@ cat /out/.pf-wpa-provenance
 WPA
 
 # =============================================================================
+# runtime — the E2 runtime-layer binaries, cross-built from the committed
+# `runtime` ref (tsp-e1b.11). FIRST runtime-layer component packaged into the
+# image; establishes the runtime->image cross-build path every future runtime
+# component follows.
+#
+# ⚠ FIRST EXTERNAL BASE IMAGE in this Dockerfile — every other stage is
+# FROM ${PF_CONTAINER} (the owned, digest-pinned build container). This stage is
+# FROM a DIGEST-PINNED official Rust image because the owned base carries a GCC
+# aarch64 cross-toolchain but no Rust. It is BUILD-TIME-ONLY: multi-stage and
+# DISCARDED — ONLY the built static aarch64 binary + the committed unit file
+# leave it (COPY --from=runtime below), never the toolchain/std/shell — so
+# nothing un-owned SHIPS. A digest pin is the SAME content-addressed
+# reproducibility class as container.pin. Full precedent + rejected alternatives
+# + migration path: build/DECISION-runtime-stage.md (tsp-e1b.11 coordinator
+# ruling, Option A). If we ever want ZERO external bases the answer is B (bake
+# Rust into the owned container at the next container.pin re-pin), NOT a rustup
+# shell install.
+#
+# The crate's committed .cargo/config.toml pins target aarch64-unknown-linux-musl
+# + the rust-lld linker, so a static binary needs only `rustup target add` — no
+# cross-gcc, no musl-gcc. pf-input-decode depends only on libc (Cargo.lock-pinned
+# + checksummed); `cargo build --locked` is the reproducibility anchor (same
+# pin-not-airgap model as mmdebstrap's Debian snapshot). Per-component bit-repro
+# is finished under B6, as for the sdl/wpa stages.
+# =============================================================================
+FROM rust:1.83-slim-bookworm@sha256:540c902e99c384163b688bbd8b5b8520e94e7731b27f7bd0eaa56ae1960627ab AS runtime
+ARG PF_DEVICE_ID
+ARG PF_GPU_REPO
+ARG PF_RUNTIME_SHA
+ARG SOURCE_DATE_EPOCH
+ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
+COPY --from=runtime-src . /work/runtime
+RUN <<'RUNTIME'
+set -eux
+mkdir -p /out/bin /out/systemd
+# Device gate — mirrors the sdl/wpa stages: pf-input-decode decodes the A133 pad
+# MCU's ttyS3/ttyS4 frames, so it is a133-only. Non-a133 (non-PowerVR) devices get
+# a NOT-SHIPPED marker + an otherwise-empty /out the downstream COPY consumes
+# harmlessly. (a523's own input substrate + its install into build-rootfs-a523.sh
+# are a separate future bead — see DECISION-runtime-stage.md.)
+if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
+  printf 'runtime@%s NOT SHIPPED for device=%s (gpu=%s; pf-input-decode is the A133 pad-MCU decoder — a133-only)\n' \
+    "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-runtime-provenance
+  cat /out/.pf-runtime-provenance
+  exit 0
+fi
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+# rust-lld (ships with the toolchain) does the musl link — only the std target is added.
+rustup target add "${PF_RUNTIME_TARGET}"
+cd /work/runtime
+# --locked: build EXACTLY the committed Cargo.lock (fails if it would change) — the
+# reproducibility anchor. --remap-path-prefix normalizes the embedded build path so the
+# artifact does not depend on this stage's absolute workdir. Only pf-input-decode is
+# built; the parallel tsp-bwrg crates carried in the pinned runtime archive are inert.
+CARGO_NET_LOCKED=1 \
+RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-decode
+BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-decode"
+[ -f "${BIN}" ] || { echo "FATAL: pf-input-decode not built at ${BIN}"; exit 1; }
+# Gate 1: must be an aarch64 ELF (e_machine 0xB7 at offset 18) — same check as the wpa stage.
+E_MACHINE="$(od -An -tx1 -j18 -N2 "${BIN}" | tr -d ' ')"
+[ "${E_MACHINE}" = "b700" ] || { echo "FATAL: pf-input-decode is not aarch64 (e_machine=${E_MACHINE}, want b700)"; exit 1; }
+# Gate 2: must be STATIC (musl target defaults crt-static) — a dynamic musl binary would need a
+# musl loader the bookworm rootfs does not have. A static binary carries no interpreter path string.
+if grep -qa 'ld-musl\|ld-linux' "${BIN}"; then echo "FATAL: pf-input-decode is dynamically linked (expected static musl)"; exit 1; fi
+install -D -m 0755 "${BIN}" /out/bin/pf-input-decode
+install -D -m 0644 crates/pf-input-decode/systemd/pf-input-decode.service /out/systemd/pf-input-decode.service
+{
+  printf 'runtime@%s device=%s gpu=%s target=%s\n' "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" "${PF_RUNTIME_TARGET}"
+  printf '  pf-input-decode sha256=%s\n' "$(sha256sum /out/bin/pf-input-decode | cut -d' ' -f1)"
+} > /out/.pf-runtime-provenance
+cat /out/.pf-runtime-provenance
+RUNTIME
+
+# =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
 # rootfs-packages-<id>.txt (tsp-1dl.4.5 unifies the two forked build-rootfs scripts).
 # Composes the kernel modules + GPU .ko + libSDL3 + owned wpa_supplicant + fetched firmware.
@@ -581,6 +656,7 @@ COPY --from=kernel /out/lib/modules /work/kernel-tsp
 COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
 COPY --from=sdl    /out/lib         /work/libsdl3
 COPY --from=wpa    /out             /work/wpa
+COPY --from=runtime /out            /work/runtime
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -592,6 +668,7 @@ case "${PF_GPU_REPO}" in
   gpu-km-tsp)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp OUT_DIR=/out \
+      RUNTIME_DIR=/work/runtime \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" PF_APT_PROXY="${PF_APT_PROXY:-}" \
       bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned
     ;;
