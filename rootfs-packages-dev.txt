@@ -9,3 +9,4 @@ openssh-server
 rsync
 systemd-coredump
 iperf3
+i2c-tools
