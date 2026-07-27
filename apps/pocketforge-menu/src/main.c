@@ -3,12 +3,17 @@
  * -----------------------------------------------------------------------------
  * MVP static launcher. Three HARDCODED rows — "Button Tester", "Steam Link",
  * "poolside.fm". LRADC volume keys navigate (KEY_VOLUMEUP → up, KEY_VOLUMEDOWN
- * → down, wrapping); there is no select action (no third LRADC key). Highlight
+ * → down, wrapping); the gamepad A button (BTN_SOUTH) selects. Highlight
  * inverts the selected row (charcoal-on-ember). Redraw ONLY on state change.
  *
  * fb0 handoff from pocketforge-boot-animator.service is done by systemd (this
  * unit declares Conflicts=/After= on ITSELF, per the reliable direction proven
  * by tsp-ikk0.11) — exactly one fb0 writer, no pan-fight (root cause tsp-7kpp).
+ *
+ * Selecting a row (bd: tsp-1cl7.1) hands the panel to the row's command through
+ * that SAME seam — see launch_in_foreground_slot() for why it is systemd-run
+ * and not a bare fork+exec. The menu does not manage the app's lifetime and
+ * does not resume: systemd stops us, and restores us on the app's exit.
  *
  * Pan-to-present (tsp-woy3): fb0's scan-out is a g2d-rotated copy of fb0 that
  * refreshes ONLY on FBIOPAN_DISPLAY, so we redraw the inactive page and pan.
@@ -18,12 +23,14 @@
  * readable on the 1280x720 landscape panel. libc only — no freetype/harfbuzz.
  */
 
+#define _GNU_SOURCE           /* ppoll(2) */
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fb.h>
 #include <linux/input.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,6 +38,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define FB_W  1280
@@ -83,8 +91,85 @@ static const char *const LABELS[ROW_COUNT] = {
     "poolside.fm",
 };
 
+/* Command launched when a row is selected; NULL = nothing configured yet.
+ *
+ * HONEST STATE OF THE CATALOGUE (bd: tsp-1cl7.1): none of the three labelled
+ * apps exists — there is no button-tester, Steam Link or poolside.fm binary
+ * anywhere in this repo or in pocketforge-os/runtime. This bead is about the
+ * LAUNCH MECHANISM, not the catalogue, so rows 1 and 2 are deliberately left
+ * unconfigured (pressing A logs and does nothing) rather than pointed at a
+ * binary that has nothing to do with their label.
+ *
+ * Row 0 launches pocketforge-placeholder purely as a STAND-IN: it is the one
+ * display app installed on every image variant (build-rootfs.sh keeps it as
+ * one-symlink-swap recovery), it is libc-only, it draws a screen visually
+ * distinct from this menu and PANS it (so it is actually visible, tsp-woy3),
+ * and it exits 0 on SIGTERM. It holds the panel until its transient unit is
+ * stopped. On a dev image, testgles2 --quit-after-ms is the self-exiting
+ * alternative and is also the mandated boot-lottery positive control; it is
+ * not wired here because it does not exist on a stock image. */
+static const char *const COMMANDS[ROW_COUNT] = {
+    "/opt/pocketforge/bin/pocketforge-placeholder",
+    NULL,
+    NULL,
+};
+
 static volatile sig_atomic_t g_stop = 0;
 static void on_signal(int sig) { (void)sig; g_stop = 1; }
+
+/* Signal mask in force before we blocked SIGTERM/SIGINT — handed to ppoll(2)
+ * during the wait, and restored in a forked child before exec so nothing we
+ * launch inherits a blocked SIGTERM. */
+static sigset_t g_prev_mask;
+
+/* Hand the panel to `cmd` through the pocketforge-foreground.target seam.
+ *
+ * NOT a bare fork+exec, deliberately: a plain fork leaves the app inside
+ * pocketforge-menu.service's cgroup (which carries MemoryMax=16M), so the very
+ * act of stopping this menu would kill the app it just launched. systemd-run
+ * puts the app in its OWN transient unit, outside our cgroup, joined to the
+ * seam with the same two properties /usr/bin/pf-take-panel uses. Activating
+ * that target Conflicts-stops US first and After= orders the app behind our
+ * stop, so fb0 keeps exactly one writer (tsp-ikk0.11 / tsp-7kpp). The menu
+ * therefore has no waitpid, no fb0 suspend/resume and no crash-vs-clean-exit
+ * logic: OnSuccess= on the target restores the previous owner.
+ *
+ * --no-block is REQUIRED, not an optimisation. Without it systemd-run waits
+ * for the start job to finish — and that job is ordered BEHIND our own stop,
+ * so we would be blocking on a job that cannot complete until we exit. Enqueue
+ * and return; the D-Bus call has already created the job by the time we do.
+ *
+ * pf-take-panel is the sibling MANUAL/HIL path (--pipe, synchronous, forwards
+ * stdio to the caller). It is left untouched: piping an app's stdio through a
+ * process systemd is about to stop is not what a launcher wants. */
+static void launch_in_foreground_slot(const char *cmd) {
+    fprintf(stderr, "menu: launching %s via pocketforge-foreground.target\n", cmd);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "menu: fork: %s\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        sigprocmask(SIG_SETMASK, &g_prev_mask, NULL);
+        execl("/usr/bin/systemd-run", "systemd-run",
+              "--collect", "--quiet", "--no-block",
+              "--property=Requires=pocketforge-foreground.target",
+              "--property=After=pocketforge-foreground.target",
+              "--", cmd, (char *)NULL);
+        fprintf(stderr, "menu: exec systemd-run: %s\n", strerror(errno));
+        _exit(127);
+    }
+
+    /* Reap the short-lived systemd-run client (--no-block returns as soon as
+     * the transient unit is enqueued). We never wait on the APP. */
+    int status = 0;
+    if (waitpid(pid, &status, 0) != pid)
+        fprintf(stderr, "menu: waitpid: %s\n", strerror(errno));
+    else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        fprintf(stderr, "menu: launch of %s failed (systemd-run status %d); "
+                        "staying on the menu\n", cmd, status);
+}
 
 /* Unbind fbcon so kernel console text cannot bleed onto our screen. Best
  * effort: no-op if already unbound or fbcon absent. */
@@ -182,31 +267,66 @@ static void draw_menu(unsigned char *page, unsigned int stride, int highlight) {
     }
 }
 
-/* Try /dev/input/event0..event15 and return the first that reports the
- * KEY_VOLUMEUP capability. LRADC's numbering can shift across boots depending
- * on probe order (SD hotplug etc.), so a hard-coded /dev/input/event0 is
- * fragile; fall back to it only if scanning finds nothing. */
-static int open_lradc_input(void) {
-    for (int i = 0; i < 16; i++) {
+static int has_key(const uint8_t *keybits, unsigned int code) {
+    return (keybits[code / 8] >> (code % 8)) & 1u;
+}
+
+/* Scan /dev/input/event0..event15 ONCE and pick, BY CAPABILITY, the node that
+ * reports KEY_VOLUMEUP (the LRADC nav keys) and the node that reports
+ * BTN_SOUTH (the gamepad A/confirm button). On this device those are two
+ * DIFFERENT nodes, and evdev numbering shifts across boots with probe order
+ * (SD hotplug etc.), so neither index may ever be hard-coded.
+ *
+ * If one node happens to report both, it is opened ONCE and both roles share
+ * the fd — two fds on the same node would deliver every event twice.
+ *
+ * Sets *nav_fd and/or *sel_fd to -1 when nothing advertises that capability;
+ * the caller decides what is fatal. Nav keeps the historical
+ * /dev/input/event0 fallback; select has none, because launching the wrong
+ * thing on a stray keycode is worse than having no select. */
+static void open_inputs(int *nav_fd, int *sel_fd) {
+    *nav_fd = -1;
+    *sel_fd = -1;
+
+    for (int i = 0; i < 16 && (*nav_fd < 0 || *sel_fd < 0); i++) {
         char path[32];
         snprintf(path, sizeof path, "/dev/input/event%d", i);
         int fd = open(path, O_RDONLY | O_CLOEXEC);
         if (fd < 0) continue;
+
         uint8_t keybits[(KEY_MAX + 7) / 8];
         memset(keybits, 0, sizeof keybits);
-        if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keybits), keybits) >= 0) {
-            if (keybits[KEY_VOLUMEUP / 8] & (1u << (KEY_VOLUMEUP % 8))) {
-                fprintf(stderr, "menu: input via %s\n", path);
-                return fd;
-            }
+        if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keybits), keybits) < 0) {
+            close(fd);
+            continue;
         }
-        close(fd);
+
+        int want_nav = (*nav_fd < 0) && has_key(keybits, KEY_VOLUMEUP);
+        int want_sel = (*sel_fd < 0) && has_key(keybits, BTN_SOUTH);
+
+        if (want_nav && want_sel) {
+            fprintf(stderr, "menu: nav+select via %s (one node)\n", path);
+            *nav_fd = fd;
+            *sel_fd = fd;
+        } else if (want_nav) {
+            fprintf(stderr, "menu: nav (KEY_VOLUMEUP) via %s\n", path);
+            *nav_fd = fd;
+        } else if (want_sel) {
+            fprintf(stderr, "menu: select (BTN_SOUTH) via %s\n", path);
+            *sel_fd = fd;
+        } else {
+            close(fd);
+        }
     }
-    int fd = open("/dev/input/event0", O_RDONLY | O_CLOEXEC);
-    if (fd >= 0)
-        fprintf(stderr, "menu: no VOLUMEUP-capable device found; "
-                        "falling back to /dev/input/event0\n");
-    return fd;
+    if (*nav_fd < 0) {
+        *nav_fd = open("/dev/input/event0", O_RDONLY | O_CLOEXEC);
+        if (*nav_fd >= 0)
+            fprintf(stderr, "menu: no VOLUMEUP-capable device found; "
+                            "falling back to /dev/input/event0\n");
+    }
+    if (*sel_fd < 0)
+        fprintf(stderr, "menu: no BTN_SOUTH-capable device found; "
+                        "navigation only, select disabled\n");
 }
 
 int main(void) {
@@ -216,6 +336,22 @@ int main(void) {
     sigemptyset(&sa.sa_mask);
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT,  &sa, NULL);
+
+    /* Block SIGTERM/SIGINT and hand the ORIGINAL mask to ppoll(2) below.
+     * A plain poll()/read() has a lost-wakeup race: a SIGTERM delivered
+     * between the `!g_stop` test and entering the syscall sets g_stop, then
+     * the syscall blocks anyway — and the menu sits there until the next
+     * input event. That matters exactly when the seam wants a fast hand-off:
+     * pocketforge-menu.service has TimeoutStopSec=2s, so a menu that only
+     * notices SIGTERM on the next keypress gets SIGKILLed 2s into a handoff
+     * the launched app is ordered behind. ppoll's atomic mask swap closes the
+     * window: the signal stays pending while we are outside the syscall and
+     * is delivered the instant we enter it, returning EINTR. */
+    sigset_t block_mask;
+    sigemptyset(&block_mask);
+    sigaddset(&block_mask, SIGTERM);
+    sigaddset(&block_mask, SIGINT);
+    sigprocmask(SIG_BLOCK, &block_mask, &g_prev_mask);
 
     hide_fbcon();
 
@@ -254,8 +390,9 @@ int main(void) {
         (vinfo.yres_virtual >= 2 * vinfo.yres) ? 2 : 1;
     unsigned int page = 0;
 
-    int input_fd = open_lradc_input();
-    if (input_fd < 0) {
+    int nav_fd = -1, sel_fd = -1;
+    open_inputs(&nav_fd, &sel_fd);
+    if (nav_fd < 0) {
         fprintf(stderr, "menu: open input: %s\n", strerror(errno));
         munmap(fbmap, map_bytes);
         close(fb);
@@ -275,24 +412,69 @@ int main(void) {
     fprintf(stderr, "menu: presented initial screen (highlight=%d, "
                     "pages=%u); waiting on input\n", highlight, n_pages);
 
-    struct input_event ev;
+    /* Poll set: nav, plus select when it is a DISTINCT node (a shared node is
+     * listed once — polling the same fd twice would double-handle events). */
+    struct pollfd pfds[2];
+    nfds_t nfds = 0;
+    pfds[nfds].fd = nav_fd; pfds[nfds].events = POLLIN; nfds++;
+    if (sel_fd >= 0 && sel_fd != nav_fd) {
+        pfds[nfds].fd = sel_fd; pfds[nfds].events = POLLIN; nfds++;
+    }
+
     while (!g_stop) {
-        ssize_t n = read(input_fd, &ev, sizeof ev);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            fprintf(stderr, "menu: read input: %s\n", strerror(errno));
+        if (ppoll(pfds, nfds, NULL, &g_prev_mask) < 0) {
+            if (errno == EINTR) continue;   /* re-tests !g_stop; see above */
+            fprintf(stderr, "menu: ppoll: %s\n", strerror(errno));
             break;
         }
-        if (n != (ssize_t)sizeof ev) continue;
-        if (ev.type != EV_KEY || ev.value != 1) continue;  /* press-edge only */
 
         int new_hl = highlight;
-        if (ev.code == KEY_VOLUMEUP)
-            new_hl = (highlight + ROW_COUNT - 1) % ROW_COUNT;
-        else if (ev.code == KEY_VOLUMEDOWN)
-            new_hl = (highlight + 1) % ROW_COUNT;
-        else
+        int selected = 0;
+        int fatal = 0;
+
+        for (nfds_t i = 0; i < nfds && !fatal; i++) {
+            if (!(pfds[i].revents & (POLLIN | POLLERR | POLLHUP)))
+                continue;
+            if (pfds[i].revents & (POLLERR | POLLHUP)) {
+                fprintf(stderr, "menu: input fd %d hung up\n", pfds[i].fd);
+                fatal = 1;
+                break;
+            }
+
+            struct input_event ev;
+            ssize_t n = read(pfds[i].fd, &ev, sizeof ev);
+            if (n < 0) {
+                if (errno == EINTR || errno == EAGAIN) continue;
+                fprintf(stderr, "menu: read input: %s\n", strerror(errno));
+                fatal = 1;
+                break;
+            }
+            if (n != (ssize_t)sizeof ev) continue;
+            if (ev.type != EV_KEY || ev.value != 1) continue; /* press-edge only */
+
+            if (ev.code == KEY_VOLUMEUP)
+                new_hl = (new_hl + ROW_COUNT - 1) % ROW_COUNT;
+            else if (ev.code == KEY_VOLUMEDOWN)
+                new_hl = (new_hl + 1) % ROW_COUNT;
+            else if (ev.code == BTN_SOUTH)
+                selected = 1;
+        }
+        if (fatal) break;
+
+        /* Select acts on the highlight as it stood when A was pressed. */
+        if (selected) {
+            const char *cmd = COMMANDS[highlight];
+            if (cmd) {
+                launch_in_foreground_slot(cmd);
+                /* Nothing to resume: starting the app activates
+                 * pocketforge-foreground.target, which Conflicts-stops this
+                 * unit. We keep serving input until that SIGTERM lands. */
+            } else {
+                fprintf(stderr, "menu: row %d (\"%s\") has no command "
+                                "configured\n", highlight, LABELS[highlight]);
+            }
             continue;
+        }
 
         if (new_hl == highlight) continue;   /* redraw ONLY on state change */
         highlight = new_hl;
@@ -309,7 +491,25 @@ int main(void) {
         fprintf(stderr, "menu: highlight=%d page=%u\n", highlight, page);
     }
 
-    close(input_fd);
+    /* Handoff: leave the panel clean-black for the successor, the same exit
+     * contract the boot animator already honours. Clear every page, then pan
+     * to a DIFFERENT yoffset so the black actually propagates through the
+     * g2d-rot scan-out (a bare memset is invisible — tsp-woy3).
+     *
+     * This is load-bearing for diagnosis, not cosmetics: without it the last
+     * menu frame stays on the panel after we exit, so "the app never
+     * presented" is indistinguishable from "the app never launched" — the
+     * exact ambiguity that burned an owner actuation window on 2026-07-27. A
+     * brief black flash at handoff is accepted by the tsp-ikk0.11 design. */
+    memset(fbmap, 0, map_bytes);
+    msync(fbmap, map_bytes, MS_SYNC);
+    vinfo.xoffset = 0;
+    vinfo.yoffset = (n_pages > 1) ? ((page ^ 1u) * vinfo.yres) : 0;
+    if (ioctl(fb, FBIOPAN_DISPLAY, &vinfo) < 0)
+        fprintf(stderr, "menu: handoff FBIOPAN_DISPLAY: %s\n", strerror(errno));
+
+    if (sel_fd >= 0 && sel_fd != nav_fd) close(sel_fd);
+    close(nav_fd);
     munmap(fbmap, map_bytes);
     close(fb);
     return 0;

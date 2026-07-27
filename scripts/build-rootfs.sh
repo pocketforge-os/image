@@ -803,12 +803,67 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-placeho
 # unit declares Conflicts=/After= on both the boot animator AND the placeholder
 # on ITSELF (the reliable direction per tsp-ikk0.11), so starting it cleanly
 # stops the animator/placeholder and takes over fb0 — one fb0 writer.
+# The binary and unit are installed here; ENABLING it is done by the panel-owner
+# selection block below, which also picks the matching foreground-slot restore
+# drop-in (bd tsp-1cl7.1 — the two must not drift apart again).
 install -m 0755 "${PF_MENU_BIN}" "${ROOTFS}/opt/pocketforge/bin/pocketforge-menu"
 echo "[customize] Menu installed: $(du -h "${PF_MENU_BIN}" | awk '{print $1}') stripped"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.service" \
     "${ROOTFS}/etc/systemd/system/pocketforge-menu.service"
-ln -sf /etc/systemd/system/pocketforge-menu.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-menu.service"
+# ---- Panel owner selection (bd tsp-1cl7.1) ---------------------------------
+# WHICH UI OWNS THE PANEL IS ONE DECISION WITH TWO CONSEQUENCES, so it is made
+# ONCE here and both consequences are derived from it:
+#   1. the multi-user.target.wants enable symlink (which UI starts at boot), and
+#   2. which pocketforge-foreground.target.d/10-owner-*.conf is installed —
+#      the drop-in that adds that UI to the slot's Conflicts=/After= (so an app
+#      taking the panel stops it; target-side is REQUIRED for the systemd-run /
+#      pf-take-panel dependency-pull path) and supplies the OnSuccess= that
+#      restores it when the app exits.
+# They were previously two independent edits, which is how the old target came
+# to restore the boot animator over whatever UI was actually enabled.
+#
+# The target itself carries NO OnSuccess=. Each drop-in ADDS to an empty list;
+# it is a SELECTION, not an override, because dependency-type settings ignore an
+# empty assignment and would silently MERGE (see 10-owner-menu.conf). Installing
+# no drop-in at all is therefore NOT a safe fall-through — the slot would have
+# no restore and the panel would keep whatever the exited app left, which reads
+# as a display fault. Hence the hard failure on an unknown owner below: add a
+# new UI variant here and to rootfs-overlay/.../pocketforge-foreground.target.d/
+# together, or the build stops.
+#
+# To swap the UI (the documented one-symlink-swap recovery), change THIS LINE
+# ONLY — do not hand-edit the symlink or the drop-in install.
+PF_PANEL_OWNER="menu"
+
+case "${PF_PANEL_OWNER}" in
+    menu)        PF_PANEL_OWNER_UNIT="pocketforge-menu.service" ;;
+    placeholder) PF_PANEL_OWNER_UNIT="pocketforge-placeholder.service" ;;
+    # The animator is already enabled at basic.target above, so it takes no
+    # multi-user.target.wants symlink — only the drop-in.
+    animator)    PF_PANEL_OWNER_UNIT="" ;;
+    *)
+        echo "[customize] ERROR: unknown PF_PANEL_OWNER='${PF_PANEL_OWNER}'." >&2
+        echo "[customize]        Every UI variant needs a matching" >&2
+        echo "[customize]        pocketforge-foreground.target.d/10-owner-<owner>.conf" >&2
+        echo "[customize]        or the foreground slot has no restore (bd tsp-1cl7.1)." >&2
+        exit 1
+        ;;
+esac
+
+PF_PANEL_OWNER_DROPIN="/work/src/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-${PF_PANEL_OWNER}.conf"
+if [ ! -f "${PF_PANEL_OWNER_DROPIN}" ]; then
+    echo "[customize] ERROR: missing ${PF_PANEL_OWNER_DROPIN} for PF_PANEL_OWNER='${PF_PANEL_OWNER}'" >&2
+    exit 1
+fi
+
+if [ -n "${PF_PANEL_OWNER_UNIT}" ]; then
+    ln -sf "/etc/systemd/system/${PF_PANEL_OWNER_UNIT}" \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/${PF_PANEL_OWNER_UNIT}"
+fi
+install -d "${ROOTFS}/etc/systemd/system/pocketforge-foreground.target.d"
+install -m 0644 "${PF_PANEL_OWNER_DROPIN}" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-foreground.target.d/10-owner-${PF_PANEL_OWNER}.conf"
+echo "[customize] Panel owner: ${PF_PANEL_OWNER} (enabled unit: ${PF_PANEL_OWNER_UNIT:-<none, animator at basic.target>}; restore drop-in: 10-owner-${PF_PANEL_OWNER}.conf)"
 
 # pocketforge-wifi-powersave.service (disable xradio power-save → stop flap)
 # bd tsp-mc9m.14.8: like wpa_supplicant@wlan0 above, pull this in via the wlan0
