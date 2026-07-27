@@ -809,6 +809,22 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.se
     "${ROOTFS}/etc/systemd/system/pocketforge-menu.service"
 ln -sf /etc/systemd/system/pocketforge-menu.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-menu.service"
+# ...and, because the menu is the enabled UI on this image, tell the foreground
+# slot that the MENU is the panel's owner (bd tsp-1cl7.1). The drop-in adds the
+# menu to the target's Conflicts=/After= so an app taking the slot stops it
+# (target-side is required for the systemd-run/pf-take-panel dependency-pull
+# path), and supplies the OnSuccess= that restores the MENU when the app exits
+# instead of reviving the boot animator over it.
+# THE ENABLE SYMLINK AND THIS DROP-IN ARE ONE DECISION. Exactly one
+# 10-owner-*.conf must be installed. If the symlink above is ever swapped back
+# to the animator or the placeholder (the documented one-symlink-swap recovery),
+# install 10-owner-animator.conf HERE INSTEAD — the target itself carries no
+# OnSuccess=, so dropping this file without installing the sibling leaves the
+# slot with no restore at all. See 10-owner-menu.conf for why this is a
+# selection and not an override.
+install -d "${ROOTFS}/etc/systemd/system/pocketforge-foreground.target.d"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-menu.conf" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-foreground.target.d/10-owner-menu.conf"
 
 # pocketforge-wifi-powersave.service (disable xradio power-save → stop flap)
 # bd tsp-mc9m.14.8: like wpa_supplicant@wlan0 above, pull this in via the wlan0

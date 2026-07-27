@@ -19,27 +19,45 @@
 #      as "z-fighting" (root cause proven in bead tsp-7kpp).
 #
 # StopWhenUnneeded: when the last joined app unit exits, the target
-# deactivates on its own; OnSuccess then restores the boot animator, so the
-# device returns to its splash steady-state. A brief black flash during
-# handoff is ACCEPTED by design ruling — seamless splash→app handoff is
-# deferred to tsp-3rd3.4.
+# deactivates on its own; OnSuccess then restores the previous owner, so the
+# device returns to its steady-state UI. A brief black flash during handoff
+# is ACCEPTED by design ruling — seamless splash→app handoff is deferred to
+# tsp-3rd3.4.
 #
-# KNOWN FUTURE EDGE (for tsp-y2di, the launcher milestone): OnSuccess
-# restores the animator unconditionally. When a persistent MainUI ships
-# (owning the panel via pocketforge-splash-handoff.target), a game exiting
-# this slot would wrongly revive the animator over the MainUI — the
-# launcher integration must define that interaction (e.g. the launcher
-# itself joins this target persistently, or replaces the OnSuccess=). Do
-# not "fix" it here pre-launcher.
+# THE "KNOWN FUTURE EDGE" ABOVE IS NOW RESOLVED (bd: tsp-1cl7.1) — the MVP
+# menu IS that persistent MainUI, and this is the launcher integration.
+# WHICH unit is restored is now selected PER IMAGE by a drop-in, because the
+# panel's owner is fixed at BUILD time by the enable-symlink swap in
+# scripts/build-rootfs.sh (exactly one of animator/menu/placeholder is
+# enabled). Hence there is no OnSuccess= below: the build installs exactly one
+#     pocketforge-foreground.target.d/10-owner-{animator,menu}.conf
+# alongside that UI's enable symlink. Read 10-owner-menu.conf before changing
+# this — an OnSuccess= here that a drop-in "overrides" does NOT override,
+# it MERGES (dependency settings cannot be reset by an empty assignment), and
+# the slot then restores TWO fb0 writers.
 #
-# bd: tsp-ikk0.11 (root cause: tsp-7kpp; design intent: tsp-3rd3.4)
+# Conflicts=/After= on the ANIMATOR stay here: the animator must be stopped
+# whenever the slot is taken on every image variant, so that half is not
+# owner-dependent. The menu's Conflicts=/After= ride its own drop-in, so an
+# animator-only image keeps exactly today's behaviour — `pf-take-panel ...
+# testgles2` runs there daily for HIL and display verification, and a slot
+# that tried to restore a menu which is not enabled would fail the restore,
+# which reads as a display fault in precisely the evidence those runs collect.
+#
+# The launcher joining this target PERSISTENTLY is NOT the answer either: a
+# unit that Requires= this target holds it active, so StopWhenUnneeded could
+# never fire and the target could never stop the menu to hand fb0 over.
+#
+# bd: tsp-ikk0.11 (root cause: tsp-7kpp; design intent: tsp-3rd3.4;
+#     launcher integration: tsp-1cl7.1, cross-ref tsp-y2di)
 
 [Unit]
 Description=PocketForge foreground display-app slot (exclusive fb0 ownership)
 Documentation=https://github.com/pocketforge-os/image/tree/main/apps/pocketforge-boot-animator
 DefaultDependencies=no
 StopWhenUnneeded=yes
-OnSuccess=pocketforge-boot-animator.service
+# OnSuccess= is deliberately ABSENT — it ships in the per-image
+# 10-owner-{animator,menu}.conf drop-in (see the header). Do not inline it.
 # The Conflicts=/After= on the animator MUST be declared HERE (target-side),
 # not only animator-side: when this target is pulled in as a Requires=
 # dependency of an app unit (systemd-run/pf-take-panel — the normal path!),
