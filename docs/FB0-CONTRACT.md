@@ -8,6 +8,11 @@ There are **two separate contracts**. Conflating them is the most common error
 here, so they are kept apart below: **ownership** (which process may write fb0)
 and **presentation** (how pixels reach the panel once you own it).
 
+§1–2 are the contract and are stable. §3–4 are **current platform status**, and
+every claim there is attributed and dated because it moves — twice on
+2026-07-27 a plausible, well-sourced claim about this subsystem turned out to be
+wrong on silicon. Check with the lane named before relying on it.
+
 ---
 
 ## 1. Ownership — join `pocketforge-foreground.target`
@@ -77,14 +82,40 @@ If you write `/dev/fb0` directly: draw into the back page, `msync`, set
 repo do the same, including clearing to black and panning once on SIGTERM so
 the next owner inherits a clean panel.
 
-## 3. Before you trust a visual verdict
+## 3. Which rendering path actually works today
+
+Measured on silicon on the base A133 on **2026-07-27** (`tsp-1pw9`, reported by
+`tsp-osr-coord`) — not an opinion, and worth re-checking against that lane
+before trusting it as current:
+
+| Path | Status |
+| --- | --- |
+| Raw fbdev + `FBIOPAN_DISPLAY` | **Works.** What this repo's own display apps use. |
+| Raw GLES2 with your own EGL context (no `SDL_Renderer`) | **Works** — `testgles2` rendered a spinning cube, visible, upright, ~60 fps. |
+| `SDL_Renderer` on `sunxifb` | **Currently non-functional. Do not build on it yet.** |
+
+The `SDL_Renderer` failure is *clean*, not a crash, which is why it went
+unnoticed: the old `libIMGegl.so` NULL dereference **is** fixed (`testsprite`
+runs with `kernel_fault_count=0`, no `SEGV_MAPERR si_addr=0x8`), but on the same
+run `SDL_CreateRenderer(win, NULL)` returns **"Couldn't find matching render
+driver"**, forcing `--renderer opengles2` gives **"EGL context already
+created"**, and the `SDL_WINDOW_OPENGL` variant never reaches the draw loop. GPU,
+panel, EGL and presentation are all fine on that same boot — the failure is
+specific to SDL's renderer-creation path. Tracked by `tsp-osr-coord` as a
+successor defect to `tsp-osr`; **"the `tsp-osr` crash is fixed" does not mean
+"SDL RENDER is safe to use".**
+
+If you need GLES today, drive EGL yourself as `testgles2` does.
+
+## 4. Before you trust a visual verdict
 
 The A133 had a boot lottery in which the g2d iommu master enable could come up
 off, so **nothing** rendered for **any** display client and the panel showed a
 stale previous-boot frame. A black panel was not evidence your app failed, and
-a plausible panel was not evidence it worked. The fix is **merged and pinned in
-`platform.lock`** (`kernel-sunxi-4.9#19`, `platform#94`), with on-silicon
-verification in flight under `tsp-woy3.1`.
+a plausible panel was not evidence it worked. Per `tsp-osr-coord` (2026-07-27)
+the fix is **merged and pinned in `platform.lock`** (`kernel-sunxi-4.9#19`,
+`platform#94`), with on-silicon verification **in flight** under `tsp-woy3.1` —
+so treat it as hardened but not yet proven.
 
 Until that verification lands, keep the protocol: judge with **burst/motion**
 evidence rather than a single frame, and before trusting a *negative* verdict
