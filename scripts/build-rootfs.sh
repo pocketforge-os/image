@@ -32,6 +32,7 @@ SRC_DIR="${SRC_DIR:-/work/src}"
 BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
 WPA_DIR="${WPA_DIR:-/work/wpa}"
+RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-decode) from the runtime stage (tsp-e1b.11)
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/tsp"
 
@@ -685,6 +686,40 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan
 # config file and causes systemd to report "degraded" status.
 ln -sf /dev/null "${ROOTFS}/etc/systemd/system/wpa_supplicant.service"
 echo "[customize] Masked global wpa_supplicant.service (template instance used instead)"
+
+# --- pf-input-decode: the A133 gamepad-MCU decoder daemon (tsp-e1b.11) --------
+# The runtime Dockerfile.pf stage cross-built a static aarch64 pf-input-decode and
+# staged it + its systemd unit under ${RUNTIME_DIR} (for a133; other devices get
+# only a NOT-SHIPPED marker there). Install into BOTH VARIANTS (dev + release): the
+# decoder is a FUNCTIONAL component — the pad exposes NO evdev gamepad without it —
+# not a diagnostic like i2c-tools or the SDL testbin. Install to /usr/bin (matches
+# the unit's ExecStart) + enable via a multi-user.target.wants symlink (the same
+# "systemctl enable doesn't work under qemu" pattern used for wpa above), so it
+# comes up on a COLD boot with no manual setup and survives every reflash — the
+# exact regression tsp-bwrg.6 hit when a reflash wiped the hand-deployed /opt binary.
+# The runtime stage's a133 gate keys on the SAME PF_GPU_REPO=gpu-km-tsp that selects
+# this rootfs path, so when this script runs the binary is structurally present; a
+# NOT-SHIPPED marker here would mean a non-a133 caller reusing this SoC-agnostic
+# script, which is skipped cleanly (a523 gets its own decoder + install wiring in
+# build-rootfs-a523.sh — a separate future bead, not this one).
+RUNTIME_BIN="${RUNTIME_DIR}/bin/pf-input-decode"
+RUNTIME_UNIT="${RUNTIME_DIR}/systemd/pf-input-decode.service"
+if [ -f "${RUNTIME_BIN}" ]; then
+    [ -f "${RUNTIME_UNIT}" ] || { echo "FATAL: pf-input-decode binary present but its unit is missing at ${RUNTIME_UNIT}" >&2; exit 1; }
+    # Belt-and-suspenders aarch64 re-check (mirrors the wpa install gate).
+    RD_EM="$(od -An -tx1 -j18 -N2 "${RUNTIME_BIN}" | tr -d ' ')"
+    [ "${RD_EM}" = "b700" ] || { echo "FATAL: ${RUNTIME_BIN} is not an aarch64 ELF (e_machine=${RD_EM}, want b700)" >&2; exit 1; }
+    install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+    install -D -m 0755 "${RUNTIME_BIN}"  "${ROOTFS}/usr/bin/pf-input-decode"
+    install -D -m 0644 "${RUNTIME_UNIT}" "${ROOTFS}/etc/systemd/system/pf-input-decode.service"
+    ln -sf /etc/systemd/system/pf-input-decode.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-input-decode.service"
+    [ -f "${RUNTIME_DIR}/.pf-runtime-provenance" ] && \
+        install -D -m 0644 "${RUNTIME_DIR}/.pf-runtime-provenance" "${ROOTFS}/usr/share/pocketforge/runtime-provenance"
+    echo "[customize] pf-input-decode installed at /usr/bin/pf-input-decode + enabled (multi-user.target.wants/)"
+else
+    echo "[customize] runtime NOT-SHIPPED for this device (no ${RUNTIME_BIN}) — skipping pf-input-decode install"
+fi
 
 # pocketforge-wifi-setup.service
 ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
