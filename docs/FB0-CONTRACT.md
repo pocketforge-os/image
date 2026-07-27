@@ -45,13 +45,15 @@ misreported as GLES z-fighting (`tsp-7kpp`).
 inherit your shell's environment, so pass variables *inside* the command line
 with `env VAR=x ...`, as above.
 
-**Who is restored is image-dependent.** The target ships with no `OnSuccess=`;
-`scripts/build-rootfs.sh` installs exactly one
-`pocketforge-foreground.target.d/10-owner-{animator,menu}.conf` alongside the
-enable symlink for whichever UI that image runs. If you edit that selection,
-read `10-owner-menu.conf` first: `OnSuccess=` cannot be *overridden* by a
-drop-in, only *selected*, because dependency-type settings ignore an empty
-assignment and silently merge instead.
+**Who is restored is image-dependent — the enabled UI is the restored UI.** The
+target ships with no `OnSuccess=`; `scripts/build-rootfs.sh` picks the panel
+owner once (`PF_PANEL_OWNER`) and derives both the enable symlink and exactly
+one `pocketforge-foreground.target.d/10-owner-{animator,menu,placeholder}.conf`
+from it. An unknown owner fails the build rather than shipping a slot with no
+restore. If you add a UI variant, add its drop-in in the same change — and read
+`10-owner-menu.conf` first: `OnSuccess=` cannot be *overridden* by a drop-in,
+only *selected*, because dependency-type settings ignore an empty assignment and
+silently merge instead.
 
 ## 2. Presentation — pan, or be invisible (raw fbdev writers only)
 
