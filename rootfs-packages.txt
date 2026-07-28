@@ -15,6 +15,7 @@ curl
 dbus
 dosfstools
 haveged
+htop
 iproute2
 iw
 kmod
