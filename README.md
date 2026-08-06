@@ -77,6 +77,8 @@ container if convenient — but it is not required to migrate.
 
 ## Pinning policy
 
+For a diagnostic A133 ODYSSEY capture image, pass `--build-arg PF_ODYSSEY_CAPTURE=1` to `pf build`; the option is empty and disabled by default.
+
 Reproducibility is M1.E's gate but the container is the foundation:
 - **Cross-toolchain**: SHA-256 + MD5 dual-pinned in the Dockerfile.
 - **All apt tools**: pinned by `APT_SNAPSHOT_DATE` build-arg →

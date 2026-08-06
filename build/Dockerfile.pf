@@ -217,6 +217,7 @@ ARG PF_GPU_SHA
 ARG PF_GPU_MODULES
 ARG PF_TOOLCHAIN_GCC_VERSION
 ARG PF_KERNEL_SOURCE_DATE_EPOCH
+ARG PF_ODYSSEY_CAPTURE=
 ARG SOURCE_DATE_EPOCH
 # The FULL built+configured kernel tree (autoconf.h + Module.symvers + generated headers): an
 # external-module build (`make -C KDIR M=…`) needs it, not just Module.symvers. Its .pf-kernel-
@@ -260,7 +261,13 @@ case "$PF_GPU_REPO" in
     # PVR_BUILDOPTS_MK is intentionally UNSET → the DDK Makefile auto-resolves its own in-repo
     # build/pvr-buildopts.mk (the validated tsp-cv7.4.3 config). No KCFLAGS=-Wno-error: the vendor
     # DDK builds warning-clean under its own per-object -Werror once RELEASE isn't doubly-defined.
+    if [ -n "${PF_ODYSSEY_CAPTURE}" ]; then
+      EXTRA_PVR_KM_CFLAGS=-DPF_ODYSSEY_CAPTURE
+    else
+      EXTRA_PVR_KM_CFLAGS=
+    fi
     make -C "$KDIR" M=/work/gpu ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- \
+      EXTRA_PVR_KM_CFLAGS="${EXTRA_PVR_KM_CFLAGS}" \
       CONFIG_DRM_IMG_ROGUE=m PVR_SYSTEM=sunxi_a133 modules
     ;;
   gpu-km-tsp-a523)   # Mali-G57 Valhall JM (CSF off) -> mali_kbase.ko
