@@ -789,6 +789,19 @@ install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"
 ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
     "${ROOTFS}/etc/systemd/system/basic.target.wants/pocketforge-boot-animator.service"
 
+# Diagnostic-only ODYSSEY region capture. The build arg also compiles the
+# capture instrumentation into pvrsrvkm; keep the trigger absent from normal
+# images and start it from the animator's early, display-ready boot seam.
+if [ "${PF_ODYSSEY_CAPTURE:-}" = "1" ]; then
+    install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/odyssey-capture.sh" \
+        "${ROOTFS}/usr/lib/pocketforge/odyssey-capture.sh"
+    install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-odyssey-capture.service" \
+        "${ROOTFS}/etc/systemd/system/pf-odyssey-capture.service"
+    ln -sf /etc/systemd/system/pf-odyssey-capture.service \
+        "${ROOTFS}/etc/systemd/system/basic.target.wants/pf-odyssey-capture.service"
+    echo "[customize] ODYSSEY boot capture trigger installed + enabled"
+fi
+
 # pocketforge-placeholder (bd tsp-147u.21) — THROWAWAY static post-boot screen.
 # bd tsp-ga7s.1: SUPERSEDED by pocketforge-menu (installed below). The binary
 # and unit stay installed for one-symlink-swap recovery, but the enable symlink
