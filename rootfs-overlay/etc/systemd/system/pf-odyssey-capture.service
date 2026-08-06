@@ -1,0 +1,20 @@
+[Unit]
+Description=PocketForge diagnostic ODYSSEY boot capture
+DefaultDependencies=no
+Wants=dev-fb0.device
+After=sysinit.target local-fs.target dev-fb0.device pocketforge-boot-animator.service
+Before=basic.target
+ConditionPathExists=/sys/module/pvrsrvkm/parameters/odyssey_capture
+ConditionPathExists=/opt/pocketforge/bin/testgles2
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/pocketforge/odyssey-capture.sh
+RemainAfterExit=no
+Restart=no
+TimeoutStartSec=25s
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=basic.target

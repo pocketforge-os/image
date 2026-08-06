@@ -644,6 +644,7 @@ ARG PF_DEVICE_ID
 ARG PF_ARCH
 ARG PF_GPU_REPO
 ARG PF_VARIANT=dev
+ARG PF_ODYSSEY_CAPTURE=
 ARG APT_SNAPSHOT_DATE
 ARG SOURCE_DATE_EPOCH
 # Optional transparent apt cache proxy (e.g. the NAS apt-cacher-ng at :3142). Empty =
@@ -676,6 +677,7 @@ case "${PF_GPU_REPO}" in
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp OUT_DIR=/out \
       RUNTIME_DIR=/work/runtime \
+      PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" PF_APT_PROXY="${PF_APT_PROXY:-}" \
       bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned
     ;;
