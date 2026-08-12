@@ -1003,8 +1003,11 @@ if [ "${VARIANT}" = "dev" ]; then
     # Dev: serial-console debug user for bring-up diagnostics.
     # This user has a known password and can sudo to gamer or root.
     # MUST BE REMOVED BEFORE RELEASE — tracked by bead tsp-iuz.2.9.
-    chroot "$ROOTFS" useradd -m -d /home/debug -s /bin/bash debug
-    echo "debug:pocketforge" | chroot "$ROOTFS" chpasswd
+    # The password is public and dev-only.  Keep its SHA-512 crypt salt fixed so
+    # identical source trees produce identical /etc/shadow files.
+    DEBUG_PASSWORD_HASH='$6$pocketforge-dev$PzW7bErMVz/y88oe/83Za8xc2dmxPJR8fNryu7.pZeqeoQ7BpQqbxbL2wsZwc8fbf29aAeQJUtTx7XoOzwv36.'
+    chroot "$ROOTFS" useradd -m -d /home/debug -s /bin/bash \
+        -p "${DEBUG_PASSWORD_HASH}" debug
     # video/render/input so diagnostics (testgles2, cube-fps.sh, pf-hwprobe) can
     # open /dev/fb0 + DRM/input nodes without sudo — same hw-access groups the
     # udev rules above gate on, mirroring gamer (bd tsp-ikk0.3).
@@ -1047,10 +1050,20 @@ if [ "${VARIANT}" = "dev" ]; then
     chroot "${ROOTFS}" chown -R debug:debug /home/debug/.ssh
     echo "[customize] dev: debug authorized_keys installed (${KEY_COUNT} keys, SSH-over-WiFi)"
 
-    # Dev: enable sshd (Debian's openssh-server postinst typically enables it,
-    # but be explicit for belt-and-suspenders clarity)
+    # openssh-server's postinst generates random host keys in the build chroot.
+    # Strip them from the image and generate unique keys on each device's first
+    # boot before sshd starts.
+    rm -f "${ROOTFS}"/etc/ssh/ssh_host_*
+    install -d "${ROOTFS}/etc/systemd/system/ssh.service.d"
+    install -m 0644 \
+        "/work/src/rootfs-overlay/etc/systemd/system/ssh-keygen-firstboot.service" \
+        "${ROOTFS}/etc/systemd/system/ssh-keygen-firstboot.service"
+    install -m 0644 \
+        "/work/src/rootfs-overlay/etc/systemd/system/ssh.service.d/pocketforge-hostkeys.conf" \
+        "${ROOTFS}/etc/systemd/system/ssh.service.d/pocketforge-hostkeys.conf"
+    chroot "${ROOTFS}" systemctl enable ssh-keygen-firstboot.service
     chroot "${ROOTFS}" systemctl enable ssh.service
-    echo "[customize] dev: ssh.service enabled"
+    echo "[customize] dev: build-time SSH host keys removed; first-boot keygen and ssh.service enabled"
 elif [ "${VARIANT}" = "release" ]; then
     # Release: strip libSDL3 + future supervisor binary
     if command -v aarch64-none-linux-gnu-strip >/dev/null 2>&1; then

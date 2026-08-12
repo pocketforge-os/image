@@ -275,9 +275,12 @@ if [ "${VARIANT}" = "dev" ]; then
     printf 'gamer ALL=(ALL:ALL) NOPASSWD: ALL\n' > "${ROOTFS}/etc/sudoers.d/pocketforge-dev"
     chmod 0440 "${ROOTFS}/etc/sudoers.d/pocketforge-dev"
 
-    # serial-console debug user (known pw; remove before release — mirrors A133)
-    chroot "$ROOTFS" useradd -m -d /home/debug -s /bin/bash debug
-    echo "debug:pocketforge" | chroot "$ROOTFS" chpasswd
+    # serial-console debug user (known pw; remove before release — mirrors A133).
+    # The password is public and dev-only.  Keep its SHA-512 crypt salt fixed so
+    # identical source trees produce identical /etc/shadow files.
+    DEBUG_PASSWORD_HASH='$6$pocketforge-dev$PzW7bErMVz/y88oe/83Za8xc2dmxPJR8fNryu7.pZeqeoQ7BpQqbxbL2wsZwc8fbf29aAeQJUtTx7XoOzwv36.'
+    chroot "$ROOTFS" useradd -m -d /home/debug -s /bin/bash \
+        -p "${DEBUG_PASSWORD_HASH}" debug
     # video/input so diagnostics can open /dev/fb0 + DRM/input nodes without sudo —
     # mirrors the a523 gamer convention (no render: the a523 stack has no render-
     # gated node, no render group is created, and gamer omits it). bd tsp-ikk0.4.
@@ -307,9 +310,22 @@ if [ "${VARIANT}" = "dev" ]; then
     install -d -m 0700 "${ROOTFS}/home/debug/.ssh"
     install -m 0600 "${ROOTFS}/home/gamer/.ssh/authorized_keys" "${ROOTFS}/home/debug/.ssh/authorized_keys"
     chroot "$ROOTFS" chown -R debug:debug /home/debug/.ssh
+
+    # openssh-server's postinst generates random host keys in the build chroot.
+    # Strip them from the image and generate unique keys on each device's first
+    # boot before sshd starts, using the same units as the A133 dev image.
+    rm -f "${ROOTFS}"/etc/ssh/ssh_host_*
+    install -d "${ROOTFS}/etc/systemd/system/ssh.service.d"
+    install -m 0644 \
+        "${SRC}/rootfs-overlay/etc/systemd/system/ssh-keygen-firstboot.service" \
+        "${ROOTFS}/etc/systemd/system/ssh-keygen-firstboot.service"
+    install -m 0644 \
+        "${SRC}/rootfs-overlay/etc/systemd/system/ssh.service.d/pocketforge-hostkeys.conf" \
+        "${ROOTFS}/etc/systemd/system/ssh.service.d/pocketforge-hostkeys.conf"
+    chroot "$ROOTFS" systemctl enable ssh-keygen-firstboot.service
     chroot "$ROOTFS" systemctl enable ssh.service 2>/dev/null || \
         ln -sf /lib/systemd/system/ssh.service "${SYSD}/multi-user.target.wants/ssh.service"
-    echo "[customize-a523] dev: ${KC} ssh key(s) installed; ssh.service enabled"
+    echo "[customize-a523] dev: ${KC} ssh key(s) installed; build-time host keys removed; first-boot keygen and ssh.service enabled"
 fi
 
 echo "[customize-a523] complete."
