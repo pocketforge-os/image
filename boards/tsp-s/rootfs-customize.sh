@@ -261,6 +261,10 @@ ln -sf /lib/systemd/system/systemd-networkd.socket \
     "${SYSD}/sockets.target.wants/systemd-networkd.socket"
 ln -sf /lib/systemd/system/systemd-timesyncd.service \
     "${SYSD}/multi-user.target.wants/systemd-timesyncd.service"
+# Seed the clock floor for first boot after a full-image flash. The extracted
+# rootfs timestamp clamp in build-rootfs-a523.sh sets its mtime to the build epoch.
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+    "${SRC}/scripts/seed-build-clock.sh" "${ROOTFS}"
 # mask the random-seed blocker (haveged fills the pool) — mirrors A133.
 ln -sf /dev/null "${SYSD}/systemd-random-seed.service"
 
