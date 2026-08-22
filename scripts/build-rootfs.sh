@@ -921,14 +921,15 @@ ln -sf /lib/systemd/system/systemd-timesyncd.service \
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
     /work/src/scripts/seed-build-clock.sh "${ROOTFS}"
 
-# DNS: openresolv (not systemd-resolved) manages /etc/resolv.conf.
-# systemd-networkd has built-in resolvconf integration — when it detects
-# the `resolvconf` binary (provided by openresolv), it calls
-# `resolvconf -a <iface>` with DHCP-provided nameservers. openresolv
-# then generates /etc/resolv.conf from the contributed data. No resolved
-# stub listener needed.
-# Remove any stale resolv.conf left by mmdebstrap so openresolv owns it.
-rm -f "${ROOTFS}/etc/resolv.conf"
+# DNS: systemd-resolved consumes the per-link DNS servers learned by networkd's
+# DHCP client. Point libc at resolved's managed stub and enable the daemon
+# explicitly (systemctl enable is unreliable under the cross-arch chroot).
+install -d "${ROOTFS}/etc/systemd/resolved.conf.d"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/resolved.conf.d/pocketforge.conf" \
+    "${ROOTFS}/etc/systemd/resolved.conf.d/pocketforge.conf"
+ln -sfn ../run/systemd/resolve/stub-resolv.conf "${ROOTFS}/etc/resolv.conf"
+ln -sf /lib/systemd/system/systemd-resolved.service \
+    "${ROOTFS}/etc/systemd/system/sysinit.target.wants/systemd-resolved.service"
 
 echo "[customize] WiFi + networking: all config installed"
 
@@ -1204,6 +1205,10 @@ mkdir -p "${ROOTFS_EXTRACTED}"
 
 # Extract the rootfs tar
 tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
+
+# Fail the build before ext4 assembly if DHCP DNS cannot reach libc. This is a
+# structural image check; lease population itself is verified on tsp-f956's boot.
+"${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${ROOTFS_EXTRACTED}"
 
 # Report rootfs size
 ROOTFS_DU="$(du -sm "${ROOTFS_EXTRACTED}" | cut -f1)"
