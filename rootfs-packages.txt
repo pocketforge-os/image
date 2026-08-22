@@ -66,8 +66,8 @@ libxcb1
 libxkbcommon-x11-0
 libxkbcommon0
 libzstd1
-openresolv
 sudo
+systemd-resolved
 systemd-sysv
 systemd-timesyncd
 udev
