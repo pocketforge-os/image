@@ -725,7 +725,10 @@ ROOTFS
 # boot + fetch-stage vendor blobs (a133) + bootchain SPL (a523). reproducibility_finalize
 # lives here.
 # =============================================================================
-FROM ${PF_CONTAINER} AS assemble
+# Inherit the completed rootfs vertex directly so its result digest is part of
+# assemble's parent chain. This avoids relying on a detached cross-stage COPY
+# cache edge for the provenance-critical userdata image.
+FROM rootfs AS assemble
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
 ARG PF_KERNEL_DTB
@@ -736,7 +739,6 @@ ARG PF_BOOTCHAIN_MODEL
 ARG PF_BOOTCHAIN_BLOB_GROUP
 ARG PF_VARIANT=dev
 ARG SOURCE_DATE_EPOCH
-COPY --from=image-src . /work/src
 # WiFi credentials (bd tsp-8ba, the tsp-zbg#5 seam): the gitignored
 # boards/tsp/boot-resource/wifi.txt cannot come from the image-src lock-ref context, so
 # it arrives as a BuildKit secret — never a layer, never a committed file. No secret =
@@ -761,8 +763,6 @@ RUN --mount=type=secret,id=wifi,required=false \
     else \
         echo "no wifi secret provided -> image ships WiFi-unconfigured"; \
     fi
-# /work/rootfs = userdata.ext4 (+.sha256) from the rootfs stage, or the a523 NOT-SHIPPED marker.
-COPY --from=rootfs /out          /work/rootfs
 # /work/kboot = kernel Image + <dtb>.
 COPY --from=kernel /out/boot     /work/kboot
 # /work/kernel-tsp/lib/modules = the owned kernel's modules_install tree. build-sd-image.sh's
@@ -791,7 +791,16 @@ COPY --from=bootchain /out       /work/bootchain
 # `docker run` gave them (tsp-buildkit-insecure-mmdebstrap). Only this RUN is privileged.
 RUN --security=insecure <<'ASM'
 set -eux
+# Preserve the inherited rootfs outputs, then reserve /out exclusively for the
+# artifacts produced by this assemble invocation.
+mv /out /work/rootfs
 mkdir -p /out
+# Make the rootfs digest consumed by this assemble vertex explicit in one build
+# log. Together with build-rootfs.sh's digest this identifies cache/provenance
+# divergence without inspecting a device or mounting the exported artifact.
+if [ -f /work/rootfs/userdata.ext4 ]; then
+  echo "assemble rootfs sha256=$(sha256sum /work/rootfs/userdata.ext4 | cut -d' ' -f1)"
+fi
 # Dispatch on the profile-declared boot proto (declarative, not the PF_GPU_REPO proxy):
 #   extlinux         = a523 (mainline U-Boot SPL + extlinux/distro-boot from a FAT partition)
 #   sunxi-boot0-fex  = a133 (vendor boot0 -> boot_package.fex -> abootimg -> genimage GPT)

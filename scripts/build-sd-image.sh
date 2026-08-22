@@ -397,6 +397,13 @@ SD_IMAGE="${GENIMAGE_OUTPUT}/pocketforge-tsp.img"
 SD_SIZE="$(stat -c%s "${SD_IMAGE}")"
 echo "  pocketforge-tsp.img: ${SD_SIZE} bytes ($(( SD_SIZE / 1024 / 1024 )) MiB)"
 
+# Provenance boundary: the partition embedded by genimage must be byte-for-byte
+# identical to the rootfs staged beside the exported image. This catches stale
+# assemble/cache output before compression can turn it into a stable-but-wrong
+# artifact SHA.
+"${SRC_DIR}/scripts/verify-userdata-partition.sh" \
+    "${SD_IMAGE}" "${GENIMAGE_INPUT}/userdata.ext4"
+
 # Verify SPL magic at sector 256 (128 KiB offset)
 SPL_MAGIC="$(xxd -s $((128 * 1024)) -l 16 "${SD_IMAGE}" | head -1)"
 echo "  SPL @ 128 KiB: ${SPL_MAGIC}"
