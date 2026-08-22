@@ -11,12 +11,8 @@ truncate -s 16M "${IMAGE}"
 truncate -s 2M "${USERDATA}"
 printf 'pocketforge-rootfs-canary\n' | dd of="${USERDATA}" bs=1 seek=4096 conv=notrunc status=none
 
-sfdisk "${IMAGE}" >/dev/null <<'SFDISK'
-label: gpt
-unit: sectors
-
-start=2048, size=4096, name="userdata"
-SFDISK
+parted -sm "${IMAGE}" mklabel gpt
+parted -sm "${IMAGE}" unit s mkpart userdata 2048 6143
 dd if="${USERDATA}" of="${IMAGE}" bs=512 seek=2048 conv=notrunc status=none
 
 "${SRC_DIR}/scripts/verify-userdata-partition.sh" "${IMAGE}" "${USERDATA}"
@@ -30,4 +26,3 @@ if "${SRC_DIR}/scripts/verify-userdata-partition.sh" "${IMAGE}" "${USERDATA}" \
 fi
 grep -F 'assembled GPT userdata bytes diverge' "${SCRATCH}/expected-failure.log"
 echo "userdata partition self-check regression: PASS"
-

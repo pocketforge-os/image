@@ -13,15 +13,11 @@ USERDATA="$2"
 [ -f "${USERDATA}" ] || { echo "FATAL: userdata image not found: ${USERDATA}" >&2; exit 1; }
 
 # Read the committed GPT rather than duplicating genimage's alignment arithmetic.
-# sfdisk emits one line per partition with byte-independent sector start/size fields.
-PARTITION="$(sfdisk --dump "${IMAGE}" | awk '
-    /name="userdata"/ {
-        for (i = 1; i <= NF; i++) {
-            if ($i == "start=") start=$(i + 1)
-            if ($i == "size=") size=$(i + 1)
-        }
-        gsub(/,/, "", start); gsub(/,/, "", size)
-        print start, size
+# parted machine output uses colon-delimited start/size fields in the requested unit.
+PARTITION="$(parted -sm "${IMAGE}" unit s print | awk -F: '
+    $6 == "userdata" {
+        sub(/s$/, "", $2); sub(/s$/, "", $4)
+        print $2, $4
     }
 ')"
 [ -n "${PARTITION}" ] || {
@@ -47,4 +43,3 @@ if [ "${USERDATA_SHA}" != "${EMBEDDED_SHA}" ]; then
     echo "FATAL: assembled GPT userdata bytes diverge from ${USERDATA}" >&2
     exit 1
 fi
-
