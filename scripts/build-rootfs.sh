@@ -916,6 +916,10 @@ ln -sf /lib/systemd/system/systemd-timesyncd.service \
 install -d "${ROOTFS}/etc/systemd/system/sysinit.target.wants"
 ln -sf /lib/systemd/system/systemd-timesyncd.service \
     "${ROOTFS}/etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
+# Seed the clock floor for first boot after a full-image flash. The extracted
+# rootfs timestamp clamp below sets the empty clock file's mtime to the build epoch.
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+    /work/src/scripts/seed-build-clock.sh "${ROOTFS}"
 
 # DNS: openresolv (not systemd-resolved) manages /etc/resolv.conf.
 # systemd-networkd has built-in resolvconf integration — when it detects
