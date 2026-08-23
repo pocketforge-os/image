@@ -360,7 +360,7 @@ else
         # caller's original uid:gid so build-rootfs.sh can chown output files.
         # CALLER_UID/CALLER_GID are set by the Makefile's docker run -e flags.
         ROOTFS_OWNER="${CALLER_UID:-$(id -u)}:${CALLER_GID:-$(id -g)}"
-        bash "${SRC_DIR}/scripts/build-rootfs.sh" \
+        bash "${SRC_DIR}/scripts/build-rootfs-direct.sh" \
             --variant "${VARIANT}" \
             --owner "${ROOTFS_OWNER}" \
             --substrate "${SUBSTRATE}"
