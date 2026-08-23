@@ -12,16 +12,27 @@ GPU_KM_TSP_DIR="${GPU_KM_TSP_DIR:-/work/gpu-km-tsp}"
 ROOTFS_BUILDER="${ROOTFS_BUILDER:-${SRC_DIR}/scripts/build-rootfs.sh}"
 
 variant=dev
-next_is_variant=0
-for arg in "$@"; do
-    if [ "${next_is_variant}" = 1 ]; then
-        variant="${arg}"
-        next_is_variant=0
-    elif [ "${arg}" = --variant ]; then
-        next_is_variant=1
-    fi
+uboot_spl=""
+builder_args=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --variant)
+            [ "$#" -ge 2 ] || { echo "build-rootfs-direct: --variant requires a value" >&2; exit 2; }
+            variant="$2"
+            builder_args+=("$1" "$2")
+            shift 2
+            ;;
+        --uboot-spl)
+            [ "$#" -ge 2 ] || { echo "build-rootfs-direct: --uboot-spl requires a value" >&2; exit 2; }
+            uboot_spl="$2"
+            shift 2
+            ;;
+        *)
+            builder_args+=("$1")
+            shift
+            ;;
+    esac
 done
-[ "${next_is_variant}" = 0 ] || { echo "build-rootfs-direct: --variant requires a value" >&2; exit 2; }
 
 # Hash names, symlink targets, and regular-file contents in a stable order. The direct
 # build consumes staged trees rather than platform.lock refs, so their bytes are the
@@ -56,10 +67,16 @@ PF_BLOBS_SHA="$(tree_identity "${BLOBS_DIR}")"
 # Reusing its byte identity keeps the canonical generator complete and deterministic.
 PF_VENDOR_MANIFEST_SHA="${PF_BLOBS_SHA}"
 PF_CAR_SHA256="${PF_BLOBS_SHA}"
-PF_UBOOT_SHA=""
+if [ -n "${uboot_spl}" ]; then
+    [ -f "${uboot_spl}" ] || { echo "build-rootfs-direct: U-Boot SPL input is absent: ${uboot_spl}" >&2; exit 1; }
+    PF_UBOOT_SHA="$(sha256sum "${uboot_spl}" | cut -d' ' -f1)"
+else
+    # Vendor/no-source mode has no separately selected owned bootchain input.
+    PF_UBOOT_SHA=""
+fi
 PF_TFA_SHA=""
 export PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA PF_GPU_SHA
 export PF_LIBSDL3_SHA PF_WPA_SHA PF_RUNTIME_SHA PF_BLOBS_SHA
 export PF_VENDOR_MANIFEST_SHA PF_CAR_SHA256 PF_UBOOT_SHA PF_TFA_SHA
 
-exec bash "${ROOTFS_BUILDER}" "$@"
+exec bash "${ROOTFS_BUILDER}" "${builder_args[@]}"

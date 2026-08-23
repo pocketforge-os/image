@@ -362,6 +362,7 @@ else
         ROOTFS_OWNER="${CALLER_UID:-$(id -u)}:${CALLER_GID:-$(id -g)}"
         bash "${SRC_DIR}/scripts/build-rootfs-direct.sh" \
             --variant "${VARIANT}" \
+            --uboot-spl "${UBOOT_SPL}" \
             --owner "${ROOTFS_OWNER}" \
             --substrate "${SUBSTRATE}"
         cp "${OUT_DIR}/userdata.ext4" "${GENIMAGE_INPUT}/userdata.ext4"
