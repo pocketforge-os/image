@@ -26,6 +26,7 @@ def words(unit: ConfigParser, section: str, key: str) -> set[str]:
 authority = load("pf-session-authorityd.service")
 selected = load("pf-shell-selected.service")
 foreground = load("pf-foreground@.service")
+foreground_target = load("pocketforge-foreground.target")
 
 # The authority is a separately enabled root service. No lifecycle edge from it
 # to either writer is allowed; ordering Before= is explicitly not coupling.
@@ -39,12 +40,19 @@ assert authority["Service"]["ExecStart"].startswith(
 )
 assert "--socket /run/pocketforge/session-authority.sock" in authority["Service"]["ExecStart"]
 
-# Starting any instantiated session stops the selected owner. The target's
-# selected-owner drop-in carries the same conflict for dependency-pulled apps;
-# systemd has no wildcard dependency meaning for an uninstantiated @.service.
+# Every instantiated session joins the foreground slot and waits for its
+# activation. Starting one therefore stops the selected owner through the
+# target, while the selected-owner drop-in restores that owner when the last
+# session releases the target. The direct conflict is retained as additional
+# serialization; systemd has no wildcard dependency meaning for an
+# uninstantiated @.service.
+assert "pocketforge-foreground.target" in words(foreground, "Unit", "Requires")
+assert "pocketforge-foreground.target" in words(foreground, "Unit", "After")
+assert foreground_target["Unit"].get("StopWhenUnneeded") == "yes"
 assert "pf-shell-selected.service" in words(foreground, "Unit", "Conflicts")
 owner_dropin = load("pocketforge-foreground.target.d/10-owner-shell.conf")
 assert "pf-shell-selected.service" in words(owner_dropin, "Unit", "Conflicts")
+assert "pf-shell-selected.service" in words(owner_dropin, "Unit", "After")
 assert "pf-shell-selected.service" in words(owner_dropin, "Unit", "OnSuccess")
 for name, unit in (("selected", selected), ("foreground", foreground)):
     assert unit["Service"]["ExecStart"].startswith("/usr/bin/pf-shell --fbdev "), name
@@ -60,7 +68,9 @@ for enabled in ("pf-session-authorityd.service", "pf-shell-selected.service"):
 
 print("F13 unit graph: PASS")
 print("foreground_writers=pf-shell-selected.service,pf-foreground@.service")
-print("writer_exclusion=session-and-target activation Conflicts=selected-owner")
+print("foreground_slot=pf-foreground@ Requires+After=pocketforge-foreground.target")
+print("writer_exclusion=target-and-session Conflicts=selected-owner")
+print("restore_path=target StopWhenUnneeded=yes OnSuccess=pf-shell-selected.service")
 print("selected_owner=persistent Restart=on-failure enabled=multi-user.target")
 print("authority_lifetime=independent enabled=multi-user.target lifecycle_edges=none")
 print("authority_state=/var/lib/pocketforge/session-authority socket=/run/pocketforge/session-authority.sock")

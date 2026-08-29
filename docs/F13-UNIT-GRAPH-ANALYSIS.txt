@@ -1,6 +1,8 @@
 F13 unit graph: PASS
 foreground_writers=pf-shell-selected.service,pf-foreground@.service
-writer_exclusion=session-and-target activation Conflicts=selected-owner
+foreground_slot=pf-foreground@ Requires+After=pocketforge-foreground.target
+writer_exclusion=target-and-session Conflicts=selected-owner
+restore_path=target StopWhenUnneeded=yes OnSuccess=pf-shell-selected.service
 selected_owner=persistent Restart=on-failure enabled=multi-user.target
 authority_lifetime=independent enabled=multi-user.target lifecycle_edges=none
 authority_state=/var/lib/pocketforge/session-authority socket=/run/pocketforge/session-authority.sock
