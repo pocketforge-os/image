@@ -15,7 +15,7 @@ gamepad-MCU decoder daemon) to a static `aarch64-unknown-linux-musl` binary. The
 container carries a GCC aarch64 cross-toolchain but **no Rust**, so the stage is:
 
 ```
-FROM rust:1.83-slim-bookworm@sha256:540c902e99c384163b688bbd8b5b8520e94e7731b27f7bd0eaa56ae1960627ab AS runtime
+FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS runtime
 ```
 
 It is a **build-time-only, multi-stage, discarded** builder. Only the built static binary and
@@ -54,8 +54,8 @@ always a build-hygiene statement, not a provenance-purity one.
    reproducibility argument this decision rests on. *(Met: pinned index digest above.)*
 2. **Provably discarded.** Nothing leaves the stage except the built aarch64 binary (and the
    committed unit file). No libraries, no toolchain, no shell helpers copied forward. *(Met:
-   the only `COPY --from=runtime` is `/out`, which contains just `bin/pf-input-decode`,
-   `systemd/pf-input-decode.service`, and the provenance marker.)*
+   the only `COPY --from=runtime` is `/out`, which contains the explicitly selected runtime
+   binaries, `systemd/pf-input-decode.service`, and the provenance marker.)*
 3. **Record the precedent explicitly** — in the PR body and this note: first external base in
    `Dockerfile.pf`, build-time-only + discarded, with the reasoning. *(This note + the PR.)*
 4. **State the migration path** (this note): if we ever decide we want **zero** external bases,
@@ -77,6 +77,7 @@ is the template every future runtime component follows:
 - Reproducibility anchor: the digest-pinned toolchain + `Cargo.lock` (`--locked`) + a single
   checksummed dependency, same pin-not-airgap model as `mmdebstrap`'s Debian snapshot.
 
-To add another runtime binary later: extend the `runtime` stage's `cargo build` to name the new
-crate, stage its artifact into `/out`, and install it from `build-rootfs.sh` — no new external
-base and no new build-context wiring needed.
+F13 added `pf-session-authorityd` to this stage and a sibling `launcher` stage using the same
+digest-pinned Rust 1.85 base (the launcher's declared MSRV). Future runtime binaries follow the
+same rule: name the exact crate/bin, stage only the artifact into `/out`, and install it from
+`build-rootfs.sh`.

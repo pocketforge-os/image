@@ -1,0 +1,19 @@
+[Unit]
+Description=PocketForge foreground session %i
+After=dev-fb0.device pocketforge-foreground.target pf-shell-selected.service
+Requires=dev-fb0.device pocketforge-foreground.target
+Conflicts=pf-shell-selected.service pocketforge-boot-animator.service pocketforge-menu.service pocketforge-placeholder.service shutdown.target
+Before=shutdown.target
+ConditionPathExists=/dev/fb0
+
+[Service]
+Type=simple
+User=gamer
+SupplementaryGroups=input video
+ExecStart=/usr/bin/pf-shell --fbdev --device /dev/fb0 --input /dev/input/event0 --state-dir /var/lib/pocketforge/sessions/%i
+StateDirectory=pocketforge/sessions/%i
+KillSignal=SIGTERM
+TimeoutStopSec=2s
+Restart=no
+MemoryMax=256M
+Nice=-5

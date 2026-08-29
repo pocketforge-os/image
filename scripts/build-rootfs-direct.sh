@@ -7,6 +7,7 @@ BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
 WPA_DIR="${WPA_DIR:-/work/wpa}"
 RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"
+LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
 GPU_KM_TSP_DIR="${GPU_KM_TSP_DIR:-/work/gpu-km-tsp}"
 ROOTFS_BUILDER="${ROOTFS_BUILDER:-${SRC_DIR}/scripts/build-rootfs.sh}"
@@ -62,6 +63,7 @@ PF_GPU_SHA="$(tree_identity "${GPU_KM_TSP_DIR}")"
 PF_LIBSDL3_SHA="$(tree_identity "${LIBSDL3_DIR}")"
 PF_WPA_SHA="$(tree_identity "${WPA_DIR}")"
 PF_RUNTIME_SHA="$(tree_identity "${RUNTIME_DIR}")"
+PF_LAUNCHER_SHA="$(tree_identity "${LAUNCHER_DIR}")"
 PF_BLOBS_SHA="$(tree_identity "${BLOBS_DIR}")"
 # The direct path receives one resolved blobs tree, not separate manifest/CAR pins.
 # Reusing its byte identity keeps the canonical generator complete and deterministic.
@@ -76,7 +78,7 @@ else
 fi
 PF_TFA_SHA=""
 export PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA PF_GPU_SHA
-export PF_LIBSDL3_SHA PF_WPA_SHA PF_RUNTIME_SHA PF_BLOBS_SHA
+export PF_LIBSDL3_SHA PF_WPA_SHA PF_RUNTIME_SHA PF_LAUNCHER_SHA PF_BLOBS_SHA
 export PF_VENDOR_MANIFEST_SHA PF_CAR_SHA256 PF_UBOOT_SHA PF_TFA_SHA
 
 exec bash "${ROOTFS_BUILDER}" "${builder_args[@]}"

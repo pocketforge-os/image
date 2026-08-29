@@ -33,6 +33,7 @@ BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
 WPA_DIR="${WPA_DIR:-/work/wpa}"
 RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-decode) from the runtime stage (tsp-e1b.11)
+LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/tsp"
 
@@ -721,6 +722,32 @@ else
     echo "[customize] runtime NOT-SHIPPED for this device (no ${RUNTIME_BIN}) — skipping pf-input-decode install"
 fi
 
+# --- F13 shell owner + independent F07 session authority (tsp-op5a.78) -------
+SHELL_BIN="${LAUNCHER_DIR}/bin/pf-shell"
+AUTHORITY_BIN="${RUNTIME_DIR}/bin/pf-session-authorityd"
+if [ -f "${SHELL_BIN}" ] || [ -f "${AUTHORITY_BIN}" ]; then
+    [ -f "${SHELL_BIN}" ] || { echo "FATAL: pf-session-authorityd staged without pf-shell" >&2; exit 1; }
+    [ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-shell staged without pf-session-authorityd" >&2; exit 1; }
+    for binary in "${SHELL_BIN}" "${AUTHORITY_BIN}"; do
+        binary_em="$(od -An -tx1 -j18 -N2 "${binary}" | tr -d ' ')"
+        [ "${binary_em}" = "b700" ] || { echo "FATAL: ${binary} is not an aarch64 ELF (e_machine=${binary_em}, want b700)" >&2; exit 1; }
+    done
+    install -D -m 0755 "${SHELL_BIN}" "${ROOTFS}/usr/bin/pf-shell"
+    install -D -m 0755 "${AUTHORITY_BIN}" "${ROOTFS}/usr/bin/pf-session-authorityd"
+    for unit in pf-session-authorityd.service pf-foreground@.service pf-shell-selected.service; do
+        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/${unit}" \
+            "${ROOTFS}/etc/systemd/system/${unit}"
+    done
+    install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+    ln -sf /etc/systemd/system/pf-session-authorityd.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-session-authorityd.service"
+    ln -sf /etc/systemd/system/pf-shell-selected.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-shell-selected.service"
+    [ -f "${LAUNCHER_DIR}/.pf-launcher-provenance" ] && \
+        install -D -m 0644 "${LAUNCHER_DIR}/.pf-launcher-provenance" "${ROOTFS}/usr/share/pocketforge/launcher-provenance"
+    echo "[customize] F13 pf-shell selected owner + independent pf-session-authorityd installed and enabled"
+fi
+
 # pocketforge-wifi-setup.service
 ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-setup.service"
@@ -859,9 +886,10 @@ echo "[customize] Recovery entry installed + condition path enabled (recovery@${
 #
 # To swap the UI (the documented one-symlink-swap recovery), change THIS LINE
 # ONLY — do not hand-edit the symlink or the drop-in install.
-PF_PANEL_OWNER="menu"
+PF_PANEL_OWNER="shell"
 
 case "${PF_PANEL_OWNER}" in
+    shell)       PF_PANEL_OWNER_UNIT="pf-shell-selected.service" ;;
     menu)        PF_PANEL_OWNER_UNIT="pocketforge-menu.service" ;;
     placeholder) PF_PANEL_OWNER_UNIT="pocketforge-placeholder.service" ;;
     # The animator is already enabled at basic.target above, so it takes no

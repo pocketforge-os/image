@@ -5,7 +5,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
 
-for input in src blobs libsdl3 wpa runtime kernel gpu; do
+for input in src blobs libsdl3 wpa runtime launcher kernel gpu; do
     mkdir -p "${scratch}/${input}"
     printf '%s input\n' "${input}" > "${scratch}/${input}/payload"
 done
@@ -27,7 +27,7 @@ run_direct() {
     local uboot_spl="${1:-}"
     SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
     LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
-    RUNTIME_DIR="${scratch}/runtime" KERNEL_TSP_DIR="${scratch}/kernel" \
+    RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" KERNEL_TSP_DIR="${scratch}/kernel" \
     GPU_KM_TSP_DIR="${scratch}/gpu" OUT_DIR="${scratch}/out" \
     ROOTFS_BUILDER="${fake_builder}" SOURCE_DATE_EPOCH=1700000000 \
     bash "${repo_dir}/scripts/build-rootfs-direct.sh" \

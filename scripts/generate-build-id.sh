@@ -4,7 +4,7 @@ set -euo pipefail
 
 required=(
     PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA PF_GPU_SHA
-    PF_LIBSDL3_SHA PF_WPA_SHA PF_RUNTIME_SHA PF_BLOBS_SHA
+    PF_LIBSDL3_SHA PF_WPA_SHA PF_RUNTIME_SHA PF_LAUNCHER_SHA PF_BLOBS_SHA
     PF_VENDOR_MANIFEST_SHA PF_CAR_SHA256 SOURCE_DATE_EPOCH
 )
 for name in "${required[@]}"; do
@@ -24,6 +24,7 @@ identity="$({
     printf 'sdl=%s\n' "${PF_LIBSDL3_SHA}"
     printf 'wpa=%s\n' "${PF_WPA_SHA}"
     printf 'runtime=%s\n' "${PF_RUNTIME_SHA}"
+    printf 'launcher=%s\n' "${PF_LAUNCHER_SHA}"
     printf 'blobs=%s\n' "${PF_BLOBS_SHA}"
     printf 'vendor_manifest=%s\n' "${PF_VENDOR_MANIFEST_SHA}"
     printf 'car=%s\n' "${PF_CAR_SHA256}"
