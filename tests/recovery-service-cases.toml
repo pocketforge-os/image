@@ -1,0 +1,26 @@
+# Runnable definitions for the deferred F16 device/service campaign.
+# The command is intentionally the same in every launcher state: recovery has
+# no launcher dependency and consumes only the durable condition record.
+condition = "/var/lib/pocketforge/recovery/required.json"
+entry = "pocketforge-recovery.service"
+
+[[case]]
+name = "launcher-binary-missing"
+setup = "test ! -e /opt/pocketforge/bin/pocketforge-menu"
+assert = "systemctl start pocketforge-recovery.service && systemctl is-active --quiet pocketforge-recovery.service"
+
+[[case]]
+name = "launcher-service-absent"
+setup = "test ! -e /etc/systemd/system/pocketforge-menu.service"
+assert = "systemctl start pocketforge-recovery.service && systemctl is-active --quiet pocketforge-recovery.service"
+
+[[case]]
+name = "launcher-crash-looping"
+setup = "systemctl is-failed --quiet pocketforge-menu.service || test $(systemctl show pocketforge-menu.service -p NRestarts --value) -gt 0"
+assert = "systemctl start pocketforge-recovery.service && systemctl is-active --quiet pocketforge-recovery.service"
+
+[[case]]
+name = "panel-presentation-failure"
+setup = "test ! -w /dev/fb0"
+assert = "systemctl start pocketforge-recovery.service && test -s /var/lib/pocketforge/recovery/presentation-failure.json"
+customer_copy = "Recovery is required; Use FEL recovery when OTA is unavailable."

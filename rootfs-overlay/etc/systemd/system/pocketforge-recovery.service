@@ -1,0 +1,17 @@
+[Unit]
+Description=PocketForge launcher-independent recovery surface
+Documentation=https://github.com/pocketforge-os/recovery/tree/7044d4980524c1d1f64e179760cbbd55c30899da/surface
+ConditionPathExists=/var/lib/pocketforge/recovery/required.json
+After=local-fs.target dev-fb0.device
+Wants=dev-fb0.device
+
+[Service]
+Type=oneshot
+ExecStart=/opt/pocketforge/bin/pocketforge-recovery-entry
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=-/run/pocketforge/recovery /var/lib/pocketforge/recovery -/dev/fb0

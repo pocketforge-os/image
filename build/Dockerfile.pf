@@ -635,6 +635,35 @@ cat /out/.pf-runtime-provenance
 RUNTIME
 
 # =============================================================================
+# recovery — launcher-independent recovery surface (product-010 F16 authoring)
+# Built from the exact recovery-src archive selected by platform.lock.  The
+# image-owned executable is deliberately only an fbdev/persistence adapter; all
+# customer state, copy, and rendering remain in the pinned recovery crate.
+# =============================================================================
+FROM rust:1.83-slim-bookworm@sha256:540c902e99c384163b688bbd8b5b8520e94e7731b27f7bd0eaa56ae1960627ab AS recovery
+ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
+ARG SOURCE_DATE_EPOCH
+COPY --from=image-src . /work/image
+COPY --from=recovery-src . /work/image/recovery
+RUN <<'RECOVERY'
+set -eux
+: "${PF_RECOVERY_SHA:?PF_RECOVERY_SHA must be resolved from platform.lock}"
+[ "${PF_RECOVERY_SHA}" = "7044d4980524c1d1f64e179760cbbd55c30899da" ] || {
+  echo "FATAL: recovery source must stay pinned to product-010 F15 (7044d49)" >&2
+  exit 1
+}
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+cd /work/image/apps/pocketforge-recovery-entry
+rustup target add aarch64-unknown-linux-musl
+cargo build --locked --release --target aarch64-unknown-linux-musl
+install -D -m0755 target/aarch64-unknown-linux-musl/release/pocketforge-recovery-entry \
+  /out/bin/pocketforge-recovery-entry
+printf 'recovery@%s\n' "${PF_RECOVERY_SHA}" > /out/.pf-recovery-provenance
+sha256sum /out/bin/pocketforge-recovery-entry >> /out/.pf-recovery-provenance
+cat /out/.pf-recovery-provenance
+RECOVERY
+
+# =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
 # rootfs-packages-<id>.txt (tsp-1dl.4.5 unifies the two forked build-rootfs scripts).
 # Composes the kernel modules + GPU .ko + libSDL3 + owned wpa_supplicant + fetched firmware.
@@ -650,6 +679,7 @@ ARG PF_GPU_SHA
 ARG PF_LIBSDL3_SHA
 ARG PF_WPA_SHA
 ARG PF_RUNTIME_SHA
+ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
 ARG PF_BLOBS_SHA
 ARG PF_VENDOR_MANIFEST_SHA
 ARG PF_CAR_SHA256
@@ -676,6 +706,7 @@ COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
 COPY --from=sdl    /out/lib         /work/libsdl3
 COPY --from=wpa    /out             /work/wpa
 COPY --from=runtime /out            /work/runtime
+COPY --from=recovery /out           /work/recovery
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -693,6 +724,7 @@ case "${PF_GPU_REPO}" in
       PF_IMAGE_SHA="${PF_IMAGE_SHA}" PF_KERNEL_SHA="${PF_KERNEL_SHA}" \
       PF_GPU_SHA="${PF_GPU_SHA}" PF_LIBSDL3_SHA="${PF_LIBSDL3_SHA}" \
       PF_WPA_SHA="${PF_WPA_SHA}" PF_RUNTIME_SHA="${PF_RUNTIME_SHA}" \
+      PF_RECOVERY_SHA="${PF_RECOVERY_SHA}" RECOVERY_DIR=/work/recovery \
       PF_BLOBS_SHA="${PF_BLOBS_SHA}" \
       PF_VENDOR_MANIFEST_SHA="${PF_VENDOR_MANIFEST_SHA}" \
       PF_CAR_SHA256="${PF_CAR_SHA256}" \

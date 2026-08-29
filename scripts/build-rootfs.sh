@@ -823,6 +823,19 @@ install -m 0755 "${PF_MENU_BIN}" "${ROOTFS}/opt/pocketforge/bin/pocketforge-menu
 echo "[customize] Menu installed: $(du -h "${PF_MENU_BIN}" | awk '{print $1}') stripped"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.service" \
     "${ROOTFS}/etc/systemd/system/pocketforge-menu.service"
+
+# product-010 F16: recovery is an independently triggered entry, not a panel
+# owner and not part of the launcher restore seam.  The path unit consumes the
+# durable RecoveryRequired condition even when it appears after boot.
+install -m 0755 "${PF_RECOVERY_BIN}" \
+    "${ROOTFS}/opt/pocketforge/bin/pocketforge-recovery-entry"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.service" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-recovery.service"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.path" \
+    "${ROOTFS}/etc/systemd/system/pocketforge-recovery.path"
+ln -sf /etc/systemd/system/pocketforge-recovery.path \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-recovery.path"
+echo "[customize] Recovery entry installed + condition path enabled (recovery@${PF_RECOVERY_SHA})"
 # ---- Panel owner selection (bd tsp-1cl7.1) ---------------------------------
 # WHICH UI OWNS THE PANEL IS ONE DECISION WITH TWO CONSEQUENCES, so it is made
 # ONCE here and both consequences are derived from it:
@@ -1172,6 +1185,17 @@ echo "  Cross-compiling pocketforge-menu (aarch64)..."
 echo "    -> $(du -h "${PF_MENU_BIN}" | awk '{print $1}') stripped"
 export PF_MENU_BIN
 
+# The recovery executable is built in its own hermetic Docker stage from the
+# platform.lock-selected recovery archive. Do not fall back to a host artifact.
+RECOVERY_DIR="${RECOVERY_DIR:-/work/recovery}"
+PF_RECOVERY_BIN="${RECOVERY_DIR}/bin/pocketforge-recovery-entry"
+[ -x "${PF_RECOVERY_BIN}" ] || { echo "FATAL: pinned recovery executable missing: ${PF_RECOVERY_BIN}" >&2; exit 1; }
+[ "${PF_RECOVERY_SHA:-}" = "7044d4980524c1d1f64e179760cbbd55c30899da" ] || {
+    echo "FATAL: recovery provenance is not pinned to F15 commit 7044d49" >&2
+    exit 1
+}
+export PF_RECOVERY_BIN
+
 echo "  Running mmdebstrap (this may take several minutes under qemu...)..."
 POCKETFORGE_VARIANT="${VARIANT}" \
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
@@ -1184,7 +1208,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \

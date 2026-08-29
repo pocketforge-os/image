@@ -1,0 +1,14 @@
+/home/matt/wt/codex/tsp-op5a.79/image/apps/pocketforge-recovery-entry/target/debug/deps/serde-e78effb42c7abd4a.d: /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/matt/wt/codex/tsp-op5a.79/image/apps/pocketforge-recovery-entry/target/debug/build/serde-2b6dc38641ca5f93/out/private.rs
+
+/home/matt/wt/codex/tsp-op5a.79/image/apps/pocketforge-recovery-entry/target/debug/deps/libserde-e78effb42c7abd4a.rlib: /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/matt/wt/codex/tsp-op5a.79/image/apps/pocketforge-recovery-entry/target/debug/build/serde-2b6dc38641ca5f93/out/private.rs
+
+/home/matt/wt/codex/tsp-op5a.79/image/apps/pocketforge-recovery-entry/target/debug/deps/libserde-e78effb42c7abd4a.rmeta: /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/matt/wt/codex/tsp-op5a.79/image/apps/pocketforge-recovery-entry/target/debug/build/serde-2b6dc38641ca5f93/out/private.rs
+
+/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/home/matt/wt/codex/tsp-op5a.79/image/apps/pocketforge-recovery-entry/target/debug/build/serde-2b6dc38641ca5f93/out/private.rs:
+
+# env-dep:OUT_DIR=/home/matt/wt/codex/tsp-op5a.79/image/apps/pocketforge-recovery-entry/target/debug/build/serde-2b6dc38641ca5f93/out
