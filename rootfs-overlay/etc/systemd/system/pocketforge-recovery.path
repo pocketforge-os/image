@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch for the durable PocketForge RecoveryRequired condition
+DefaultDependencies=no
+After=local-fs.target
+Before=multi-user.target
+
+[Path]
+PathExists=/var/lib/pocketforge/recovery/required.json
+Unit=pocketforge-recovery.service
+
+[Install]
+WantedBy=multi-user.target
