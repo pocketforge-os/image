@@ -2,8 +2,10 @@
 Description=PocketForge launcher-independent recovery surface
 Documentation=https://github.com/pocketforge-os/recovery/tree/7044d4980524c1d1f64e179760cbbd55c30899da/surface
 ConditionPathExists=/var/lib/pocketforge/recovery/required.json
-After=local-fs.target dev-fb0.device
+Requires=pocketforge-foreground.target
 Wants=dev-fb0.device
+Conflicts=pocketforge-boot-animator.service pocketforge-menu.service pocketforge-placeholder.service
+After=local-fs.target dev-fb0.device pocketforge-foreground.target pocketforge-boot-animator.service pocketforge-menu.service pocketforge-placeholder.service
 
 [Service]
 Type=oneshot
