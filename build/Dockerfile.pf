@@ -17,6 +17,7 @@
 # content-addressed SHA is byte-identical regardless of transport, and is air-gap-safe):
 #   --build-context image-src=<archive>  kernel-src=<archive>  gpu-src=<archive>
 #                    sdl-src=<archive>    blobs-src=<archive>   wpa-src=<archive>
+#                    runtime-src=<archive> launcher-src=<archive>
 #                    uboot-src=<archive>  tfa-src=<archive>    (a523 bootchain; EMPTY dirs
 #                                                               for a device with no source
 #                                                               bootchain, e.g. a133)
@@ -585,7 +586,7 @@ WPA
 # pin-not-airgap model as mmdebstrap's Debian snapshot). Per-component bit-repro
 # is finished under B6, as for the sdl/wpa stages.
 # =============================================================================
-FROM rust:1.83-slim-bookworm@sha256:540c902e99c384163b688bbd8b5b8520e94e7731b27f7bd0eaa56ae1960627ab AS runtime
+FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS runtime
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
 ARG PF_RUNTIME_SHA
@@ -595,6 +596,7 @@ COPY --from=runtime-src . /work/runtime
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd
+[ "${PF_RUNTIME_SHA}" = "2dc47fb6eb0750e5b4c23bca44250d3e6a3f4738" ] || { echo "FATAL: F13 runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device gate — mirrors the sdl/wpa stages: pf-input-decode decodes the A133 pad
 # MCU's ttyS3/ttyS4 frames, so it is a133-only. Non-a133 (non-PowerVR) devices get
 # a NOT-SHIPPED marker + an otherwise-empty /out the downstream COPY consumes
@@ -617,19 +619,29 @@ cd /work/runtime
 CARGO_NET_LOCKED=1 \
 RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
 cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-decode
+CARGO_NET_LOCKED=1 \
+RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-session-authority --bin pf-session-authorityd
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-decode"
+AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
 [ -f "${BIN}" ] || { echo "FATAL: pf-input-decode not built at ${BIN}"; exit 1; }
+[ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
 # Gate 1: must be an aarch64 ELF (e_machine 0xB7 at offset 18) — same check as the wpa stage.
 E_MACHINE="$(od -An -tx1 -j18 -N2 "${BIN}" | tr -d ' ')"
 [ "${E_MACHINE}" = "b700" ] || { echo "FATAL: pf-input-decode is not aarch64 (e_machine=${E_MACHINE}, want b700)"; exit 1; }
 # Gate 2: must be STATIC (musl target defaults crt-static) — a dynamic musl binary would need a
 # musl loader the bookworm rootfs does not have. A static binary carries no interpreter path string.
 if grep -qa 'ld-musl\|ld-linux' "${BIN}"; then echo "FATAL: pf-input-decode is dynamically linked (expected static musl)"; exit 1; fi
+AUTHORITY_EM="$(od -An -tx1 -j18 -N2 "${AUTHORITY_BIN}" | tr -d ' ')"
+[ "${AUTHORITY_EM}" = "b700" ] || { echo "FATAL: pf-session-authorityd is not aarch64 (e_machine=${AUTHORITY_EM}, want b700)"; exit 1; }
+if grep -qa 'ld-musl\|ld-linux' "${AUTHORITY_BIN}"; then echo "FATAL: pf-session-authorityd is dynamically linked (expected static musl)"; exit 1; fi
 install -D -m 0755 "${BIN}" /out/bin/pf-input-decode
+install -D -m 0755 "${AUTHORITY_BIN}" /out/bin/pf-session-authorityd
 install -D -m 0644 crates/pf-input-decode/systemd/pf-input-decode.service /out/systemd/pf-input-decode.service
 {
   printf 'runtime@%s device=%s gpu=%s target=%s\n' "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" "${PF_RUNTIME_TARGET}"
   printf '  pf-input-decode sha256=%s\n' "$(sha256sum /out/bin/pf-input-decode | cut -d' ' -f1)"
+  printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
 } > /out/.pf-runtime-provenance
 cat /out/.pf-runtime-provenance
 RUNTIME
@@ -639,7 +651,7 @@ RUNTIME
 # Built from the exact recovery-src archive selected by platform.lock.  The
 # image-owned executable is deliberately only an fbdev/persistence adapter; all
 # customer state, copy, and rendering remain in the pinned recovery crate.
-# =============================================================================
+# ======================================================================
 FROM rust:1.83-slim-bookworm@sha256:540c902e99c384163b688bbd8b5b8520e94e7731b27f7bd0eaa56ae1960627ab AS recovery
 ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
 ARG SOURCE_DATE_EPOCH
@@ -662,6 +674,44 @@ printf 'recovery@%s\n' "${PF_RECOVERY_SHA}" > /out/.pf-recovery-provenance
 sha256sum /out/bin/pocketforge-recovery-entry >> /out/.pf-recovery-provenance
 cat /out/.pf-recovery-provenance
 RECOVERY
+=======
+# launcher — selected persistent shell owner, built from the platform.lock-resolved
+# launcher archive. The digest-pinned Rust toolchain, committed Cargo.lock and
+# --locked make the source/tool/dependency selection deterministic.
+# =============================================================================
+FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS launcher
+ARG PF_DEVICE_ID
+ARG PF_GPU_REPO
+ARG PF_LAUNCHER_SHA
+ARG SOURCE_DATE_EPOCH
+ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
+COPY --from=launcher-src . /work/launcher
+RUN <<'LAUNCHER'
+set -eux
+mkdir -p /out/bin
+[ "${PF_LAUNCHER_SHA}" = "3fc6a8ebd71ebe7c2bf261908fcbfbd6e8df65ea" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
+  printf 'launcher@%s NOT SHIPPED for device=%s (gpu=%s; pf-shell is selected for a133)\n' \
+    "${PF_LAUNCHER_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-launcher-provenance
+  exit 0
+fi
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+rustup target add "${PF_RUNTIME_TARGET}"
+cd /work/launcher
+CARGO_NET_LOCKED=1 RUSTFLAGS="--remap-path-prefix=/work/launcher=." \
+  cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-shell
+BIN="target/${PF_RUNTIME_TARGET}/release/pf-shell"
+[ -f "${BIN}" ] || { echo "FATAL: pf-shell not built at ${BIN}"; exit 1; }
+E_MACHINE="$(od -An -tx1 -j18 -N2 "${BIN}" | tr -d ' ')"
+[ "${E_MACHINE}" = "b700" ] || { echo "FATAL: pf-shell is not aarch64 (e_machine=${E_MACHINE}, want b700)"; exit 1; }
+if grep -qa 'ld-musl\|ld-linux' "${BIN}"; then echo "FATAL: pf-shell is dynamically linked (expected static musl)"; exit 1; fi
+install -D -m 0755 "${BIN}" /out/bin/pf-shell
+{
+  printf 'launcher@%s device=%s gpu=%s target=%s\n' "${PF_LAUNCHER_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" "${PF_RUNTIME_TARGET}"
+  printf '  pf-shell sha256=%s\n' "$(sha256sum /out/bin/pf-shell | cut -d' ' -f1)"
+} > /out/.pf-launcher-provenance
+cat /out/.pf-launcher-provenance
+LAUNCHER
 
 # =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
@@ -680,6 +730,7 @@ ARG PF_LIBSDL3_SHA
 ARG PF_WPA_SHA
 ARG PF_RUNTIME_SHA
 ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
+ARG PF_LAUNCHER_SHA
 ARG PF_BLOBS_SHA
 ARG PF_VENDOR_MANIFEST_SHA
 ARG PF_CAR_SHA256
@@ -707,6 +758,7 @@ COPY --from=sdl    /out/lib         /work/libsdl3
 COPY --from=wpa    /out             /work/wpa
 COPY --from=runtime /out            /work/runtime
 COPY --from=recovery /out           /work/recovery
+COPY --from=launcher /out           /work/launcher
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -718,12 +770,12 @@ case "${PF_GPU_REPO}" in
   gpu-km-tsp)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp OUT_DIR=/out \
-      RUNTIME_DIR=/work/runtime \
+      RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher \
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_IMAGE_SHA="${PF_IMAGE_SHA}" PF_KERNEL_SHA="${PF_KERNEL_SHA}" \
       PF_GPU_SHA="${PF_GPU_SHA}" PF_LIBSDL3_SHA="${PF_LIBSDL3_SHA}" \
-      PF_WPA_SHA="${PF_WPA_SHA}" PF_RUNTIME_SHA="${PF_RUNTIME_SHA}" \
+      PF_WPA_SHA="${PF_WPA_SHA}" PF_RUNTIME_SHA="${PF_RUNTIME_SHA}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA}" \
       PF_RECOVERY_SHA="${PF_RECOVERY_SHA}" RECOVERY_DIR=/work/recovery \
       PF_BLOBS_SHA="${PF_BLOBS_SHA}" \
       PF_VENDOR_MANIFEST_SHA="${PF_VENDOR_MANIFEST_SHA}" \

@@ -1,0 +1,10 @@
+F13 unit graph: PASS
+foreground_writers=pf-shell-selected.service,pf-foreground@.service
+writer_exclusion=session-and-target activation Conflicts=selected-owner
+selected_owner=persistent Restart=on-failure enabled=multi-user.target
+authority_lifetime=independent enabled=multi-user.target lifecycle_edges=none
+authority_state=/var/lib/pocketforge/session-authority socket=/run/pocketforge/session-authority.sock
+
+Generated offline by: tests/verify-f13-unit-graph.py
+Scope: unit-graph analysis only. On-device boot and fault evidence is deferred by
+the product-010 honesty split; this artifact makes no device claim.

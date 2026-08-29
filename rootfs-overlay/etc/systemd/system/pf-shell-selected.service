@@ -1,0 +1,23 @@
+[Unit]
+Description=PocketForge selected persistent foreground owner
+After=dev-fb0.device pf-input-decode.service pocketforge-boot-animator.service
+Requires=dev-fb0.device
+Conflicts=pocketforge-boot-animator.service pocketforge-menu.service pocketforge-placeholder.service shutdown.target
+Before=shutdown.target
+ConditionPathExists=/dev/fb0
+
+[Service]
+Type=simple
+User=gamer
+SupplementaryGroups=input video
+ExecStart=/usr/bin/pf-shell --fbdev --device /dev/fb0 --input /dev/input/event0 --state-dir /var/lib/pocketforge/shell
+StateDirectory=pocketforge/shell
+KillSignal=SIGTERM
+TimeoutStopSec=2s
+Restart=on-failure
+RestartSec=2s
+MemoryMax=256M
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
