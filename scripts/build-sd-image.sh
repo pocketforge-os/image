@@ -67,9 +67,14 @@ fi
 # Owned-substrate paths (bind-mounted by the build container)
 KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
 GPU_KM_TSP_DIR="${GPU_KM_TSP_DIR:-/work/gpu-km-tsp}"
+PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 
 [ -f "${KERNEL_TSP_DIR}/arch/arm64/boot/Image" ] || { echo "FATAL: kernel-tsp Image not found at ${KERNEL_TSP_DIR}/arch/arm64/boot/Image" >&2; exit 1; }
-[ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: gpu-km-tsp pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
+case "${PF_GPU_MODEL}" in
+    open) [ -f "${GPU_KM_TSP_DIR}/powervr.ko" ] || { echo "FATAL: open powervr.ko not found at ${GPU_KM_TSP_DIR}/powervr.ko" >&2; exit 1; } ;;
+    ddk)  [ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: gpu-km-tsp pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; } ;;
+    *) echo "FATAL: unsupported PF_GPU_MODEL=${PF_GPU_MODEL}" >&2; exit 1 ;;
+esac
 
 # Reproducible timestamp from git head commit
 if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
@@ -105,6 +110,7 @@ echo "  src:       ${SRC_DIR}"
 echo "  blobs:     ${BLOBS_DIR}"
 echo "  kernel-tsp: ${KERNEL_TSP_DIR}"
 echo "  gpu-km-tsp: ${GPU_KM_TSP_DIR}"
+echo "  gpu model: ${PF_GPU_MODEL}"
 echo "  out:       ${OUT_DIR}"
 echo "========================================================================"
 
@@ -117,7 +123,7 @@ INITRD_ARGS=(--src "${SRC_DIR}" --blobs "${BLOBS_DIR}" --out "${WORK}/initrd.gz"
 if [ "$M1B_MODE" = 1 ]; then
     INITRD_ARGS+=(--m1b-mode)
 fi
-INITRD_ARGS+=(--kernel-tsp-dir "${KERNEL_TSP_DIR}" --gpu-km-dir "${GPU_KM_TSP_DIR}")
+INITRD_ARGS+=(--kernel-tsp-dir "${KERNEL_TSP_DIR}" --gpu-km-dir "${GPU_KM_TSP_DIR}" --gpu-model "${PF_GPU_MODEL}")
 bash "${BOARD_DIR}/initrd/build-initrd.sh" "${INITRD_ARGS[@]}"
 
 # ---- step 2: compile DTB ---------------------------------------------------
@@ -127,7 +133,7 @@ if [ "$BOOT_ONLY" != 1 ]; then
 echo ""
 echo "=== Step 2/6: Compile DTB ==="
 # Use the pre-built DTB from kernel-tsp (compiled alongside the kernel)
-KERNEL_DTB="${KERNEL_TSP_DIR}/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb"
+KERNEL_DTB="${KERNEL_DTB_FILE:-${KERNEL_TSP_DIR}/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb}"
 [ -f "${KERNEL_DTB}" ] || { echo "FATAL: kernel-tsp DTB not found at ${KERNEL_DTB}" >&2; exit 1; }
 DTB_FILE="${WORK}/dtb.bin"
 cp "${KERNEL_DTB}" "${DTB_FILE}"
