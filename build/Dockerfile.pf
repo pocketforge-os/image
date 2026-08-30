@@ -208,27 +208,46 @@ cat /out/build/.pf-kernel-provenance
 KERNEL
 
 # =============================================================================
-# Select the GPU KM source before entering the build stage.  The open model's
-# powervr.ko is collected from the in-tree kernel build and therefore has no
-# dependency edge on the closed DDK named context.  Closed builds override the
-# scratch gpu-src fallback with their pinned named context.
-FROM scratch AS gpu-src
-FROM scratch AS gpu-km-source-open
-FROM gpu-src AS gpu-km-source-ddk
-FROM gpu-km-source-${PF_GPU_MODEL} AS gpu-km-source
+# gpu-km-open — collect the in-tree Imagination DRM module from the kernel
+# modules_install output.  This path intentionally has no DDK source, repository,
+# module-list, or make invocation.
+FROM ${PF_CONTAINER} AS gpu-km-open
+ARG PF_KERNEL_REPO
+ARG PF_KERNEL_SHA
+ARG PF_TOOLCHAIN_GCC_VERSION
+COPY --from=kernel /out/lib/modules /work/kernel-modules
+COPY --from=kernel /out/build/.pf-kernel-provenance /work/kernel-provenance
+RUN <<'GPUKM_OPEN'
+set -eux
+: "${PF_TOOLCHAIN_GCC_VERSION:?}"
+export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
+krel="$(sed -n 's/^kernel.release=//p' /work/kernel-provenance)"
+kvm="$(sed -n 's/^vermagic=//p' /work/kernel-provenance)"
+[ -n "${krel}" ] || { echo "GPU: could not read kernel release from /work/kernel-provenance"; exit 1; }
+[ -n "${kvm}" ] || { echo "GPU: could not read kernel vermagic from /work/kernel-provenance"; exit 1; }
+ko="$(find /work/kernel-modules -name powervr.ko -type f -print -quit)"
+[ -n "${ko}" ] || { echo "GPU FAIL: in-tree powervr.ko missing from kernel modules_install"; exit 1; }
+vm="$(aarch64-none-linux-gnu-objcopy -O binary --only-section=.modinfo "${ko}" /dev/stdout | tr '\0' '\n' | sed -n 's/^vermagic=//p')"
+[ "${vm}" = "${kvm}" ] || { echo "GPU FAIL: powervr.ko vermagic '${vm}' != kernel '${kvm}' -> silent load failure"; exit 1; }
+install -D -m0644 "${ko}" /out/modules/powervr.ko
+{
+  printf 'gpu-km model=open source=%s@%s\n' "${PF_KERNEL_REPO:-kernel}" "${PF_KERNEL_SHA:-unknown}"
+  printf 'kernel.release=%s vermagic=%s\n' "${krel}" "${kvm}"
+  printf 'modules=[powervr.ko]\n'
+  printf '  powervr.ko sha256=%s\n' "$(sha256sum /out/modules/powervr.ko | cut -d' ' -f1)"
+} > /out/modules/.pf-gpu-provenance
+cat /out/modules/.pf-gpu-provenance
+GPUKM_OPEN
 
 # gpu-km — GPU kernel module, built vs the SAME-tree Module.symvers (tsp-1dl.4.3).
 # COPY --from=kernel the build tree so vermagic matches (silent-load-failure gate).
 # Per-IP: a133 gpu-km-tsp (pvrsrvkm.ko+dc_sunxi.ko); a523 gpu-km-tsp-a523 (mali_kbase.ko).
 # =============================================================================
-FROM ${PF_CONTAINER} AS gpu-km
+FROM ${PF_CONTAINER} AS gpu-km-ddk
 ARG PF_DEVICE_ID
-ARG PF_GPU_MODEL=ddk
 ARG PF_GPU_REPO
 ARG PF_GPU_SHA
 ARG PF_GPU_MODULES
-ARG PF_KERNEL_REPO
-ARG PF_KERNEL_SHA
 ARG PF_TOOLCHAIN_GCC_VERSION
 ARG PF_KERNEL_SOURCE_DATE_EPOCH
 ARG PF_ODYSSEY_CAPTURE=
@@ -237,9 +256,8 @@ ARG SOURCE_DATE_EPOCH
 # external-module build (`make -C KDIR M=…`) needs it, not just Module.symvers. Its .pf-kernel-
 # provenance carries the kernel vermagic we must match (MODVERSIONS=n → vermagic is the only gate).
 COPY --from=kernel /work/kernel /work/kernel
-COPY --from=kernel /out/lib/modules /work/kernel-modules
 COPY --from=kernel /out/build/.pf-kernel-provenance /work/kernel-provenance
-COPY --from=gpu-km-source . /work/gpu
+COPY --from=gpu-src . /work/gpu
 # The GPU driver's build-options (PVR_KM_CFLAGS + the Make-level SUPPORT_* gates) are OWNED BY and
 # ship WITH the driver source at gpu-km-tsp/build/pvr-buildopts.mk, which the DDK Makefile
 # auto-resolves as search-order #1 ($(DDK_SRC)/build/pvr-buildopts.mk). We deliberately do NOT COPY
@@ -249,7 +267,7 @@ COPY --from=gpu-km-source . /work/gpu
 # gate → dc_sunxi MODPOST undefined symbols). Single source of truth lives with the driver (tsp-1dl.4.3).
 RUN <<'GPUKM'
 set -eux
-: "${PF_GPU_MODEL:?}" "${PF_GPU_MODULES:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
+: "${PF_GPU_REPO:?}" "${PF_GPU_MODULES:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
 export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
 export ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu-
 # Deterministic module stamp (pinned to the kernel commit like the kernel stage; vermagic itself
@@ -267,29 +285,6 @@ kver="$(cat "$KDIR/include/config/kernel.release")"
 kvm="$(sed -n 's/^vermagic=//p' /work/kernel-provenance)"
 [ -n "$kvm" ] || { echo "GPU: could not read kernel vermagic from /work/kernel-provenance"; exit 1; }
 mkdir -p /out/modules
-
-# The open A133 driver is built in-tree by the kernel stage.  Do not require or
-# consume a DDK repository in this branch; collect the modules_install result.
-if [ "${PF_GPU_MODEL}" = open ]; then
-  [ -z "${PF_GPU_REPO}" ] || { echo "GPU FAIL: open model must not select legacy PF_GPU_REPO=${PF_GPU_REPO}"; exit 1; }
-  rc=0
-  for m in ${PF_GPU_MODULES}; do
-    ko="$(find /work/kernel-modules -name "$m" -print -quit)"
-    [ -n "$ko" ] || { echo "GPU FAIL: in-tree module $m missing from modules_install"; rc=1; continue; }
-    vm="$(aarch64-none-linux-gnu-objcopy -O binary --only-section=.modinfo "$ko" /dev/stdout | tr '\0' '\n' | sed -n 's/^vermagic=//p')"
-    [ "$vm" = "$kvm" ] || { echo "GPU FAIL: $m vermagic '$vm' != kernel '$kvm'"; rc=1; }
-    install -D -m0644 "$ko" "/out/modules/$m"
-  done
-  [ "$rc" -eq 0 ] || exit 1
-  {
-    printf 'gpu-km model=open source=%s@%s\n' "${PF_KERNEL_REPO:-kernel}" "${PF_KERNEL_SHA:-unknown}"
-    printf 'kernel.release=%s vermagic=%s\n' "${kver}" "${kvm}"
-    printf 'modules=[%s]\n' "${PF_GPU_MODULES}"
-  } > /out/modules/.pf-gpu-provenance
-  cat /out/modules/.pf-gpu-provenance
-  exit 0
-fi
-: "${PF_GPU_REPO:?closed GPU model requires PF_GPU_REPO}"
 
 # PER-IP build (PowerVR vs Mali share no code). Recipes mirror the committed in-repo build scripts:
 # gpu-km-tsp/build-sunxi-a133.sh and gpu-km-tsp-a523/build-a523-gpu-km.sh (the latter cannot run as-is
@@ -339,6 +334,9 @@ done
 } > /out/modules/.pf-gpu-provenance
 cat /out/modules/.pf-gpu-provenance
 GPUKM
+
+# Select the complete GPU-KM output without evaluating the other model's RUN.
+FROM gpu-km-${PF_GPU_MODEL} AS gpu-km
 
 # =============================================================================
 # gpu-um — open Mesa userspace for the in-tree PowerVR DRM model.

@@ -760,8 +760,8 @@ echo "[customize] Masked global wpa_supplicant.service (template instance used i
 # "systemctl enable doesn't work under qemu" pattern used for wpa above), so it
 # comes up on a COLD boot with no manual setup and survives every reflash — the
 # exact regression tsp-bwrg.6 hit when a reflash wiped the hand-deployed /opt binary.
-# The runtime stage's a133 gate keys on the SAME PF_GPU_REPO=gpu-km-tsp that selects
-# this rootfs path, so when this script runs the binary is structurally present; a
+# The runtime stage's a133 gate keys on PF_SOC, independently of GPU model, so when
+# this script runs the binary is structurally present; a
 # NOT-SHIPPED marker here would mean a non-a133 caller reusing this SoC-agnostic
 # script, which is skipped cleanly (a523 gets its own decoder + install wiring in
 # build-rootfs-a523.sh — a separate future bead, not this one).
