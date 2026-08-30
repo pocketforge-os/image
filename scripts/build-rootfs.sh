@@ -748,6 +748,25 @@ if [ -f "${SHELL_BIN}" ] || [ -f "${AUTHORITY_BIN}" ]; then
     echo "[customize] F13 pf-shell selected owner + independent pf-session-authorityd installed and enabled"
 fi
 
+# --- W2c preference state authority (tsp-op5a.134) --------------------------
+PREFSD_BIN="${RUNTIME_DIR}/bin/pf-prefsd"
+if [ -f "${PREFSD_BIN}" ]; then
+    prefsd_em="$(od -An -tx1 -j18 -N2 "${PREFSD_BIN}" | tr -d ' ')"
+    [ "${prefsd_em}" = "b700" ] || { echo "FATAL: ${PREFSD_BIN} is not an aarch64 ELF (e_machine=${prefsd_em}, want b700)" >&2; exit 1; }
+    install -D -m 0755 "${PREFSD_BIN}" "${ROOTFS}/usr/bin/pf-prefsd"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-prefsd.service" \
+        "${ROOTFS}/etc/systemd/system/pf-prefsd.service"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-broker.service.d/10-prefsd.conf" \
+        "${ROOTFS}/etc/systemd/system/pf-broker.service.d/10-prefsd.conf"
+    touch "${ROOTFS}/etc/environment"
+    grep -qxF 'PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock' "${ROOTFS}/etc/environment" || \
+        cat "/work/src/rootfs-overlay/etc/environment" >> "${ROOTFS}/etc/environment"
+    install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+    ln -sf /etc/systemd/system/pf-prefsd.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-prefsd.service"
+    echo "[customize] pf-prefsd installed and enabled as the preference state authority"
+fi
+
 # pocketforge-wifi-setup.service
 ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-setup.service"

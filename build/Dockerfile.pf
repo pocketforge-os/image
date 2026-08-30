@@ -596,7 +596,7 @@ COPY --from=runtime-src . /work/runtime
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd
-[ "${PF_RUNTIME_SHA}" = "2dc47fb6eb0750e5b4c23bca44250d3e6a3f4738" ] || { echo "FATAL: F13 runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "2478b37755bc9968a49105fb9223be1f55ca7ddd" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device gate — mirrors the sdl/wpa stages: pf-input-decode decodes the A133 pad
 # MCU's ttyS3/ttyS4 frames, so it is a133-only. Non-a133 (non-PowerVR) devices get
 # a NOT-SHIPPED marker + an otherwise-empty /out the downstream COPY consumes
@@ -622,10 +622,15 @@ cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-decod
 CARGO_NET_LOCKED=1 \
 RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
 cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-session-authority --bin pf-session-authorityd
+CARGO_NET_LOCKED=1 \
+RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-prefsd --bin pf-prefsd
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-decode"
 AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
+PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
 [ -f "${BIN}" ] || { echo "FATAL: pf-input-decode not built at ${BIN}"; exit 1; }
 [ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
+[ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-prefsd not built at ${PREFSD_BIN}"; exit 1; }
 # Gate 1: must be an aarch64 ELF (e_machine 0xB7 at offset 18) — same check as the wpa stage.
 E_MACHINE="$(od -An -tx1 -j18 -N2 "${BIN}" | tr -d ' ')"
 [ "${E_MACHINE}" = "b700" ] || { echo "FATAL: pf-input-decode is not aarch64 (e_machine=${E_MACHINE}, want b700)"; exit 1; }
@@ -635,13 +640,18 @@ if grep -qa 'ld-musl\|ld-linux' "${BIN}"; then echo "FATAL: pf-input-decode is d
 AUTHORITY_EM="$(od -An -tx1 -j18 -N2 "${AUTHORITY_BIN}" | tr -d ' ')"
 [ "${AUTHORITY_EM}" = "b700" ] || { echo "FATAL: pf-session-authorityd is not aarch64 (e_machine=${AUTHORITY_EM}, want b700)"; exit 1; }
 if grep -qa 'ld-musl\|ld-linux' "${AUTHORITY_BIN}"; then echo "FATAL: pf-session-authorityd is dynamically linked (expected static musl)"; exit 1; fi
+PREFSD_EM="$(od -An -tx1 -j18 -N2 "${PREFSD_BIN}" | tr -d ' ')"
+[ "${PREFSD_EM}" = "b700" ] || { echo "FATAL: pf-prefsd is not aarch64 (e_machine=${PREFSD_EM}, want b700)"; exit 1; }
+if grep -qa 'ld-musl\|ld-linux' "${PREFSD_BIN}"; then echo "FATAL: pf-prefsd is dynamically linked (expected static musl)"; exit 1; fi
 install -D -m 0755 "${BIN}" /out/bin/pf-input-decode
 install -D -m 0755 "${AUTHORITY_BIN}" /out/bin/pf-session-authorityd
+install -D -m 0755 "${PREFSD_BIN}" /out/bin/pf-prefsd
 install -D -m 0644 crates/pf-input-decode/systemd/pf-input-decode.service /out/systemd/pf-input-decode.service
 {
   printf 'runtime@%s device=%s gpu=%s target=%s\n' "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" "${PF_RUNTIME_TARGET}"
   printf '  pf-input-decode sha256=%s\n' "$(sha256sum /out/bin/pf-input-decode | cut -d' ' -f1)"
   printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
+  printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
 } > /out/.pf-runtime-provenance
 cat /out/.pf-runtime-provenance
 RUNTIME
