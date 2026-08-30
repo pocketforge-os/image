@@ -235,9 +235,19 @@ install -D -m 0644 /work/gpu-um/.pf-gpu-um-provenance \
 icd="$(find "${ROOTFS}/usr/share/vulkan/icd.d" -name '*powervr*.json' -print -quit)"
 [ -n "${icd}" ] || { echo "FATAL: open Mesa ICD JSON missing after install" >&2; exit 1; }
 icd_path="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ICD"]["library_path"])' "${icd}")"
-find "${ROOTFS}/usr/lib" -name "$(basename "${icd_path}")" -print -quit | grep -q . \
+case "${icd_path}" in
+    /*) icd_lib="${ROOTFS}${icd_path}" ;;
+    */*) icd_lib="$(dirname "${icd}")/${icd_path}" ;;
+    *) icd_lib="$(find "${ROOTFS}/usr/lib" -name "${icd_path}" -print -quit)" ;;
+esac
+[ -n "${icd_lib}" ] && [ -f "${icd_lib}" ] \
     || { echo "FATAL: open Mesa ICD library ${icd_path} does not resolve" >&2; exit 1; }
+for so in libEGL.so.1 libGLESv2.so.2 libGLESv1_CM.so.1 libGLES_CM.so libgbm.so.1; do
+    find "${ROOTFS}/usr/lib" -name "${so}" -print -quit | grep -q . \
+        || { echo "FATAL: open Mesa library ${so} missing after install" >&2; exit 1; }
+done
 chroot "$ROOTFS" ldconfig
+echo "[customize] Open Mesa API inventory: EGL + GLES2 + GLES1/GLES_CM + GBM; ICD ${icd_path}"
 else
 echo "[customize] Installing PowerVR DDK userspace..."
 install -d "${ROOTFS}/usr/lib/pvr-rogue"

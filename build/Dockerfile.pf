@@ -333,7 +333,8 @@ GPUKM
 # =============================================================================
 # gpu-um — open Mesa userspace for the in-tree PowerVR DRM model.
 # The pinned Mesa fork is a complete source archive; install a normal Mesa tree
-# (GL/EGL/GLES/GBM plus the Imagination Vulkan ICD), not the capture-only .so.
+# (EGL/GLES1/GLES2/GBM plus the Imagination Vulkan ICD), not the capture-only
+# .so.  A133 has no desktop GLX/libGL runtime contract.
 # =============================================================================
 # Closed profiles do not pass a gpu-um-src named context.  This empty stage is
 # the fallback; BuildKit's named-context precedence overrides it for open builds.
@@ -385,22 +386,34 @@ cd /work/gpu-um
 LLVM_CONFIG=llvm-config-20 meson setup build-shipping --wrap-mode=nodownload --cross-file /work/aarch64.ini \
   --prefix=/usr --libdir=lib/aarch64-linux-gnu \
   -Dvulkan-drivers=imagination -Dimagination-srv=false \
-  -Dgallium-drivers=softpipe -Dplatforms=wayland \
-  -Dglx=disabled -Degl=enabled -Dgbm=enabled -Dgles1=disabled -Dgles2=enabled \
+  -Dgallium-drivers=zink,softpipe -Dplatforms=wayland \
+  -Dglx=disabled -Degl=enabled -Dgbm=enabled -Dgles1=enabled -Dgles2=enabled \
   -Dllvm=enabled -Dshader-cache=disabled -Dxmlconfig=disabled \
   -Dzlib=disabled -Dzstd=disabled -Dvideo-codecs=[]
 DESTDIR=/out meson install -C build-shipping
+# The closed A133 stack exposed GLES1 as libGLES_CM.so.  Mesa/GLVND uses the
+# standard libGLESv1_CM name, so retain the runtime-facing name as an alias
+# without introducing desktop GL/GLX.
+gles1="$(find /out/usr/lib -name 'libGLESv1_CM.so.1' -print -quit)"
+[ -n "$gles1" ] && [ -f "$gles1" ] || { echo 'GPU UM FAIL: GLES1 library missing'; exit 1; }
+ln -s "$(basename "$gles1")" "$(dirname "$gles1")/libGLES_CM.so"
 icd=/out/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json
 [ -f "$icd" ] || icd="$(find /out/usr/share/vulkan/icd.d -name '*powervr*.json' -print -quit)"
 [ -n "$icd" ] && [ -f "$icd" ] || { echo 'GPU UM FAIL: PowerVR ICD JSON missing'; exit 1; }
 libpath="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ICD"]["library_path"])' "$icd")"
-case "$libpath" in /*) icdlib="/out$libpath" ;; *) icdlib="$(dirname "$icd")/$libpath" ;; esac
-[ -f "$icdlib" ] || icdlib="$(find /out/usr/lib -name 'libvulkan_powervr_mesa.so' -print -quit)"
+case "$libpath" in
+  /*) icdlib="/out$libpath" ;;
+  */*) icdlib="$(dirname "$icd")/$libpath" ;;
+  *) icdlib="$(find /out/usr/lib -name "$libpath" -print -quit)" ;;
+esac
 [ -n "$icdlib" ] && [ -f "$icdlib" ] || { echo "GPU UM FAIL: ICD library '$libpath' missing"; exit 1; }
 [ "$(od -An -tx1 -j18 -N2 "$icdlib" | tr -d ' ')" = b700 ] || { echo 'GPU UM FAIL: ICD is not AArch64'; exit 1; }
-for pat in 'libGL.so*' 'libEGL.so*' 'libGLESv2.so*' 'libgbm.so*'; do
+for pat in 'libEGL.so.1' 'libGLESv2.so.2' 'libGLESv1_CM.so.1' 'libGLES_CM.so' 'libgbm.so.1'; do
   find /out/usr/lib -name "$pat" -print -quit | grep -q . || { echo "GPU UM FAIL: missing $pat"; exit 1; }
 done
+printf '%s\n' 'GPU UM installed library inventory:'
+find /out/usr/lib -type f -o -type l | sort | sed 's#^/out##'
+printf 'GPU UM ICD: %s -> %s\n' "${icd#/out}" "${icdlib#/out}"
 {
   printf 'gpu-um %s@%s\n' "${PF_GPU_UM_REPO}" "${PF_GPU_UM_SHA}"
   printf 'icd=%s library=%s\n' "${icd#/out}" "${icdlib#/out}"
