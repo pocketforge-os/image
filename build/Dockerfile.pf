@@ -16,7 +16,7 @@
 # clone inside the build (platform docs/KERNEL-SOURCE-STRATEGY.md §3: the archive of a
 # content-addressed SHA is byte-identical regardless of transport, and is air-gap-safe):
 #   --build-context image-src=<archive>  kernel-src=<archive>  gpu-src=<archive>
-#                    sdl-src=<archive>    blobs-src=<archive>   wpa-src=<archive>
+#                    gpu-um-src=<archive> sdl-src=<archive>     blobs-src=<archive>
 #                    runtime-src=<archive> launcher-src=<archive>
 #                    uboot-src=<archive>  tfa-src=<archive>    (a523 bootchain; EMPTY dirs
 #                                                               for a device with no source
@@ -43,6 +43,7 @@
 # The owned, digest-pinned build container (image/container.pin). Overridable so a dev
 # can point at a locally-built tag; CI/`pf build` pass the pinned digest.
 ARG PF_CONTAINER=pocketforge/build:10.3-2021.07-bookworm
+ARG PF_GPU_MODEL=ddk
 
 # =============================================================================
 # fetch — vendor blobs (irreducibly-closed originals), by CID (B3 / tsp-1dl.3).
@@ -207,11 +208,42 @@ cat /out/build/.pf-kernel-provenance
 KERNEL
 
 # =============================================================================
+# gpu-km-open — collect the in-tree Imagination DRM module from the kernel
+# modules_install output.  This path intentionally has no DDK source, repository,
+# module-list, or make invocation.
+FROM ${PF_CONTAINER} AS gpu-km-open
+ARG PF_KERNEL_REPO
+ARG PF_KERNEL_SHA
+ARG PF_TOOLCHAIN_GCC_VERSION
+COPY --from=kernel /out/lib/modules /work/kernel-modules
+COPY --from=kernel /out/build/.pf-kernel-provenance /work/kernel-provenance
+RUN <<'GPUKM_OPEN'
+set -eux
+: "${PF_TOOLCHAIN_GCC_VERSION:?}"
+export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
+krel="$(sed -n 's/^kernel.release=//p' /work/kernel-provenance)"
+kvm="$(sed -n 's/^vermagic=//p' /work/kernel-provenance)"
+[ -n "${krel}" ] || { echo "GPU: could not read kernel release from /work/kernel-provenance"; exit 1; }
+[ -n "${kvm}" ] || { echo "GPU: could not read kernel vermagic from /work/kernel-provenance"; exit 1; }
+ko="$(find /work/kernel-modules -name powervr.ko -type f -print -quit)"
+[ -n "${ko}" ] || { echo "GPU FAIL: in-tree powervr.ko missing from kernel modules_install"; exit 1; }
+vm="$(aarch64-none-linux-gnu-objcopy -O binary --only-section=.modinfo "${ko}" /dev/stdout | tr '\0' '\n' | sed -n 's/^vermagic=//p')"
+[ "${vm}" = "${kvm}" ] || { echo "GPU FAIL: powervr.ko vermagic '${vm}' != kernel '${kvm}' -> silent load failure"; exit 1; }
+install -D -m0644 "${ko}" /out/modules/powervr.ko
+{
+  printf 'gpu-km model=open source=%s@%s\n' "${PF_KERNEL_REPO:-kernel}" "${PF_KERNEL_SHA:-unknown}"
+  printf 'kernel.release=%s vermagic=%s\n' "${krel}" "${kvm}"
+  printf 'modules=[powervr.ko]\n'
+  printf '  powervr.ko sha256=%s\n' "$(sha256sum /out/modules/powervr.ko | cut -d' ' -f1)"
+} > /out/modules/.pf-gpu-provenance
+cat /out/modules/.pf-gpu-provenance
+GPUKM_OPEN
+
 # gpu-km — GPU kernel module, built vs the SAME-tree Module.symvers (tsp-1dl.4.3).
 # COPY --from=kernel the build tree so vermagic matches (silent-load-failure gate).
 # Per-IP: a133 gpu-km-tsp (pvrsrvkm.ko+dc_sunxi.ko); a523 gpu-km-tsp-a523 (mali_kbase.ko).
 # =============================================================================
-FROM ${PF_CONTAINER} AS gpu-km
+FROM ${PF_CONTAINER} AS gpu-km-ddk
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
 ARG PF_GPU_SHA
@@ -302,6 +334,122 @@ done
 } > /out/modules/.pf-gpu-provenance
 cat /out/modules/.pf-gpu-provenance
 GPUKM
+
+# Select the complete GPU-KM output without evaluating the other model's RUN.
+FROM gpu-km-${PF_GPU_MODEL} AS gpu-km
+
+# =============================================================================
+# gpu-um — open Mesa userspace for the in-tree PowerVR DRM model.
+# The pinned Mesa fork is a complete source archive; install a normal Mesa tree
+# (EGL/GLES1/GLES2/GBM plus the Imagination Vulkan ICD), not the capture-only
+# .so.  A133 has no desktop GLX/libGL runtime contract.
+# =============================================================================
+# Closed profiles do not pass a gpu-um-src named context.  This empty stage is
+# the fallback; BuildKit's named-context precedence overrides it for open builds.
+FROM scratch AS gpu-um-src
+FROM ubuntu:24.04@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb AS gpu-um
+ARG PF_GPU_MODEL=ddk
+ARG PF_GPU_UM_REPO
+ARG PF_GPU_UM_SHA
+ARG SOURCE_DATE_EPOCH
+COPY --from=gpu-um-src . /work/gpu-um
+COPY --from=image-src build/mesa-cross/ /work/mesa-cross/
+RUN <<'GPUUM'
+set -eux
+mkdir -p /out
+if [ "${PF_GPU_MODEL}" != open ]; then
+  printf 'gpu-um NOT SHIPPED model=%s\n' "${PF_GPU_MODEL}" > /out/.pf-gpu-um-provenance
+  exit 0
+fi
+: "${PF_GPU_UM_REPO:?}" "${PF_GPU_UM_SHA:?}"
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+
+# Lift gpu-um-tsp's proven Dockerfile.ge8300-mesa-cross toolchain verbatim:
+# provision its native LLVM 20 precompiler environment first, then restrict all
+# native repositories to amd64 before adding the ARM64 target repository.
+sed -i '/rm -f/d' /work/gpu-um/scripts/install-mesa-buildenv.sh
+/work/gpu-um/scripts/install-mesa-buildenv.sh
+sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+sed -i 's/^deb \[/deb [arch=amd64 /' /etc/apt/sources.list.d/llvm-20.list
+printf '%s\n' \
+  'Types: deb' \
+  'URIs: http://ports.ubuntu.com/ubuntu-ports' \
+  'Suites: noble noble-updates noble-backports noble-security' \
+  'Components: main universe restricted multiverse' \
+  'Architectures: arm64' \
+  'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+  >/etc/apt/sources.list.d/ubuntu-arm64.sources
+dpkg --add-architecture arm64
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  bison flex ccache file gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+  libc6-dev:arm64 libdrm-dev:arm64 libexpat1-dev:arm64 \
+  libwayland-dev:arm64 libwayland-egl-backend-dev:arm64 wayland-protocols
+install -m0755 /work/mesa-cross/aarch64-linux-gnu-pkg-config \
+  /work/mesa-cross/x86_64-linux-gnu-pkg-config /usr/local/bin/
+install -m0644 /work/mesa-cross/ge8300-aarch64.ini \
+  /work/mesa-cross/ge8300-native.ini /usr/local/share/
+cd /work/gpu-um
+
+# Imagination's target compiler consumes these exact-tree native generators.
+LLVM_CONFIG=llvm-config-20 meson setup build-native \
+  --native-file /usr/local/share/ge8300-native.ini \
+  --wrap-mode=nodownload --prefix=/opt/mesa-native \
+  -Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=enabled \
+  -Dprecomp-compiler=enabled -Dinstall-precomp-compiler=true \
+  -Dinstall-mesa-clc=true -Dgallium-drivers=[] -Dplatforms=[] \
+  -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dshader-cache=disabled \
+  -Dxmlconfig=disabled -Dzlib=disabled -Dzstd=disabled -Dvideo-codecs=[]
+ninja -C build-native src/compiler/clc/mesa_clc \
+  src/compiler/spirv/vtn_bindgen2 src/imagination/pco/uscgen/pco_clc
+install -d /opt/mesa-native/bin
+for tool in mesa_clc pco_clc vtn_bindgen2; do
+  install "$(find build-native -type f -name "$tool" -perm /111 -print -quit)" \
+    "/opt/mesa-native/bin/$tool"
+  file "/opt/mesa-native/bin/$tool" | grep -q 'x86-64'
+done
+export PATH="/opt/mesa-native/bin:${PATH}"
+
+meson setup build-shipping --wrap-mode=nodownload \
+  --cross-file /usr/local/share/ge8300-aarch64.ini \
+  --native-file /usr/local/share/ge8300-native.ini \
+  --prefix=/usr --libdir=lib/aarch64-linux-gnu \
+  -Dvulkan-drivers=imagination -Dimagination-srv=false \
+  -Dmesa-clc=system -Dprecomp-compiler=system \
+  -Dgallium-drivers=zink -Dplatforms=wayland \
+  -Dglx=disabled -Dglvnd=disabled -Degl=enabled -Dgbm=enabled -Dgles1=enabled -Dgles2=enabled \
+  -Dllvm=disabled -Dshader-cache=disabled -Dxmlconfig=disabled \
+  -Dzlib=disabled -Dzstd=disabled -Dvideo-codecs=[]
+DESTDIR=/out meson install -C build-shipping
+# The closed A133 stack exposed GLES1 as libGLES_CM.so.  Mesa/GLVND uses the
+# standard libGLESv1_CM name, so retain the runtime-facing name as an alias
+# without introducing desktop GL/GLX.
+gles1="$(find /out/usr/lib -name 'libGLESv1_CM.so.1' -print -quit)"
+[ -n "$gles1" ] && [ -f "$gles1" ] || { echo 'GPU UM FAIL: GLES1 library missing'; exit 1; }
+ln -s "$(basename "$gles1")" "$(dirname "$gles1")/libGLES_CM.so"
+icd=/out/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json
+[ -f "$icd" ] || icd="$(find /out/usr/share/vulkan/icd.d -name '*powervr*.json' -print -quit)"
+[ -n "$icd" ] && [ -f "$icd" ] || { echo 'GPU UM FAIL: PowerVR ICD JSON missing'; exit 1; }
+libpath="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ICD"]["library_path"])' "$icd")"
+case "$libpath" in
+  /*) icdlib="/out$libpath" ;;
+  */*) icdlib="$(dirname "$icd")/$libpath" ;;
+  *) icdlib="$(find /out/usr/lib -name "$libpath" -print -quit)" ;;
+esac
+[ -n "$icdlib" ] && [ -f "$icdlib" ] || { echo "GPU UM FAIL: ICD library '$libpath' missing"; exit 1; }
+[ "$(od -An -tx1 -j18 -N2 "$icdlib" | tr -d ' ')" = b700 ] || { echo 'GPU UM FAIL: ICD is not AArch64'; exit 1; }
+for pat in 'libEGL.so.1' 'libGLESv2.so.2' 'libGLESv1_CM.so.1' 'libGLES_CM.so' 'libgbm.so.1'; do
+  find /out/usr/lib -name "$pat" -print -quit | grep -q . || { echo "GPU UM FAIL: missing $pat"; exit 1; }
+done
+printf '%s\n' 'GPU UM installed library inventory:'
+find /out/usr/lib -type f -o -type l | sort | sed 's#^/out##'
+printf 'GPU UM ICD: %s -> %s\n' "${icd#/out}" "${icdlib#/out}"
+{
+  printf 'gpu-um %s@%s\n' "${PF_GPU_UM_REPO}" "${PF_GPU_UM_SHA}"
+  printf 'icd=%s library=%s\n' "${icd#/out}" "${icdlib#/out}"
+} > /out/.pf-gpu-um-provenance
+cat /out/.pf-gpu-um-provenance
+GPUUM
 
 # =============================================================================
 # bootchain — a523 boot chain: TF-A BL31 + U-Boot SPL, source-built from the
@@ -420,6 +568,8 @@ BOOTCHAIN
 # =============================================================================
 FROM ${PF_CONTAINER} AS sdl
 ARG PF_DEVICE_ID
+ARG PF_SOC
+ARG PF_GPU_MODEL=ddk
 ARG PF_GPU_REPO
 ARG PF_LIBSDL3_SHA
 ARG SOURCE_DATE_EPOCH
@@ -433,7 +583,7 @@ set -eux
 mkdir -p /out/lib /work/out
 # libSDL3-pocketforge's sunxifb backend links the closed PowerVR UM, so it is meaningful ONLY on the
 # PowerVR IP (a133 / gpu-km-tsp). a523 (Mali) ships no sunxifb libSDL3 today — emit a device-gated marker.
-if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
+if [ "${PF_SOC}" != a133 ] || [ "${PF_GPU_MODEL}" != ddk ]; then
   printf 'libsdl3-sunxifb@%s NOT SHIPPED for device=%s (gpu=%s; sunxifb links the PowerVR UM — a133-only)\n' \
     "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/lib/.pf-sdl-provenance
   cat /out/lib/.pf-sdl-provenance
@@ -481,6 +631,7 @@ SDL
 # =============================================================================
 FROM ${PF_CONTAINER} AS wpa
 ARG PF_DEVICE_ID
+ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_WPA_SHA
 ARG PF_TOOLCHAIN_GCC_VERSION
@@ -491,7 +642,7 @@ set -eux
 mkdir -p /out
 # Device gate — mirrors the sdl stage: non-PowerVR (= non-a133) devices get a
 # NOT-SHIPPED marker and an empty output the downstream COPY consumes harmlessly.
-if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
+if [ "${PF_SOC}" != a133 ]; then
   printf 'wpa-supplicant-tsp@%s NOT SHIPPED for device=%s (gpu=%s; xr829 roam-hysteresis fork — a133-only)\n' \
     "${PF_WPA_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-wpa-provenance
   cat /out/.pf-wpa-provenance
@@ -588,6 +739,7 @@ WPA
 # =============================================================================
 FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS runtime
 ARG PF_DEVICE_ID
+ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_RUNTIME_SHA
 ARG SOURCE_DATE_EPOCH
@@ -602,7 +754,7 @@ mkdir -p /out/bin /out/systemd
 # a NOT-SHIPPED marker + an otherwise-empty /out the downstream COPY consumes
 # harmlessly. (a523's own input substrate + its install into build-rootfs-a523.sh
 # are a separate future bead — see DECISION-runtime-stage.md.)
-if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
+if [ "${PF_SOC}" != a133 ]; then
   printf 'runtime@%s NOT SHIPPED for device=%s (gpu=%s; pf-input-decode is the A133 pad-MCU decoder — a133-only)\n' \
     "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-runtime-provenance
   cat /out/.pf-runtime-provenance
@@ -684,13 +836,13 @@ printf 'recovery@%s\n' "${PF_RECOVERY_SHA}" > /out/.pf-recovery-provenance
 sha256sum /out/bin/pocketforge-recovery-entry >> /out/.pf-recovery-provenance
 cat /out/.pf-recovery-provenance
 RECOVERY
-=======
 # launcher — selected persistent shell owner, built from the platform.lock-resolved
 # launcher archive. The digest-pinned Rust toolchain, committed Cargo.lock and
 # --locked make the source/tool/dependency selection deterministic.
 # =============================================================================
 FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS launcher
 ARG PF_DEVICE_ID
+ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_LAUNCHER_SHA
 ARG SOURCE_DATE_EPOCH
@@ -700,7 +852,7 @@ RUN <<'LAUNCHER'
 set -eux
 mkdir -p /out/bin
 [ "${PF_LAUNCHER_SHA}" = "3fc6a8ebd71ebe7c2bf261908fcbfbd6e8df65ea" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
-if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
+if [ "${PF_SOC}" != a133 ]; then
   printf 'launcher@%s NOT SHIPPED for device=%s (gpu=%s; pf-shell is selected for a133)\n' \
     "${PF_LAUNCHER_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-launcher-provenance
   exit 0
@@ -730,7 +882,9 @@ LAUNCHER
 # =============================================================================
 FROM ${PF_CONTAINER} AS rootfs
 ARG PF_DEVICE_ID
+ARG PF_SOC
 ARG PF_ARCH
+ARG PF_GPU_MODEL=ddk
 ARG PF_GPU_REPO
 ARG PF_VARIANT=dev
 ARG PF_IMAGE_SHA
@@ -764,6 +918,7 @@ COPY --from=image-src . /work/src
 COPY --from=fetch  /out /work/blobs
 COPY --from=kernel /out/lib/modules /work/kernel-tsp
 COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
+COPY --from=gpu-um /out             /work/gpu-um
 COPY --from=sdl    /out/lib         /work/libsdl3
 COPY --from=wpa    /out             /work/wpa
 COPY --from=runtime /out            /work/runtime
@@ -776,8 +931,24 @@ COPY --from=launcher /out           /work/launcher
 RUN --security=insecure <<'ROOTFS'
 set -eux
 mkdir -p /out
-case "${PF_GPU_REPO}" in
-  gpu-km-tsp)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
+case "${PF_GPU_MODEL}:${PF_GPU_REPO}" in
+  open:)        # a133-open: in-tree DRM KM + open Mesa; no DDK input or userspace
+    [ "${PF_SOC}" = a133 ] || { echo "rootfs open model is only defined for a133 (soc=${PF_SOC})"; exit 1; }
+    SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
+      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp GPU_UM_DIR=/work/gpu-um OUT_DIR=/out \
+      RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher \
+      PF_GPU_MODEL=open PF_SOC="${PF_SOC}" \
+      PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
+      PF_IMAGE_SHA="${PF_IMAGE_SHA}" PF_KERNEL_SHA="${PF_KERNEL_SHA}" \
+      PF_GPU_SHA="${PF_GPU_SHA}" PF_LIBSDL3_SHA="${PF_LIBSDL3_SHA}" \
+      PF_WPA_SHA="${PF_WPA_SHA}" PF_RUNTIME_SHA="${PF_RUNTIME_SHA}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA}" \
+      PF_RECOVERY_SHA="${PF_RECOVERY_SHA}" RECOVERY_DIR=/work/recovery \
+      PF_BLOBS_SHA="${PF_BLOBS_SHA}" PF_VENDOR_MANIFEST_SHA="${PF_VENDOR_MANIFEST_SHA}" \
+      PF_CAR_SHA256="${PF_CAR_SHA256}" PF_UBOOT_SHA="${PF_UBOOT_SHA}" PF_TFA_SHA="${PF_TFA_SHA}" \
+      SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" PF_APT_PROXY="${PF_APT_PROXY:-}" \
+      bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned
+    ;;
+  ddk:gpu-km-tsp)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp OUT_DIR=/out \
       RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher \
@@ -794,7 +965,7 @@ case "${PF_GPU_REPO}" in
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" PF_APT_PROXY="${PF_APT_PROXY:-}" \
       bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned
     ;;
-  gpu-km-tsp-a523)   # a523 (Mali-G57 Valhall JM): source-rebuilt mali_kbase.ko + closed Mali userland + AIC8800 fw
+  ddk:gpu-km-tsp-a523)   # a523 (Mali-G57 Valhall JM): source-rebuilt mali_kbase.ko + closed Mali userland + AIC8800 fw
     # a523 uses its own build-rootfs-a523.sh (deliberately separate from the a133 path; a
     # SoC-agnostic unify is tsp-1dl.14, decoupled so a133 isn't regressed for a dedup). The
     # customize hook boards/tsp-s/rootfs-customize.sh HARDCODES MODSTAGE=/work/modules,
@@ -843,6 +1014,7 @@ ROOTFS
 # cache edge for the provenance-critical userdata image.
 FROM rootfs AS assemble
 ARG PF_DEVICE_ID
+ARG PF_GPU_MODEL=ddk
 ARG PF_GPU_REPO
 ARG PF_KERNEL_DTB
 ARG PF_IMAGE_NAME
@@ -971,7 +1143,7 @@ case "${PF_BOOT_PROTO}" in
     cp "/work/kboot/${PF_KERNEL_DTB}"       /work/kernel-tsp/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb
     cp /work/rootfs/userdata.ext4           /out/userdata.ext4
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs OUT_DIR=/out \
-      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
+      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp PF_GPU_MODEL="${PF_GPU_MODEL}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned \
         --boot-chain owned-spl --uboot-spl "${UBOOT_SPL}"
@@ -987,7 +1159,7 @@ case "${PF_BOOT_PROTO}" in
     # OUT_DIR/userdata.ext4 rather than rebuilding it).
     cp /work/rootfs/userdata.ext4           /out/userdata.ext4
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs OUT_DIR=/out \
-      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
+      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp PF_GPU_MODEL="${PF_GPU_MODEL}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned
     ;;

@@ -53,6 +53,8 @@ done
 # Phase 2 owned-substrate paths (bind-mounted by the Makefile)
 KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
 GPU_KM_TSP_DIR="${GPU_KM_TSP_DIR:-/work/gpu-km-tsp}"
+GPU_UM_DIR="${GPU_UM_DIR:-/work/gpu-um}"
+PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 
 if [ "$VARIANT" != "dev" ] && [ "$VARIANT" != "release" ]; then
     echo "FATAL: --variant must be 'dev' or 'release', got '${VARIANT}'" >&2
@@ -91,6 +93,8 @@ echo "  snapshot:  ${SNAPSHOT_URL}"
 echo "  blobs:     ${BLOBS_DIR}"
 echo "  kernel-tsp: ${KERNEL_TSP_DIR}"
 echo "  gpu-km-tsp: ${GPU_KM_TSP_DIR}"
+echo "  gpu model: ${PF_GPU_MODEL}"
+echo "  gpu-um: ${GPU_UM_DIR}"
 echo "  libsdl3:   ${LIBSDL3_DIR}"
 echo "  out:       ${OUT_DIR}"
 echo "========================================================================"
@@ -141,36 +145,43 @@ else
     exit 1
 fi
 
-# Verify blobs exist
-# DDK userspace + firmware always from blobs (unchanged across substrate transition)
-for f in \
-    "${BLOBS_DIR}/sunxi/a133/22.102.54.38/lib/libEGL.so" \
-    "${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38"; do
-    [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
-done
-
-# GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
-[ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
-[ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
-KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
-[ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
-# WiFi modules: kernel-tsp builds xr829_* (not xradio_*)
-KERNEL_WIFI_MAC="$(find "${KERNEL_TSP_DIR}" -name 'xr829_mac.ko' -type f | head -1)"
-KERNEL_WIFI_CORE="$(find "${KERNEL_TSP_DIR}" -name 'xr829_core.ko' -type f | head -1)"
-KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
-# All three are required: the install loop below FATALs on any missing one and
-# modules-load.d/pocketforge-wifi.conf loads the full triplet at boot. Spot-check
-# all three here so a broken kernel-tsp wifi build fails fast, before mmdebstrap.
-[ -n "${KERNEL_WIFI_MAC}" ] && [ -n "${KERNEL_WIFI_CORE}" ] && [ -n "${KERNEL_WIFI_WLAN}" ] \
-    || { echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2; exit 1; }
+# Verify model-specific GPU inputs.  The closed branch is deliberately unchanged;
+# open mode consumes only the in-tree module, open firmware and Mesa install tree.
+if [ "${PF_GPU_MODEL}" = open ]; then
+    [ -f "${GPU_KM_TSP_DIR}/powervr.ko" ] || { echo "FATAL: open powervr.ko not found" >&2; exit 1; }
+    [ -f "${BLOBS_DIR}/powervr/rogue_22.102.54.38_v1.fw" ] || { echo "FATAL: open PowerVR firmware not found" >&2; exit 1; }
+    [ -f "${GPU_UM_DIR}/.pf-gpu-um-provenance" ] || { echo "FATAL: open Mesa provenance missing" >&2; exit 1; }
+    find "${GPU_UM_DIR}/usr/lib" -name 'libvulkan_powervr_mesa.so' -print -quit | grep -q . \
+        || { echo "FATAL: open Mesa Vulkan ICD library missing" >&2; exit 1; }
+else
+    for f in \
+        "${BLOBS_DIR}/sunxi/a133/22.102.54.38/lib/libEGL.so" \
+        "${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38"; do
+        [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
+    done
+    [ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
+    [ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
+fi
+if [ "${PF_GPU_MODEL}" != open ]; then
+    KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
+    # WiFi modules: kernel-tsp builds xr829_* (not xradio_*)
+    KERNEL_WIFI_MAC="$(find "${KERNEL_TSP_DIR}" -name 'xr829_mac.ko' -type f | head -1)"
+    KERNEL_WIFI_CORE="$(find "${KERNEL_TSP_DIR}" -name 'xr829_core.ko' -type f | head -1)"
+    KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
+    [ -n "${KERNEL_WIFI_MAC}" ] && [ -n "${KERNEL_WIFI_CORE}" ] && [ -n "${KERNEL_WIFI_WLAN}" ] \
+        || { echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2; exit 1; }
+fi
 # WiFi firmware still from blobs (same firmware regardless of module name)
 [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
-echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
+echo "  blobs + kernel-tsp + gpu artifacts: spot-check passed"
 
-# Verify libSDL3 artifact exists
-LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
-[ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
-echo "  libsdl3: ${LIBSDL3_SO}"
+# sunxifb SDL links the closed DDK and must not enter an open image.
+if [ "${PF_GPU_MODEL}" != open ]; then
+    LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
+    [ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
+    echo "  libsdl3: ${LIBSDL3_SO}"
+fi
 
 # Verify the owned wpa_supplicant artifact exists (wpa stage output; tsp-myp1.8.2).
 # The a133 wlan supplicant is the owned wpa-supplicant-tsp fork — a missing
@@ -215,7 +226,29 @@ chroot "$ROOTFS" usermod -aG audio,input,video,render,plugdev gamer
 chroot "$ROOTFS" passwd -l gamer
 echo "[customize] gamer user created: $(chroot "$ROOTFS" id gamer)"
 
-# --- PowerVR DDK userspace install ------------------------------------------
+# --- GPU userspace install ---------------------------------------------------
+if [ "${PF_GPU_MODEL}" = open ]; then
+echo "[customize] Installing open Mesa userspace..."
+cp -a /work/gpu-um/usr/. "${ROOTFS}/usr/"
+install -D -m 0644 /work/gpu-um/.pf-gpu-um-provenance \
+    "${ROOTFS}/usr/share/pocketforge/gpu-um-provenance"
+icd="$(find "${ROOTFS}/usr/share/vulkan/icd.d" -name '*powervr*.json' -print -quit)"
+[ -n "${icd}" ] || { echo "FATAL: open Mesa ICD JSON missing after install" >&2; exit 1; }
+icd_path="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ICD"]["library_path"])' "${icd}")"
+case "${icd_path}" in
+    /*) icd_lib="${ROOTFS}${icd_path}" ;;
+    */*) icd_lib="$(dirname "${icd}")/${icd_path}" ;;
+    *) icd_lib="$(find "${ROOTFS}/usr/lib" -name "${icd_path}" -print -quit)" ;;
+esac
+[ -n "${icd_lib}" ] && [ -f "${icd_lib}" ] \
+    || { echo "FATAL: open Mesa ICD library ${icd_path} does not resolve" >&2; exit 1; }
+for so in libEGL.so.1 libGLESv2.so.2 libGLESv1_CM.so.1 libGLES_CM.so libgbm.so.1; do
+    find "${ROOTFS}/usr/lib" -name "${so}" -print -quit | grep -q . \
+        || { echo "FATAL: open Mesa library ${so} missing after install" >&2; exit 1; }
+done
+chroot "$ROOTFS" ldconfig
+echo "[customize] Open Mesa API inventory: EGL + GLES2 + GLES1/GLES_CM + GBM; ICD ${icd_path}"
+else
 echo "[customize] Installing PowerVR DDK userspace..."
 install -d "${ROOTFS}/usr/lib/pvr-rogue"
 for so in libEGL.so libGLESv2.so libGLES_CM.so libIMGegl.so \
@@ -248,9 +281,23 @@ if [ ! -L "${ROOTFS}/usr/lib/pvr-rogue/libEGL.so.1" ]; then
     exit 1
 fi
 echo "[customize] PowerVR DDK: SONAME symlinks verified (libEGL.so.1 exists)"
+fi
 
 # --- Kernel modules install --------------------------------------------------
 echo "[customize] Installing kernel modules..."
+
+if [ "${PF_GPU_MODEL}" = open ]; then
+    krel="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n')"
+    [ -n "${krel}" ] && [ "$(printf '%s\n' "${krel}" | wc -l)" -eq 1 ] \
+        || { echo "FATAL: expected exactly one discovered kernel release, got '${krel}'" >&2; exit 1; }
+    cp -a /work/kernel-tsp/. "${ROOTFS}/lib/modules/"
+    install -D -m 0644 /work/gpu-km-tsp/powervr.ko \
+        "${ROOTFS}/lib/modules/${krel}/extra/powervr.ko"
+    chroot "$ROOTFS" depmod "${krel}"
+    [ -s "${ROOTFS}/lib/modules/${krel}/modules.dep" ] \
+        || { echo "FATAL: depmod ${krel} produced empty modules.dep" >&2; exit 1; }
+    echo "[customize] Open modules installed for ${krel}"
+else
 install -d "${ROOTFS}/lib/modules/4.9.191"
 
 # Owned substrate: GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
@@ -280,14 +327,20 @@ if [ ! -s "${ROOTFS}/lib/modules/4.9.191/modules.dep" ]; then
     echo "FATAL: depmod 4.9.191 produced empty modules.dep" >&2
     exit 1
 fi
+fi
 
 # --- Firmware install --------------------------------------------------------
 echo "[customize] Installing firmware..."
 install -d "${ROOTFS}/lib/firmware"
 
-# GPU firmware (both files required — missing rgx.sh.* causes firmware-load failures)
-install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38" "${ROOTFS}/lib/firmware/"
-install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.sh.22.102.54.38" "${ROOTFS}/lib/firmware/"
+if [ "${PF_GPU_MODEL}" = open ]; then
+    install -D -m 0644 "/work/blobs/powervr/rogue_22.102.54.38_v1.fw" \
+        "${ROOTFS}/lib/firmware/powervr/rogue_22.102.54.38_v1.fw"
+else
+    # GPU firmware (both files required — missing rgx.sh.* causes firmware-load failures)
+    install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38" "${ROOTFS}/lib/firmware/"
+    install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.sh.22.102.54.38" "${ROOTFS}/lib/firmware/"
+fi
 
 # WiFi firmware
 install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin" "${ROOTFS}/lib/firmware/"
@@ -297,6 +350,7 @@ install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/sdd_xr829.bin" "${ROOTFS}/
 echo "[customize] Firmware: $(ls "${ROOTFS}/lib/firmware/" | wc -l) files"
 
 # --- libSDL3 install ---------------------------------------------------------
+if [ "${PF_GPU_MODEL}" != open ]; then
 echo "[customize] Installing libSDL3-pocketforge..."
 install -d "${ROOTFS}/opt/pocketforge/lib"
 # Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
@@ -315,6 +369,7 @@ if [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] && [ -d /work/libsdl3/testbin ] && 
     printf '/opt/pocketforge/lib\n' > "${ROOTFS}/etc/ld.so.conf.d/01-pocketforge.conf"
     chroot "$ROOTFS" ldconfig
     echo "[customize] SDL test binaries installed to /opt/pocketforge/bin (dev variant)"
+fi
 fi
 
 # --- Owned wpa_supplicant install (tsp-myp1.8.2; pattern from tsp-urq.7) -------
@@ -532,12 +587,19 @@ ASOUND_EOF
 
 # /etc/pocketforge/display-env.sh — central display/env (build-int §12.4)
 install -d "${ROOTFS}/etc/pocketforge"
+if [ "${PF_GPU_MODEL}" = open ]; then
+cat > "${ROOTFS}/etc/pocketforge/display-env.sh" << 'DISPLAY_ENV_OPEN_EOF'
+# /etc/pocketforge/display-env.sh — central display/env for PocketForge apps
+# Open A133 uses Mesa's normal loader paths; no closed DDK environment.
+DISPLAY_ENV_OPEN_EOF
+else
 cat > "${ROOTFS}/etc/pocketforge/display-env.sh" << 'DISPLAY_ENV_EOF'
 # /etc/pocketforge/display-env.sh — central display/env for PocketForge apps
 # Sourced by every app's launch script; owned by device-config.
 export SDL3_DYNAMIC_API=/opt/pocketforge/lib/libSDL3-pocketforge.so.0
 export LD_LIBRARY_PATH=/usr/lib/pvr-rogue${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 DISPLAY_ENV_EOF
+fi
 chmod 0644 "${ROOTFS}/etc/pocketforge/display-env.sh"
 
 # udev rules (build-int §12.3)
@@ -698,8 +760,8 @@ echo "[customize] Masked global wpa_supplicant.service (template instance used i
 # "systemctl enable doesn't work under qemu" pattern used for wpa above), so it
 # comes up on a COLD boot with no manual setup and survives every reflash — the
 # exact regression tsp-bwrg.6 hit when a reflash wiped the hand-deployed /opt binary.
-# The runtime stage's a133 gate keys on the SAME PF_GPU_REPO=gpu-km-tsp that selects
-# this rootfs path, so when this script runs the binary is structurally present; a
+# The runtime stage's a133 gate keys on PF_SOC, independently of GPU model, so when
+# this script runs the binary is structurally present; a
 # NOT-SHIPPED marker here would mean a non-a133 caller reusing this SoC-agnostic
 # script, which is skipped cleanly (a523 gets its own decoder + install wiring in
 # build-rootfs-a523.sh — a separate future bead, not this one).
@@ -1143,6 +1205,19 @@ elif [ "${VARIANT}" = "release" ]; then
     fi
 fi
 
+if [ "${PF_GPU_MODEL}" = open ]; then
+    for forbidden in \
+        "${ROOTFS}/usr/lib/pvr-rogue" \
+        "${ROOTFS}/etc/ld.so.conf.d/00-pvr.conf" \
+        "${ROOTFS}/usr/bin/pvrsrvctl"; do
+        [ ! -e "${forbidden}" ] || { echo "FATAL: closed DDK artifact leaked into open rootfs: ${forbidden}" >&2; exit 1; }
+    done
+    find "${ROOTFS}/lib/modules" \( -name pvrsrvkm.ko -o -name dc_sunxi.ko \) -print -quit | grep -q . \
+        && { echo "FATAL: closed DDK module leaked into open rootfs" >&2; exit 1; } || true
+    [ -f "${ROOTFS}/lib/firmware/powervr/rogue_22.102.54.38_v1.fw" ] \
+        || { echo "FATAL: open PowerVR firmware missing from rootfs" >&2; exit 1; }
+fi
+
 echo "[customize] Customization complete."
 CUSTOMIZE_EOF
 chmod +x "${CUSTOMIZE_SCRIPT}"
@@ -1245,6 +1320,7 @@ export PF_RECOVERY_BIN
 
 echo "  Running mmdebstrap (this may take several minutes under qemu...)..."
 POCKETFORGE_VARIANT="${VARIANT}" \
+PF_GPU_MODEL="${PF_GPU_MODEL}" \
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
 mmdebstrap \
     --arch=arm64 \
@@ -1255,7 +1331,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \

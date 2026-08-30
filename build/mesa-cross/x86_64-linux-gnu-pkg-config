@@ -1,0 +1,6 @@
+#!/bin/sh
+# Do not allow build-machine dependency discovery to enter the target sysroot.
+export PKG_CONFIG_DIR=
+export PKG_CONFIG_PATH=
+export PKG_CONFIG_LIBDIR=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig
+exec /usr/bin/pkg-config "$@"

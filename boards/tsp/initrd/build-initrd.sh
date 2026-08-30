@@ -40,6 +40,7 @@ OUT_FILE="${OUT_FILE:-/work/out/initrd.gz}"
 KERNEL_TSP_DIR=""
 GPU_KM_DIR=""
 VARIANT="dev"
+GPU_MODEL="ddk"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -50,6 +51,7 @@ while [ $# -gt 0 ]; do
         --variant)         VARIANT="$2"; shift 2 ;;
         --kernel-tsp-dir)  KERNEL_TSP_DIR="$2"; shift 2 ;;
         --gpu-km-dir)      GPU_KM_DIR="$2"; shift 2 ;;
+        --gpu-model)       GPU_MODEL="$2"; shift 2 ;;
         *) echo "build-initrd.sh: unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -67,6 +69,11 @@ if [ "$SUBSTRATE" = "owned" ]; then
     # Phase 2: modules from kernel-tsp + gpu-km-tsp builds
     echo "  substrate: owned (kernel-tsp + gpu-km-tsp)"
 
+    if [ "${GPU_MODEL}" = open ]; then
+        GPU_POWERVR="${GPU_KM_DIR}/powervr.ko"
+        [ -f "${GPU_POWERVR}" ] || { echo "FATAL: powervr.ko not found at ${GPU_POWERVR}" >&2; exit 1; }
+        echo "  powervr: ${GPU_POWERVR} (loaded from rootfs after switch_root)"
+    else
     # videobuf2-dma-contig from kernel-tsp build tree
     KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
     [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp build tree" >&2; exit 1; }
@@ -80,6 +87,7 @@ if [ "$SUBSTRATE" = "owned" ]; then
     echo "  videobuf2: ${KERNEL_VB2}"
     echo "  pvrsrvkm:  ${GPU_PVRSRVKM}"
     echo "  dc_sunxi:  ${GPU_DC_SUNXI}"
+    fi
 else
     # Phase 1: modules from vendor blobs
     echo "  substrate: vendor (blobs)"
@@ -90,7 +98,7 @@ fi
 
 # The initrd module set, in load order. NOTE: videobuf2-dma-contig.ko is
 # HYPHENATED on disk (runtime/lsmod name is underscored). Verified on blobs.
-MODULES="videobuf2-dma-contig.ko pvrsrvkm.ko dc_sunxi.ko"
+if [ "${GPU_MODEL}" = open ]; then MODULES=""; else MODULES="videobuf2-dma-contig.ko pvrsrvkm.ko dc_sunxi.ko"; fi
 
 # Reproducible mtime. Prefer the image repo's head commit; fall back to a fixed
 # epoch so an out-of-git invocation is still deterministic.
@@ -178,13 +186,32 @@ fi
 
 # /init
 install -m 0755 "${INITRD_SRC}/init" "${STAGING}/init"
+if [ "${GPU_MODEL}" = open ]; then
+    python3 - "${STAGING}/init" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+s = p.read_text()
+start = s.index('# --- PowerVR + buffer plumbing')
+end = s.index('# --- WiFi (NOT in the initrd)', start)
+replacement = '''# --- Open PowerVR ------------------------------------------------------------
+# The 6.x module tree and open firmware live in the rootfs; udev/modprobe loads
+# powervr after switch_root.  The closed early-DDK sequence is intentionally absent.
+log "STAGE: open GPU modules deferred to rootfs"
+
+'''
+p.write_text(s[:start] + replacement + s[end:])
+PY
+fi
 
 # Module set (flat under /lib/modules to match the insmod paths in /init).
 if [ "$SUBSTRATE" = "owned" ]; then
+    if [ "${GPU_MODEL}" != open ]; then
     # Owned substrate: videobuf2 from kernel-tsp, GPU modules from gpu-km-tsp
     cp "${KERNEL_VB2}" "${STAGING}/lib/modules/videobuf2-dma-contig.ko"
     cp "${GPU_PVRSRVKM}" "${STAGING}/lib/modules/pvrsrvkm.ko"
     cp "${GPU_DC_SUNXI}" "${STAGING}/lib/modules/dc_sunxi.ko"
+    fi
 else
     # Vendor substrate: all modules from blobs
     for m in $MODULES; do
@@ -201,14 +228,16 @@ done
 # files pvrsrvkm registers the BVNC but fails init with err=-19 (ENODEV) and
 # dc_sunxi cascades into "No such device". Firmware is always from blobs/ (the
 # closed DDK firmware is version-locked to the UM blobs, not to the KM source).
-GPU_FW_DIR="${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware"
 mkdir -p "${STAGING}/lib/firmware"
+if [ "${GPU_MODEL}" != open ]; then
+GPU_FW_DIR="${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware"
 for fw in rgx.fw.22.102.54.38 rgx.sh.22.102.54.38; do
     [ -f "${GPU_FW_DIR}/${fw}" ] || { echo "FATAL: GPU firmware ${fw} not found at ${GPU_FW_DIR}" >&2; exit 1; }
     cp "${GPU_FW_DIR}/${fw}" "${STAGING}/lib/firmware/${fw}"
     chmod 0644 "${STAGING}/lib/firmware/${fw}"
     echo "  firmware: ${fw} ($(stat -c%s "${GPU_FW_DIR}/${fw}") bytes)"
 done
+fi
 
 # Strip debug symbols from modules to minimize initrd size.
 # pvrsrvkm.ko: ~22 MB unstripped -> ~2 MB stripped (debug info is enormous).
