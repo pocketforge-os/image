@@ -346,6 +346,7 @@ ARG PF_GPU_UM_SHA
 ARG PF_TOOLCHAIN_GCC_VERSION
 ARG SOURCE_DATE_EPOCH
 COPY --from=gpu-um-src . /work/gpu-um
+COPY --from=image-src build/mesa-cross/ /work/mesa-cross/
 RUN <<'GPUUM'
 set -eux
 mkdir -p /out
@@ -357,38 +358,53 @@ fi
 export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 
-# Mesa's committed openrender recipe is expressed here because the locked tree
-# does not ship a reusable installer.  Debian arm64 development packages provide
-# the target sysroot while Meson and LLVM tools execute on the build host.
+# Lift gpu-um-tsp's proven docker/build-ge8300-mesa-cross.sh recipe: native
+# precompilers run on x86_64, while the shipping tree uses its committed AArch64
+# cross file and fail-closed pkg-config wrapper. LLVM is native-generator-only;
+# no host LLVM library is visible to or linked into the AArch64 build.
+dpkg --add-architecture arm64
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  meson python3-mako python3-yaml python3-ply pkg-config \
+  meson ninja-build ccache build-essential file gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+  binutils-aarch64-linux-gnu python3-mako python3-yaml python3-ply pkg-config \
   llvm-20-dev clang-20 libclang-20-dev libclc-20-dev libclc-20 \
   libllvmspirvlib-20-dev spirv-tools glslang-tools \
-  libdrm-dev:arm64 libexpat1-dev:arm64 libglvnd-dev:arm64 \
+  libc6-dev:arm64 libdrm-dev:arm64 libexpat1-dev:arm64 libglvnd-dev:arm64 \
   libwayland-dev:arm64 wayland-protocols
-cat >/work/aarch64.ini <<EOF
-[binaries]
-c = 'aarch64-none-linux-gnu-gcc'
-cpp = 'aarch64-none-linux-gnu-g++'
-ar = 'aarch64-none-linux-gnu-ar'
-strip = 'aarch64-none-linux-gnu-strip'
-pkg-config = 'aarch64-linux-gnu-pkg-config'
-[host_machine]
-system = 'linux'
-cpu_family = 'aarch64'
-cpu = 'aarch64'
-endian = 'little'
-[properties]
-sys_root = '/'
-EOF
+install -m0755 /work/mesa-cross/aarch64-linux-gnu-pkg-config \
+  /work/mesa-cross/x86_64-linux-gnu-pkg-config /usr/local/bin/
+install -m0644 /work/mesa-cross/ge8300-aarch64.ini \
+  /work/mesa-cross/ge8300-native.ini /usr/local/share/
 cd /work/gpu-um
-LLVM_CONFIG=llvm-config-20 meson setup build-shipping --wrap-mode=nodownload --cross-file /work/aarch64.ini \
+
+# Imagination's target compiler consumes these exact-tree native generators.
+LLVM_CONFIG=llvm-config-20 meson setup build-native \
+  --native-file /usr/local/share/ge8300-native.ini \
+  --wrap-mode=nodownload --prefix=/opt/mesa-native \
+  -Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=enabled \
+  -Dprecomp-compiler=enabled -Dinstall-precomp-compiler=true \
+  -Dinstall-mesa-clc=true -Dgallium-drivers=[] -Dplatforms=[] \
+  -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dshader-cache=disabled \
+  -Dxmlconfig=disabled -Dzlib=disabled -Dzstd=disabled -Dvideo-codecs=[]
+ninja -C build-native src/compiler/clc/mesa_clc \
+  src/compiler/spirv/vtn_bindgen2 src/imagination/pco/uscgen/pco_clc
+install -d /opt/mesa-native/bin
+for tool in mesa_clc pco_clc vtn_bindgen2; do
+  install "$(find build-native -type f -name "$tool" -perm /111 -print -quit)" \
+    "/opt/mesa-native/bin/$tool"
+  file "/opt/mesa-native/bin/$tool" | grep -q 'x86-64'
+done
+export PATH="/opt/mesa-native/bin:${PATH}"
+
+meson setup build-shipping --wrap-mode=nodownload \
+  --cross-file /usr/local/share/ge8300-aarch64.ini \
+  --native-file /usr/local/share/ge8300-native.ini \
   --prefix=/usr --libdir=lib/aarch64-linux-gnu \
   -Dvulkan-drivers=imagination -Dimagination-srv=false \
-  -Dgallium-drivers=zink,softpipe -Dplatforms=wayland \
+  -Dmesa-clc=system -Dprecomp-compiler=system \
+  -Dgallium-drivers=zink -Dplatforms=wayland \
   -Dglx=disabled -Degl=enabled -Dgbm=enabled -Dgles1=enabled -Dgles2=enabled \
-  -Dllvm=enabled -Dshader-cache=disabled -Dxmlconfig=disabled \
+  -Dllvm=disabled -Dshader-cache=disabled -Dxmlconfig=disabled \
   -Dzlib=disabled -Dzstd=disabled -Dvideo-codecs=[]
 DESTDIR=/out meson install -C build-shipping
 # The closed A133 stack exposed GLES1 as libGLES_CM.so.  Mesa/GLVND uses the

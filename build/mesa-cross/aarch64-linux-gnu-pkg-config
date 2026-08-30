@@ -1,0 +1,6 @@
+#!/bin/sh
+# Do not allow target dependency discovery to fall back to native .pc files.
+export PKG_CONFIG_DIR=
+export PKG_CONFIG_PATH=
+export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+exec /usr/bin/pkg-config "$@"

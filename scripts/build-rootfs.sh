@@ -591,7 +591,6 @@ if [ "${PF_GPU_MODEL}" = open ]; then
 cat > "${ROOTFS}/etc/pocketforge/display-env.sh" << 'DISPLAY_ENV_OPEN_EOF'
 # /etc/pocketforge/display-env.sh — central display/env for PocketForge apps
 # Open A133 uses Mesa's normal loader paths; no closed DDK environment.
-export MESA_LOADER_DRIVER_OVERRIDE=softpipe
 DISPLAY_ENV_OPEN_EOF
 else
 cat > "${ROOTFS}/etc/pocketforge/display-env.sh" << 'DISPLAY_ENV_EOF'
