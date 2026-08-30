@@ -43,6 +43,7 @@
 # The owned, digest-pinned build container (image/container.pin). Overridable so a dev
 # can point at a locally-built tag; CI/`pf build` pass the pinned digest.
 ARG PF_CONTAINER=pocketforge/build:10.3-2021.07-bookworm
+ARG PF_GPU_MODEL=ddk
 
 # =============================================================================
 # fetch — vendor blobs (irreducibly-closed originals), by CID (B3 / tsp-1dl.3).
@@ -207,6 +208,15 @@ cat /out/build/.pf-kernel-provenance
 KERNEL
 
 # =============================================================================
+# Select the GPU KM source before entering the build stage.  The open model's
+# powervr.ko is collected from the in-tree kernel build and therefore has no
+# dependency edge on the closed DDK named context.  Closed builds override the
+# scratch gpu-src fallback with their pinned named context.
+FROM scratch AS gpu-src
+FROM scratch AS gpu-km-source-open
+FROM gpu-src AS gpu-km-source-ddk
+FROM gpu-km-source-${PF_GPU_MODEL} AS gpu-km-source
+
 # gpu-km — GPU kernel module, built vs the SAME-tree Module.symvers (tsp-1dl.4.3).
 # COPY --from=kernel the build tree so vermagic matches (silent-load-failure gate).
 # Per-IP: a133 gpu-km-tsp (pvrsrvkm.ko+dc_sunxi.ko); a523 gpu-km-tsp-a523 (mali_kbase.ko).
@@ -229,7 +239,7 @@ ARG SOURCE_DATE_EPOCH
 COPY --from=kernel /work/kernel /work/kernel
 COPY --from=kernel /out/lib/modules /work/kernel-modules
 COPY --from=kernel /out/build/.pf-kernel-provenance /work/kernel-provenance
-COPY --from=gpu-src . /work/gpu
+COPY --from=gpu-km-source . /work/gpu
 # The GPU driver's build-options (PVR_KM_CFLAGS + the Make-level SUPPORT_* gates) are OWNED BY and
 # ship WITH the driver source at gpu-km-tsp/build/pvr-buildopts.mk, which the DDK Makefile
 # auto-resolves as search-order #1 ($(DDK_SRC)/build/pvr-buildopts.mk). We deliberately do NOT COPY
@@ -339,11 +349,10 @@ GPUKM
 # Closed profiles do not pass a gpu-um-src named context.  This empty stage is
 # the fallback; BuildKit's named-context precedence overrides it for open builds.
 FROM scratch AS gpu-um-src
-FROM ${PF_CONTAINER} AS gpu-um
+FROM ubuntu:24.04@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb AS gpu-um
 ARG PF_GPU_MODEL=ddk
 ARG PF_GPU_UM_REPO
 ARG PF_GPU_UM_SHA
-ARG PF_TOOLCHAIN_GCC_VERSION
 ARG SOURCE_DATE_EPOCH
 COPY --from=gpu-um-src . /work/gpu-um
 COPY --from=image-src build/mesa-cross/ /work/mesa-cross/
@@ -354,23 +363,30 @@ if [ "${PF_GPU_MODEL}" != open ]; then
   printf 'gpu-um NOT SHIPPED model=%s\n' "${PF_GPU_MODEL}" > /out/.pf-gpu-um-provenance
   exit 0
 fi
-: "${PF_GPU_UM_REPO:?}" "${PF_GPU_UM_SHA:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
-export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
+: "${PF_GPU_UM_REPO:?}" "${PF_GPU_UM_SHA:?}"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 
-# Lift gpu-um-tsp's proven docker/build-ge8300-mesa-cross.sh recipe: native
-# precompilers run on x86_64, while the shipping tree uses its committed AArch64
-# cross file and fail-closed pkg-config wrapper. LLVM is native-generator-only;
-# no host LLVM library is visible to or linked into the AArch64 build.
+# Lift gpu-um-tsp's proven Dockerfile.ge8300-mesa-cross toolchain verbatim:
+# provision its native LLVM 20 precompiler environment first, then restrict all
+# native repositories to amd64 before adding the ARM64 target repository.
+sed -i '/rm -f/d' /work/gpu-um/scripts/install-mesa-buildenv.sh
+/work/gpu-um/scripts/install-mesa-buildenv.sh
+sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+sed -i 's/^deb \[/deb [arch=amd64 /' /etc/apt/sources.list.d/llvm-20.list
+printf '%s\n' \
+  'Types: deb' \
+  'URIs: http://ports.ubuntu.com/ubuntu-ports' \
+  'Suites: noble noble-updates noble-backports noble-security' \
+  'Components: main universe restricted multiverse' \
+  'Architectures: arm64' \
+  'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+  >/etc/apt/sources.list.d/ubuntu-arm64.sources
 dpkg --add-architecture arm64
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  meson ninja-build ccache build-essential file gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-  binutils-aarch64-linux-gnu python3-mako python3-yaml python3-ply pkg-config \
-  llvm-20-dev clang-20 libclang-20-dev libclc-20-dev libclc-20 \
-  libllvmspirvlib-20-dev spirv-tools glslang-tools \
-  libc6-dev:arm64 libdrm-dev:arm64 libexpat1-dev:arm64 libglvnd-dev:arm64 \
-  libwayland-dev:arm64 wayland-protocols
+  bison flex ccache file gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+  libc6-dev:arm64 libdrm-dev:arm64 libexpat1-dev:arm64 \
+  libwayland-dev:arm64 libwayland-egl-backend-dev:arm64 wayland-protocols
 install -m0755 /work/mesa-cross/aarch64-linux-gnu-pkg-config \
   /work/mesa-cross/x86_64-linux-gnu-pkg-config /usr/local/bin/
 install -m0644 /work/mesa-cross/ge8300-aarch64.ini \
@@ -403,7 +419,7 @@ meson setup build-shipping --wrap-mode=nodownload \
   -Dvulkan-drivers=imagination -Dimagination-srv=false \
   -Dmesa-clc=system -Dprecomp-compiler=system \
   -Dgallium-drivers=zink -Dplatforms=wayland \
-  -Dglx=disabled -Degl=enabled -Dgbm=enabled -Dgles1=enabled -Dgles2=enabled \
+  -Dglx=disabled -Dglvnd=disabled -Degl=enabled -Dgbm=enabled -Dgles1=enabled -Dgles2=enabled \
   -Dllvm=disabled -Dshader-cache=disabled -Dxmlconfig=disabled \
   -Dzlib=disabled -Dzstd=disabled -Dvideo-codecs=[]
 DESTDIR=/out meson install -C build-shipping
