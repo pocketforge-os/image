@@ -51,6 +51,18 @@ done
 [ -n "$OUT" ] || { echo "FATAL: --out <path> is required" >&2; exit 2; }
 "${CROSS}readelf" -h "$MENU_BIN" 2>/dev/null | grep -q AArch64 \
   || { echo "FATAL: --menu-bin is not an AArch64 ELF ($MENU_BIN)" >&2; exit 2; }
+# Reject a dynamically-linked menu binary the same way busybox is checked below: this
+# minimal initramfs ships NO dynamic loader or shared libs, so a dynamic binary would
+# pass this ELF check, get copied in, and then fail to exec at boot with no useful
+# diagnostic (ELF interpreter not found) -- fail loudly here instead.
+if "${CROSS}readelf" -d "$MENU_BIN" 2>/dev/null | grep -q NEEDED; then
+  echo "FATAL: --menu-bin has DT_NEEDED entries (dynamically linked, not static): $MENU_BIN" >&2
+  exit 2
+fi
+if "${CROSS}readelf" -l "$MENU_BIN" 2>/dev/null | grep -q "^ *INTERP\b"; then
+  echo "FATAL: --menu-bin has a PT_INTERP segment (dynamically linked, not static): $MENU_BIN" >&2
+  exit 2
+fi
 
 WORK="${WORK:-$(mktemp -d /tmp/qemu-a133-initramfs.XXXXXX)}"
 mkdir -p "$WORK"
