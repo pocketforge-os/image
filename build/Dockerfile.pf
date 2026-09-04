@@ -1101,6 +1101,7 @@ ROOTFS
 FROM rootfs AS assemble
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
+ARG PF_GPU_MODEL=ddk
 ARG PF_KERNEL_DTB
 ARG PF_IMAGE_NAME
 ARG PF_IMAGE_ASSEMBLER
@@ -1229,6 +1230,7 @@ case "${PF_BOOT_PROTO}" in
     cp /work/rootfs/userdata.ext4           /out/userdata.ext4
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs OUT_DIR=/out \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
+      PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned \
         --boot-chain owned-spl --uboot-spl "${UBOOT_SPL}"
@@ -1245,6 +1247,7 @@ case "${PF_BOOT_PROTO}" in
     cp /work/rootfs/userdata.ext4           /out/userdata.ext4
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs OUT_DIR=/out \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
+      PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned
     ;;
