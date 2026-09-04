@@ -1,0 +1,9 @@
+# rootfs-packages-mainline.txt — mainline-6.x A133 conformance packages
+#
+# Layered on top of the shared package list only when PF_GPU_MODEL=open selects
+# the mainline A133 rootfs.  Keep the shipping (closed-DDK) rootfs unchanged.
+# wpa_supplicant is already supplied by the shared list and replaced with the
+# pinned, source-built PocketForge binary during rootfs customization.
+
+cpufrequtils
+iperf3
