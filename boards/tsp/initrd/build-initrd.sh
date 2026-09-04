@@ -204,8 +204,12 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     # from the shipped open-model /init. The ddk copy remains byte-for-byte the
     # tracked source file.
     sed -i \
-        -e '/^log "STAGE: insmod pvrsrvkm"$/,/^insmod \/lib\/modules\/dc_sunxi\.ko /d' \
-        -e '/pvrsrvkm\|dc_sunxi/d' \
+        -e '/^# Load order: vb2 (DMA buffers) -> pvrsrvkm (GPU KMD) -> dc_sunxi (DC bridge)\.$/d' \
+        -e '/^log "STAGE: insmod pvrsrvkm"$/d' \
+        -e '/^insmod \/lib\/modules\/pvrsrvkm\.ko || fail "insmod pvrsrvkm failed (rc=\$?)"$/d' \
+        -e '/^log "STAGE: insmod dc_sunxi"$/d' \
+        -e '/^insmod \/lib\/modules\/dc_sunxi\.ko || fail "insmod dc_sunxi failed (rc=\$?)"$/d' \
+        -e '/^# racing enumeration (the original rootfs mount below only wins that race because$/,/^# the GPU insmods burn enough time first)\.$/c\    # racing enumeration.' \
         "${STAGING}/init"
 fi
 
