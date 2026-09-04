@@ -392,19 +392,15 @@ install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/sdd_xr829.bin" "${ROOTFS}/
 echo "[customize] Firmware: $(ls "${ROOTFS}/lib/firmware/" | wc -l) files"
 
 # --- libSDL3 install ---------------------------------------------------------
-# Closed-DDK model only (tsp-mc9m.41.924.2 / B4 review fix): the sdl stage's
-# PF_GPU_MODEL gate (B3) DEFERS the open-Mesa sunxifb link to step C, so no .so
-# exists yet for PF_GPU_MODEL=open — an unconditional `install` with an empty
-# LIBSDL3_SRC would FATAL under `set -e`.
-if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
-    echo "[customize] Installing libSDL3-pocketforge..."
-    install -d "${ROOTFS}/opt/pocketforge/lib"
-    # Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
-    LIBSDL3_SRC="$(find /work/libsdl3 -name 'libSDL3-pocketforge.so*' -type f | head -1)"
-    install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketforge.so.0"
-else
-    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — libSDL3-pocketforge install skipped (open Mesa link lands in step C)"
-fi
+# The sdl stage builds a real sunxifb .so for BOTH GPU models now (tsp-mc9m.41.924.6 /
+# C3/C4 review fix — closed-DDK-only was a review finding: this install stayed gated
+# after C3 wired the open-Mesa link, so the a133-open FINAL rootfs never got the .so
+# C3 had already built), so this install no longer branches on PF_GPU_MODEL.
+echo "[customize] Installing libSDL3-pocketforge..."
+install -d "${ROOTFS}/opt/pocketforge/lib"
+# Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
+LIBSDL3_SRC="$(find /work/libsdl3 -name 'libSDL3-pocketforge.so*' -type f | head -1)"
+install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketforge.so.0"
 
 # SDL test binaries (bd tsp-tyt) — dev variant only; present only when the sdl
 # stage built them (a133/sunxifb). Lets the sunxifb functional gate
