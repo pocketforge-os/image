@@ -180,6 +180,18 @@ fi
 if [ "${PF_GPU_MODEL}" = "ddk" ]; then
     [ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
     [ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
+
+    KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
+    # WiFi modules: the closed 4.9 kernel-tsp builds xr829_* (not xradio_*).
+    KERNEL_WIFI_MAC="$(find "${KERNEL_TSP_DIR}" -name 'xr829_mac.ko' -type f | head -1)"
+    KERNEL_WIFI_CORE="$(find "${KERNEL_TSP_DIR}" -name 'xr829_core.ko' -type f | head -1)"
+    KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
+    # All three are required: the closed install loop below FATALs on any missing one and
+    # modules-load.d/pocketforge-wifi.conf loads the full triplet at boot. Spot-check
+    # all three here so a broken kernel-tsp wifi build fails fast, before mmdebstrap.
+    [ -n "${KERNEL_WIFI_MAC}" ] && [ -n "${KERNEL_WIFI_CORE}" ] && [ -n "${KERNEL_WIFI_WLAN}" ] \
+        || { echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2; exit 1; }
 else
     # Open GPU model (tsp-mc9m.41.924.6 / C2/C4): the open KM is IN-TREE in kernel-sunxi-6.x
     # (devices/a133-open/profile.toml km_model="in-tree-6.x"), so powervr.ko comes from the
@@ -187,19 +199,16 @@ else
     # DEFERS entirely for the open model (no DDK repo to build against). Spot-check it here.
     KERNEL_POWERVR="$(find "${KERNEL_TSP_DIR}" -name 'powervr.ko' -type f | head -1)"
     [ -n "${KERNEL_POWERVR}" ] || { echo "FATAL: powervr.ko not found in kernel-tsp (kernel-sunxi-6.x in-tree KM build)" >&2; exit 1; }
+    KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp (open model)" >&2; exit 1; }
+    # kernel-sunxi-6.x builds the upstream-shaped XR829 driver as one xradio.ko,
+    # unlike the closed 4.9 tree's xr829_mac/core/wlan triplet.
+    KERNEL_WIFI="$(find "${KERNEL_TSP_DIR}" -name 'xradio.ko' -type f | head -1)"
+    [ -n "${KERNEL_WIFI}" ] || { echo "FATAL: xradio.ko not found in kernel-tsp (open model)" >&2; exit 1; }
+    KERNEL_RELEASE_DIR="$(find "${KERNEL_TSP_DIR}" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    [ -n "${KERNEL_RELEASE_DIR}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
     echo "  powervr.ko (in-tree, kernel-tsp): ${KERNEL_POWERVR}"
 fi
-KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
-[ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
-# WiFi modules: kernel-tsp builds xr829_* (not xradio_*)
-KERNEL_WIFI_MAC="$(find "${KERNEL_TSP_DIR}" -name 'xr829_mac.ko' -type f | head -1)"
-KERNEL_WIFI_CORE="$(find "${KERNEL_TSP_DIR}" -name 'xr829_core.ko' -type f | head -1)"
-KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
-# All three are required: the install loop below FATALs on any missing one and
-# modules-load.d/pocketforge-wifi.conf loads the full triplet at boot. Spot-check
-# all three here so a broken kernel-tsp wifi build fails fast, before mmdebstrap.
-[ -n "${KERNEL_WIFI_MAC}" ] && [ -n "${KERNEL_WIFI_CORE}" ] && [ -n "${KERNEL_WIFI_WLAN}" ] \
-    || { echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2; exit 1; }
 # WiFi firmware still from blobs (same firmware regardless of module name)
 [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
 echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
@@ -348,13 +357,11 @@ echo "[customize] Installing kernel modules..."
 # the pre-existing hardcoded "4.9.191" (unchanged — that is the closed kernel's own
 # release string, and D's handoff item 2 owns generalizing this hardcode broadly).
 # Open GPU model (tsp-mc9m.41.924.6 / C4 review round 2): derive the REAL
-# kernel-sunxi-6.x release so the WHOLE module tree below — powervr.ko AND the
-# shared VB2/WiFi modules — lands COHERENTLY in ONE correctly-versioned dir, instead
+# kernel-sunxi-6.x release so the WHOLE module tree below — powervr.ko AND its
+# in-tree dependencies — lands COHERENTLY in ONE correctly-versioned dir, instead
 # of splitting across a bogus "4.9.191" dir (nothing on a 6.x kernel ever looks
 # there) and a separate correctly-versioned dir holding only powervr.ko. This fixes
-# WHERE the install lands, not WHETHER kernel-sunxi-6.x actually produces
-# videobuf2-dma-contig.ko/xr829_*.ko under those names — that spot-check/build gap is
-# separately tracked (tsp-mc9m.41.924.8), out of C4's scope.
+# The model-specific spot-check above verifies the open tree's actual module names.
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     KREL="4.9.191"
 else
@@ -366,31 +373,46 @@ install -d "${ROOTFS}/lib/modules/${KREL}"
 # Owned substrate: GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
 echo "[customize] Installing kernel + GPU modules (kernel-tsp + gpu-km-tsp) at lib/modules/${KREL}"
 
-# GPU modules. Closed-DDK filenames (pvrsrvkm.ko/dc_sunxi.ko) vs the open in-tree
-# powervr.ko (tsp-mc9m.41.924.6 / C2) — gated on PF_GPU_MODEL, same KREL dir either way.
+# Closed a133 keeps its hand-picked out-of-tree DDK modules plus the existing in-tree
+# VB2/XR829 set. Open a133 copies the complete kernel modules_install release tree so
+# powervr.ko's in-tree modular dependencies remain available.
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/${KREL}/"
     install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/${KREL}/"
+
+    # DMA buffer plumbing from kernel-tsp build tree
+    VB2_KO="$(find /work/kernel-tsp -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    install -m 0644 "${VB2_KO}" "${ROOTFS}/lib/modules/${KREL}/"
+
+    # WiFi driver triplet: kernel-tsp builds xr829_* (vendor used xradio_*)
+    # Module aliases (xradio_core -> xr829_core etc) make modprobe transparent.
+    for mod in xr829_mac xr829_core xr829_wlan; do
+        MOD_KO="$(find /work/kernel-tsp -name "${mod}.ko" -type f | head -1)"
+        [ -n "${MOD_KO}" ] || { echo "FATAL: ${mod}.ko not found in kernel-tsp" >&2; exit 1; }
+        install -m 0644 "${MOD_KO}" "${ROOTFS}/lib/modules/${KREL}/"
+    done
+
+    chroot "$ROOTFS" depmod "${KREL}"
+    echo "[customize] Modules installed: $(ls "${ROOTFS}/lib/modules/${KREL}/"*.ko | wc -l) .ko files"
 else
-    POWERVR_KO="$(find /work/kernel-tsp -name 'powervr.ko' -type f | head -1)"
-    [ -n "${POWERVR_KO}" ] || { echo "FATAL: powervr.ko not found in kernel-tsp (open model)" >&2; exit 1; }
-    install -m 0644 "${POWERVR_KO}" "${ROOTFS}/lib/modules/${KREL}/"
+    cp -a "/work/kernel-tsp/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
+
+    DEPMOD_STDERR="$(mktemp)"
+    if ! chroot "$ROOTFS" depmod "${KREL}" 2>"${DEPMOD_STDERR}"; then
+        cat "${DEPMOD_STDERR}" >&2
+        echo "FATAL: depmod ${KREL} failed for open kernel modules tree" >&2
+        rm -f "${DEPMOD_STDERR}"
+        exit 1
+    fi
+    cat "${DEPMOD_STDERR}" >&2
+    if grep -Eiq 'warning|needs unknown symbol|not found' "${DEPMOD_STDERR}"; then
+        echo "FATAL: depmod ${KREL} reported an unresolved dependency warning" >&2
+        rm -f "${DEPMOD_STDERR}"
+        exit 1
+    fi
+    rm -f "${DEPMOD_STDERR}"
+    echo "[customize] Modules installed: $(find "${ROOTFS}/lib/modules/${KREL}" -name '*.ko' -type f | wc -l) .ko files"
 fi
-
-# DMA buffer plumbing from kernel-tsp build tree
-VB2_KO="$(find /work/kernel-tsp -name 'videobuf2-dma-contig.ko' -type f | head -1)"
-install -m 0644 "${VB2_KO}" "${ROOTFS}/lib/modules/${KREL}/"
-
-# WiFi driver triplet: kernel-tsp builds xr829_* (vendor used xradio_*)
-# Module aliases (xradio_core -> xr829_core etc) make modprobe transparent.
-for mod in xr829_mac xr829_core xr829_wlan; do
-    MOD_KO="$(find /work/kernel-tsp -name "${mod}.ko" -type f | head -1)"
-    [ -n "${MOD_KO}" ] || { echo "FATAL: ${mod}.ko not found in kernel-tsp" >&2; exit 1; }
-    install -m 0644 "${MOD_KO}" "${ROOTFS}/lib/modules/${KREL}/"
-done
-
-chroot "$ROOTFS" depmod "${KREL}"
-echo "[customize] Modules installed: $(ls "${ROOTFS}/lib/modules/${KREL}/"*.ko | wc -l) .ko files"
 
 # Verify depmod produced output
 if [ ! -s "${ROOTFS}/lib/modules/${KREL}/modules.dep" ]; then
