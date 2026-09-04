@@ -214,6 +214,7 @@ KERNEL
 FROM ${PF_CONTAINER} AS gpu-km
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
+ARG PF_GPU_MODEL
 ARG PF_GPU_SHA
 ARG PF_GPU_MODULES
 ARG PF_TOOLCHAIN_GCC_VERSION
@@ -235,6 +236,21 @@ COPY --from=gpu-src . /work/gpu
 # gate → dc_sunxi MODPOST undefined symbols). Single source of truth lives with the driver (tsp-1dl.4.3).
 RUN <<'GPUKM'
 set -eux
+mkdir -p /out/modules
+# Device gate (tsp-mc9m.41.924.2 / B4 review fix): this stage builds the CLOSED
+# out-of-tree DDK KM against PF_GPU_REPO — meaningless for the open model, whose KM is
+# in-tree in kernel-sunxi-6.x (km_model="in-tree-6.x" per devices/a133-open/profile.toml)
+# and needs a different consumer entirely (that wiring is step C/D's job — the
+# rootfs stage's `COPY --from=gpu-km` is unconditional, so this stage must not hard-fail
+# on PF_GPU_REPO="" the same way wpa/runtime/launcher/sdl/rootfs no longer do). Emit a
+# DEFERRED marker + empty /out/modules (mirrors the bootchain stage's NOT-SHIPPED
+# pattern) rather than the closed recipe's `: "${PF_GPU_REPO:?}"` hard-fail.
+if [ "${PF_GPU_MODEL}" != "ddk" ]; then
+  printf 'gpu-km DEFERRED for device=%s (gpu_model=%s; in-tree open KM consumption lands in step C/D)\n' \
+    "${PF_DEVICE_ID}" "${PF_GPU_MODEL}" > /out/modules/.pf-gpu-provenance
+  cat /out/modules/.pf-gpu-provenance
+  exit 0
+fi
 : "${PF_GPU_REPO:?}" "${PF_GPU_MODULES:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
 export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
 export ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu-
