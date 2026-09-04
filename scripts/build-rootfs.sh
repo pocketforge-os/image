@@ -37,6 +37,9 @@ BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 # see the tsp-mc9m.41.924.2 bead comment for the full handoff list).
 PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
+# The C1 open-Mesa install tree (tsp-mc9m.41.924.6 / C4): its own /usr/local/{include,lib}
+# meson DESTDIR install — only meaningful (non-marker-only) for PF_GPU_MODEL=open.
+GPU_UM_MESA_DIR="${GPU_UM_MESA_DIR:-/work/gpu-um-mesa}"
 WPA_DIR="${WPA_DIR:-/work/wpa}"
 RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-decode) from the runtime stage (tsp-e1b.11)
 LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
@@ -159,19 +162,32 @@ if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
     done
 else
-    echo "  closed PowerVR DDK blobs: PF_GPU_MODEL=${PF_GPU_MODEL} — spot-check skipped (open Mesa link lands in step C)"
+    # Open GPU model (tsp-mc9m.41.924.6 / C4): verify the C1 gpu-um-mesa stage produced a
+    # REAL install tree, not just its NOT-SHIPPED-for-ddk marker (which would mean the
+    # Dockerfile's PF_GPU_MODEL/gpu-um-mesa-${PF_GPU_MODEL} selector picked the wrong stage).
+    for f in \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libEGL.so" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libGLESv2.so" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libgbm.so" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/gbm/dri_gbm.so"; do
+        [ -f "$f" ] || { echo "FATAL: open Mesa userspace not found: $f (gpu-um-mesa stage did not build for gpu_model=open?)" >&2; exit 1; }
+    done
+    echo "  open Mesa GLES/EGL/GBM userspace: ${GPU_UM_MESA_DIR}/usr/local (spot-check passed)"
 fi
 
 # GPU modules from gpu-km-tsp, kernel modules from kernel-tsp. The closed-KM file names
-# (pvrsrvkm.ko/dc_sunxi.ko) are DDK-model-specific — a133-open's gpu-km stage produces
-# powervr.ko instead (see devices/a133-open/profile.toml [gpu].modules), so this spot-
-# check is gated on PF_GPU_MODEL. The open module's actual install is step D's job (not
-# added here) — for "open" this sub-step is a documented no-op, not a substitute install.
+# (pvrsrvkm.ko/dc_sunxi.ko) are DDK-model-specific — gated on PF_GPU_MODEL.
 if [ "${PF_GPU_MODEL}" = "ddk" ]; then
     [ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
     [ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
 else
-    echo "  gpu-km-tsp: PF_GPU_MODEL=${PF_GPU_MODEL} — closed pvrsrvkm.ko/dc_sunxi.ko spot-check skipped (open module install lands in step D)"
+    # Open GPU model (tsp-mc9m.41.924.6 / C2/C4): the open KM is IN-TREE in kernel-sunxi-6.x
+    # (devices/a133-open/profile.toml km_model="in-tree-6.x"), so powervr.ko comes from the
+    # KERNEL stage's own modules_install output (KERNEL_TSP_DIR) — NOT gpu-km-tsp, which
+    # DEFERS entirely for the open model (no DDK repo to build against). Spot-check it here.
+    KERNEL_POWERVR="$(find "${KERNEL_TSP_DIR}" -name 'powervr.ko' -type f | head -1)"
+    [ -n "${KERNEL_POWERVR}" ] || { echo "FATAL: powervr.ko not found in kernel-tsp (kernel-sunxi-6.x in-tree KM build)" >&2; exit 1; }
+    echo "  powervr.ko (in-tree, kernel-tsp): ${KERNEL_POWERVR}"
 fi
 KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
 [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
@@ -188,17 +204,13 @@ KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | hea
 [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
 echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
 
-# Verify libSDL3 artifact exists (closed-DDK model only — the sdl stage's PF_GPU_MODEL
-# gate, tsp-mc9m.41.924.2 / B3, DEFERS the open-Mesa sunxifb link to step C, so no .so
-# exists yet for PF_GPU_MODEL=open; the customize hook's libSDL3-install block below is
-# gated the same way, below.)
-if [ "${PF_GPU_MODEL}" = "ddk" ]; then
-    LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
-    [ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
-    echo "  libsdl3: ${LIBSDL3_SO}"
-else
-    echo "  libsdl3: PF_GPU_MODEL=${PF_GPU_MODEL} — sunxifb .so not built yet (open Mesa link lands in step C), skipping"
-fi
+# Verify libSDL3 artifact exists. The sdl stage builds a real sunxifb .so for BOTH
+# GPU models now (tsp-mc9m.41.924.6 / C3 wires the open-Mesa link that used to leave a
+# DEFERRED marker here for PF_GPU_MODEL=open — B3/tsp-mc9m.41.924.2), so this check no
+# longer needs to branch on PF_GPU_MODEL.
+LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
+[ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
+echo "  libsdl3: ${LIBSDL3_SO}"
 
 # Verify the owned wpa_supplicant artifact exists (wpa stage output; tsp-myp1.8.2).
 # The a133 wlan supplicant is the owned wpa-supplicant-tsp fork — a missing
@@ -243,12 +255,10 @@ chroot "$ROOTFS" usermod -aG audio,input,video,render,plugdev gamer
 chroot "$ROOTFS" passwd -l gamer
 echo "[customize] gamer user created: $(chroot "$ROOTFS" id gamer)"
 
-# --- PowerVR DDK userspace install ------------------------------------------
-# Closed-DDK model only (tsp-mc9m.41.924.2 / B4 review fix): a133-open's blob groups
-# carry NO closed GPU blob group at all (devices/a133-open/profile.toml), so this whole
-# block would FATAL for PF_GPU_MODEL=open. The open-Mesa userspace install is step C/D's
-# job — this bead only makes the dispatch EXECUTABLE (reach a DEFERRED marker), not
-# complete for the open model.
+# --- GPU userspace install ---------------------------------------------------
+# Closed PowerVR DDK (blob group) or open Mesa (tsp-mc9m.41.924.6 / C4), gated on
+# PF_GPU_MODEL. a133-open's blob groups carry NO closed GPU blob group at all
+# (devices/a133-open/profile.toml), so the ddk branch below would FATAL for it.
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     echo "[customize] Installing PowerVR DDK userspace..."
     install -d "${ROOTFS}/usr/lib/pvr-rogue"
@@ -283,7 +293,27 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     fi
     echo "[customize] PowerVR DDK: SONAME symlinks verified (libEGL.so.1 exists)"
 else
-    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — closed PowerVR DDK userspace install skipped (open Mesa install lands in step C/D)"
+    # Open Mesa GLES/EGL/GBM userspace (tsp-mc9m.41.924.6 / C4): install the C1
+    # gpu-um-mesa stage's FULL meson DESTDIR tree verbatim at the SAME prefix it was
+    # built for (/usr/local) — the Zink DRI driver, gbm backend loader, and Vulkan ICD
+    # all resolve each other via paths baked in at build time relative to that prefix
+    # (e.g. GBM's dlopen of lib/gbm/dri_gbm.so), so preserving the prefix identity is
+    # what keeps those baked-in paths valid post-install; translating the tree onto a
+    # different prefix would need re-deriving every one of those compiled-in paths.
+    echo "[customize] Installing open Mesa GLES/EGL/GBM userspace (Zink, GE8300)..."
+    install -d "${ROOTFS}/usr/local"
+    cp -a /work/gpu-um-mesa/usr/local/. "${ROOTFS}/usr/local/"
+    printf '/usr/local/lib\n' > "${ROOTFS}/etc/ld.so.conf.d/00-mesa-powervr.conf"
+    chroot "$ROOTFS" ldconfig
+    echo "[customize] open Mesa: ldconfig done"
+    if [ ! -L "${ROOTFS}/usr/local/lib/libEGL.so.1" ] && [ ! -f "${ROOTFS}/usr/local/lib/libEGL.so.1" ]; then
+        echo "FATAL: libEGL.so.1 missing from ${ROOTFS}/usr/local/lib after install" >&2
+        exit 1
+    fi
+    if [ -f /work/gpu-um-mesa/.pf-gpu-um-provenance ]; then
+        install -D -m 0644 /work/gpu-um-mesa/.pf-gpu-um-provenance "${ROOTFS}/usr/share/pocketforge/gpu-um-mesa-provenance"
+    fi
+    echo "[customize] open Mesa: userspace install verified (libEGL.so.1 present)"
 fi
 
 # --- Kernel modules install --------------------------------------------------
@@ -294,14 +324,29 @@ install -d "${ROOTFS}/lib/modules/4.9.191"
 echo "[customize] Installing kernel + GPU modules (kernel-tsp + gpu-km-tsp)"
 
 # GPU modules from gpu-km-tsp. Closed-DDK filenames only (tsp-mc9m.41.924.2 / B4) — the
-# open-model install (powervr.ko, at whatever kernel release the open kernel-sunxi-6.x
-# build produces, NOT the 4.9.191 hardcode below) is step D's job; left un-added here per
-# the bead's explicit scope so this bead does not invent that recipe.
+# 4.9.191 modules-dir hardcode above is the CLOSED a133 kernel's own release string and
+# stays D's job to generalize (B's step-D handoff item 2). Left untouched here.
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
     install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
 else
-    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — closed GPU module install skipped (open module install lands in step D)"
+    # Open GPU model (tsp-mc9m.41.924.6 / C2/C4): powervr.ko is IN-TREE in kernel-sunxi-6.x,
+    # which produces a DIFFERENT release string than the closed 4.9.191 kernel — so it goes
+    # into its OWN correctly-named modules dir (mirroring the a523 branch's existing
+    # krel_a523 pattern in this same script's rootfs-stage caller), not the 4.9.191 dir
+    # above. This is additive only: it does not touch the closed-a133 install/depmod above,
+    # and does not attempt the broader kernel-modules-dir generalization D's handoff owns
+    # (the VB2/WiFi triplet install right below this block is unconditional 4.9.191-only
+    # legacy code, unrelated to GPU wiring — left as-is; see the bead comment for the
+    # kernel-sunxi-6.x module-name-parity gap it likely hits on a full a133-open build).
+    krel_open="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
+    [ -n "${krel_open}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
+    POWERVR_KO="$(find /work/kernel-tsp -name 'powervr.ko' -type f | head -1)"
+    [ -n "${POWERVR_KO}" ] || { echo "FATAL: powervr.ko not found in kernel-tsp (open model)" >&2; exit 1; }
+    install -d "${ROOTFS}/lib/modules/${krel_open}"
+    install -m 0644 "${POWERVR_KO}" "${ROOTFS}/lib/modules/${krel_open}/"
+    chroot "$ROOTFS" depmod "${krel_open}"
+    echo "[customize] open GPU module: powervr.ko installed + depmod'd at lib/modules/${krel_open}"
 fi
 
 # DMA buffer plumbing from kernel-tsp build tree
