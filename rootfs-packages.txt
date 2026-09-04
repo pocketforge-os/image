@@ -45,7 +45,6 @@ libsm6
 libsodium23
 libstdc++6
 libudev1
-libvulkan1
 libwayland-client0
 libwayland-egl1
 libx11-6

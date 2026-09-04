@@ -124,6 +124,14 @@ if [ "${VARIANT}" = "dev" ] && [ -f "${PKG_DEV_FILE}" ]; then
     echo "  variant=dev: added dev-only packages (${DEV_PKGS})"
 fi
 
+# Zink needs the Khronos Vulkan loader, but the open GPU model is opt-in.
+# Keep the shared package set byte-identical for closed a133 by appending the
+# loader only to the package list passed to this open-model mmdebstrap run.
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    PKG_LIST="${PKG_LIST},libvulkan1"
+    echo "  gpu_model=open: added open-GPU package (libvulkan1)"
+fi
+
 echo "  package list: ${PKG_LIST}"
 
 # ---- step 2: verify prerequisites ------------------------------------------
@@ -325,7 +333,7 @@ else
     echo "[customize] open Mesa: userspace install verified (libEGL.so.1 present)"
 
     # Zink is a Vulkan-on-GL translation layer: at runtime it needs the Khronos
-    # Vulkan LOADER (libvulkan.so.1, from rootfs-packages.txt's libvulkan1) to find
+    # Vulkan LOADER (libvulkan.so.1, from the open-only mmdebstrap package set) to find
     # and dlopen the imagination ICD via the manifest JSON above. The ICD JSON's
     # own "library_path" is an ABSOLUTE path baked in at Mesa build time
     # (meson.build: vulkan_icd_lib_path = prefix / libdir, i.e. /usr/local/lib —
@@ -344,7 +352,7 @@ else
 
     VULKAN_LOADER="$(find "${ROOTFS}/usr/lib" -name 'libvulkan.so.1*' -type f | head -1)"
     if [ -z "${VULKAN_LOADER}" ]; then
-        echo "FATAL: libvulkan.so.1 (Khronos Vulkan loader) not found in rootfs — Zink cannot dispatch to the imagination ICD. Check libvulkan1 is in rootfs-packages.txt." >&2
+        echo "FATAL: libvulkan.so.1 (Khronos Vulkan loader) not found in open-model rootfs — Zink cannot dispatch to the imagination ICD. Check the open-only libvulkan1 package append." >&2
         exit 1
     fi
     echo "[customize] open Mesa: Vulkan loader present at ${VULKAN_LOADER#"${ROOTFS}"}"
