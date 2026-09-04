@@ -318,55 +318,58 @@ fi
 
 # --- Kernel modules install --------------------------------------------------
 echo "[customize] Installing kernel modules..."
-install -d "${ROOTFS}/lib/modules/4.9.191"
+
+# KREL = the module-tree release dir EVERY module below lands in. Closed a133 keeps
+# the pre-existing hardcoded "4.9.191" (unchanged — that is the closed kernel's own
+# release string, and D's handoff item 2 owns generalizing this hardcode broadly).
+# Open GPU model (tsp-mc9m.41.924.6 / C4 review round 2): derive the REAL
+# kernel-sunxi-6.x release so the WHOLE module tree below — powervr.ko AND the
+# shared VB2/WiFi modules — lands COHERENTLY in ONE correctly-versioned dir, instead
+# of splitting across a bogus "4.9.191" dir (nothing on a 6.x kernel ever looks
+# there) and a separate correctly-versioned dir holding only powervr.ko. This fixes
+# WHERE the install lands, not WHETHER kernel-sunxi-6.x actually produces
+# videobuf2-dma-contig.ko/xr829_*.ko under those names — that spot-check/build gap is
+# separately tracked (tsp-mc9m.41.924.8), out of C4's scope.
+if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
+    KREL="4.9.191"
+else
+    KREL="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
+    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
+fi
+install -d "${ROOTFS}/lib/modules/${KREL}"
 
 # Owned substrate: GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
-echo "[customize] Installing kernel + GPU modules (kernel-tsp + gpu-km-tsp)"
+echo "[customize] Installing kernel + GPU modules (kernel-tsp + gpu-km-tsp) at lib/modules/${KREL}"
 
-# GPU modules from gpu-km-tsp. Closed-DDK filenames only (tsp-mc9m.41.924.2 / B4) — the
-# 4.9.191 modules-dir hardcode above is the CLOSED a133 kernel's own release string and
-# stays D's job to generalize (B's step-D handoff item 2). Left untouched here.
+# GPU modules. Closed-DDK filenames (pvrsrvkm.ko/dc_sunxi.ko) vs the open in-tree
+# powervr.ko (tsp-mc9m.41.924.6 / C2) — gated on PF_GPU_MODEL, same KREL dir either way.
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
-    install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
-    install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/${KREL}/"
+    install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/${KREL}/"
 else
-    # Open GPU model (tsp-mc9m.41.924.6 / C2/C4): powervr.ko is IN-TREE in kernel-sunxi-6.x,
-    # which produces a DIFFERENT release string than the closed 4.9.191 kernel — so it goes
-    # into its OWN correctly-named modules dir (mirroring the a523 branch's existing
-    # krel_a523 pattern in this same script's rootfs-stage caller), not the 4.9.191 dir
-    # above. This is additive only: it does not touch the closed-a133 install/depmod above,
-    # and does not attempt the broader kernel-modules-dir generalization D's handoff owns
-    # (the VB2/WiFi triplet install right below this block is unconditional 4.9.191-only
-    # legacy code, unrelated to GPU wiring — left as-is; see the bead comment for the
-    # kernel-sunxi-6.x module-name-parity gap it likely hits on a full a133-open build).
-    krel_open="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
-    [ -n "${krel_open}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
     POWERVR_KO="$(find /work/kernel-tsp -name 'powervr.ko' -type f | head -1)"
     [ -n "${POWERVR_KO}" ] || { echo "FATAL: powervr.ko not found in kernel-tsp (open model)" >&2; exit 1; }
-    install -d "${ROOTFS}/lib/modules/${krel_open}"
-    install -m 0644 "${POWERVR_KO}" "${ROOTFS}/lib/modules/${krel_open}/"
-    chroot "$ROOTFS" depmod "${krel_open}"
-    echo "[customize] open GPU module: powervr.ko installed + depmod'd at lib/modules/${krel_open}"
+    install -m 0644 "${POWERVR_KO}" "${ROOTFS}/lib/modules/${KREL}/"
 fi
 
 # DMA buffer plumbing from kernel-tsp build tree
 VB2_KO="$(find /work/kernel-tsp -name 'videobuf2-dma-contig.ko' -type f | head -1)"
-install -m 0644 "${VB2_KO}" "${ROOTFS}/lib/modules/4.9.191/"
+install -m 0644 "${VB2_KO}" "${ROOTFS}/lib/modules/${KREL}/"
 
 # WiFi driver triplet: kernel-tsp builds xr829_* (vendor used xradio_*)
 # Module aliases (xradio_core -> xr829_core etc) make modprobe transparent.
 for mod in xr829_mac xr829_core xr829_wlan; do
     MOD_KO="$(find /work/kernel-tsp -name "${mod}.ko" -type f | head -1)"
     [ -n "${MOD_KO}" ] || { echo "FATAL: ${mod}.ko not found in kernel-tsp" >&2; exit 1; }
-    install -m 0644 "${MOD_KO}" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "${MOD_KO}" "${ROOTFS}/lib/modules/${KREL}/"
 done
 
-chroot "$ROOTFS" depmod 4.9.191
-echo "[customize] Modules installed: $(ls "${ROOTFS}/lib/modules/4.9.191/"*.ko | wc -l) .ko files"
+chroot "$ROOTFS" depmod "${KREL}"
+echo "[customize] Modules installed: $(ls "${ROOTFS}/lib/modules/${KREL}/"*.ko | wc -l) .ko files"
 
 # Verify depmod produced output
-if [ ! -s "${ROOTFS}/lib/modules/4.9.191/modules.dep" ]; then
-    echo "FATAL: depmod 4.9.191 produced empty modules.dep" >&2
+if [ ! -s "${ROOTFS}/lib/modules/${KREL}/modules.dep" ]; then
+    echo "FATAL: depmod ${KREL} produced empty modules.dep" >&2
     exit 1
 fi
 
