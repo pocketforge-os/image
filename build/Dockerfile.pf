@@ -701,7 +701,8 @@ RUNTIME
 # image-owned executable is deliberately only an fbdev/persistence adapter; all
 # customer state, copy, and rendering remain in the pinned recovery crate.
 # ======================================================================
-FROM rust:1.83-slim-bookworm@sha256:540c902e99c384163b688bbd8b5b8520e94e7731b27f7bd0eaa56ae1960627ab AS recovery
+# recovery@7044d49 uses slice::as_chunks_mut, stabilized in Rust 1.88.
+FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS recovery
 ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
 ARG SOURCE_DATE_EPOCH
 COPY --from=image-src . /work/image
