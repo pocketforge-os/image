@@ -40,6 +40,7 @@ OUT_FILE="${OUT_FILE:-/work/out/initrd.gz}"
 KERNEL_TSP_DIR=""
 GPU_KM_DIR=""
 VARIANT="dev"
+PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -50,9 +51,15 @@ while [ $# -gt 0 ]; do
         --variant)         VARIANT="$2"; shift 2 ;;
         --kernel-tsp-dir)  KERNEL_TSP_DIR="$2"; shift 2 ;;
         --gpu-km-dir)      GPU_KM_DIR="$2"; shift 2 ;;
+        --gpu-model)       PF_GPU_MODEL="$2"; shift 2 ;;
         *) echo "build-initrd.sh: unknown arg: $1" >&2; exit 2 ;;
     esac
 done
+
+case "${PF_GPU_MODEL}" in
+    ddk|open) ;;
+    *) echo "build-initrd.sh: --gpu-model must be ddk|open (got '${PF_GPU_MODEL}')" >&2; exit 2 ;;
+esac
 
 # Determine substrate mode from args
 SUBSTRATE="vendor"
@@ -65,21 +72,30 @@ INITRD_SRC="${SRC_DIR}/boards/tsp/initrd"
 
 if [ "$SUBSTRATE" = "owned" ]; then
     # Phase 2: modules from kernel-tsp + gpu-km-tsp builds
-    echo "  substrate: owned (kernel-tsp + gpu-km-tsp)"
+    echo "  substrate: owned (kernel-tsp, gpu model: ${PF_GPU_MODEL})"
 
-    # videobuf2-dma-contig from kernel-tsp build tree
-    KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    # videobuf2-dma-contig from kernel-tsp. The open model receives the
+    # modules_install tree, so resolve its single kernel-release directory.
+    if [ "${PF_GPU_MODEL}" = "open" ]; then
+        KERNEL_MODULES_ROOT="${KERNEL_TSP_DIR}/lib/modules"
+        KERNEL_RELEASE_DIR="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d | head -1)"
+        [ -n "${KERNEL_RELEASE_DIR}" ] || { echo "FATAL: no kernel release dir under ${KERNEL_MODULES_ROOT}" >&2; exit 1; }
+        KERNEL_VB2="$(find "${KERNEL_RELEASE_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    else
+        KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    fi
     [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp build tree" >&2; exit 1; }
 
-    # GPU modules from gpu-km-tsp
-    GPU_PVRSRVKM="${GPU_KM_DIR}/pvrsrvkm.ko"
-    GPU_DC_SUNXI="${GPU_KM_DIR}/dc_sunxi.ko"
-    [ -f "${GPU_PVRSRVKM}" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_PVRSRVKM}" >&2; exit 1; }
-    [ -f "${GPU_DC_SUNXI}" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_DC_SUNXI}" >&2; exit 1; }
-
     echo "  videobuf2: ${KERNEL_VB2}"
-    echo "  pvrsrvkm:  ${GPU_PVRSRVKM}"
-    echo "  dc_sunxi:  ${GPU_DC_SUNXI}"
+    if [ "${PF_GPU_MODEL}" = "ddk" ]; then
+        # Closed GPU modules from gpu-km-tsp.
+        GPU_PVRSRVKM="${GPU_KM_DIR}/pvrsrvkm.ko"
+        GPU_DC_SUNXI="${GPU_KM_DIR}/dc_sunxi.ko"
+        [ -f "${GPU_PVRSRVKM}" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_PVRSRVKM}" >&2; exit 1; }
+        [ -f "${GPU_DC_SUNXI}" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_DC_SUNXI}" >&2; exit 1; }
+        echo "  pvrsrvkm:  ${GPU_PVRSRVKM}"
+        echo "  dc_sunxi:  ${GPU_DC_SUNXI}"
+    fi
 else
     # Phase 1: modules from vendor blobs
     echo "  substrate: vendor (blobs)"
@@ -90,7 +106,11 @@ fi
 
 # The initrd module set, in load order. NOTE: videobuf2-dma-contig.ko is
 # HYPHENATED on disk (runtime/lsmod name is underscored). Verified on blobs.
-MODULES="videobuf2-dma-contig.ko pvrsrvkm.ko dc_sunxi.ko"
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    MODULES="videobuf2-dma-contig.ko"
+else
+    MODULES="videobuf2-dma-contig.ko pvrsrvkm.ko dc_sunxi.ko"
+fi
 
 # Reproducible mtime. Prefer the image repo's head commit; fall back to a fixed
 # epoch so an out-of-git invocation is still deterministic.
@@ -178,13 +198,29 @@ fi
 
 # /init
 install -m 0755 "${INITRD_SRC}/init" "${STAGING}/init"
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    # Open GPU initialization is deferred until after switch_root. Keep vb2 for
+    # the existing early DMA-buffer plumbing, but omit the closed DDK insmods
+    # from the shipped open-model /init. The ddk copy remains byte-for-byte the
+    # tracked source file.
+    sed -i \
+        -e '/^# Load order: vb2 (DMA buffers) -> pvrsrvkm (GPU KMD) -> dc_sunxi (DC bridge)\.$/d' \
+        -e '/^log "STAGE: insmod pvrsrvkm"$/d' \
+        -e '/^insmod \/lib\/modules\/pvrsrvkm\.ko || fail "insmod pvrsrvkm failed (rc=\$?)"$/d' \
+        -e '/^log "STAGE: insmod dc_sunxi"$/d' \
+        -e '/^insmod \/lib\/modules\/dc_sunxi\.ko || fail "insmod dc_sunxi failed (rc=\$?)"$/d' \
+        -e '/^# racing enumeration (the original rootfs mount below only wins that race because$/,/^# the GPU insmods burn enough time first)\.$/c\    # racing enumeration.' \
+        "${STAGING}/init"
+fi
 
 # Module set (flat under /lib/modules to match the insmod paths in /init).
 if [ "$SUBSTRATE" = "owned" ]; then
-    # Owned substrate: videobuf2 from kernel-tsp, GPU modules from gpu-km-tsp
+    # Owned substrate: videobuf2 from kernel-tsp; closed GPU modules only for ddk.
     cp "${KERNEL_VB2}" "${STAGING}/lib/modules/videobuf2-dma-contig.ko"
-    cp "${GPU_PVRSRVKM}" "${STAGING}/lib/modules/pvrsrvkm.ko"
-    cp "${GPU_DC_SUNXI}" "${STAGING}/lib/modules/dc_sunxi.ko"
+    if [ "${PF_GPU_MODEL}" = "ddk" ]; then
+        cp "${GPU_PVRSRVKM}" "${STAGING}/lib/modules/pvrsrvkm.ko"
+        cp "${GPU_DC_SUNXI}" "${STAGING}/lib/modules/dc_sunxi.ko"
+    fi
 else
     # Vendor substrate: all modules from blobs
     for m in $MODULES; do
@@ -201,14 +237,16 @@ done
 # files pvrsrvkm registers the BVNC but fails init with err=-19 (ENODEV) and
 # dc_sunxi cascades into "No such device". Firmware is always from blobs/ (the
 # closed DDK firmware is version-locked to the UM blobs, not to the KM source).
-GPU_FW_DIR="${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware"
-mkdir -p "${STAGING}/lib/firmware"
-for fw in rgx.fw.22.102.54.38 rgx.sh.22.102.54.38; do
-    [ -f "${GPU_FW_DIR}/${fw}" ] || { echo "FATAL: GPU firmware ${fw} not found at ${GPU_FW_DIR}" >&2; exit 1; }
-    cp "${GPU_FW_DIR}/${fw}" "${STAGING}/lib/firmware/${fw}"
-    chmod 0644 "${STAGING}/lib/firmware/${fw}"
-    echo "  firmware: ${fw} ($(stat -c%s "${GPU_FW_DIR}/${fw}") bytes)"
-done
+if [ "${PF_GPU_MODEL}" = "ddk" ]; then
+    GPU_FW_DIR="${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware"
+    mkdir -p "${STAGING}/lib/firmware"
+    for fw in rgx.fw.22.102.54.38 rgx.sh.22.102.54.38; do
+        [ -f "${GPU_FW_DIR}/${fw}" ] || { echo "FATAL: GPU firmware ${fw} not found at ${GPU_FW_DIR}" >&2; exit 1; }
+        cp "${GPU_FW_DIR}/${fw}" "${STAGING}/lib/firmware/${fw}"
+        chmod 0644 "${STAGING}/lib/firmware/${fw}"
+        echo "  firmware: ${fw} ($(stat -c%s "${GPU_FW_DIR}/${fw}") bytes)"
+    done
+fi
 
 # Strip debug symbols from modules to minimize initrd size.
 # pvrsrvkm.ko: ~22 MB unstripped -> ~2 MB stripped (debug info is enormous).

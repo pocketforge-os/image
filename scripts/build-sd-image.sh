@@ -30,6 +30,7 @@ BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/${BOARD}"
 TOOLS_DIR="${SRC_DIR}/tools"
+PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 
 # Parse arguments
 M1B_MODE=0
@@ -54,6 +55,10 @@ while [ $# -gt 0 ]; do
         *) echo "build-sd-image.sh: unknown arg: $1" >&2; exit 2 ;;
     esac
 done
+case "${PF_GPU_MODEL}" in
+    ddk|open) ;;
+    *) echo "build-sd-image.sh: PF_GPU_MODEL must be ddk|open (got '${PF_GPU_MODEL}')" >&2; exit 2 ;;
+esac
 case "${BOOT_CHAIN}" in
     vendor|owned-spl) ;;
     *) echo "build-sd-image.sh: --boot-chain must be vendor|owned-spl (got '${BOOT_CHAIN}')" >&2; exit 2 ;;
@@ -69,7 +74,9 @@ KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
 GPU_KM_TSP_DIR="${GPU_KM_TSP_DIR:-/work/gpu-km-tsp}"
 
 [ -f "${KERNEL_TSP_DIR}/arch/arm64/boot/Image" ] || { echo "FATAL: kernel-tsp Image not found at ${KERNEL_TSP_DIR}/arch/arm64/boot/Image" >&2; exit 1; }
-[ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: gpu-km-tsp pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
+if [ "${PF_GPU_MODEL}" = "ddk" ]; then
+    [ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: gpu-km-tsp pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
+fi
 
 # Reproducible timestamp from git head commit
 if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
@@ -118,6 +125,7 @@ if [ "$M1B_MODE" = 1 ]; then
     INITRD_ARGS+=(--m1b-mode)
 fi
 INITRD_ARGS+=(--kernel-tsp-dir "${KERNEL_TSP_DIR}" --gpu-km-dir "${GPU_KM_TSP_DIR}")
+INITRD_ARGS+=(--gpu-model "${PF_GPU_MODEL}")
 bash "${BOARD_DIR}/initrd/build-initrd.sh" "${INITRD_ARGS[@]}"
 
 # ---- step 2: compile DTB ---------------------------------------------------
