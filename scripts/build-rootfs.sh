@@ -30,6 +30,12 @@ set -euo pipefail
 # ---- configuration ----------------------------------------------------------
 SRC_DIR="${SRC_DIR:-/work/src}"
 BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
+# GPU model discriminator (tsp-mc9m.41.924.2 / B4): "ddk" (closed PowerVR DDK, default —
+# preserves today's behavior) or "open" (a133-open's in-tree Mesa/PowerVR KM). Gates ONLY
+# the pvrsrvkm.ko/dc_sunxi.ko-vs-powervr.ko module-install sub-step below; the closed-UM
+# .so + firmware install stays UNCONDITIONAL for THIS bead (step D removes/reworks it —
+# see the tsp-mc9m.41.924.2 bead comment for the full handoff list).
+PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
 WPA_DIR="${WPA_DIR:-/work/wpa}"
 RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-decode) from the runtime stage (tsp-e1b.11)
@@ -149,9 +155,17 @@ for f in \
     [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
 done
 
-# GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
-[ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
-[ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
+# GPU modules from gpu-km-tsp, kernel modules from kernel-tsp. The closed-KM file names
+# (pvrsrvkm.ko/dc_sunxi.ko) are DDK-model-specific — a133-open's gpu-km stage produces
+# powervr.ko instead (see devices/a133-open/profile.toml [gpu].modules), so this spot-
+# check is gated on PF_GPU_MODEL. The open module's actual install is step D's job (not
+# added here) — for "open" this sub-step is a documented no-op, not a substitute install.
+if [ "${PF_GPU_MODEL}" = "ddk" ]; then
+    [ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
+    [ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
+else
+    echo "  gpu-km-tsp: PF_GPU_MODEL=${PF_GPU_MODEL} — closed pvrsrvkm.ko/dc_sunxi.ko spot-check skipped (open module install lands in step D)"
+fi
 KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
 [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
 # WiFi modules: kernel-tsp builds xr829_* (not xradio_*)
@@ -256,9 +270,16 @@ install -d "${ROOTFS}/lib/modules/4.9.191"
 # Owned substrate: GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
 echo "[customize] Installing kernel + GPU modules (kernel-tsp + gpu-km-tsp)"
 
-# GPU modules from gpu-km-tsp
-install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
-install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
+# GPU modules from gpu-km-tsp. Closed-DDK filenames only (tsp-mc9m.41.924.2 / B4) — the
+# open-model install (powervr.ko, at whatever kernel release the open kernel-sunxi-6.x
+# build produces, NOT the 4.9.191 hardcode below) is step D's job; left un-added here per
+# the bead's explicit scope so this bead does not invent that recipe.
+if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
+    install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
+else
+    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — closed GPU module install skipped (open module install lands in step D)"
+fi
 
 # DMA buffer plumbing from kernel-tsp build tree
 VB2_KO="$(find /work/kernel-tsp -name 'videobuf2-dma-contig.ko' -type f | head -1)"
@@ -1255,7 +1276,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
