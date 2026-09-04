@@ -112,6 +112,7 @@ echo "=== Step 1/4: Merge package list ==="
 
 PKG_FILE="${SRC_DIR}/rootfs-packages.txt"
 PKG_DEV_FILE="${SRC_DIR}/rootfs-packages-dev.txt"
+PKG_MAINLINE_FILE="${SRC_DIR}/rootfs-packages-mainline.txt"
 
 [ -f "${PKG_FILE}" ] || { echo "FATAL: ${PKG_FILE} not found" >&2; exit 1; }
 
@@ -122,6 +123,18 @@ if [ "${VARIANT}" = "dev" ] && [ -f "${PKG_DEV_FILE}" ]; then
     DEV_PKGS="$(grep -v '^\s*#' "${PKG_DEV_FILE}" | grep -v '^\s*$' | tr '\n' ',' | sed 's/,$//')"
     PKG_LIST="${PKG_LIST},${DEV_PKGS}"
     echo "  variant=dev: added dev-only packages (${DEV_PKGS})"
+fi
+
+# The open GPU model is the mainline-6.x A133 image variant.  Its conformance
+# suites need throughput and cpufreq inspection tools in both dev and release
+# images.  Keep these out of the shared list so the shipping closed-DDK rootfs
+# remains byte-for-byte unaffected by this package-layer change.
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    [ -f "${PKG_MAINLINE_FILE}" ] \
+        || { echo "FATAL: ${PKG_MAINLINE_FILE} not found" >&2; exit 1; }
+    MAINLINE_PKGS="$(grep -v '^\s*#' "${PKG_MAINLINE_FILE}" | grep -v '^\s*$' | tr '\n' ',' | sed 's/,$//')"
+    PKG_LIST="${PKG_LIST},${MAINLINE_PKGS}"
+    echo "  gpu_model=open: added mainline conformance packages (${MAINLINE_PKGS})"
 fi
 
 # Zink needs the Khronos Vulkan loader, but the open GPU model is opt-in.
