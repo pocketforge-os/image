@@ -216,18 +216,29 @@ per-variant override. `rootfs`'s master per-device dispatch
 A133 rootfs branch; only the GPU-module install sub-step inside that branch
 stays keyed on `PF_GPU_MODEL` (closed vs open).
 
-### Residual hardcodes left for step D
+### Residual hardcodes left for step D — the full assembly path, not one script
 
-Decoupling the proxy *gates* does not remove the closed-stack assumptions
-still baked into the rootfs branch's *contents* — step D's removal targets,
-left untouched by B:
+Decoupling the proxy *gates* (B) does not remove the closed-stack assumptions
+baked into the *contents* of the A133 image-assembly path — and that path is
+**three** scripts, not one. The same closed-module/firmware/version literals
+recur in `scripts/build-rootfs.sh`, `boards/tsp/initrd/build-initrd.sh`
+(hardcodes `pvrsrvkm.ko`/`dc_sunxi.ko` under `SUBSTRATE=owned`; since the
+initrd is what loads the GPU module at boot, missing this script specifically
+would leave `a133-open` unable to boot even after rootfs and Dockerfile
+changes land), and `scripts/build-sd-image.sh`. Step D's removal targets,
+left untouched by B, span all three:
 
-- the hard-coded `/lib/modules/4.9.191` install/`depmod` path (must become
-  the discovered 6.x release for `a133-open`);
-- the closed-vs-open kernel-module divergence itself: `pvrsrvkm.ko` +
-  `dc_sunxi.ko` (closed DDK) vs the in-tree `powervr.ko` (open), which
-  selects a different initrd/module-install set, not merely a different
-  file list.
+- the eight closed UM `.so` libraries (`libEGL.so`, `libGLESv2.so`,
+  `libGLES_CM.so`, `libIMGegl.so`, `libsrv_um.so`, `libusc.so`,
+  `libglslcompiler.so`, `libpvrNULL_WSEGL.so`);
+- the closed firmware (`rgx.fw.*`, `rgx.sh.*`);
+- the `pvrsrvkm.ko`/`dc_sunxi.ko` DDK module names — present in both
+  `build-rootfs.sh` and `build-initrd.sh` — replaced by the in-tree
+  `powervr.ko` in both places;
+- the hard-coded `/lib/modules/4.9.191` kernel-version path, everywhere it
+  appears — replaced by the discovered 6.x release;
+- `build-sd-image.sh`'s unconditional `pvrsrvkm.ko`-exists assertion,
+  replaced by a profile/model-specific GPU artifact check.
 
 ### `platform`
 
@@ -260,6 +271,12 @@ left untouched by B:
   its discovered release; install Mesa/ICD and open firmware; do not install any
   DDK UM/KM artifact. Preserve XR829 firmware and other board services, while
   auditing whether the 6.x tree supplies compatible XR829 modules.
+- `boards/tsp/initrd/build-initrd.sh`: it independently hardcodes
+  `pvrsrvkm.ko`/`dc_sunxi.ko` under `SUBSTRATE=owned` — a second, distinct
+  copy of the same closed-module assumption `build-rootfs.sh` carries, not
+  covered by fixing rootfs alone. Replace with `powervr.ko` for the open
+  model; this is required, since the initrd is what loads the GPU module at
+  boot — missing it means an otherwise-correct open image fails to boot.
 - `scripts/build-sd-image.sh`: replace the unconditional `pvrsrvkm.ko` assertion
   with a profile/model-specific GPU artifact check; accept the 6.x DTB name/path.
 - tests for Docker stage selection, rootfs file inventory, ICD JSON resolution,
@@ -304,7 +321,7 @@ listed by sequence label so the coordinator can translate them to bead IDs.
 | A | `exec` | `blobs`, `vendor-manifest`: firmware custody record, manifest group, fetch test | Firmware-only group fetches the exact preserved SHA/CID to `powervr/rogue_22.102.54.38_v1.fw`; group contains no DDK UM/KM file; existing DDK group unchanged | none |
 | B | `think` | `platform`: `platform.lock`, profile schema, `core/profile.py`, `core/pf-build.sh`, tests; `image`: `build/Dockerfile.pf` is-A133 gate re-point (`wpa`, `runtime`, `launcher`, `sdl`, `rootfs` dispatch) | Lock resolves exact 6.x and Mesa SHAs; separate KM/UM fields and `gpu-um-src` context resolve for a fixture; missing pin/group fails; existing `a133`, `a133-owned`, and `a523` resolved outputs unchanged. **Required, not optional:** the `wpa`, `runtime`, `launcher`, and `sdl` stages are re-pointed off the `PF_GPU_REPO` proxy onto the declarative is-A133 signal (`PF_SOC`/`PF_DEVICE_FAMILY`) — an `a133-open` build must SELECT (not NOT-SHIP) all four stages. The `rootfs` stage's master per-device dispatch (`case "$PF_GPU_REPO"`) is re-pointed the same way, so `a133-open` reaches rootfs assembly instead of being excluded from it. B is not done while any of the four gate stages, or the rootfs dispatch, still keys on `PF_GPU_REPO` | A |
 | C | `think` | `image`: `build/Dockerfile.pf`, Mesa build/stage tests (and `gpu-um-tsp/docker/*` only if its reusable recipe must export a full install tree) | Hermetic source build emits `powervr.ko` from the locked kernel plus a complete Mesa install tree; ICD JSON resolves to an AArch64 library; provenance includes both SHAs; no DDK build or closed input is consumed in open mode | B |
-| D | `think` | `image`: `scripts/build-rootfs.sh` or open customizer, `build-sd-image.sh`, SDL/display selection, rootfs tests | **Explicit hardcode removal (required):** the `/lib/modules/4.9.191` install/`depmod` path is replaced with the discovered 6.x kernel release; the closed `pvrsrvkm.ko`/`dc_sunxi.ko` DDK pair is replaced by the in-tree `powervr.ko` module in the open rootfs branch; `build-sd-image.sh`'s unconditional `pvrsrvkm.ko`-exists assertion is replaced by a profile/model-specific GPU artifact check. Synthetic/open rootfs also has open firmware, Mesa GL/EGL/GLES/Vulkan/GBM/ICD wiring, and XR829/runtime services; the `sdl` stage links the open Mesa userspace (not the closed UM) for `a133-open`; contains none of the closed PowerVR libraries, `pvrsrvkm.ko`, or `dc_sunxi.ko`; closed A133 fixture remains unchanged | C |
+| D | `think` | `image`: **the complete a133 image-assembly path** — `scripts/build-rootfs.sh` (or open customizer), `boards/tsp/initrd/build-initrd.sh`, `scripts/build-sd-image.sh`, SDL/display selection, rootfs/initrd tests | **Scope is a full sweep of all three assembly scripts, not a per-file list — remove/replace every closed-GPU-stack hardcode found in any of them:** the eight closed UM `.so` libraries; the closed firmware (`rgx.fw.*`/`rgx.sh.*`); the `pvrsrvkm.ko`/`dc_sunxi.ko` module names in *both* `build-rootfs.sh` and `build-initrd.sh` (the initrd copy is independent of rootfs and boots the device — missing it leaves the open image unable to boot even if rootfs is fixed); and the hard-coded `/lib/modules/4.9.191` kernel-version path wherever it appears. Replace with the open equivalents: `powervr.ko` in both rootfs and initrd; the open firmware `powervr/rogue_22.102.54.38_v1.fw` (from L4's `pvr-fw-open-22.102.54.38` group); the discovered 6.x kernel-modules path. `build-sd-image.sh`'s unconditional `pvrsrvkm.ko`-exists assertion is replaced by a profile/model-specific GPU artifact check; the `sdl` stage links the open Mesa userspace (not the closed UM) for `a133-open`. **Acceptance is grep-verifiable and closes the whole class:** a grep across all three scripts' `a133-open` code path for the closed-stack literals above (`pvrsrvkm.ko`, `dc_sunxi.ko`, `4.9.191`, the eight closed UM library names, `rgx.fw`, `rgx.sh`) returns no match; the `a133-open` image assembles and boots with only the open module and firmware present; the closed `a133` fixture and its assembly output remain unchanged | C |
 | E | `exec` | `platform`: `devices/a133-open/profile.toml` and profile/lock tests | `pf resolve/build --device a133-open --dry-run` selects 6.x, open KM/UM, and firmware-only group; `a133` still selects 4.9/DDK/composite group; `a133-owned` inheritance is unchanged | B, D |
 | F | `think` | `image` + `platform` candidate refs; full image build on modelmaker only | Canonical full `a133-open` build passes, is reproducible at pinned refs, records artifact SHA-256, module/firmware/ICD inventory, and closed-blob absence; no device action in this bead | E |
 | G | `think` | `kernel-sunxi-6.x` DTS/config/drivers as findings require; automation `pf-test` collectors/envelopes if missing | On the held bench DUT through sanctioned automation: boot/current kernel, rootfs/storage, panel/backlight, Wi-Fi, input, audio, USB, PMIC/regulators/battery, and claimed suspend/resume pass; every failure becomes a bounded source-first follow-up and the same candidate is rebuilt/retested | F |
