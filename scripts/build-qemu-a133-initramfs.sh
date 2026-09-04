@@ -138,11 +138,29 @@ cat > "$ROOT/init" <<'INIT_EOF'
 /bin/busybox mount -t proc proc /proc
 /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox mount -t devtmpfs devtmpfs /dev
+# On SOME machines (root-caused on the `-M pocketforge-a133` real-DT boot,
+# tsp-mc9m.41.925.2.3: the DW-APB UART's permanent driver,
+# drivers/tty/serial/8250/8250_dw.c, requires a resolvable clock rate and
+# fails dw8250_probe() with no console/ttyS0 device ever created when its
+# DT clock provider is a register-only stub with no real clk framework
+# registration -- earlycon keeps working throughout because it talks to
+# the UART directly, bypassing this driver entirely) neither /dev/console
+# nor any /dev/ttyS* node ever comes to exist, so a menu binary's
+# fprintf(stderr, ...) diagnostics (its "presented initial screen" marker
+# included) would silently go nowhere even though it runs and renders
+# fine. /dev/kmsg is the one output sink that is ALWAYS available
+# regardless of which (if any) tty console driver bound -- writes to it
+# land directly in the kernel ring buffer/dmesg, i.e. the same captured
+# serial log, just with a leading kernel timestamp instead of a bare
+# line (harmless: every marker this harness greps for is matched with a
+# leading `.*`, so the extra prefix does not change any assertion).
+/bin/busybox mknod -m 600 /dev/kmsg c 1 11 2>/dev/null
+exec >/dev/kmsg 2>&1 </dev/null
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   [ -e /dev/fb0 ] && break
   /bin/busybox sleep 0.5
 done
-echo "qemu-a133-virt: initramfs up, execing pocketforge-menu" >/dev/console 2>&1 || true
+echo "qemu-a133-virt: initramfs up, execing pocketforge-menu"
 exec /opt/pocketforge/bin/pocketforge-menu
 INIT_EOF
 chmod 0755 "$ROOT/init"
