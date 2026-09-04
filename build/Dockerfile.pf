@@ -684,7 +684,6 @@ printf 'recovery@%s\n' "${PF_RECOVERY_SHA}" > /out/.pf-recovery-provenance
 sha256sum /out/bin/pocketforge-recovery-entry >> /out/.pf-recovery-provenance
 cat /out/.pf-recovery-provenance
 RECOVERY
-=======
 # launcher — selected persistent shell owner, built from the platform.lock-resolved
 # launcher archive. The digest-pinned Rust toolchain, committed Cargo.lock and
 # --locked make the source/tool/dependency selection deterministic.
