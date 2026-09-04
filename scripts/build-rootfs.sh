@@ -752,12 +752,13 @@ install -d "${ROOTFS}/etc/sysctl.d"
 install -m 0644 "/work/src/rootfs-overlay/etc/sysctl.d/10-pocketforge-net-latency.conf" \
     "${ROOTFS}/etc/sysctl.d/10-pocketforge-net-latency.conf"
 
-# Module autoload for the WiFi driver triplet.
-# Owned substrate: xr829_mac -> xr829_core -> xr829_wlan
-# (xr829_core/xr829_wlan have alias=xradio_* so modprobe can resolve either,
-#  but xr829_mac has NO alias, so we must use the correct file-based name.)
 install -d "${ROOTFS}/etc/modules-load.d"
-cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
+if [ "${PF_GPU_MODEL}" = "ddk" ]; then
+    # Module autoload for the WiFi driver triplet.
+    # Owned substrate: xr829_mac -> xr829_core -> xr829_wlan
+    # (xr829_core/xr829_wlan have alias=xradio_* so modprobe can resolve either,
+    #  but xr829_mac has NO alias, so we must use the correct file-based name.)
+    cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
 # WiFi driver triplet for the XR829 (TrimUI Smart Pro, owned substrate).
 # Load order: mac -> core -> wlan (dependency chain).
 # cfg80211 + mac80211 are built into the 4.9.191 kernel (not modular).
@@ -766,6 +767,12 @@ xr829_mac
 xr829_core
 xr829_wlan
 WIFI_MODULES_EOF
+else
+    cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
+# WiFi driver for the XR829 (kernel-sunxi-6.x in-tree driver).
+xradio
+WIFI_MODULES_EOF
+fi
 
 # XR829 WiFi MAC address persistence directory.
 # The xr829 driver reads/writes /etc/wifi/xr_wifi.conf to persist the MAC
