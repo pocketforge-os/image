@@ -314,6 +314,31 @@ else
         install -D -m 0644 /work/gpu-um-mesa/.pf-gpu-um-provenance "${ROOTFS}/usr/share/pocketforge/gpu-um-mesa-provenance"
     fi
     echo "[customize] open Mesa: userspace install verified (libEGL.so.1 present)"
+
+    # Zink is a Vulkan-on-GL translation layer: at runtime it needs the Khronos
+    # Vulkan LOADER (libvulkan.so.1, from rootfs-packages.txt's libvulkan1) to find
+    # and dlopen the imagination ICD via the manifest JSON above. The ICD JSON's
+    # own "library_path" is an ABSOLUTE path baked in at Mesa build time
+    # (meson.build: vulkan_icd_lib_path = prefix / libdir, i.e. /usr/local/lib —
+    # NOT relative to the JSON file), so copying the JSON to a second location is
+    # safe and does not need re-deriving any path. The loader's default manifest
+    # search covers both /usr/local/share/vulkan/icd.d (where the Mesa DESTDIR
+    # tree ships it, installed above) and /usr/share/vulkan/icd.d via
+    # XDG_DATA_DIRS — but XDG_DATA_DIRS is not guaranteed to be set in every
+    # runtime environment, so also install the JSON at the canonical
+    # /usr/share/vulkan/icd.d path the loader falls back to unconditionally.
+    ICD_JSON="$(find "${ROOTFS}/usr/local/share/vulkan/icd.d" -name '*.json' -type f | head -1)"
+    [ -n "${ICD_JSON}" ] || { echo "FATAL: no Vulkan ICD JSON found under ${ROOTFS}/usr/local/share/vulkan/icd.d (open Mesa install incomplete)" >&2; exit 1; }
+    install -d "${ROOTFS}/usr/share/vulkan/icd.d"
+    install -m 0644 "${ICD_JSON}" "${ROOTFS}/usr/share/vulkan/icd.d/$(basename "${ICD_JSON}")"
+    echo "[customize] open Mesa: ICD JSON also installed at /usr/share/vulkan/icd.d/$(basename "${ICD_JSON}") (loader default search path)"
+
+    VULKAN_LOADER="$(find "${ROOTFS}/usr/lib" -name 'libvulkan.so.1*' -type f | head -1)"
+    if [ -z "${VULKAN_LOADER}" ]; then
+        echo "FATAL: libvulkan.so.1 (Khronos Vulkan loader) not found in rootfs — Zink cannot dispatch to the imagination ICD. Check libvulkan1 is in rootfs-packages.txt." >&2
+        exit 1
+    fi
+    echo "[customize] open Mesa: Vulkan loader present at ${VULKAN_LOADER#"${ROOTFS}"}"
 fi
 
 # --- Kernel modules install --------------------------------------------------
