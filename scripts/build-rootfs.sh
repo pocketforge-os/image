@@ -30,6 +30,12 @@ set -euo pipefail
 # ---- configuration ----------------------------------------------------------
 SRC_DIR="${SRC_DIR:-/work/src}"
 BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
+# GPU model discriminator (tsp-mc9m.41.924.2 / B4): "ddk" (closed PowerVR DDK, default —
+# preserves today's behavior) or "open" (a133-open's in-tree Mesa/PowerVR KM). Gates ONLY
+# the pvrsrvkm.ko/dc_sunxi.ko-vs-powervr.ko module-install sub-step below; the closed-UM
+# .so + firmware install stays UNCONDITIONAL for THIS bead (step D removes/reworks it —
+# see the tsp-mc9m.41.924.2 bead comment for the full handoff list).
+PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
 WPA_DIR="${WPA_DIR:-/work/wpa}"
 RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-decode) from the runtime stage (tsp-e1b.11)
@@ -141,17 +147,32 @@ else
     exit 1
 fi
 
-# Verify blobs exist
-# DDK userspace + firmware always from blobs (unchanged across substrate transition)
-for f in \
-    "${BLOBS_DIR}/sunxi/a133/22.102.54.38/lib/libEGL.so" \
-    "${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38"; do
-    [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
-done
+# Verify blobs exist (closed-DDK model only — tsp-mc9m.41.924.2 / B4 review fix: the
+# a133-open blob groups carry NO closed GPU blob group at all, so this spot-check would
+# FATAL every open-model rootfs dispatch before it ever reaches the DEFERRED marker
+# below. Step C/D wire the open-Mesa equivalent; the DEFERRED gates in the customize
+# hook below are what actually skip the closed install.)
+if [ "${PF_GPU_MODEL}" = "ddk" ]; then
+    for f in \
+        "${BLOBS_DIR}/sunxi/a133/22.102.54.38/lib/libEGL.so" \
+        "${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38"; do
+        [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
+    done
+else
+    echo "  closed PowerVR DDK blobs: PF_GPU_MODEL=${PF_GPU_MODEL} — spot-check skipped (open Mesa link lands in step C)"
+fi
 
-# GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
-[ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
-[ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
+# GPU modules from gpu-km-tsp, kernel modules from kernel-tsp. The closed-KM file names
+# (pvrsrvkm.ko/dc_sunxi.ko) are DDK-model-specific — a133-open's gpu-km stage produces
+# powervr.ko instead (see devices/a133-open/profile.toml [gpu].modules), so this spot-
+# check is gated on PF_GPU_MODEL. The open module's actual install is step D's job (not
+# added here) — for "open" this sub-step is a documented no-op, not a substitute install.
+if [ "${PF_GPU_MODEL}" = "ddk" ]; then
+    [ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
+    [ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
+else
+    echo "  gpu-km-tsp: PF_GPU_MODEL=${PF_GPU_MODEL} — closed pvrsrvkm.ko/dc_sunxi.ko spot-check skipped (open module install lands in step D)"
+fi
 KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
 [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
 # WiFi modules: kernel-tsp builds xr829_* (not xradio_*)
@@ -167,10 +188,17 @@ KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | hea
 [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
 echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
 
-# Verify libSDL3 artifact exists
-LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
-[ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
-echo "  libsdl3: ${LIBSDL3_SO}"
+# Verify libSDL3 artifact exists (closed-DDK model only — the sdl stage's PF_GPU_MODEL
+# gate, tsp-mc9m.41.924.2 / B3, DEFERS the open-Mesa sunxifb link to step C, so no .so
+# exists yet for PF_GPU_MODEL=open; the customize hook's libSDL3-install block below is
+# gated the same way, below.)
+if [ "${PF_GPU_MODEL}" = "ddk" ]; then
+    LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
+    [ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
+    echo "  libsdl3: ${LIBSDL3_SO}"
+else
+    echo "  libsdl3: PF_GPU_MODEL=${PF_GPU_MODEL} — sunxifb .so not built yet (open Mesa link lands in step C), skipping"
+fi
 
 # Verify the owned wpa_supplicant artifact exists (wpa stage output; tsp-myp1.8.2).
 # The a133 wlan supplicant is the owned wpa-supplicant-tsp fork — a missing
@@ -216,38 +244,47 @@ chroot "$ROOTFS" passwd -l gamer
 echo "[customize] gamer user created: $(chroot "$ROOTFS" id gamer)"
 
 # --- PowerVR DDK userspace install ------------------------------------------
-echo "[customize] Installing PowerVR DDK userspace..."
-install -d "${ROOTFS}/usr/lib/pvr-rogue"
-for so in libEGL.so libGLESv2.so libGLES_CM.so libIMGegl.so \
-          libsrv_um.so libusc.so libglslcompiler.so libpvrNULL_WSEGL.so; do
-    install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/lib/${so}" "${ROOTFS}/usr/lib/pvr-rogue/${so}"
-done
-printf '/usr/lib/pvr-rogue\n' > "${ROOTFS}/etc/ld.so.conf.d/00-pvr.conf"
-chroot "$ROOTFS" ldconfig
-echo "[customize] PowerVR DDK: ldconfig done"
+# Closed-DDK model only (tsp-mc9m.41.924.2 / B4 review fix): a133-open's blob groups
+# carry NO closed GPU blob group at all (devices/a133-open/profile.toml), so this whole
+# block would FATAL for PF_GPU_MODEL=open. The open-Mesa userspace install is step C/D's
+# job — this bead only makes the dispatch EXECUTABLE (reach a DEFERRED marker), not
+# complete for the open model.
+if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
+    echo "[customize] Installing PowerVR DDK userspace..."
+    install -d "${ROOTFS}/usr/lib/pvr-rogue"
+    for so in libEGL.so libGLESv2.so libGLES_CM.so libIMGegl.so \
+              libsrv_um.so libusc.so libglslcompiler.so libpvrNULL_WSEGL.so; do
+        install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/lib/${so}" "${ROOTFS}/usr/lib/pvr-rogue/${so}"
+    done
+    printf '/usr/lib/pvr-rogue\n' > "${ROOTFS}/etc/ld.so.conf.d/00-pvr.conf"
+    chroot "$ROOTFS" ldconfig
+    echo "[customize] PowerVR DDK: ldconfig done"
 
-# libIMGegl.so discovers its client-API drivers by dlopen()ing the UNVERSIONED
-# dev names (libGLESv2.so / libGLES_CM.so). ldconfig keys ld.so.cache by SONAME
-# (libGLESv2.so.2 …), so those dev-name dlopens miss the cache, IMGegl's baked
-# vendor RPATH doesn't exist on device, and /usr/lib/pvr-rogue is not in
-# glibc's built-in fallback path — leaving EGL_CLIENT_APIS empty (no GLES)
-# unless LD_LIBRARY_PATH=/usr/lib/pvr-rogue happens to be exported (tsp-ve5).
-# Symlink the dev names into the multiarch dir (always searched by dlopen) so
-# EGL client discovery works regardless of launch environment.
-for so in libEGL.so libGLESv2.so libGLES_CM.so; do
-    ln -sf "/usr/lib/pvr-rogue/${so}" "${ROOTFS}/usr/lib/aarch64-linux-gnu/${so}"
-done
-echo "[customize] PowerVR DDK: dev-name dlopen symlinks installed in /usr/lib/aarch64-linux-gnu"
+    # libIMGegl.so discovers its client-API drivers by dlopen()ing the UNVERSIONED
+    # dev names (libGLESv2.so / libGLES_CM.so). ldconfig keys ld.so.cache by SONAME
+    # (libGLESv2.so.2 …), so those dev-name dlopens miss the cache, IMGegl's baked
+    # vendor RPATH doesn't exist on device, and /usr/lib/pvr-rogue is not in
+    # glibc's built-in fallback path — leaving EGL_CLIENT_APIS empty (no GLES)
+    # unless LD_LIBRARY_PATH=/usr/lib/pvr-rogue happens to be exported (tsp-ve5).
+    # Symlink the dev names into the multiarch dir (always searched by dlopen) so
+    # EGL client discovery works regardless of launch environment.
+    for so in libEGL.so libGLESv2.so libGLES_CM.so; do
+        ln -sf "/usr/lib/pvr-rogue/${so}" "${ROOTFS}/usr/lib/aarch64-linux-gnu/${so}"
+    done
+    echo "[customize] PowerVR DDK: dev-name dlopen symlinks installed in /usr/lib/aarch64-linux-gnu"
 
-# Verify SONAME symlinks were created by checking the filesystem directly
-# (ldconfig -p may not work reliably under qemu in all chroot configurations)
-if [ ! -L "${ROOTFS}/usr/lib/pvr-rogue/libEGL.so.1" ]; then
-    echo "FATAL: ldconfig did not create libEGL.so.1 symlink in /usr/lib/pvr-rogue/" >&2
-    echo "  Contents of /usr/lib/pvr-rogue/:" >&2
-    ls -la "${ROOTFS}/usr/lib/pvr-rogue/" >&2
-    exit 1
+    # Verify SONAME symlinks were created by checking the filesystem directly
+    # (ldconfig -p may not work reliably under qemu in all chroot configurations)
+    if [ ! -L "${ROOTFS}/usr/lib/pvr-rogue/libEGL.so.1" ]; then
+        echo "FATAL: ldconfig did not create libEGL.so.1 symlink in /usr/lib/pvr-rogue/" >&2
+        echo "  Contents of /usr/lib/pvr-rogue/:" >&2
+        ls -la "${ROOTFS}/usr/lib/pvr-rogue/" >&2
+        exit 1
+    fi
+    echo "[customize] PowerVR DDK: SONAME symlinks verified (libEGL.so.1 exists)"
+else
+    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — closed PowerVR DDK userspace install skipped (open Mesa install lands in step C/D)"
 fi
-echo "[customize] PowerVR DDK: SONAME symlinks verified (libEGL.so.1 exists)"
 
 # --- Kernel modules install --------------------------------------------------
 echo "[customize] Installing kernel modules..."
@@ -256,9 +293,16 @@ install -d "${ROOTFS}/lib/modules/4.9.191"
 # Owned substrate: GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
 echo "[customize] Installing kernel + GPU modules (kernel-tsp + gpu-km-tsp)"
 
-# GPU modules from gpu-km-tsp
-install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
-install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
+# GPU modules from gpu-km-tsp. Closed-DDK filenames only (tsp-mc9m.41.924.2 / B4) — the
+# open-model install (powervr.ko, at whatever kernel release the open kernel-sunxi-6.x
+# build produces, NOT the 4.9.191 hardcode below) is step D's job; left un-added here per
+# the bead's explicit scope so this bead does not invent that recipe.
+if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
+    install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
+else
+    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — closed GPU module install skipped (open module install lands in step D)"
+fi
 
 # DMA buffer plumbing from kernel-tsp build tree
 VB2_KO="$(find /work/kernel-tsp -name 'videobuf2-dma-contig.ko' -type f | head -1)"
@@ -285,9 +329,15 @@ fi
 echo "[customize] Installing firmware..."
 install -d "${ROOTFS}/lib/firmware"
 
-# GPU firmware (both files required — missing rgx.sh.* causes firmware-load failures)
-install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38" "${ROOTFS}/lib/firmware/"
-install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.sh.22.102.54.38" "${ROOTFS}/lib/firmware/"
+# GPU firmware (both files required — missing rgx.sh.* causes firmware-load failures).
+# Closed-DDK model only (tsp-mc9m.41.924.2 / B4 review fix) — a133-open's blobs carry no
+# GPU blob group, so this firmware doesn't exist yet for PF_GPU_MODEL=open.
+if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
+    install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38" "${ROOTFS}/lib/firmware/"
+    install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.sh.22.102.54.38" "${ROOTFS}/lib/firmware/"
+else
+    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — closed GPU firmware install skipped (open Mesa install lands in step C/D)"
+fi
 
 # WiFi firmware
 install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin" "${ROOTFS}/lib/firmware/"
@@ -297,11 +347,19 @@ install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/sdd_xr829.bin" "${ROOTFS}/
 echo "[customize] Firmware: $(ls "${ROOTFS}/lib/firmware/" | wc -l) files"
 
 # --- libSDL3 install ---------------------------------------------------------
-echo "[customize] Installing libSDL3-pocketforge..."
-install -d "${ROOTFS}/opt/pocketforge/lib"
-# Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
-LIBSDL3_SRC="$(find /work/libsdl3 -name 'libSDL3-pocketforge.so*' -type f | head -1)"
-install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketforge.so.0"
+# Closed-DDK model only (tsp-mc9m.41.924.2 / B4 review fix): the sdl stage's
+# PF_GPU_MODEL gate (B3) DEFERS the open-Mesa sunxifb link to step C, so no .so
+# exists yet for PF_GPU_MODEL=open — an unconditional `install` with an empty
+# LIBSDL3_SRC would FATAL under `set -e`.
+if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
+    echo "[customize] Installing libSDL3-pocketforge..."
+    install -d "${ROOTFS}/opt/pocketforge/lib"
+    # Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
+    LIBSDL3_SRC="$(find /work/libsdl3 -name 'libSDL3-pocketforge.so*' -type f | head -1)"
+    install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketforge.so.0"
+else
+    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — libSDL3-pocketforge install skipped (open Mesa link lands in step C)"
+fi
 
 # SDL test binaries (bd tsp-tyt) — dev variant only; present only when the sdl
 # stage built them (a133/sunxifb). Lets the sunxifb functional gate
@@ -1255,7 +1313,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \

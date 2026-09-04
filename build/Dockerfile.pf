@@ -214,6 +214,7 @@ KERNEL
 FROM ${PF_CONTAINER} AS gpu-km
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
+ARG PF_GPU_MODEL
 ARG PF_GPU_SHA
 ARG PF_GPU_MODULES
 ARG PF_TOOLCHAIN_GCC_VERSION
@@ -235,6 +236,21 @@ COPY --from=gpu-src . /work/gpu
 # gate → dc_sunxi MODPOST undefined symbols). Single source of truth lives with the driver (tsp-1dl.4.3).
 RUN <<'GPUKM'
 set -eux
+mkdir -p /out/modules
+# Device gate (tsp-mc9m.41.924.2 / B4 review fix): this stage builds the CLOSED
+# out-of-tree DDK KM against PF_GPU_REPO — meaningless for the open model, whose KM is
+# in-tree in kernel-sunxi-6.x (km_model="in-tree-6.x" per devices/a133-open/profile.toml)
+# and needs a different consumer entirely (that wiring is step C/D's job — the
+# rootfs stage's `COPY --from=gpu-km` is unconditional, so this stage must not hard-fail
+# on PF_GPU_REPO="" the same way wpa/runtime/launcher/sdl/rootfs no longer do). Emit a
+# DEFERRED marker + empty /out/modules (mirrors the bootchain stage's NOT-SHIPPED
+# pattern) rather than the closed recipe's `: "${PF_GPU_REPO:?}"` hard-fail.
+if [ "${PF_GPU_MODEL}" != "ddk" ]; then
+  printf 'gpu-km DEFERRED for device=%s (gpu_model=%s; in-tree open KM consumption lands in step C/D)\n' \
+    "${PF_DEVICE_ID}" "${PF_GPU_MODEL}" > /out/modules/.pf-gpu-provenance
+  cat /out/modules/.pf-gpu-provenance
+  exit 0
+fi
 : "${PF_GPU_REPO:?}" "${PF_GPU_MODULES:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
 export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
 export ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu-
@@ -420,7 +436,9 @@ BOOTCHAIN
 # =============================================================================
 FROM ${PF_CONTAINER} AS sdl
 ARG PF_DEVICE_ID
+ARG PF_SOC
 ARG PF_GPU_REPO
+ARG PF_GPU_MODEL
 ARG PF_LIBSDL3_SHA
 ARG SOURCE_DATE_EPOCH
 # Mount points match the canonical recipe (libsdl3-sunxifb/build/build-libsdl3.sh): source at
@@ -431,11 +449,26 @@ COPY --from=fetch /out /work/blobs
 RUN <<'SDL'
 set -eux
 mkdir -p /out/lib /work/out
-# libSDL3-pocketforge's sunxifb backend links the closed PowerVR UM, so it is meaningful ONLY on the
-# PowerVR IP (a133 / gpu-km-tsp). a523 (Mali) ships no sunxifb libSDL3 today — emit a device-gated marker.
-if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
-  printf 'libsdl3-sunxifb@%s NOT SHIPPED for device=%s (gpu=%s; sunxifb links the PowerVR UM — a133-only)\n' \
-    "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/lib/.pf-sdl-provenance
+# Device gate (tsp-mc9m.41.924.2 / B3): declarative is-a133 signal, NOT the PF_GPU_REPO
+# proxy — a133-open resolves PF_GPU_REPO="" (open profile), which used to read as
+# "not a133" and wrongly NOT-SHIP this a133 device component. libSDL3-sunxifb is
+# meaningful on every a133 variant; a523 (Mali) ships no sunxifb libSDL3 today.
+if [ "${PF_SOC}" != "sun50iw10p1" ]; then
+  printf 'libsdl3-sunxifb@%s NOT SHIPPED for device=%s (soc=%s; sunxifb is a133-only)\n' \
+    "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_SOC}" > /out/lib/.pf-sdl-provenance
+  cat /out/lib/.pf-sdl-provenance
+  exit 0
+fi
+# sdl is SELECTED for every a133 variant, but the sunxifb backend's build recipe hard-links
+# the CLOSED PowerVR UM (SUNXIFB_DDK_ROOT defaults into the closed blob tree — see
+# libsdl3-sunxifb/build/build-libsdl3.sh) and would FATAL for the open GPU model, whose
+# blobs carry no closed UM at all. Wiring an open-Mesa link recipe is step C's job (the
+# schema this bead lands has no consumer yet) — gate the actual build invocation on
+# PF_GPU_MODEL rather than inventing that recipe here (coordinator DM'd per the bead's
+# explicit fallback instruction).
+if [ "${PF_GPU_MODEL}" != "ddk" ]; then
+  printf 'libsdl3-sunxifb@%s DEFERRED for device=%s (gpu_model=%s; open-Mesa sunxifb link lands in step C)\n' \
+    "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_MODEL}" > /out/lib/.pf-sdl-provenance
   cat /out/lib/.pf-sdl-provenance
   exit 0
 fi
@@ -481,6 +514,7 @@ SDL
 # =============================================================================
 FROM ${PF_CONTAINER} AS wpa
 ARG PF_DEVICE_ID
+ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_WPA_SHA
 ARG PF_TOOLCHAIN_GCC_VERSION
@@ -489,11 +523,14 @@ COPY --from=wpa-src . /work/src
 RUN <<'WPA'
 set -eux
 mkdir -p /out
-# Device gate — mirrors the sdl stage: non-PowerVR (= non-a133) devices get a
-# NOT-SHIPPED marker and an empty output the downstream COPY consumes harmlessly.
-if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
-  printf 'wpa-supplicant-tsp@%s NOT SHIPPED for device=%s (gpu=%s; xr829 roam-hysteresis fork — a133-only)\n' \
-    "${PF_WPA_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-wpa-provenance
+# Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
+# proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). wpa_supplicant's
+# xr829 roam-hysteresis fork is unrelated to the GPU choice — it ships on every a133
+# variant. Non-a133 devices get a NOT-SHIPPED marker + an empty output the downstream
+# COPY consumes harmlessly.
+if [ "${PF_SOC}" != "sun50iw10p1" ]; then
+  printf 'wpa-supplicant-tsp@%s NOT SHIPPED for device=%s (soc=%s; xr829 roam-hysteresis fork — a133-only)\n' \
+    "${PF_WPA_SHA}" "${PF_DEVICE_ID}" "${PF_SOC}" > /out/.pf-wpa-provenance
   cat /out/.pf-wpa-provenance
   exit 0
 fi
@@ -588,6 +625,7 @@ WPA
 # =============================================================================
 FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS runtime
 ARG PF_DEVICE_ID
+ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_RUNTIME_SHA
 ARG SOURCE_DATE_EPOCH
@@ -597,14 +635,15 @@ RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd
 [ "${PF_RUNTIME_SHA}" = "2478b37755bc9968a49105fb9223be1f55ca7ddd" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
-# Device gate — mirrors the sdl/wpa stages: pf-input-decode decodes the A133 pad
-# MCU's ttyS3/ttyS4 frames, so it is a133-only. Non-a133 (non-PowerVR) devices get
-# a NOT-SHIPPED marker + an otherwise-empty /out the downstream COPY consumes
-# harmlessly. (a523's own input substrate + its install into build-rootfs-a523.sh
-# are a separate future bead — see DECISION-runtime-stage.md.)
-if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
-  printf 'runtime@%s NOT SHIPPED for device=%s (gpu=%s; pf-input-decode is the A133 pad-MCU decoder — a133-only)\n' \
-    "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-runtime-provenance
+# Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
+# proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). pf-input-decode
+# decodes the A133 pad MCU's ttyS3/ttyS4 frames — a133-only, unrelated to the GPU
+# choice. Non-a133 devices get a NOT-SHIPPED marker + an otherwise-empty /out the
+# downstream COPY consumes harmlessly. (a523's own input substrate + its install into
+# build-rootfs-a523.sh are a separate future bead — see DECISION-runtime-stage.md.)
+if [ "${PF_SOC}" != "sun50iw10p1" ]; then
+  printf 'runtime@%s NOT SHIPPED for device=%s (soc=%s; pf-input-decode is the A133 pad-MCU decoder — a133-only)\n' \
+    "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_SOC}" > /out/.pf-runtime-provenance
   cat /out/.pf-runtime-provenance
   exit 0
 fi
@@ -690,6 +729,7 @@ RECOVERY
 # =============================================================================
 FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS launcher
 ARG PF_DEVICE_ID
+ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_LAUNCHER_SHA
 ARG SOURCE_DATE_EPOCH
@@ -699,9 +739,12 @@ RUN <<'LAUNCHER'
 set -eux
 mkdir -p /out/bin
 [ "${PF_LAUNCHER_SHA}" = "3fc6a8ebd71ebe7c2bf261908fcbfbd6e8df65ea" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
-if [ "${PF_GPU_REPO}" != "gpu-km-tsp" ]; then
-  printf 'launcher@%s NOT SHIPPED for device=%s (gpu=%s; pf-shell is selected for a133)\n' \
-    "${PF_LAUNCHER_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-launcher-provenance
+# Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
+# proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). pf-shell is
+# unrelated to the GPU choice — it ships on every a133 variant.
+if [ "${PF_SOC}" != "sun50iw10p1" ]; then
+  printf 'launcher@%s NOT SHIPPED for device=%s (soc=%s; pf-shell is selected for a133)\n' \
+    "${PF_LAUNCHER_SHA}" "${PF_DEVICE_ID}" "${PF_SOC}" > /out/.pf-launcher-provenance
   exit 0
 fi
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
@@ -730,7 +773,9 @@ LAUNCHER
 FROM ${PF_CONTAINER} AS rootfs
 ARG PF_DEVICE_ID
 ARG PF_ARCH
+ARG PF_SOC
 ARG PF_GPU_REPO
+ARG PF_GPU_MODEL
 ARG PF_VARIANT=dev
 ARG PF_IMAGE_SHA
 ARG PF_KERNEL_SHA
@@ -775,13 +820,18 @@ COPY --from=launcher /out           /work/launcher
 RUN --security=insecure <<'ROOTFS'
 set -eux
 mkdir -p /out
-case "${PF_GPU_REPO}" in
-  gpu-km-tsp)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
+# Rootfs dispatch (tsp-mc9m.41.924.2 / B4): declarative is-a133/is-a523 signal, NOT the
+# PF_GPU_REPO proxy — a133-open's PF_GPU_REPO="" used to fall through to the "unknown
+# per-IP" branch and wrongly NOT-SHIP the whole a133 rootfs. Dispatch on PF_SOC instead
+# so every a133 variant (closed/open/owned) takes the a133 branch.
+case "${PF_SOC}" in
+  sun50iw10p1)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp OUT_DIR=/out \
       RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher \
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
+      PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
       PF_IMAGE_SHA="${PF_IMAGE_SHA}" PF_KERNEL_SHA="${PF_KERNEL_SHA}" \
       PF_GPU_SHA="${PF_GPU_SHA}" PF_LIBSDL3_SHA="${PF_LIBSDL3_SHA}" \
       PF_WPA_SHA="${PF_WPA_SHA}" PF_RUNTIME_SHA="${PF_RUNTIME_SHA}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA}" \
@@ -793,7 +843,7 @@ case "${PF_GPU_REPO}" in
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" PF_APT_PROXY="${PF_APT_PROXY:-}" \
       bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned
     ;;
-  gpu-km-tsp-a523)   # a523 (Mali-G57 Valhall JM): source-rebuilt mali_kbase.ko + closed Mali userland + AIC8800 fw
+  sun55iw3)   # a523 (Mali-G57 Valhall JM): source-rebuilt mali_kbase.ko + closed Mali userland + AIC8800 fw
     # a523 uses its own build-rootfs-a523.sh (deliberately separate from the a133 path; a
     # SoC-agnostic unify is tsp-1dl.14, decoupled so a133 isn't regressed for a dedup). The
     # customize hook boards/tsp-s/rootfs-customize.sh HARDCODES MODSTAGE=/work/modules,
@@ -820,9 +870,9 @@ case "${PF_GPU_REPO}" in
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-rootfs-a523.sh --variant "${PF_VARIANT}"
     ;;
-  *)            # unknown per-IP: emit a device-gated marker (mirrors the sdl stage's gating)
-    printf 'rootfs NOT SHIPPED for device=%s gpu=%s (unknown IP)\n' \
-        "${PF_DEVICE_ID}" "${PF_GPU_REPO}" > /out/.pf-rootfs-provenance
+  *)            # unknown SoC: emit a device-gated marker (mirrors the sdl stage's gating)
+    printf 'rootfs NOT SHIPPED for device=%s soc=%s (unknown SoC)\n' \
+        "${PF_DEVICE_ID}" "${PF_SOC}" > /out/.pf-rootfs-provenance
     cat /out/.pf-rootfs-provenance
     ;;
 esac
