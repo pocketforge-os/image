@@ -37,6 +37,9 @@ BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 # see the tsp-mc9m.41.924.2 bead comment for the full handoff list).
 PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
+# The C1 open-Mesa install tree (tsp-mc9m.41.924.6 / C4): its own /usr/local/{include,lib}
+# meson DESTDIR install — only meaningful (non-marker-only) for PF_GPU_MODEL=open.
+GPU_UM_MESA_DIR="${GPU_UM_MESA_DIR:-/work/gpu-um-mesa}"
 WPA_DIR="${WPA_DIR:-/work/wpa}"
 RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-decode) from the runtime stage (tsp-e1b.11)
 LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
@@ -121,6 +124,14 @@ if [ "${VARIANT}" = "dev" ] && [ -f "${PKG_DEV_FILE}" ]; then
     echo "  variant=dev: added dev-only packages (${DEV_PKGS})"
 fi
 
+# Zink needs the Khronos Vulkan loader, but the open GPU model is opt-in.
+# Keep the shared package set byte-identical for closed a133 by appending the
+# loader only to the package list passed to this open-model mmdebstrap run.
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    PKG_LIST="${PKG_LIST},libvulkan1"
+    echo "  gpu_model=open: added open-GPU package (libvulkan1)"
+fi
+
 echo "  package list: ${PKG_LIST}"
 
 # ---- step 2: verify prerequisites ------------------------------------------
@@ -159,46 +170,64 @@ if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
     done
 else
-    echo "  closed PowerVR DDK blobs: PF_GPU_MODEL=${PF_GPU_MODEL} — spot-check skipped (open Mesa link lands in step C)"
+    # Open GPU model (tsp-mc9m.41.924.6 / C4): verify the C1 gpu-um-mesa stage produced a
+    # REAL install tree, not just its NOT-SHIPPED-for-ddk marker (which would mean the
+    # Dockerfile's PF_GPU_MODEL/gpu-um-mesa-${PF_GPU_MODEL} selector picked the wrong stage).
+    for f in \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libEGL.so" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libGLESv2.so" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libgbm.so" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/gbm/dri_gbm.so"; do
+        [ -f "$f" ] || { echo "FATAL: open Mesa userspace not found: $f (gpu-um-mesa stage did not build for gpu_model=open?)" >&2; exit 1; }
+    done
+    echo "  open Mesa GLES/EGL/GBM userspace: ${GPU_UM_MESA_DIR}/usr/local (spot-check passed)"
 fi
 
 # GPU modules from gpu-km-tsp, kernel modules from kernel-tsp. The closed-KM file names
-# (pvrsrvkm.ko/dc_sunxi.ko) are DDK-model-specific — a133-open's gpu-km stage produces
-# powervr.ko instead (see devices/a133-open/profile.toml [gpu].modules), so this spot-
-# check is gated on PF_GPU_MODEL. The open module's actual install is step D's job (not
-# added here) — for "open" this sub-step is a documented no-op, not a substitute install.
+# (pvrsrvkm.ko/dc_sunxi.ko) are DDK-model-specific — gated on PF_GPU_MODEL.
 if [ "${PF_GPU_MODEL}" = "ddk" ]; then
     [ -f "${GPU_KM_TSP_DIR}/pvrsrvkm.ko" ] || { echo "FATAL: pvrsrvkm.ko not found at ${GPU_KM_TSP_DIR}/pvrsrvkm.ko" >&2; exit 1; }
     [ -f "${GPU_KM_TSP_DIR}/dc_sunxi.ko" ] || { echo "FATAL: dc_sunxi.ko not found at ${GPU_KM_TSP_DIR}/dc_sunxi.ko" >&2; exit 1; }
+
+    KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
+    # WiFi modules: the closed 4.9 kernel-tsp builds xr829_* (not xradio_*).
+    KERNEL_WIFI_MAC="$(find "${KERNEL_TSP_DIR}" -name 'xr829_mac.ko' -type f | head -1)"
+    KERNEL_WIFI_CORE="$(find "${KERNEL_TSP_DIR}" -name 'xr829_core.ko' -type f | head -1)"
+    KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
+    # All three are required: the closed install loop below FATALs on any missing one and
+    # modules-load.d/pocketforge-wifi.conf loads the full triplet at boot. Spot-check
+    # all three here so a broken kernel-tsp wifi build fails fast, before mmdebstrap.
+    [ -n "${KERNEL_WIFI_MAC}" ] && [ -n "${KERNEL_WIFI_CORE}" ] && [ -n "${KERNEL_WIFI_WLAN}" ] \
+        || { echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2; exit 1; }
 else
-    echo "  gpu-km-tsp: PF_GPU_MODEL=${PF_GPU_MODEL} — closed pvrsrvkm.ko/dc_sunxi.ko spot-check skipped (open module install lands in step D)"
+    # Open GPU model (tsp-mc9m.41.924.6 / C2/C4): the open KM is IN-TREE in kernel-sunxi-6.x
+    # (devices/a133-open/profile.toml km_model="in-tree-6.x"), so powervr.ko comes from the
+    # KERNEL stage's own modules_install output (KERNEL_TSP_DIR) — NOT gpu-km-tsp, which
+    # DEFERS entirely for the open model (no DDK repo to build against). Spot-check it here.
+    KERNEL_POWERVR="$(find "${KERNEL_TSP_DIR}" -name 'powervr.ko' -type f | head -1)"
+    [ -n "${KERNEL_POWERVR}" ] || { echo "FATAL: powervr.ko not found in kernel-tsp (kernel-sunxi-6.x in-tree KM build)" >&2; exit 1; }
+    KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp (open model)" >&2; exit 1; }
+    # kernel-sunxi-6.x builds the upstream-shaped XR829 driver as one xradio.ko,
+    # unlike the closed 4.9 tree's xr829_mac/core/wlan triplet.
+    KERNEL_WIFI="$(find "${KERNEL_TSP_DIR}" -name 'xradio.ko' -type f | head -1)"
+    [ -n "${KERNEL_WIFI}" ] || { echo "FATAL: xradio.ko not found in kernel-tsp (open model)" >&2; exit 1; }
+    KERNEL_RELEASE_DIR="$(find "${KERNEL_TSP_DIR}" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    [ -n "${KERNEL_RELEASE_DIR}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
+    echo "  powervr.ko (in-tree, kernel-tsp): ${KERNEL_POWERVR}"
 fi
-KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
-[ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp" >&2; exit 1; }
-# WiFi modules: kernel-tsp builds xr829_* (not xradio_*)
-KERNEL_WIFI_MAC="$(find "${KERNEL_TSP_DIR}" -name 'xr829_mac.ko' -type f | head -1)"
-KERNEL_WIFI_CORE="$(find "${KERNEL_TSP_DIR}" -name 'xr829_core.ko' -type f | head -1)"
-KERNEL_WIFI_WLAN="$(find "${KERNEL_TSP_DIR}" -name 'xr829_wlan.ko' -type f | head -1)"
-# All three are required: the install loop below FATALs on any missing one and
-# modules-load.d/pocketforge-wifi.conf loads the full triplet at boot. Spot-check
-# all three here so a broken kernel-tsp wifi build fails fast, before mmdebstrap.
-[ -n "${KERNEL_WIFI_MAC}" ] && [ -n "${KERNEL_WIFI_CORE}" ] && [ -n "${KERNEL_WIFI_WLAN}" ] \
-    || { echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2; exit 1; }
 # WiFi firmware still from blobs (same firmware regardless of module name)
 [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
 echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
 
-# Verify libSDL3 artifact exists (closed-DDK model only — the sdl stage's PF_GPU_MODEL
-# gate, tsp-mc9m.41.924.2 / B3, DEFERS the open-Mesa sunxifb link to step C, so no .so
-# exists yet for PF_GPU_MODEL=open; the customize hook's libSDL3-install block below is
-# gated the same way, below.)
-if [ "${PF_GPU_MODEL}" = "ddk" ]; then
-    LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
-    [ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
-    echo "  libsdl3: ${LIBSDL3_SO}"
-else
-    echo "  libsdl3: PF_GPU_MODEL=${PF_GPU_MODEL} — sunxifb .so not built yet (open Mesa link lands in step C), skipping"
-fi
+# Verify libSDL3 artifact exists. The sdl stage builds a real sunxifb .so for BOTH
+# GPU models now (tsp-mc9m.41.924.6 / C3 wires the open-Mesa link that used to leave a
+# DEFERRED marker here for PF_GPU_MODEL=open — B3/tsp-mc9m.41.924.2), so this check no
+# longer needs to branch on PF_GPU_MODEL.
+LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
+[ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
+echo "  libsdl3: ${LIBSDL3_SO}"
 
 # Verify the owned wpa_supplicant artifact exists (wpa stage output; tsp-myp1.8.2).
 # The a133 wlan supplicant is the owned wpa-supplicant-tsp fork — a missing
@@ -243,12 +272,10 @@ chroot "$ROOTFS" usermod -aG audio,input,video,render,plugdev gamer
 chroot "$ROOTFS" passwd -l gamer
 echo "[customize] gamer user created: $(chroot "$ROOTFS" id gamer)"
 
-# --- PowerVR DDK userspace install ------------------------------------------
-# Closed-DDK model only (tsp-mc9m.41.924.2 / B4 review fix): a133-open's blob groups
-# carry NO closed GPU blob group at all (devices/a133-open/profile.toml), so this whole
-# block would FATAL for PF_GPU_MODEL=open. The open-Mesa userspace install is step C/D's
-# job — this bead only makes the dispatch EXECUTABLE (reach a DEFERRED marker), not
-# complete for the open model.
+# --- GPU userspace install ---------------------------------------------------
+# Closed PowerVR DDK (blob group) or open Mesa (tsp-mc9m.41.924.6 / C4), gated on
+# PF_GPU_MODEL. a133-open's blob groups carry NO closed GPU blob group at all
+# (devices/a133-open/profile.toml), so the ddk branch below would FATAL for it.
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     echo "[customize] Installing PowerVR DDK userspace..."
     install -d "${ROOTFS}/usr/lib/pvr-rogue"
@@ -283,45 +310,121 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     fi
     echo "[customize] PowerVR DDK: SONAME symlinks verified (libEGL.so.1 exists)"
 else
-    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — closed PowerVR DDK userspace install skipped (open Mesa install lands in step C/D)"
+    # Open Mesa GLES/EGL/GBM userspace (tsp-mc9m.41.924.6 / C4): install the C1
+    # gpu-um-mesa stage's FULL meson DESTDIR tree verbatim at the SAME prefix it was
+    # built for (/usr/local) — the Zink DRI driver, gbm backend loader, and Vulkan ICD
+    # all resolve each other via paths baked in at build time relative to that prefix
+    # (e.g. GBM's dlopen of lib/gbm/dri_gbm.so), so preserving the prefix identity is
+    # what keeps those baked-in paths valid post-install; translating the tree onto a
+    # different prefix would need re-deriving every one of those compiled-in paths.
+    echo "[customize] Installing open Mesa GLES/EGL/GBM userspace (Zink, GE8300)..."
+    install -d "${ROOTFS}/usr/local"
+    cp -a /work/gpu-um-mesa/usr/local/. "${ROOTFS}/usr/local/"
+    printf '/usr/local/lib\n' > "${ROOTFS}/etc/ld.so.conf.d/00-mesa-powervr.conf"
+    chroot "$ROOTFS" ldconfig
+    echo "[customize] open Mesa: ldconfig done"
+    if [ ! -L "${ROOTFS}/usr/local/lib/libEGL.so.1" ] && [ ! -f "${ROOTFS}/usr/local/lib/libEGL.so.1" ]; then
+        echo "FATAL: libEGL.so.1 missing from ${ROOTFS}/usr/local/lib after install" >&2
+        exit 1
+    fi
+    if [ -f /work/gpu-um-mesa/.pf-gpu-um-provenance ]; then
+        install -D -m 0644 /work/gpu-um-mesa/.pf-gpu-um-provenance "${ROOTFS}/usr/share/pocketforge/gpu-um-mesa-provenance"
+    fi
+    echo "[customize] open Mesa: userspace install verified (libEGL.so.1 present)"
+
+    # Zink is a Vulkan-on-GL translation layer: at runtime it needs the Khronos
+    # Vulkan LOADER (libvulkan.so.1, from the open-only mmdebstrap package set) to find
+    # and dlopen the imagination ICD via the manifest JSON above. The ICD JSON's
+    # own "library_path" is an ABSOLUTE path baked in at Mesa build time
+    # (meson.build: vulkan_icd_lib_path = prefix / libdir, i.e. /usr/local/lib —
+    # NOT relative to the JSON file), so copying the JSON to a second location is
+    # safe and does not need re-deriving any path. The loader's default manifest
+    # search covers both /usr/local/share/vulkan/icd.d (where the Mesa DESTDIR
+    # tree ships it, installed above) and /usr/share/vulkan/icd.d via
+    # XDG_DATA_DIRS — but XDG_DATA_DIRS is not guaranteed to be set in every
+    # runtime environment, so also install the JSON at the canonical
+    # /usr/share/vulkan/icd.d path the loader falls back to unconditionally.
+    ICD_JSON="$(find "${ROOTFS}/usr/local/share/vulkan/icd.d" -name '*.json' -type f | head -1)"
+    [ -n "${ICD_JSON}" ] || { echo "FATAL: no Vulkan ICD JSON found under ${ROOTFS}/usr/local/share/vulkan/icd.d (open Mesa install incomplete)" >&2; exit 1; }
+    install -d "${ROOTFS}/usr/share/vulkan/icd.d"
+    install -m 0644 "${ICD_JSON}" "${ROOTFS}/usr/share/vulkan/icd.d/$(basename "${ICD_JSON}")"
+    echo "[customize] open Mesa: ICD JSON also installed at /usr/share/vulkan/icd.d/$(basename "${ICD_JSON}") (loader default search path)"
+
+    VULKAN_LOADER="$(find "${ROOTFS}/usr/lib" -name 'libvulkan.so.1*' -type f | head -1)"
+    if [ -z "${VULKAN_LOADER}" ]; then
+        echo "FATAL: libvulkan.so.1 (Khronos Vulkan loader) not found in open-model rootfs — Zink cannot dispatch to the imagination ICD. Check the open-only libvulkan1 package append." >&2
+        exit 1
+    fi
+    echo "[customize] open Mesa: Vulkan loader present at ${VULKAN_LOADER#"${ROOTFS}"}"
 fi
 
 # --- Kernel modules install --------------------------------------------------
 echo "[customize] Installing kernel modules..."
-install -d "${ROOTFS}/lib/modules/4.9.191"
+
+# KREL = the module-tree release dir EVERY module below lands in. Closed a133 keeps
+# the pre-existing hardcoded "4.9.191" (unchanged — that is the closed kernel's own
+# release string, and D's handoff item 2 owns generalizing this hardcode broadly).
+# Open GPU model (tsp-mc9m.41.924.6 / C4 review round 2): derive the REAL
+# kernel-sunxi-6.x release so the WHOLE module tree below — powervr.ko AND its
+# in-tree dependencies — lands COHERENTLY in ONE correctly-versioned dir, instead
+# of splitting across a bogus "4.9.191" dir (nothing on a 6.x kernel ever looks
+# there) and a separate correctly-versioned dir holding only powervr.ko. This fixes
+# The model-specific spot-check above verifies the open tree's actual module names.
+if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
+    KREL="4.9.191"
+else
+    KREL="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
+    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
+fi
+install -d "${ROOTFS}/lib/modules/${KREL}"
 
 # Owned substrate: GPU modules from gpu-km-tsp, kernel modules from kernel-tsp
-echo "[customize] Installing kernel + GPU modules (kernel-tsp + gpu-km-tsp)"
+echo "[customize] Installing kernel + GPU modules (kernel-tsp + gpu-km-tsp) at lib/modules/${KREL}"
 
-# GPU modules from gpu-km-tsp. Closed-DDK filenames only (tsp-mc9m.41.924.2 / B4) — the
-# open-model install (powervr.ko, at whatever kernel release the open kernel-sunxi-6.x
-# build produces, NOT the 4.9.191 hardcode below) is step D's job; left un-added here per
-# the bead's explicit scope so this bead does not invent that recipe.
+# Closed a133 keeps its hand-picked out-of-tree DDK modules plus the existing in-tree
+# VB2/XR829 set. Open a133 copies the complete kernel modules_install release tree so
+# powervr.ko's in-tree modular dependencies remain available.
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
-    install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/4.9.191/"
-    install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/4.9.191/"
+    install -m 0644 "/work/gpu-km-tsp/pvrsrvkm.ko" "${ROOTFS}/lib/modules/${KREL}/"
+    install -m 0644 "/work/gpu-km-tsp/dc_sunxi.ko" "${ROOTFS}/lib/modules/${KREL}/"
+
+    # DMA buffer plumbing from kernel-tsp build tree
+    VB2_KO="$(find /work/kernel-tsp -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+    install -m 0644 "${VB2_KO}" "${ROOTFS}/lib/modules/${KREL}/"
+
+    # WiFi driver triplet: kernel-tsp builds xr829_* (vendor used xradio_*)
+    # Module aliases (xradio_core -> xr829_core etc) make modprobe transparent.
+    for mod in xr829_mac xr829_core xr829_wlan; do
+        MOD_KO="$(find /work/kernel-tsp -name "${mod}.ko" -type f | head -1)"
+        [ -n "${MOD_KO}" ] || { echo "FATAL: ${mod}.ko not found in kernel-tsp" >&2; exit 1; }
+        install -m 0644 "${MOD_KO}" "${ROOTFS}/lib/modules/${KREL}/"
+    done
+
+    chroot "$ROOTFS" depmod "${KREL}"
+    echo "[customize] Modules installed: $(ls "${ROOTFS}/lib/modules/${KREL}/"*.ko | wc -l) .ko files"
 else
-    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — closed GPU module install skipped (open module install lands in step D)"
+    cp -a "/work/kernel-tsp/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
+
+    DEPMOD_STDERR="$(mktemp)"
+    if ! chroot "$ROOTFS" depmod "${KREL}" 2>"${DEPMOD_STDERR}"; then
+        cat "${DEPMOD_STDERR}" >&2
+        echo "FATAL: depmod ${KREL} failed for open kernel modules tree" >&2
+        rm -f "${DEPMOD_STDERR}"
+        exit 1
+    fi
+    cat "${DEPMOD_STDERR}" >&2
+    if grep -Eiq 'warning|needs unknown symbol|not found' "${DEPMOD_STDERR}"; then
+        echo "FATAL: depmod ${KREL} reported an unresolved dependency warning" >&2
+        rm -f "${DEPMOD_STDERR}"
+        exit 1
+    fi
+    rm -f "${DEPMOD_STDERR}"
+    echo "[customize] Modules installed: $(find "${ROOTFS}/lib/modules/${KREL}" -name '*.ko' -type f | wc -l) .ko files"
 fi
 
-# DMA buffer plumbing from kernel-tsp build tree
-VB2_KO="$(find /work/kernel-tsp -name 'videobuf2-dma-contig.ko' -type f | head -1)"
-install -m 0644 "${VB2_KO}" "${ROOTFS}/lib/modules/4.9.191/"
-
-# WiFi driver triplet: kernel-tsp builds xr829_* (vendor used xradio_*)
-# Module aliases (xradio_core -> xr829_core etc) make modprobe transparent.
-for mod in xr829_mac xr829_core xr829_wlan; do
-    MOD_KO="$(find /work/kernel-tsp -name "${mod}.ko" -type f | head -1)"
-    [ -n "${MOD_KO}" ] || { echo "FATAL: ${mod}.ko not found in kernel-tsp" >&2; exit 1; }
-    install -m 0644 "${MOD_KO}" "${ROOTFS}/lib/modules/4.9.191/"
-done
-
-chroot "$ROOTFS" depmod 4.9.191
-echo "[customize] Modules installed: $(ls "${ROOTFS}/lib/modules/4.9.191/"*.ko | wc -l) .ko files"
-
 # Verify depmod produced output
-if [ ! -s "${ROOTFS}/lib/modules/4.9.191/modules.dep" ]; then
-    echo "FATAL: depmod 4.9.191 produced empty modules.dep" >&2
+if [ ! -s "${ROOTFS}/lib/modules/${KREL}/modules.dep" ]; then
+    echo "FATAL: depmod ${KREL} produced empty modules.dep" >&2
     exit 1
 fi
 
@@ -347,19 +450,15 @@ install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/sdd_xr829.bin" "${ROOTFS}/
 echo "[customize] Firmware: $(ls "${ROOTFS}/lib/firmware/" | wc -l) files"
 
 # --- libSDL3 install ---------------------------------------------------------
-# Closed-DDK model only (tsp-mc9m.41.924.2 / B4 review fix): the sdl stage's
-# PF_GPU_MODEL gate (B3) DEFERS the open-Mesa sunxifb link to step C, so no .so
-# exists yet for PF_GPU_MODEL=open — an unconditional `install` with an empty
-# LIBSDL3_SRC would FATAL under `set -e`.
-if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
-    echo "[customize] Installing libSDL3-pocketforge..."
-    install -d "${ROOTFS}/opt/pocketforge/lib"
-    # Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
-    LIBSDL3_SRC="$(find /work/libsdl3 -name 'libSDL3-pocketforge.so*' -type f | head -1)"
-    install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketforge.so.0"
-else
-    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — libSDL3-pocketforge install skipped (open Mesa link lands in step C)"
-fi
+# The sdl stage builds a real sunxifb .so for BOTH GPU models now (tsp-mc9m.41.924.6 /
+# C3/C4 review fix — closed-DDK-only was a review finding: this install stayed gated
+# after C3 wired the open-Mesa link, so the a133-open FINAL rootfs never got the .so
+# C3 had already built), so this install no longer branches on PF_GPU_MODEL.
+echo "[customize] Installing libSDL3-pocketforge..."
+install -d "${ROOTFS}/opt/pocketforge/lib"
+# Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
+LIBSDL3_SRC="$(find /work/libsdl3 -name 'libSDL3-pocketforge.so*' -type f | head -1)"
+install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketforge.so.0"
 
 # SDL test binaries (bd tsp-tyt) — dev variant only; present only when the sdl
 # stage built them (a133/sunxifb). Lets the sunxifb functional gate
@@ -653,12 +752,13 @@ install -d "${ROOTFS}/etc/sysctl.d"
 install -m 0644 "/work/src/rootfs-overlay/etc/sysctl.d/10-pocketforge-net-latency.conf" \
     "${ROOTFS}/etc/sysctl.d/10-pocketforge-net-latency.conf"
 
-# Module autoload for the WiFi driver triplet.
-# Owned substrate: xr829_mac -> xr829_core -> xr829_wlan
-# (xr829_core/xr829_wlan have alias=xradio_* so modprobe can resolve either,
-#  but xr829_mac has NO alias, so we must use the correct file-based name.)
 install -d "${ROOTFS}/etc/modules-load.d"
-cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
+if [ "${PF_GPU_MODEL}" = "ddk" ]; then
+    # Module autoload for the WiFi driver triplet.
+    # Owned substrate: xr829_mac -> xr829_core -> xr829_wlan
+    # (xr829_core/xr829_wlan have alias=xradio_* so modprobe can resolve either,
+    #  but xr829_mac has NO alias, so we must use the correct file-based name.)
+    cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
 # WiFi driver triplet for the XR829 (TrimUI Smart Pro, owned substrate).
 # Load order: mac -> core -> wlan (dependency chain).
 # cfg80211 + mac80211 are built into the 4.9.191 kernel (not modular).
@@ -667,6 +767,12 @@ xr829_mac
 xr829_core
 xr829_wlan
 WIFI_MODULES_EOF
+else
+    cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
+# WiFi driver for the XR829 (kernel-sunxi-6.x in-tree driver).
+xradio
+WIFI_MODULES_EOF
+fi
 
 # XR829 WiFi MAC address persistence directory.
 # The xr829 driver reads/writes /etc/wifi/xr_wifi.conf to persist the MAC

@@ -21,14 +21,24 @@
 #                    uboot-src=<archive>  tfa-src=<archive>    (a523 bootchain; EMPTY dirs
 #                                                               for a device with no source
 #                                                               bootchain, e.g. a133)
+#                    gpu-um-src=<archive> (a133-open ONLY — PF_GPU_MODEL=open; unlike every
+#                                          other context above, pf-build.sh does NOT even
+#                                          stage an empty dir for closed profiles, so the
+#                                          gpu-um-mesa stage that consumes it is reached ONLY
+#                                          through an ARG-selected `FROM`, never unconditionally
+#                                          — tsp-mc9m.41.924.6 / C1)
 #
 # Stage graph (COPY --from boundaries == the B6 component-repro-gate granularity):
 #   fetch ─┐                             vendor blobs by CID (B3 fills; B4.0 scaffolds)
-#   kernel ┼─▶ gpu-km ─┐                 kernel Image/dtbs/modules/Module.symvers  (tsp-1dl.4.2)
-#          │           │                 GPU .ko built vs kernel Module.symvers    (tsp-1dl.4.3)
-#   sdl ───┼───────────┼─┐               libSDL3-pocketforge.so                     (tsp-1dl.4.4)
-#   wpa ───┼───────────┼─┼─┐             owned wpa_supplicant (a133 xr829 fork)     (tsp-myp1.8.2)
-#          └─▶ rootfs ─┴─┴─┴─▶ assemble ─▶ export mmdebstrap + genimage/extlinux    (tsp-1dl.4.5)
+#   kernel ┼─▶ gpu-km ───┐               kernel Image/dtbs/modules/Module.symvers  (tsp-1dl.4.2)
+#          │             │               GPU .ko built vs kernel Module.symvers    (tsp-1dl.4.3)
+#   gpu-um-mesa ─────────┼─┐             a133-open ONLY: Zink/EGL/GBM Mesa userspace
+#                        │ │             from gpu-um-src, ARG-selected vs the trivial
+#                        │ │             ddk passthrough (tsp-mc9m.41.924.6 / C1)
+#   sdl ─────────────────┼─┼─┐           libSDL3-pocketforge.so (closed DDK OR, for
+#                        │ │ │           a133-open, linked against gpu-um-mesa — C3)  (tsp-1dl.4.4)
+#   wpa ─────────────────┼─┼─┼─┐         owned wpa_supplicant (a133 xr829 fork)     (tsp-myp1.8.2)
+#          └─▶ rootfs ───┴─┴─┴─┴─▶ assemble ─▶ export mmdebstrap + genimage/extlinux (tsp-1dl.4.5)
 #   bootchain ─────────────▶ (assemble)  a523 TF-A BL31 + U-Boot SPL → u-boot-sunxi-with-spl.bin
 #                                        (tsp-jet.1; consumed by the a523 assemble branch via
 #                                        COPY --from=bootchain — tsp-jet.4)
@@ -43,6 +53,12 @@
 # The owned, digest-pinned build container (image/container.pin). Overridable so a dev
 # can point at a locally-built tag; CI/`pf build` pass the pinned digest.
 ARG PF_CONTAINER=pocketforge/build:10.3-2021.07-bookworm
+
+# Declared before the first FROM (global pre-FROM scope) SOLELY so the gpu-um-mesa
+# selector stage below can interpolate it into a `FROM gpu-um-mesa-${PF_GPU_MODEL}`
+# (tsp-mc9m.41.924.6 / C1). "ddk" | "open" (profile.py validate()); default matches the
+# existing PF_GPU_MODEL:-ddk fallback already used in the rootfs stage.
+ARG PF_GPU_MODEL=ddk
 
 # =============================================================================
 # fetch — vendor blobs (irreducibly-closed originals), by CID (B3 / tsp-1dl.3).
@@ -320,6 +336,198 @@ cat /out/modules/.pf-gpu-provenance
 GPUKM
 
 # =============================================================================
+# gpu-um-mesa — open Mesa GLES/EGL/GBM/Vulkan userspace for the a133-open GPU
+# model (tsp-mc9m.41.924.6 / C1). Ports gpu-um-tsp's OWN committed cross-build
+# recipe (docker/Dockerfile.ge8300-mesa-cross, upstream-driven by
+# docker/build-ge8300-mesa-cross.sh) INLINE: that script wraps a SECOND
+# `docker buildx build` (docker-in-docker, unusable in-stage — the same reason
+# the wpa/gpu-km stages above run their INNER recipe directly instead of the
+# repo's own docker-wrapping build script). Every RUN below is copied
+# faithfully from that Dockerfile (same base image digest, same meson/ninja
+# flags, same two-pass reproducibility self-check, same DESTDIR=meson-install
+# — do NOT hand-pick .so files) with exactly one substitution: source arrives
+# via the gpu-um-src named build context (the git-archive of the
+# platform.lock-pinned commit, staged by pf-build.sh) in place of that
+# script's own local `git archive | tar -x` staging step.
+#
+# ONLY reachable for the open GPU model. platform/core/pf-build.sh supplies
+# the gpu-um-src build context EXCLUSIVELY when PF_GPU_MODEL=open — unlike
+# every other named context in this file (kernel-src, gpu-src, sdl-src, ...)
+# it is not even staged as an empty dir for closed profiles ("Keep it
+# entirely out of closed profiles", pf_stage_sources). So the real build
+# lives in its own gpu-um-mesa-open subgraph, reached ONLY through the
+# ARG-selected `FROM gpu-um-mesa-${PF_GPU_MODEL}` selector below — BuildKit
+# resolves/builds only stages reachable from the requested target, so for
+# PF_GPU_MODEL=ddk that whole subgraph (and its gpu-um-src reference) is
+# pruned and the missing context is never needed. gpu-um-mesa-ddk is the
+# trivial closed-model passthrough, mirroring the gpu-km/sdl NOT-SHIPPED /
+# DEFERRED marker pattern used throughout this file.
+# =============================================================================
+
+FROM ${PF_CONTAINER} AS gpu-um-mesa-ddk
+RUN <<'GPUUMDDK'
+set -eux
+mkdir -p /out
+printf 'gpu-um-mesa NOT SHIPPED (gpu_model=ddk; closed DDK userspace comes from the fetch-stage blob group, not this stage)\n' \
+  > /out/.pf-gpu-um-provenance
+cat /out/.pf-gpu-um-provenance
+GPUUMDDK
+
+# --- 1/5 toolchain: Ubuntu 24.04 (native x86_64) + the arm64 cross toolchain + LLVM 20 ---
+# Same base image digest as gpu-um-tsp's own docker/Dockerfile.ge8300-mesa-cross. Do NOT
+# add --platform=linux/arm64 anywhere in this subgraph: every program this recipe executes
+# is x86_64 (the "native precompilers" stage below is the whole reason a cross build needs
+# a native pass at all — mesa_clc/pco_clc/vtn_bindgen2 run at BUILD time, not on-device).
+FROM ubuntu:24.04@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb AS gpu-um-toolchain
+COPY --from=gpu-um-src scripts/install-mesa-buildenv.sh /usr/local/src/install-mesa-buildenv.sh
+RUN <<'GPUUMTOOLCHAIN'
+set -eux
+# The interactive installer's own `rm -f` cleanup step is stripped (same edit
+# gpu-um-tsp's own Dockerfile makes) so its intermediate apt/tool state stays
+# available to this Docker layer rather than being deleted mid-script.
+sed -i '/rm -f/d' /usr/local/src/install-mesa-buildenv.sh
+/usr/local/src/install-mesa-buildenv.sh
+sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+sed -i 's/^deb \[/deb [arch=amd64 /' /etc/apt/sources.list.d/llvm-20.list
+printf '%s\n' \
+  'Types: deb' \
+  'URIs: http://ports.ubuntu.com/ubuntu-ports' \
+  'Suites: noble noble-updates noble-backports noble-security' \
+  'Components: main universe restricted multiverse' \
+  'Architectures: arm64' \
+  'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+  >/etc/apt/sources.list.d/ubuntu-arm64.sources
+dpkg --add-architecture arm64
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  binutils-aarch64-linux-gnu \
+  bison \
+  flex \
+  g++-aarch64-linux-gnu \
+  gcc-aarch64-linux-gnu \
+  libc6-dev:arm64 \
+  libdrm-dev:arm64
+dpkg-query -W > /toolchain-packages.txt
+GPUUMTOOLCHAIN
+COPY --from=gpu-um-src docker/pkg-config/ /usr/local/bin/
+COPY --from=gpu-um-src docker/meson/ /usr/local/share/mesa-cross/
+RUN chmod 0755 /usr/local/bin/aarch64-linux-gnu-pkg-config /usr/local/bin/x86_64-linux-gnu-pkg-config
+ENV CCACHE_DIR=/root/.cache/ccache \
+    CCACHE_MAXSIZE=20G \
+    CCACHE_COMPILERCHECK=content \
+    LLVM_CONFIG=llvm-config-20
+
+# --- 2/5 source: the platform.lock-pinned gpu-um-tsp commit, via the named build context ---
+FROM gpu-um-toolchain AS gpu-um-source
+ARG PF_GPU_UM_SHA
+ARG SOURCE_DATE_EPOCH
+COPY --from=gpu-um-src . /src/
+RUN <<'GPUUMSOURCE'
+set -eux
+: "${PF_GPU_UM_SHA:?}" "${SOURCE_DATE_EPOCH:?}"
+printf '%s\n' "${PF_GPU_UM_SHA}" >/mesa-source-commit
+GPUUMSOURCE
+
+# --- 3/5 native-precompilers: mesa_clc/pco_clc/vtn_bindgen2 built for the BUILD machine
+# (x86_64) from the SAME Mesa tree as the target ICD — keeps target LLVM/CLC libraries out
+# of the aarch64 link while avoiding unversioned host precompilers.
+FROM gpu-um-source AS gpu-um-native-precompilers
+WORKDIR /src
+ARG SOURCE_DATE_EPOCH
+RUN --mount=type=cache,id=ge8300-mesa-cross-ccache,target=/root/.cache/ccache,sharing=locked <<'GPUUMNATIVE'
+set -eux
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" meson setup build-native \
+  --native-file /usr/local/share/mesa-cross/ge8300-native.ini \
+  --wrap-mode=nodownload --prefix=/opt/mesa-native \
+  -Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=enabled \
+  -Dprecomp-compiler=enabled -Dinstall-precomp-compiler=true \
+  -Dinstall-mesa-clc=true -Dgallium-drivers=[] -Dplatforms=[] \
+  -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dshader-cache=disabled \
+  -Dxmlconfig=disabled -Dzlib=disabled -Dzstd=disabled -Dvideo-codecs=[]
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" ninja -C build-native \
+  src/compiler/clc/mesa_clc src/compiler/spirv/vtn_bindgen2 \
+  src/imagination/pco/uscgen/pco_clc
+install -d /opt/mesa-native/bin
+install "$(find build-native -type f -name mesa_clc -perm /111 -print -quit)" /opt/mesa-native/bin/mesa_clc
+install "$(find build-native -type f -name pco_clc -perm /111 -print -quit)" /opt/mesa-native/bin/pco_clc
+install "$(find build-native -type f -name vtn_bindgen2 -perm /111 -print -quit)" /opt/mesa-native/bin/vtn_bindgen2
+file /opt/mesa-native/bin/mesa_clc /opt/mesa-native/bin/pco_clc /opt/mesa-native/bin/vtn_bindgen2 \
+  | grep -c 'x86-64' | grep -qx 3
+GPUUMNATIVE
+
+# --- 4/5 build: the aarch64 cross build itself — Zink gallium + EGL + GBM (GLESv2 rides
+# Mesa's default GL/GLES dispatch) + the Imagination Vulkan ICD. Two-pass build +
+# byte-identical compare is gpu-um-tsp's OWN reproducibility self-check (the SAME
+# sha256/cmp gate build-ge8300-mesa-cross.sh's caller relies on), kept verbatim: a
+# non-reproducible cross build here would silently ship a different binary than CI proved.
+FROM gpu-um-native-precompilers AS gpu-um-build
+WORKDIR /src
+ARG SOURCE_DATE_EPOCH
+ARG PF_GPU_UM_SHA
+ENV PATH=/opt/mesa-native/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN --mount=type=cache,id=ge8300-mesa-cross-ccache,target=/root/.cache/ccache,sharing=locked <<'GPUUMBUILD'
+set -eux
+start="$(date +%s)"
+for pass in 1 2; do
+  build_dir=build-cross
+  SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" meson setup "${build_dir}" \
+    --cross-file /usr/local/share/mesa-cross/ge8300-aarch64.ini \
+    --native-file /usr/local/share/mesa-cross/ge8300-native.ini \
+    --wrap-mode=nodownload \
+    -Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=disabled \
+    -Dmesa-clc=system \
+    -Dprecomp-compiler=system -Dgallium-drivers=zink -Dplatforms=[] \
+    -Dglx=disabled -Degl=enabled -Dgbm=enabled -Dshader-cache=disabled \
+    -Dxmlconfig=disabled -Dzlib=disabled -Dzstd=disabled -Dvideo-codecs=[] \
+    -Dunversion-libgallium=true
+  grep -q 'Build machine cpu family: x86_64' "${build_dir}/meson-logs/meson-log.txt"
+  grep -q 'Host machine cpu family: aarch64' "${build_dir}/meson-logs/meson-log.txt"
+  SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" ninja -C "${build_dir}"
+  so=src/imagination/vulkan/libvulkan_powervr_mesa.so
+  if [ "${pass}" = 1 ]; then
+    cp "${build_dir}/${so}" /first-cross-build.so
+    find "${build_dir}" -depth -delete
+  fi
+done
+so=src/imagination/vulkan/libvulkan_powervr_mesa.so
+readelf -h "build-cross/${so}" | grep -Eq 'Machine:[[:space:]]+AArch64'
+cmp /first-cross-build.so "build-cross/${so}"
+sha256sum /first-cross-build.so "build-cross/${so}" >/src/cross-build-sha256.txt
+elapsed="$(( $(date +%s) - start ))"
+printf 'two_builds_elapsed_seconds=%s\n' "${elapsed}" >/src/cross-build-time.txt
+DESTDIR=/instroot SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" meson install -C build-cross --no-rebuild --skip-subprojects
+# Provenance (this file's convention — a `.pf-*-provenance` marker for every stage):
+# the full install-tree manifest by sha256, so C's acceptance evidence lists real
+# staged artifact paths + hashes rather than a hand-picked subset.
+{
+  printf 'gpu-um-tsp@%s (open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)\n' "${PF_GPU_UM_SHA}"
+  find /instroot/usr/local -type f \( -name '*.so*' -o -name '*.json' \) -printf '%P\n' | LC_ALL=C sort | while read -r f; do
+    printf '  %s sha256=%s\n' "${f}" "$(sha256sum "/instroot/usr/local/${f}" | cut -d' ' -f1)"
+  done
+} > /src/.pf-gpu-um-provenance
+cat /src/.pf-gpu-um-provenance
+GPUUMBUILD
+
+# --- 5/5 gpu-um-mesa-open: the consumable artifact — /out/usr/local is the FULL DESTDIR
+# install tree (Zink DRI under lib/dri, libEGL/libgbm/libGLESv2, the Vulkan ICD .so + its
+# ICD JSON under share/vulkan/icd.d) exactly as C1's acceptance criteria require: a real
+# `meson install` tree, never a hand-picked .so subset.
+FROM scratch AS gpu-um-mesa-open
+COPY --from=gpu-um-build /mesa-source-commit /mesa-source-commit
+COPY --from=gpu-um-build /toolchain-packages.txt /toolchain-packages.txt
+COPY --from=gpu-um-build /src/cross-build-sha256.txt /cross-build-sha256.txt
+COPY --from=gpu-um-build /src/cross-build-time.txt /cross-build-time.txt
+COPY --from=gpu-um-build /src/.pf-gpu-um-provenance /out/.pf-gpu-um-provenance
+COPY --from=gpu-um-build /src/build-cross/src/imagination/vulkan/libvulkan_powervr_mesa.so /libvulkan_powervr_mesa.so
+COPY --from=gpu-um-build /instroot/usr/local /out/usr/local
+
+# Selector: which of the two stages above answers to the `gpu-um-mesa` name every
+# downstream consumer (sdl, rootfs) COPYs --from. ARGs declared before the file's first
+# FROM (PF_GPU_MODEL, near the top of this file) are usable in any FROM instruction
+# without redeclaration — this is the same mechanism PF_CONTAINER relies on throughout.
+FROM gpu-um-mesa-${PF_GPU_MODEL} AS gpu-um-mesa
+
+# =============================================================================
 # bootchain — a523 boot chain: TF-A BL31 + U-Boot SPL, source-built from the
 # platform.lock-pinned git archives (tsp-jet.1). Device-gated on the profile's
 # [bootchain] model: only "sunxi-spl-uboot" source-builds a boot chain — a133
@@ -444,8 +652,11 @@ ARG SOURCE_DATE_EPOCH
 # Mount points match the canonical recipe (libsdl3-sunxifb/build/build-libsdl3.sh): source at
 # /work/src (the script builds /work/src/sdl3), blobs at /work/blobs (it links the PowerVR UM at
 # /work/blobs/tsp/<bvnc>). The UM comes from the fetch stage — NOT a host LOCAL_BLOBS/_build inject.
+# /work/gpu-um-mesa is the C1 open-Mesa install tree (harmlessly just a NOT-SHIPPED marker file
+# for the closed/ddk model — gpu-um-mesa resolves to the trivial gpu-um-mesa-ddk passthrough then).
 COPY --from=sdl-src . /work/src
 COPY --from=fetch /out /work/blobs
+COPY --from=gpu-um-mesa /out /work/gpu-um-mesa
 RUN <<'SDL'
 set -eux
 mkdir -p /out/lib /work/out
@@ -459,24 +670,18 @@ if [ "${PF_SOC}" != "sun50iw10p1" ]; then
   cat /out/lib/.pf-sdl-provenance
   exit 0
 fi
-# sdl is SELECTED for every a133 variant, but the sunxifb backend's build recipe hard-links
-# the CLOSED PowerVR UM (SUNXIFB_DDK_ROOT defaults into the closed blob tree — see
-# libsdl3-sunxifb/build/build-libsdl3.sh) and would FATAL for the open GPU model, whose
-# blobs carry no closed UM at all. Wiring an open-Mesa link recipe is step C's job (the
-# schema this bead lands has no consumer yet) — gate the actual build invocation on
-# PF_GPU_MODEL rather than inventing that recipe here (coordinator DM'd per the bead's
-# explicit fallback instruction).
-if [ "${PF_GPU_MODEL}" != "ddk" ]; then
-  printf 'libsdl3-sunxifb@%s DEFERRED for device=%s (gpu_model=%s; open-Mesa sunxifb link lands in step C)\n' \
-    "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_MODEL}" > /out/lib/.pf-sdl-provenance
-  cat /out/lib/.pf-sdl-provenance
-  exit 0
-fi
 # Deterministic timestamp (image commit epoch, resolved from the pinned SHA — never wall-clock);
 # cmake/gcc honour SOURCE_DATE_EPOCH. Per-lib bit-for-bit repro is finished under B6 (tsp-1dl.6).
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
-# Canonical recipe: cmake+ninja, sunxifb backend, with DYNAPI-export + glibc-symver self-checks.
-# In-container, no host injection. OUT is the writable artifact dir; SRC/BLOBS default to the mounts.
+# sdl is SELECTED for every a133 variant. The sunxifb backend's build recipe links EITHER the
+# closed PowerVR UM (ddk) OR — tsp-mc9m.41.924.6 / C3, replacing the former B-deferred marker —
+# the C1 open Mesa GLES/EGL/GBM install tree (open): build-libsdl3.sh itself branches on
+# PF_GPU_MODEL and, for open, requires SUNXIFB_MESA_ROOT (the C1 gpu-um-mesa stage's
+# /work/gpu-um-mesa/usr/local — the real `meson install` prefix: include/EGL,EGL/eglext.h... +
+# lib/libEGL.so,libGLESv2.so... — CheckSUNXIFB's CMAKE_FIND_ROOT_PATH usage is generic, so no
+# cmake change was needed to point it at Mesa instead of the DDK).
+PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
+SUNXIFB_MESA_ROOT=/work/gpu-um-mesa/usr/local \
 OUT=/work/out bash /work/src/build/build-libsdl3.sh
 # Emit the shared-object set (real lib + soname/dev symlinks) for the a133 rootfs/assemble stage.
 cp -a /work/out/libSDL3-pocketforge.so* /out/lib/
@@ -491,7 +696,7 @@ for t in testgles2 testsprite pf-gfxbench; do
 done
 ls -la /out/lib/testbin/
 {
-  printf 'libsdl3-sunxifb@%s device=%s gpu=%s\n' "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}"
+  printf 'libsdl3-sunxifb@%s device=%s gpu_model=%s gpu=%s\n' "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_MODEL:-ddk}" "${PF_GPU_REPO}"
   for f in /out/lib/libSDL3-pocketforge.so*; do
     if [ -f "$f" ] && [ ! -L "$f" ]; then printf '  %s sha256=%s\n' "${f##*/}" "$(sha256sum "$f" | cut -d' ' -f1)"; fi
   done
@@ -809,6 +1014,7 @@ COPY --from=image-src . /work/src
 COPY --from=fetch  /out /work/blobs
 COPY --from=kernel /out/lib/modules /work/kernel-tsp
 COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
+COPY --from=gpu-um-mesa /out        /work/gpu-um-mesa
 COPY --from=sdl    /out/lib         /work/libsdl3
 COPY --from=wpa    /out             /work/wpa
 COPY --from=runtime /out            /work/runtime
@@ -828,7 +1034,8 @@ mkdir -p /out
 case "${PF_SOC}" in
   sun50iw10p1)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
-      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp OUT_DIR=/out \
+      KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
+      GPU_UM_MESA_DIR=/work/gpu-um-mesa OUT_DIR=/out \
       RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher \
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
