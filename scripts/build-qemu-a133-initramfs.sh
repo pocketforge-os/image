@@ -66,8 +66,12 @@ fi
 
 WORK="${WORK:-$(mktemp -d /tmp/qemu-a133-initramfs.XXXXXX)}"
 mkdir -p "$WORK"
-ROOT="$WORK/root"
-rm -rf "$ROOT"
+# Stage under a FRESH mktemp dir, never a fixed "$WORK/root" -- --work accepts any
+# caller-supplied path (e.g. a shared workspace, or even "/"), and a fixed subdir name
+# combined with `rm -rf` on it is a destructive footgun (rm -rf "$WORK/root" against
+# --work / would target /root). mktemp guarantees a unique, just-created directory, so
+# there is nothing pre-existing to rm -rf in the first place.
+ROOT="$(mktemp -d "$WORK/stage.XXXXXX")/root"
 mkdir -p "$ROOT"/{bin,proc,sys,dev,opt/pocketforge/bin}
 
 echo "=== fetching busybox ${BUSYBOX_VER} (pinned sha256) ==="
