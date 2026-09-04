@@ -85,9 +85,14 @@ if [ "$need_fetch" = 1 ]; then
 fi
 echo "${BUSYBOX_SHA256}  ${TARBALL}" | sha256sum -c -
 
-BB_SRC="$WORK/busybox-${BUSYBOX_VER}"
-rm -rf "$BB_SRC"
-tar -xjf "$TARBALL" -C "$WORK"
+# Extract under a FRESH mktemp dir, never a fixed "$WORK/busybox-<ver>" name -- the same
+# destructive-footgun class already fixed for ROOT above (--work accepts any
+# caller-supplied path, and a fixed name immediately preceded by `rm -rf` can wipe
+# unrelated content under a shared or malicious --work). mktemp guarantees a unique,
+# just-created directory, so there is nothing pre-existing to rm -rf.
+BB_STAGE="$(mktemp -d "$WORK/busybox-src.XXXXXX")"
+tar -xjf "$TARBALL" -C "$BB_STAGE"
+BB_SRC="$BB_STAGE/busybox-${BUSYBOX_VER}"
 
 echo "=== cross-compiling busybox (static, aarch64) ==="
 (
