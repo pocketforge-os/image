@@ -155,6 +155,80 @@ them.
 
 ## File-by-file change set
 
+### Step B is adoption, not a greenfield schema
+
+Scoping for step B found the KM/UM split is already half-built, so B's job is
+**decoupling the is-A133 proxy from `PF_GPU_REPO`**, not designing the schema
+from scratch:
+
+- `platform/platform.lock` already pins both `gpu-km-tsp` and `gpu-um-tsp`
+  (at merged mitigation SHA `43fc908`) as ordinary name/url/ref/sha entries —
+  no lock-schema change is needed.
+- `platform/core/profile.py` `env_lines()`/`build_args()` already emit
+  `PF_GPU_KM_MODEL`/`PF_GPU_KM_REPO`/`PF_GPU_KM_REF`/`PF_GPU_KM_SHA` (falling
+  back to the legacy `repo` field) and `PF_GPU_UM_REPO`/`PF_GPU_UM_REF`/
+  `PF_GPU_UM_SHA`. These are currently dead: `build/Dockerfile.pf` still reads
+  only the legacy `PF_GPU_REPO`.
+- `platform/devices/a133-open/profile.toml` already exists with
+  `km_model=in-tree-6.x`, `km_repo=kernel-sunxi-6.x`, `um_repo=gpu-um-tsp`,
+  and `modules=[powervr.ko]`; base-profile inheritance already respects its
+  explicit `repo=""` override.
+- `platform/core/pf-build.sh` already stages the `gpu-um-src` archive context
+  (gated on `PF_GPU_MODEL=open`) and passes it as a named Docker build
+  context — nothing consumes it yet; that consumer is step C's Mesa stage,
+  not B.
+
+So step B's remaining work is narrower than a schema design: wire the
+already-emitted KM/UM args so step C can consume them, and — the part this
+plan was missing — decouple the four *device-identity* gates below from
+`PF_GPU_REPO`, which is a GPU-model value, not a device-identity value.
+
+### Decoupling the is-A133 proxy
+
+`PF_GPU_REPO == gpu-km-tsp` (or `!=`) doubles as an "is this an A133 device"
+proxy in several `Dockerfile.pf` stages. That breaks once `PF_GPU_REPO` is
+empty under `a133-open` (the open profile's GPU repo field), which would
+wrongly NOT-SHIP components that have nothing to do with the GPU choice.
+Four stages are affected, of two different kinds:
+
+- **Pure device-identity proxies (zero GPU relation)** — must ship for every
+  A133 variant regardless of GPU model:
+  - `wpa` stage — the owned XR829 `wpa_supplicant` fork.
+  - `runtime` stage — `pf-input-decode`, `pf-session-authorityd`, `pf-prefsd`.
+  - `launcher` stage — `pf-shell`.
+- **GPU-adjacent but mis-keyed** — `sdl` (`libsdl3-sunxifb`) legitimately
+  depends on the GPU choice (it links the PowerVR userspace), but keying it
+  on the *closed*-KM value specifically wrongly NOT-SHIPs it for
+  `a133-open`; it must be selected for both A133 GPU models, then link
+  whichever userspace the model resolves to (that link recipe is step C's
+  concern — B only needs to stop excluding the stage).
+
+The fix is a declarative is-A133 signal, not a `PF_GPU_REPO` string compare —
+following the precedent already in-tree: the `assemble` stage was migrated
+off this same proxy onto `PF_BOOT_PROTO` (see the Dockerfile.pf comment
+"declarative, not the `PF_GPU_REPO` proxy"). The candidate signal is `PF_SOC`
+(`sun50iw10p1` for A133, `sun55iw3` for A523) — already exported by
+`profile.py`'s `env_lines()` but not yet by `build_args()` — or an explicit
+`PF_DEVICE_FAMILY` field if a self-documenting boolean is preferred; either
+way it must be base-profile-inherited so `a133-open` picks it up without a
+per-variant override. `rootfs`'s master per-device dispatch
+(`case "$PF_GPU_REPO"`) needs the same treatment, so `a133-open` takes the
+A133 rootfs branch; only the GPU-module install sub-step inside that branch
+stays keyed on `PF_GPU_MODEL` (closed vs open).
+
+### Residual hardcodes left for step D
+
+Decoupling the proxy *gates* does not remove the closed-stack assumptions
+still baked into the rootfs branch's *contents* — step D's removal targets,
+left untouched by B:
+
+- the hard-coded `/lib/modules/4.9.191` install/`depmod` path (must become
+  the discovered 6.x release for `a133-open`);
+- the closed-vs-open kernel-module divergence itself: `pvrsrvkm.ko` +
+  `dc_sunxi.ko` (closed DDK) vs the in-tree `powervr.ko` (open), which
+  selects a different initrd/module-install set, not merely a different
+  file list.
+
 ### `platform`
 
 - `platform.lock`: add exact pins for `kernel-sunxi-6.x` (`device/a133`) and
