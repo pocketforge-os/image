@@ -5,8 +5,13 @@
 #
 # Source: pocketforge-plan.md §3.5 (variant definitions)
 
+ffmpeg
+i2c-tools
+iperf3
+libvdpau1
+libpixman-1-0
+libx11-6
 openssh-server
 rsync
+strace
 systemd-coredump
-iperf3
-i2c-tools
