@@ -5,7 +5,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
 
-for input in src blobs libsdl3 wpa runtime launcher kernel gpu; do
+for input in src blobs libsdl3 wpa runtime launcher hwprobe kernel gpu; do
     mkdir -p "${scratch}/${input}"
     printf '%s input\n' "${input}" > "${scratch}/${input}/payload"
 done
@@ -27,7 +27,8 @@ run_direct() {
     local uboot_spl="${1:-}"
     SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
     LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
-    RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" KERNEL_TSP_DIR="${scratch}/kernel" \
+    RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${scratch}/hwprobe" \
+    KERNEL_TSP_DIR="${scratch}/kernel" \
     GPU_KM_TSP_DIR="${scratch}/gpu" OUT_DIR="${scratch}/out" \
     ROOTFS_BUILDER="${fake_builder}" SOURCE_DATE_EPOCH=1700000000 \
     bash "${repo_dir}/scripts/build-rootfs-direct.sh" \
@@ -48,9 +49,17 @@ rm "${scratch}/out/userdata.ext4"
 different="$(run_direct "${scratch}/u-boot.bin")"
 [ "${first}" != "${different}" ] || { echo "FAIL: changed direct input matched" >&2; exit 1; }
 
+# hwprobe is a shipped dev payload, so its staged bytes must participate in the
+# direct path's resolved-input identity just like the other rootfs inputs.
+sed -i '$d' "${scratch}/kernel/payload"
+printf 'changed hwprobe input\n' >> "${scratch}/hwprobe/payload"
+rm "${scratch}/out/userdata.ext4"
+different_hwprobe="$(run_direct "${scratch}/u-boot.bin")"
+[ "${first}" != "${different_hwprobe}" ] || { echo "FAIL: changed hwprobe input matched" >&2; exit 1; }
+sed -i '$d' "${scratch}/hwprobe/payload"
+
 # Restore the kernel input, then prove the separately selected owned bootchain is
 # part of the identity even though it is outside every staged source tree.
-sed -i '$d' "${scratch}/kernel/payload"
 printf 'owned U-Boot input B\n' > "${scratch}/u-boot.bin"
 rm "${scratch}/out/userdata.ext4"
 different_uboot="$(run_direct "${scratch}/u-boot.bin")"
@@ -65,5 +74,5 @@ case "${first}" in
     *) echo "FAIL: direct build-id is not a single cat-readable line: ${first}" >&2; exit 1 ;;
 esac
 
-printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\n' \
-    "${first}" "${different}" "${different_uboot}" "${vendor}"
+printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-hwprobe=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\n' \
+    "${first}" "${different}" "${different_hwprobe}" "${different_uboot}" "${vendor}"

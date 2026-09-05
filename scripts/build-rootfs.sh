@@ -15,6 +15,7 @@
 #   /work/src       (ro)  — this image repo
 #   /work/blobs     (ro)  — blobs repo checkout
 #   /work/libsdl3   (ro)  — libSDL3-pocketforge.so.0 release artifact
+#   /work/hwprobe   (ro)  — pf-hwprobe stage output (dev variant)
 #   /work/out       (rw)  — build output (userdata.ext4 written here)
 #
 # Usage:
@@ -492,7 +493,7 @@ fi
 # pf-hwprobe is a development diagnostic. It is fully static for portability,
 # while SDL3_DYNAMIC_API in /etc/environment selects the device SDL at runtime.
 HWPROBE_BIN="${HWPROBE_DIR}/bin/pf-hwprobe"
-if [ "${VARIANT}" = dev ]; then
+if [ "${POCKETFORGE_VARIANT:-dev}" = dev ]; then
     test -f "${HWPROBE_BIN}"
     test "$(od -An -tx1 -j18 -N2 "${HWPROBE_BIN}" | tr -d ' ')" = b700
     install -D -m0755 "${HWPROBE_BIN}" \
