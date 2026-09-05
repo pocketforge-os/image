@@ -972,6 +972,64 @@ cat /out/.pf-launcher-provenance
 LAUNCHER
 
 # =============================================================================
+# cedar — legacy /dev/cedar_dev userspace, for the a133 dev-image spike only.
+# The owned PocketForge forks and immutable refs are deliberately literal here:
+# Docker/BuildKit checks out exactly these commits, never a moving branch tip.
+# Only /out crosses into the rootfs stage; git and all build dependencies remain
+# build-time-only.  Promote these to platform.lock named contexts if Cedar becomes
+# a product component rather than this bounded spike.
+# =============================================================================
+FROM ${PF_CONTAINER} AS cedar-lib
+ARG PF_TOOLCHAIN_GCC_VERSION
+ARG SOURCE_DATE_EPOCH
+ADD --checksum=sha256:a2c531db5f4ce04e896eab0e5553422bb3d560fb554b049ae2cc1764e8427975 \
+  https://github.com/pocketforge-os/libcedrus/archive/9b243c430a4d445b3853262552ad563fa9ea325d.tar.gz /work/libcedrus.tar.gz
+RUN <<'CEDRUS'
+set -eux
+mkdir /work/libcedrus
+tar -xzf /work/libcedrus.tar.gz --strip-components=1 -C /work/libcedrus
+export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+make -C /work/libcedrus -j"$(nproc)" \
+  CC=aarch64-none-linux-gnu-gcc \
+  CFLAGS='-Wall -Wextra -O2 -ffile-prefix-map=/work/libcedrus=.'
+make -C /work/libcedrus install DESTDIR=/out prefix=/usr
+test "$(od -An -tx1 -j18 -N2 /out/usr/lib/libcedrus.so.1 | tr -d ' ')" = b700
+printf '%s\n' 'libcedrus@9b243c430a4d445b3853262552ad563fa9ea325d' > /out/.pf-cedar-provenance
+CEDRUS
+
+FROM ${PF_CONTAINER} AS cedar-vdpau
+ARG PF_TOOLCHAIN_GCC_VERSION
+ARG SOURCE_DATE_EPOCH
+ADD --checksum=sha256:9adb541d841d8a18d7075d6619a070aa34893a7569b4ad17b41015e0bbccbebb \
+  https://github.com/pocketforge-os/libvdpau-sunxi/archive/ebdf7844efbb997a1e858600ae76c90985ea865d.tar.gz /work/libvdpau-sunxi.tar.gz
+COPY --from=cedar-lib /out/usr /usr
+COPY --from=cedar-lib /out/.pf-cedar-provenance /tmp/cedrus-provenance
+RUN <<'VDPAU'
+set -eux
+mkdir /work/libvdpau-sunxi
+tar -xzf /work/libvdpau-sunxi.tar.gz --strip-components=1 -C /work/libvdpau-sunxi
+dpkg --add-architecture arm64
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  libpixman-1-dev:arm64 libvdpau-dev:arm64 libx11-dev:arm64
+export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
+make -C /work/libvdpau-sunxi -j"$(nproc)" \
+  CC=aarch64-none-linux-gnu-gcc \
+  CFLAGS='-Wall -O2 -ffile-prefix-map=/work/libvdpau-sunxi=.' \
+  LDFLAGS='-L/usr/lib -L/usr/lib/aarch64-linux-gnu'
+make -C /work/libvdpau-sunxi install DESTDIR=/out prefix=/usr MODULEDIR=/usr/lib/aarch64-linux-gnu/vdpau
+test "$(od -An -tx1 -j18 -N2 /out/usr/lib/aarch64-linux-gnu/vdpau/libvdpau_sunxi.so.1 | tr -d ' ')" = b700
+cp -a /usr/lib/libcedrus.so* /out/usr/lib/
+{
+  cat /tmp/cedrus-provenance
+  printf '%s\n' 'libvdpau-sunxi@ebdf7844efbb997a1e858600ae76c90985ea865d'
+} > /out/.pf-cedar-provenance
+VDPAU
+
+# =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
 # rootfs-packages-<id>.txt (tsp-1dl.4.5 unifies the two forked build-rootfs scripts).
 # Composes the kernel modules + GPU .ko + libSDL3 + owned wpa_supplicant + fetched firmware.
@@ -1020,6 +1078,7 @@ COPY --from=wpa    /out             /work/wpa
 COPY --from=runtime /out            /work/runtime
 COPY --from=recovery /out           /work/recovery
 COPY --from=launcher /out           /work/launcher
+COPY --from=cedar-vdpau /out        /work/cedar
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -1036,7 +1095,7 @@ case "${PF_SOC}" in
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
       GPU_UM_MESA_DIR=/work/gpu-um-mesa OUT_DIR=/out \
-      RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher \
+      RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher CEDAR_DIR=/work/cedar \
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \

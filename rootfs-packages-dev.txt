@@ -9,6 +9,8 @@ ffmpeg
 i2c-tools
 iperf3
 libvdpau1
+libpixman-1-0
+libx11-6
 openssh-server
 rsync
 strace

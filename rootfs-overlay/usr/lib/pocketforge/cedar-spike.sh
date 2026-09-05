@@ -39,8 +39,31 @@ frames=$(sed -n 's/^frame=//p' "$PROGRESS" 2>/dev/null | tail -n 1)
 frames=${frames:-0}
 grep -Eq 'open(at)?\(.*"/dev/cedar_dev".*\)[[:space:]]*=[[:space:]]*[0-9]+</dev/cedar_dev[^[:space:]]*>' "$TRACE" \
     || fail "$frames" cedar_device_not_opened
-grep -Eq 'ioctl\([0-9]+</dev/cedar_dev[^,]*>,' "$TRACE" \
-    || fail "$frames" cedar_ioctl_not_observed
+# Track each descriptor by owning process from its Cedar open until its close.
+# This rejects both cross-process number collisions and same-process FD reuse.
+awk '
+function pid_of(line, p) {
+    if (match(line, /^\[pid[[:space:]]+[0-9]+\]/)) {
+        p = substr(line, RSTART, RLENGTH); gsub(/[^0-9]/, "", p); return p
+    }
+    if (match(line, /^[0-9]+[[:space:]]/)) return substr(line, 1, RLENGTH - 1)
+    return "main"
+}
+{
+    pid = pid_of($0)
+    if ($0 ~ /open(at)?\(.*"\/dev\/cedar_dev".*\)[[:space:]]*=[[:space:]]*[0-9]+<\/dev\/cedar_dev/) {
+        result = $0; sub(/^.*=[[:space:]]*/, "", result); sub(/<.*$/, "", result)
+        live[pid SUBSEP result] = 1
+    } else if (match($0, /close\([0-9]+<[^>]*>/)) {
+        fd = substr($0, RSTART, RLENGTH); sub(/^close\(/, "", fd); sub(/<.*$/, "", fd)
+        delete live[pid SUBSEP fd]
+    } else if (match($0, /ioctl\([0-9]+<\/dev\/cedar_dev[^>]*>/)) {
+        fd = substr($0, RSTART, RLENGTH); sub(/^ioctl\(/, "", fd); sub(/<.*$/, "", fd)
+        if (live[pid SUBSEP fd]) found = 1
+    }
+}
+END { exit(found ? 0 : 1) }
+' "$TRACE" || fail "$frames" cedar_ioctl_not_observed
 [ "$rc" -eq 0 ] || fail "$frames" decoder_exit_${rc}
 [ "$frames" -eq 900 ] 2>/dev/null || fail "$frames" incomplete_decode
 

@@ -1014,6 +1014,16 @@ install -m 0755 "/work/src/rootfs-overlay/usr/bin/pf-take-panel" \
 # the snapshot-pinned target ffmpeg already installed by mmdebstrap.  Raw Annex-B
 # avoids introducing a container/demux dependency into the actual decode question.
 if [ "${VARIANT}" = "dev" ]; then
+    [ -f "${CEDAR_DIR}/usr/lib/libcedrus.so.1" ] \
+        || { echo "FATAL: pinned Cedar library is missing" >&2; exit 1; }
+    [ -f "${CEDAR_DIR}/usr/lib/aarch64-linux-gnu/vdpau/libvdpau_sunxi.so.1" ] \
+        || { echo "FATAL: pinned sunxi VDPAU backend is missing" >&2; exit 1; }
+    cp -a "${CEDAR_DIR}/usr/lib/libcedrus.so"* "${ROOTFS}/usr/lib/"
+    install -d "${ROOTFS}/usr/lib/aarch64-linux-gnu/vdpau"
+    cp -a "${CEDAR_DIR}/usr/lib/aarch64-linux-gnu/vdpau/libvdpau_sunxi.so"* \
+        "${ROOTFS}/usr/lib/aarch64-linux-gnu/vdpau/"
+    install -D -m 0644 "${CEDAR_DIR}/.pf-cedar-provenance" \
+        "${ROOTFS}/usr/share/pocketforge/cedar-userspace.provenance"
     install -D -m 0755 \
         "/work/src/rootfs-overlay/usr/lib/pocketforge/cedar-spike.sh" \
         "${ROOTFS}/usr/lib/pocketforge/cedar-spike.sh"
