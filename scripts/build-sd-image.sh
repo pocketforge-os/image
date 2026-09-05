@@ -14,6 +14,7 @@
 #   /work/src     (ro) - this image repo
 #   /work/blobs   (ro) - blobs repo checkout
 #   /work/libsdl3 (ro) - libSDL3-pocketforge.so.0 release artifact
+#   /work/hwprobe (ro) - pf-hwprobe stage output (required for dev rootfs)
 #   /work/out     (rw) - build output
 #
 # Usage:

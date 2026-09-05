@@ -5,10 +5,12 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
 
-for input in src blobs libsdl3 wpa runtime launcher kernel gpu; do
+for input in src blobs libsdl3 wpa runtime launcher hwprobe kernel gpu; do
     mkdir -p "${scratch}/${input}"
     printf '%s input\n' "${input}" > "${scratch}/${input}/payload"
 done
+cp "${scratch}/kernel/payload" "${scratch}/kernel-payload.original"
+cp "${scratch}/hwprobe/payload" "${scratch}/hwprobe-payload.original"
 cp "${repo_dir}/scripts/generate-build-id.sh" "${scratch}/src/generate-build-id.sh"
 mkdir -p "${scratch}/out"
 printf 'owned U-Boot input A\n' > "${scratch}/u-boot.bin"
@@ -18,7 +20,11 @@ fake_builder="${scratch}/fake-build-rootfs.sh"
 cat > "${fake_builder}" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+[ "${PF_VARIANT}" = dev ]
+[ -n "${PF_HWPROBE_SHA}" ]
+[ -n "${PF_SIM_SHA}" ]
 "${SRC_DIR}/generate-build-id.sh" > "${OUT_DIR}/build-id"
+printf 'hwprobe=%s\nsim=%s\n' "${PF_HWPROBE_SHA}" "${PF_SIM_SHA}" > "${OUT_DIR}/dev-inputs"
 printf 'rootfs\n' > "${OUT_DIR}/userdata.ext4"
 EOF
 chmod +x "${fake_builder}"
@@ -27,7 +33,8 @@ run_direct() {
     local uboot_spl="${1:-}"
     SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
     LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
-    RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" KERNEL_TSP_DIR="${scratch}/kernel" \
+    RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${scratch}/hwprobe" \
+    KERNEL_TSP_DIR="${scratch}/kernel" \
     GPU_KM_TSP_DIR="${scratch}/gpu" OUT_DIR="${scratch}/out" \
     ROOTFS_BUILDER="${fake_builder}" SOURCE_DATE_EPOCH=1700000000 \
     bash "${repo_dir}/scripts/build-rootfs-direct.sh" \
@@ -36,6 +43,14 @@ run_direct() {
 }
 
 first="$(run_direct "${scratch}/u-boot.bin")"
+grep -E '^hwprobe=[0-9a-f]{64}$' "${scratch}/out/dev-inputs" >/dev/null || {
+    echo "FAIL: dev build-ID inputs did not record a non-empty hwprobe identity" >&2
+    exit 1
+}
+grep -E '^sim=[0-9a-f]{64}$' "${scratch}/out/dev-inputs" >/dev/null || {
+    echo "FAIL: dev build-ID inputs did not record a non-empty sim identity" >&2
+    exit 1
+}
 rm "${scratch}/out/userdata.ext4"
 # Mutable checkout metadata is not a build input and must not perturb identity.
 mkdir -p "${scratch}/src/.git"
@@ -48,9 +63,17 @@ rm "${scratch}/out/userdata.ext4"
 different="$(run_direct "${scratch}/u-boot.bin")"
 [ "${first}" != "${different}" ] || { echo "FAIL: changed direct input matched" >&2; exit 1; }
 
+# hwprobe is a shipped dev payload, so its staged bytes must participate in the
+# direct path's resolved-input identity just like the other rootfs inputs.
+cp "${scratch}/kernel-payload.original" "${scratch}/kernel/payload"
+printf 'changed hwprobe input\n' >> "${scratch}/hwprobe/payload"
+rm "${scratch}/out/userdata.ext4"
+different_hwprobe="$(run_direct "${scratch}/u-boot.bin")"
+[ "${first}" != "${different_hwprobe}" ] || { echo "FAIL: changed hwprobe input matched" >&2; exit 1; }
+cp "${scratch}/hwprobe-payload.original" "${scratch}/hwprobe/payload"
+
 # Restore the kernel input, then prove the separately selected owned bootchain is
 # part of the identity even though it is outside every staged source tree.
-sed -i '$d' "${scratch}/kernel/payload"
 printf 'owned U-Boot input B\n' > "${scratch}/u-boot.bin"
 rm "${scratch}/out/userdata.ext4"
 different_uboot="$(run_direct "${scratch}/u-boot.bin")"
@@ -60,10 +83,55 @@ rm "${scratch}/out/userdata.ext4"
 vendor="$(run_direct "")"
 [ "${first}" != "${vendor}" ] || { echo "FAIL: owned and explicit vendor bootchain identities matched" >&2; exit 1; }
 
+missing_hwprobe="${scratch}/missing-hwprobe"
+release_builder="${scratch}/release-build-rootfs.sh"
+cat > "${release_builder}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "${PF_VARIANT}" = release ]
+[ -z "${PF_HWPROBE_SHA}" ]
+[ -z "${PF_SIM_SHA}" ]
+"${SRC_DIR}/generate-build-id.sh" > "${OUT_DIR}/release-build-id"
+printf 'hwprobe=%s\nsim=%s\n' "${PF_HWPROBE_SHA}" "${PF_SIM_SHA}" > "${OUT_DIR}/release-inputs"
+EOF
+chmod +x "${release_builder}"
+
+SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
+LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
+RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${missing_hwprobe}" \
+KERNEL_TSP_DIR="${scratch}/kernel" GPU_KM_TSP_DIR="${scratch}/gpu" \
+OUT_DIR="${scratch}/out" \
+ROOTFS_BUILDER="${release_builder}" SOURCE_DATE_EPOCH=1700000000 \
+bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release
+
+case "$(cat "${scratch}/out/release-build-id")" in
+    'device=trimui-smart-pro-a133 build='????????????) ;;
+    *) echo "FAIL: release path did not complete real build-ID generation" >&2; exit 1 ;;
+esac
+[ "$(cat "${scratch}/out/release-inputs")" = $'hwprobe=\nsim=' ] || {
+    echo "FAIL: release build-ID inputs did not record empty hwprobe/sim identities" >&2
+    exit 1
+}
+
+if SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
+    LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
+    RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${missing_hwprobe}" \
+    KERNEL_TSP_DIR="${scratch}/kernel" GPU_KM_TSP_DIR="${scratch}/gpu" \
+    OUT_DIR="${scratch}/out" \
+    ROOTFS_BUILDER="${release_builder}" SOURCE_DATE_EPOCH=1700000000 \
+    bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant dev 2>"${scratch}/dev-missing-hwprobe.err"; then
+    echo "FAIL: dev direct path accepted an absent hwprobe input" >&2
+    exit 1
+fi
+grep -F "required input is absent: ${missing_hwprobe}" "${scratch}/dev-missing-hwprobe.err" >/dev/null || {
+    echo "FAIL: dev direct path did not report the absent hwprobe input" >&2
+    exit 1
+}
+
 case "${first}" in
     'device=trimui-smart-pro-a133 build='????????????) ;;
     *) echo "FAIL: direct build-id is not a single cat-readable line: ${first}" >&2; exit 1 ;;
 esac
 
-printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\n' \
-    "${first}" "${different}" "${different_uboot}" "${vendor}"
+printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-hwprobe=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\nPASS release-without-hwprobe\nPASS dev-requires-hwprobe\n' \
+    "${first}" "${different}" "${different_hwprobe}" "${different_uboot}" "${vendor}"

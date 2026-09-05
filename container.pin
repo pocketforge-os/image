@@ -10,4 +10,6 @@
 # Re-pinned 2026-09-05: added the checksum-verified Rust 1.88.0 host toolchain,
 # aarch64-unknown-linux-gnu standard library, and a validated GNU cross-linker
 # configuration for hermetic runtime builds.
-10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r2@sha256:21c4bbf3bfa99538b211505e89945b482f1224f43ac729e9cf8e35e3bd202f31
+# Re-pinned 2026-09-05: added the checksum-verified aarch64-unknown-linux-musl std
+# for hermetic static runtime builds.
+10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r3@sha256:7db398b08abced1d602fe94b08178819a49dbb907e33ed9a6af5382cdcd20dde

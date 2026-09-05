@@ -126,10 +126,12 @@ ARG RUST_DIST_DATE=2025-06-26
 ARG RUST_DIST_BASE_URL=https://static.rust-lang.org/dist/${RUST_DIST_DATE}
 ARG RUST_HOST=x86_64-unknown-linux-gnu
 ARG RUST_CROSS_TARGET=aarch64-unknown-linux-gnu
+ARG RUST_MUSL_TARGET=aarch64-unknown-linux-musl
 ARG RUSTC_SHA256=b049fd57fce274d10013e2cf0e05f215f68f6580865abc52178f66ae9bf43fd8
 ARG CARGO_SHA256=856962610ee821648cee32e3d6abac667af7bb7ea6ec6f3d184cc31e66044f6b
 ARG RUST_STD_HOST_SHA256=36d7eacf46bd5199cb433e49a9ed9c9b380d82f8a0ebc05e89b43b51c070c955
 ARG RUST_STD_CROSS_SHA256=e9ac4ff3c87247a2195fcceddbf1bdeee5c4fd337f014d8f4c4e3ac99002021f
+ARG RUST_STD_MUSL_SHA256=b1562ce0836d5071abbbeaf52e3db9ce0d37fa432f5202b8f661aa4881b4c3e4
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -144,11 +146,13 @@ RUN set -eux; \
     cargo_archive="cargo-${RUST_VERSION}-${RUST_HOST}.tar.xz"; \
     std_host_archive="rust-std-${RUST_VERSION}-${RUST_HOST}.tar.xz"; \
     std_cross_archive="rust-std-${RUST_VERSION}-${RUST_CROSS_TARGET}.tar.xz"; \
+    std_musl_archive="rust-std-${RUST_VERSION}-${RUST_MUSL_TARGET}.tar.xz"; \
     for archive in \
         "${rustc_archive}" \
         "${cargo_archive}" \
         "${std_host_archive}" \
-        "${std_cross_archive}"; do \
+        "${std_cross_archive}" \
+        "${std_musl_archive}"; do \
         curl --fail --silent --show-error --location \
              --output "${archive}" "${RUST_DIST_BASE_URL}/${archive}"; \
     done; \
@@ -156,11 +160,13 @@ RUN set -eux; \
     echo "${CARGO_SHA256}  ${cargo_archive}" | sha256sum -c -; \
     echo "${RUST_STD_HOST_SHA256}  ${std_host_archive}" | sha256sum -c -; \
     echo "${RUST_STD_CROSS_SHA256}  ${std_cross_archive}" | sha256sum -c -; \
+    echo "${RUST_STD_MUSL_SHA256}  ${std_musl_archive}" | sha256sum -c -; \
     for archive in \
         "${rustc_archive}" \
         "${cargo_archive}" \
         "${std_host_archive}" \
-        "${std_cross_archive}"; do \
+        "${std_cross_archive}" \
+        "${std_musl_archive}"; do \
         tar -xJf "${archive}"; \
         component=${archive%.tar.xz}; \
         "./${component}/install.sh" --prefix=/opt/rust --disable-ldconfig; \
@@ -217,6 +223,7 @@ ARG TOOLCHAIN_VERSION=10.3-2021.07
 ARG TOOLCHAIN_TRIPLET=aarch64-none-linux-gnu
 ARG RUST_VERSION=1.88.0
 ARG RUST_CROSS_TARGET=aarch64-unknown-linux-gnu
+ARG RUST_MUSL_TARGET=aarch64-unknown-linux-musl
 
 # Apt snapshot pin. Default committed in image/snapshot-date.txt; CI passes this
 # as --build-arg APT_SNAPSHOT_DATE=$(cat image/snapshot-date.txt). All apt
@@ -475,11 +482,13 @@ RUN set -eux; \
 
 # Rust host/cross-target validation. Build a real executable through Cargo so
 # the durable target linker configuration and the GNU cross-link path are both
-# exercised before the container can be published.
+# exercised before the container can be published. The musl target is linked by
+# runtime's committed Cargo configuration, so validate its installed std here.
 RUN set -eux; \
     rustc -Vv | grep -F "release: 1.88."; \
     cargo -V; \
     test -f /opt/rust/lib/rustlib/${RUST_CROSS_TARGET}/lib/libstd-*.rlib; \
+    test -f /opt/rust/lib/rustlib/${RUST_MUSL_TARGET}/lib/libstd-*.rlib; \
     cargo new --bin /tmp/rust-cross-check; \
     cargo build --manifest-path /tmp/rust-cross-check/Cargo.toml \
         --target "${RUST_CROSS_TARGET}"; \
