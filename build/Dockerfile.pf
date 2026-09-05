@@ -921,7 +921,31 @@ RUNTIME
 # customer state, copy, and rendering remain in the pinned recovery crate.
 # ======================================================================
 # recovery@7044d49 uses slice::as_chunks_mut, stabilized in Rust 1.88.
-FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS recovery
+# recovery is the MODEL-SELECTOR pattern (tsp-mc9m.41.924.4 / top-coord RULING B), mirroring
+# launcher/gpu-um-mesa EXACTLY: the recovery entry (product-010 F16) is source-built ONLY for the
+# open GPU model. closed a133 + a523 land on the recovery-ddk NOT-SHIPPED stub — no COPY
+# --from=recovery-src, builds nothing — so they never reference the (open-only) staged recovery-src
+# and stay byte-identical to the pre-op5a baseline (no pocketforge-recovery-entry, no .path unit;
+# build-rootfs.sh skips the recovery install for the ddk path). This ALSO un-breaks the ddk build:
+# before this change the single recovery stage did an UNCONDITIONAL COPY --from=recovery-src that
+# FATALed every ddk build at graph-solve (recovery-src is staged for open only).
+#
+# recovery-ddk — the NOT-SHIPPED closed-model stub (mirrors launcher-ddk / gpu-um-mesa-ddk). Runs
+# on the owned build container since it compiles nothing.
+FROM ${PF_CONTAINER} AS recovery-ddk
+RUN <<'RECOVERYDDK'
+set -eux
+mkdir -p /out
+printf 'recovery NOT SHIPPED (gpu_model=ddk; the recovery entry is source-built for the open GPU model only — tsp-mc9m.41.924.4 / RULING B)\n' \
+  > /out/.pf-recovery-provenance
+cat /out/.pf-recovery-provenance
+RECOVERYDDK
+
+# recovery-open — the real source build of pocketforge-recovery-entry for the a133-open stack.
+# Reached ONLY via the `FROM recovery-${PF_GPU_MODEL}` selector below, so BuildKit prunes it (and
+# its recovery-src reference) for every ddk build.
+# recovery@7044d49 uses slice::as_chunks_mut, stabilized in Rust 1.88.
+FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS recovery-open
 ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
 ARG SOURCE_DATE_EPOCH
 COPY --from=image-src . /work/image
@@ -943,6 +967,10 @@ printf 'recovery@%s\n' "${PF_RECOVERY_SHA}" > /out/.pf-recovery-provenance
 sha256sum /out/bin/pocketforge-recovery-entry >> /out/.pf-recovery-provenance
 cat /out/.pf-recovery-provenance
 RECOVERY
+
+# Selector: which of the two stages above answers to the `recovery` name the rootfs stage COPYs
+# --from. Same ARG mechanism as launcher / gpu-um-mesa (PF_GPU_MODEL declared pre-first-FROM).
+FROM recovery-${PF_GPU_MODEL} AS recovery
 # launcher — selected persistent shell owner, built from the platform.lock-resolved
 # launcher archive. The digest-pinned Rust toolchain, committed Cargo.lock and
 # --locked make the source/tool/dependency selection deterministic.

@@ -1050,15 +1050,23 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.se
 # product-010 F16: recovery is an independently triggered entry, not a panel
 # owner and not part of the launcher restore seam.  The path unit consumes the
 # durable RecoveryRequired condition even when it appears after boot.
-install -m 0755 "${PF_RECOVERY_BIN}" \
-    "${ROOTFS}/opt/pocketforge/bin/pocketforge-recovery-entry"
-install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.service" \
-    "${ROOTFS}/etc/systemd/system/pocketforge-recovery.service"
-install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.path" \
-    "${ROOTFS}/etc/systemd/system/pocketforge-recovery.path"
-ln -sf /etc/systemd/system/pocketforge-recovery.path \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-recovery.path"
-echo "[customize] Recovery entry installed + condition path enabled (recovery@${PF_RECOVERY_SHA})"
+# OPEN-ONLY (tsp-mc9m.41.924.4 / top-coord RULING B): the recovery entry is part of the op5a
+# userspace wave gated off the closed a133/a523 image (byte-identical to the pre-op5a baseline).
+# For the ddk path the recovery stage is the NOT-SHIPPED stub (no pocketforge-recovery-entry in
+# ${RECOVERY_DIR}/bin), so install/enable ONLY for the open model — closed/a523 SKIP both.
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    install -m 0755 "${PF_RECOVERY_BIN}" \
+        "${ROOTFS}/opt/pocketforge/bin/pocketforge-recovery-entry"
+    install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.service" \
+        "${ROOTFS}/etc/systemd/system/pocketforge-recovery.service"
+    install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.path" \
+        "${ROOTFS}/etc/systemd/system/pocketforge-recovery.path"
+    ln -sf /etc/systemd/system/pocketforge-recovery.path \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-recovery.path"
+    echo "[customize] Recovery entry installed + condition path enabled (recovery@${PF_RECOVERY_SHA})"
+else
+    echo "[customize] recovery entry NOT-SHIPPED for the ddk model (open-only; closed a133/a523 byte-identical)"
+fi
 # ---- Panel owner selection (bd tsp-1cl7.1) ---------------------------------
 # WHICH UI OWNS THE PANEL IS ONE DECISION WITH TWO CONSEQUENCES, so it is made
 # ONCE here and both consequences are derived from it:
