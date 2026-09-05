@@ -833,6 +833,7 @@ ARG PF_DEVICE_ID
 ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_RUNTIME_SHA
+ARG PF_GPU_MODEL
 ARG SOURCE_DATE_EPOCH
 ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 COPY --from=runtime-src . /work/runtime
@@ -858,45 +859,58 @@ rustup target add "${PF_RUNTIME_TARGET}"
 cd /work/runtime
 # --locked: build EXACTLY the committed Cargo.lock (fails if it would change) — the
 # reproducibility anchor. --remap-path-prefix normalizes the embedded build path so the
-# artifact does not depend on this stage's absolute workdir. Only pf-input-decode is
-# built; the parallel tsp-bwrg crates carried in the pinned runtime archive are inert.
+# artifact does not depend on this stage's absolute workdir.
+#
+# pf-input-decode is the A133 pad-MCU decoder — part of the a133 BASELINE, built for EVERY
+# a133 variant (closed + open). The F13/F07 userspace stack (pf-session-authorityd + pf-prefsd)
+# is OPEN-ONLY (tsp-mc9m.41.924.4 / top-coord RULING B-extended) — see the gated block below.
 CARGO_NET_LOCKED=1 \
 RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
 cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-decode
-CARGO_NET_LOCKED=1 \
-RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
-cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-session-authority --bin pf-session-authorityd
-CARGO_NET_LOCKED=1 \
-RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
-cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-prefsd --bin pf-prefsd
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-decode"
-AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
-PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
 [ -f "${BIN}" ] || { echo "FATAL: pf-input-decode not built at ${BIN}"; exit 1; }
-[ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
-[ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-prefsd not built at ${PREFSD_BIN}"; exit 1; }
 # Gate 1: must be an aarch64 ELF (e_machine 0xB7 at offset 18) — same check as the wpa stage.
 E_MACHINE="$(od -An -tx1 -j18 -N2 "${BIN}" | tr -d ' ')"
 [ "${E_MACHINE}" = "b700" ] || { echo "FATAL: pf-input-decode is not aarch64 (e_machine=${E_MACHINE}, want b700)"; exit 1; }
 # Gate 2: must be STATIC (musl target defaults crt-static) — a dynamic musl binary would need a
 # musl loader the bookworm rootfs does not have. A static binary carries no interpreter path string.
 if grep -qa 'ld-musl\|ld-linux' "${BIN}"; then echo "FATAL: pf-input-decode is dynamically linked (expected static musl)"; exit 1; fi
-AUTHORITY_EM="$(od -An -tx1 -j18 -N2 "${AUTHORITY_BIN}" | tr -d ' ')"
-[ "${AUTHORITY_EM}" = "b700" ] || { echo "FATAL: pf-session-authorityd is not aarch64 (e_machine=${AUTHORITY_EM}, want b700)"; exit 1; }
-if grep -qa 'ld-musl\|ld-linux' "${AUTHORITY_BIN}"; then echo "FATAL: pf-session-authorityd is dynamically linked (expected static musl)"; exit 1; fi
-PREFSD_EM="$(od -An -tx1 -j18 -N2 "${PREFSD_BIN}" | tr -d ' ')"
-[ "${PREFSD_EM}" = "b700" ] || { echo "FATAL: pf-prefsd is not aarch64 (e_machine=${PREFSD_EM}, want b700)"; exit 1; }
-if grep -qa 'ld-musl\|ld-linux' "${PREFSD_BIN}"; then echo "FATAL: pf-prefsd is dynamically linked (expected static musl)"; exit 1; fi
 install -D -m 0755 "${BIN}" /out/bin/pf-input-decode
-install -D -m 0755 "${AUTHORITY_BIN}" /out/bin/pf-session-authorityd
-install -D -m 0755 "${PREFSD_BIN}" /out/bin/pf-prefsd
 install -D -m 0644 crates/pf-input-decode/systemd/pf-input-decode.service /out/systemd/pf-input-decode.service
+# Provenance: pf-input-decode always (a133 baseline); the open-only F13/F07 shas are appended below.
 {
   printf 'runtime@%s device=%s gpu=%s target=%s\n' "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" "${PF_RUNTIME_TARGET}"
   printf '  pf-input-decode sha256=%s\n' "$(sha256sum /out/bin/pf-input-decode | cut -d' ' -f1)"
-  printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
-  printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
 } > /out/.pf-runtime-provenance
+# F13/F07 userspace stack (pf-session-authorityd + pf-prefsd) — OPEN-ONLY (tsp-mc9m.41.924.4 /
+# top-coord RULING B-extended). Gated with pf-shell (launcher stage) on PF_GPU_MODEL=open so
+# closed a133 + a523 ship NONE of the F13/F07 stack (byte-identical baseline — top-coord). The
+# build-rootfs.sh pf-shell<->pf-session-authorityd both-or-neither pairing is kept as-is; with
+# both open-gated, closed a133/a523 land on neither and the pairing block simply never fires.
+if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-session-authority --bin pf-session-authorityd
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-prefsd --bin pf-prefsd
+  AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
+  PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
+  [ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
+  [ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-prefsd not built at ${PREFSD_BIN}"; exit 1; }
+  AUTHORITY_EM="$(od -An -tx1 -j18 -N2 "${AUTHORITY_BIN}" | tr -d ' ')"
+  [ "${AUTHORITY_EM}" = "b700" ] || { echo "FATAL: pf-session-authorityd is not aarch64 (e_machine=${AUTHORITY_EM}, want b700)"; exit 1; }
+  if grep -qa 'ld-musl\|ld-linux' "${AUTHORITY_BIN}"; then echo "FATAL: pf-session-authorityd is dynamically linked (expected static musl)"; exit 1; fi
+  PREFSD_EM="$(od -An -tx1 -j18 -N2 "${PREFSD_BIN}" | tr -d ' ')"
+  [ "${PREFSD_EM}" = "b700" ] || { echo "FATAL: pf-prefsd is not aarch64 (e_machine=${PREFSD_EM}, want b700)"; exit 1; }
+  if grep -qa 'ld-musl\|ld-linux' "${PREFSD_BIN}"; then echo "FATAL: pf-prefsd is dynamically linked (expected static musl)"; exit 1; fi
+  install -D -m 0755 "${AUTHORITY_BIN}" /out/bin/pf-session-authorityd
+  install -D -m 0755 "${PREFSD_BIN}" /out/bin/pf-prefsd
+  {
+    printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
+    printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
+  } >> /out/.pf-runtime-provenance
+fi
 cat /out/.pf-runtime-provenance
 RUNTIME
 
