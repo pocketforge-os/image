@@ -30,10 +30,12 @@ batched DUT run. It reports PASS only when all of these hold:
 
 1. The headless decoder returns 900 VDPAU hardware frames (no software output is accepted).
 2. `/dev/cedar_dev` is successfully opened by a traced task.
-3. An ioctl is issued by the same process on the descriptor between its Cedar open and
-   close. The verifier tracks `(pid, fd)` lifetimes and also requires `strace -yy` to
-   resolve that ioctl descriptor to `/dev/cedar_dev`, preventing cross-task collisions
-   and post-close FD reuse from becoming false hardware evidence.
+3. An ioctl is issued on the descriptor between its Cedar open and close. The verifier
+   keys the live descriptor by FD across the one traced decoder process group because
+   its worker threads share one FD table; this permits a main-thread open and a
+   worker-thread ioctl. It also requires `strace -yy` to resolve the ioctl descriptor
+   to `/dev/cedar_dev`, while the close tracking prevents post-close FD reuse from
+   becoming false hardware evidence.
 4. The direct decoder exits successfully and reports exactly 900 decoded frames (30 seconds at
    30 fps).
 

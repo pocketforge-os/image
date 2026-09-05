@@ -15,7 +15,7 @@ grep -Fxq strace "${ROOT}/rootfs-packages-dev.txt"
 
 grep -Fq 'cedar-headless-test "$CLIP"' "${RUNNER}"
 grep -Fq 'strace -f -yy' "${RUNNER}"
-grep -Fq 'live[pid SUBSEP result] = 1' "${RUNNER}"
+grep -Fq 'live[result] = 1' "${RUNNER}"
 grep -Fq 'libvdpau_sunxi_not_shipped' "${RUNNER}"
 grep -Fq 'hw_used=yes' "${RUNNER}"
 grep -Fq 'frames" -eq 900' "${RUNNER}"
@@ -41,17 +41,17 @@ negative_output="$(${RUNNER} 2>&1 || true)"
 awk_program=$(sed -n "/^awk '/,/^' \"\$TRACE\"/p" "${RUNNER}" | sed '1s/^awk //' | sed '$s/ "\$TRACE".*$//')
 check_trace() { printf '%s\n' "$1" | eval "awk ${awk_program}"; }
 
-valid='123 openat(AT_FDCWD, "/dev/cedar_dev", O_RDWR) = 7</dev/cedar_dev<char 150:0>>
-123 ioctl(7</dev/cedar_dev<char 150:0>>, 0x100, 0) = 0'
-check_trace "${valid}"
+cross_thread='123 openat(AT_FDCWD, "/dev/cedar_dev", O_RDWR) = 7</dev/cedar_dev<char 150:0>>
+124 ioctl(7</dev/cedar_dev<char 150:0>>, 0x100, 0) = 0'
+check_trace "${cross_thread}"
+
+unrelated_target='123 openat(AT_FDCWD, "/dev/cedar_dev", O_RDWR) = 7</dev/cedar_dev<char 150:0>>
+124 ioctl(7</dev/tty0<char 4:0>>, 0x100, 0) = 0'
+if check_trace "${unrelated_target}"; then echo 'FAIL: accepted unrelated ioctl target' >&2; exit 1; fi
 
 after_close='123 openat(AT_FDCWD, "/dev/cedar_dev", O_RDWR) = 7</dev/cedar_dev<char 150:0>>
 123 close(7</dev/cedar_dev<char 150:0>>) = 0
 123 ioctl(7</dev/cedar_dev<char 150:0>>, 0x100, 0) = 0'
 if check_trace "${after_close}"; then echo 'FAIL: accepted ioctl after close' >&2; exit 1; fi
-
-other_process='123 openat(AT_FDCWD, "/dev/cedar_dev", O_RDWR) = 7</dev/cedar_dev<char 150:0>>
-124 ioctl(7</dev/cedar_dev<char 150:0>>, 0x100, 0) = 0'
-if check_trace "${other_process}"; then echo 'FAIL: accepted another process FD' >&2; exit 1; fi
 
 echo 'PASS: Cedar spike is dev-only, 900-frame, headless direct-VE, and ioctl-evidenced'
