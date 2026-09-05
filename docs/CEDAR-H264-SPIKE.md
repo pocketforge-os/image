@@ -24,7 +24,10 @@ path before decoding; it does not depend on the VDPAU module directory being in 
 default dynamic-loader search path.
 Dedicated Dockerfile stages fetch those exact immutable refs, cross-build AArch64
 libraries with the pinned toolchain, verify their ELF machine type, and copy only the
-libraries and provenance stamp into the dev rootfs. Release images do not install them.
+libraries and provenance stamp into the dev rootfs. A build-graph selector uses the
+existing SoC and variant profile values, reaching the networked stages only for
+`sun50iw10p1` + `dev`; A523 and A133 release builds select an empty stage, so they
+neither fetch nor build Cedar. Release images do not install the payload.
 
 This dev-image spike adds Debian-snapshot-pinned FFmpeg libraries, the generic VDPAU
 loader, and `strace`, plus a deterministic 30-second 1280x720 H.264 Annex-B clip and
@@ -44,7 +47,7 @@ batched DUT run. It reports PASS only when all of these hold:
 
 ## Build and DUT handoff
 
-Build the normal A133 dev OS image on modelmaker.  The build creates the clip inside
+Build the normal A133 dev OS image on modelmaker. The build creates the clip inside
 the target rootfs with the snapshot-pinned target FFmpeg and installs the runner.  The
 coordinator records the resulting OS artifact SHA-256 and batches this exact command:
 

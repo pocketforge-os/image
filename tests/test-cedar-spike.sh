@@ -30,6 +30,17 @@ grep -Fq 'sha256:a2c531db5f4ce04e896eab0e5553422bb3d560fb554b049ae2cc1764e842797
 grep -Fq 'sha256:9adb541d841d8a18d7075d6619a070aa34893a7569b4ad17b41015e0bbccbebb' "${DOCKERFILE}"
 grep -Fq 'patch -d /work/libvdpau-sunxi -p1 < /work/cedar-headless.patch' "${DOCKERFILE}"
 grep -Fq 'cedar-headless-test.c -o /out/usr/bin/cedar-headless-test' "${DOCKERFILE}"
+grep -Fq 'FROM cedar-vdpau AS cedar-sun50iw10p1-dev' "${DOCKERFILE}"
+grep -Fq 'FROM cedar-disabled AS cedar-sun50iw10p1-release' "${DOCKERFILE}"
+grep -Fq 'FROM cedar-disabled AS cedar-sun55iw3-dev' "${DOCKERFILE}"
+grep -Fq 'FROM cedar-disabled AS cedar-sun55iw3-release' "${DOCKERFILE}"
+# shellcheck disable=SC2016 # Assert literal Dockerfile build-arg interpolation.
+grep -Fq 'FROM cedar-${PF_SOC}-${PF_VARIANT} AS cedar' "${DOCKERFILE}"
+grep -Fq 'COPY --from=cedar /out' "${DOCKERFILE}"
+if grep -Fq 'COPY --from=cedar-vdpau /out' "${DOCKERFILE}"; then
+    echo 'FAIL: rootfs directly depends on the networked Cedar build stage' >&2
+    exit 1
+fi
 grep -Fq 'vdp_imp_device_create_headless' "${ROOT}/build/cedar-headless.patch"
 grep -Fq 'return AV_PIX_FMT_NONE; /* Software fallback is forbidden. */' \
     "${ROOT}/build/cedar-headless-test.c"

@@ -60,6 +60,12 @@ ARG PF_CONTAINER=pocketforge/build:10.3-2021.07-bookworm
 # existing PF_GPU_MODEL:-ddk fallback already used in the rootfs stage.
 ARG PF_GPU_MODEL=ddk
 
+# These profile values select the Cedar diagnostic subgraph below. They are
+# already supplied by pf-build; declaring them globally makes them available to
+# FROM interpolation without adding a new caller-side switch.
+ARG PF_SOC
+ARG PF_VARIANT=dev
+
 # =============================================================================
 # fetch — vendor blobs (irreducibly-closed originals), by CID (B3 / tsp-1dl.3).
 # DECIDED mechanism: HERMETIC KUBO-IN-BUILD (owner + research, 2026-07-02). kubo (pinned
@@ -1038,6 +1044,18 @@ cp -a /usr/lib/libcedrus.so* /out/usr/lib/
 } > /out/.pf-cedar-provenance
 VDPAU
 
+# Build-graph selector: the disabled side has the same /out contract but no
+# dependency on cedar-lib/cedar-vdpau (and therefore no Cedar GitHub fetch).
+# BuildKit prunes the unselected side, as with gpu-um-mesa above.
+FROM ${PF_CONTAINER} AS cedar-disabled
+RUN mkdir -p /out
+
+FROM cedar-vdpau AS cedar-sun50iw10p1-dev
+FROM cedar-disabled AS cedar-sun50iw10p1-release
+FROM cedar-disabled AS cedar-sun55iw3-dev
+FROM cedar-disabled AS cedar-sun55iw3-release
+FROM cedar-${PF_SOC}-${PF_VARIANT} AS cedar
+
 # =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
 # rootfs-packages-<id>.txt (tsp-1dl.4.5 unifies the two forked build-rootfs scripts).
@@ -1087,7 +1105,7 @@ COPY --from=wpa    /out             /work/wpa
 COPY --from=runtime /out            /work/runtime
 COPY --from=recovery /out           /work/recovery
 COPY --from=launcher /out           /work/launcher
-COPY --from=cedar-vdpau /out        /work/cedar
+COPY --from=cedar /out              /work/cedar
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
