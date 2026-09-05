@@ -933,26 +933,41 @@ RECOVERY
 # launcher archive. The digest-pinned Rust toolchain, committed Cargo.lock and
 # --locked make the source/tool/dependency selection deterministic.
 # =============================================================================
-FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS launcher
+# launcher is the MODEL-SELECTOR pattern (tsp-mc9m.41.924.4 / top-coord RULING B), mirroring
+# gpu-um-mesa above EXACTLY: pf-shell is source-built ONLY for the open GPU model (a133-open).
+# closed a133 + a523 (+ any non-open model) land on the launcher-ddk NOT-SHIPPED stub — which
+# does NOT COPY launcher-src and builds nothing — so they never reference the (open-only) staged
+# launcher-src context and the ddk images stay byte-identical (no pf-shell). This ALSO un-breaks
+# the ddk build on main: before this change the single launcher stage did an UNCONDITIONAL
+# `COPY --from=launcher-src` that FATALed every ddk build (launcher-src is staged for open only).
+#
+# launcher-ddk — the NOT-SHIPPED closed-model stub (mirrors gpu-um-mesa-ddk / gpu-km / sdl).
+# No COPY --from=launcher-src, no pf-shell: just a provenance marker. Runs on the owned build
+# container (not the Rust image) since it compiles nothing.
+FROM ${PF_CONTAINER} AS launcher-ddk
+RUN <<'LAUNCHERDDK'
+set -eux
+mkdir -p /out
+printf 'launcher NOT SHIPPED (gpu_model=ddk; pf-shell is source-built for the open GPU model only — tsp-mc9m.41.924.4 / RULING B)\n' \
+  > /out/.pf-launcher-provenance
+cat /out/.pf-launcher-provenance
+LAUNCHERDDK
+
+# launcher-open — the real source build of pf-shell for the a133-open stack. Reached ONLY via
+# the `FROM launcher-${PF_GPU_MODEL}` selector below, so BuildKit prunes it (and its launcher-src
+# reference) for every ddk build. The digest-pinned Rust toolchain + committed Cargo.lock +
+# --locked make the source/tool/dependency selection deterministic.
+FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS launcher-open
 ARG PF_DEVICE_ID
-ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_LAUNCHER_SHA
 ARG SOURCE_DATE_EPOCH
 ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 COPY --from=launcher-src . /work/launcher
-RUN <<'LAUNCHER'
+RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
 [ "${PF_LAUNCHER_SHA}" = "3fc6a8ebd71ebe7c2bf261908fcbfbd6e8df65ea" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
-# Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
-# proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). pf-shell is
-# unrelated to the GPU choice — it ships on every a133 variant.
-if [ "${PF_SOC}" != "sun50iw10p1" ]; then
-  printf 'launcher@%s NOT SHIPPED for device=%s (soc=%s; pf-shell is selected for a133)\n' \
-    "${PF_LAUNCHER_SHA}" "${PF_DEVICE_ID}" "${PF_SOC}" > /out/.pf-launcher-provenance
-  exit 0
-fi
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 rustup target add "${PF_RUNTIME_TARGET}"
 cd /work/launcher
@@ -969,7 +984,12 @@ install -D -m 0755 "${BIN}" /out/bin/pf-shell
   printf '  pf-shell sha256=%s\n' "$(sha256sum /out/bin/pf-shell | cut -d' ' -f1)"
 } > /out/.pf-launcher-provenance
 cat /out/.pf-launcher-provenance
-LAUNCHER
+LAUNCHEROPEN
+
+# Selector: which of the two stages above answers to the `launcher` name the rootfs stage COPYs
+# --from. ARGs declared before the file's first FROM (PF_GPU_MODEL, near the top) are usable in a
+# FROM instruction without redeclaration — the same mechanism gpu-um-mesa and PF_CONTAINER use.
+FROM launcher-${PF_GPU_MODEL} AS launcher
 
 # =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
