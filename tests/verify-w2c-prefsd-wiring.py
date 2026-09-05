@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Recipe-level assertions for the W2c pf-prefsd image deployment."""
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,7 +42,16 @@ for relative in (
 assert text(ROOT / "rootfs-overlay/etc/environment").strip() == f"PF_PREFSD_SOCK={SOCKET}"
 
 dockerfile = text(ROOT / "build/Dockerfile.pf")
-assert "78e4754cd0d6ccdc0aa858bc2d889b7f33458ec0" in dockerfile
+runtime_guard = re.findall(
+    r'^\[ "\$\{PF_RUNTIME_SHA\}" = "([0-9a-f]{40})" \] '
+    r'\|\| \{ echo "FATAL: runtime pin drift: \$\{PF_RUNTIME_SHA\}"; exit 1; \}$',
+    dockerfile,
+    flags=re.MULTILINE,
+)
+assert runtime_guard == ["78e4754cd0d6ccdc0aa858bc2d889b7f33458ec0"], (
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 78e4754, "
+    f"found: {runtime_guard}"
+)
 assert "cargo build --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
 
