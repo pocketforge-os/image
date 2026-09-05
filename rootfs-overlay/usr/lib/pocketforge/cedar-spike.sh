@@ -24,7 +24,10 @@ DRIVER=$(find /usr/lib /usr/local/lib -type f -name 'libvdpau_sunxi.so*' 2>/dev/
 # Capture opens and ioctls.  A successful ffmpeg exit alone is not evidence: ffmpeg
 # can fall back to its software H.264 decoder unless every hwaccel is constrained.
 set +e
-VDPAU_DRIVER=sunxi strace -f -qq -e trace=open,openat,ioctl -o "$TRACE" \
+# -yy resolves the descriptor target at each ioctl.  That makes the evidence
+# lifetime- and task-specific even when another thread closes/reuses the same
+# numeric descriptor; a bare same-number ioctl can never satisfy the check.
+VDPAU_DRIVER=sunxi strace -f -yy -qq -e trace=open,openat,close,dup2,dup3,ioctl -o "$TRACE" \
     ffmpeg -nostdin -hide_banner -loglevel error \
     -hwaccel vdpau -hwaccel_output_format vdpau \
     -i "$CLIP" -an -sn -dn -f null - \
@@ -34,12 +37,10 @@ set -e
 
 frames=$(sed -n 's/^frame=//p' "$PROGRESS" 2>/dev/null | tail -n 1)
 frames=${frames:-0}
-grep -Eq 'open(at)?\([^\n]*"/dev/cedar_dev"[^\n]*= [0-9]+' "$TRACE" \
+grep -Eq 'open(at)?\(.*"/dev/cedar_dev".*\)[[:space:]]*=[[:space:]]*[0-9]+</dev/cedar_dev[^[:space:]]*>' "$TRACE" \
     || fail "$frames" cedar_device_not_opened
-
-cedar_fd=$(sed -nE 's/.*open(at)?\([^\n]*"\/dev\/cedar_dev"[^\n]*= ([0-9]+).*/\2/p' "$TRACE" | head -n 1)
-[ -n "$cedar_fd" ] || fail "$frames" cedar_fd_unresolved
-grep -Eq "ioctl\(${cedar_fd}," "$TRACE" || fail "$frames" cedar_ioctl_not_observed
+grep -Eq 'ioctl\([0-9]+</dev/cedar_dev[^,]*>,' "$TRACE" \
+    || fail "$frames" cedar_ioctl_not_observed
 [ "$rc" -eq 0 ] || fail "$frames" decoder_exit_${rc}
 [ "$frames" -eq 900 ] 2>/dev/null || fail "$frames" incomplete_decode
 

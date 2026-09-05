@@ -2,16 +2,24 @@
 
 Bead: `tsp-h5ed.17`
 
-## Result before DUT execution: NO (userspace backend is not shipped)
+## Result after kernel preflight: NO (userspace backend cannot yet be pinned)
 
-The current A133 image's owned 4.9 kernel describes the Cedar VE and creates
-`/dev/cedar_dev`, but the image build has no userspace implementation of that ioctl ABI.
+The exact `platform.lock` kernel pin
+`a7cfec247898bb2c22e51bb705a7f18fd5910285` passes the kernel preflight. Its
+`drivers/media/Makefile` links `cedar-ve/` unconditionally, `pocketforge_tsp.dts`
+contains the enabled `allwinner,sunxi-cedar-ve` node, and the driver's probe
+registers the character device and creates `cedar_dev`. No kernel change is needed.
+
+The image build still has no userspace implementation of that ioctl ABI.
 The clean-room legacy stack is
 [`libcedrus`](https://github.com/linux-sunxi/libcedrus) commit
 `9b243c430a4d445b3853262552ad563fa9ea325d`, beneath
 [`libvdpau-sunxi`](https://github.com/linux-sunxi/libvdpau-sunxi) commit
 `ebdf7844efbb997a1e858600ae76c90985ea865d`, with FFmpeg's VDPAU hwaccel above it.
-Neither source is a `platform.lock` input today.  Fetching either at image-build time
+Neither source is a `platform.lock` input today. The authorized attempts to create
+`pocketforge-os/libcedrus` and `pocketforge-os/libvdpau-sunxi` forks were rejected by
+GitHub with `HTTP 403: Resource not accessible by integration`; consequently there
+is no owned source remote that `platform.lock` can honestly pin yet. Fetching either at image-build time
 would violate PocketForge's pinned-source and hermetic-build contract, so this change
 does not disguise a network fetch as a decoder integration.
 
@@ -28,8 +36,10 @@ clean-room repositories are added as exact `platform.lock` inputs and cross-buil
 same command proceeds to decode.  It reports PASS only when all of these hold:
 
 1. FFmpeg is forced to VDPAU output (no software fallback is selected).
-2. `/dev/cedar_dev` is successfully opened during that FFmpeg process tree.
-3. At least one ioctl is issued on the returned Cedar file descriptor.
+2. `/dev/cedar_dev` is successfully opened by a traced task.
+3. An ioctl is issued while its descriptor resolves to `/dev/cedar_dev`. `strace -yy`
+   annotates the descriptor target at the time of every syscall, so an equal FD number
+   in another task—or after close and reuse—cannot be mistaken for Cedar activity.
 4. FFmpeg exits successfully and reports exactly 900 decoded frames (30 seconds at
    30 fps).
 
