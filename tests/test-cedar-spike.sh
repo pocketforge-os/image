@@ -13,7 +13,7 @@ grep -Fxq libpixman-1-0 "${ROOT}/rootfs-packages-dev.txt"
 grep -Fxq libx11-6 "${ROOT}/rootfs-packages-dev.txt"
 grep -Fxq strace "${ROOT}/rootfs-packages-dev.txt"
 
-grep -Fq -- '-hwaccel vdpau -hwaccel_output_format vdpau' "${RUNNER}"
+grep -Fq 'cedar-headless-test "$CLIP"' "${RUNNER}"
 grep -Fq 'strace -f -yy' "${RUNNER}"
 grep -Fq 'live[pid SUBSEP result] = 1' "${RUNNER}"
 grep -Fq 'libvdpau_sunxi_not_shipped' "${RUNNER}"
@@ -27,6 +27,11 @@ grep -Fq 'libcedrus/archive/9b243c430a4d445b3853262552ad563fa9ea325d.tar.gz' "${
 grep -Fq 'libvdpau-sunxi/archive/ebdf7844efbb997a1e858600ae76c90985ea865d.tar.gz' "${DOCKERFILE}"
 grep -Fq 'sha256:a2c531db5f4ce04e896eab0e5553422bb3d560fb554b049ae2cc1764e8427975' "${DOCKERFILE}"
 grep -Fq 'sha256:9adb541d841d8a18d7075d6619a070aa34893a7569b4ad17b41015e0bbccbebb' "${DOCKERFILE}"
+grep -Fq 'patch -d /work/libvdpau-sunxi -p1 < /work/cedar-headless.patch' "${DOCKERFILE}"
+grep -Fq 'cedar-headless-test.c -o /out/usr/bin/cedar-headless-test' "${DOCKERFILE}"
+grep -Fq 'vdp_imp_device_create_headless' "${ROOT}/build/cedar-headless.patch"
+grep -Fq 'return AV_PIX_FMT_NONE; /* Software fallback is forbidden. */' \
+    "${ROOT}/build/cedar-headless-test.c"
 
 negative_output="$(${RUNNER} 2>&1 || true)"
 [ "${negative_output}" = 'FAIL cedar-h264 hw_used=no frames=0 blocker=cedar_device_missing' ]
@@ -49,4 +54,4 @@ other_process='123 openat(AT_FDCWD, "/dev/cedar_dev", O_RDWR) = 7</dev/cedar_dev
 124 ioctl(7</dev/cedar_dev<char 150:0>>, 0x100, 0) = 0'
 if check_trace "${other_process}"; then echo 'FAIL: accepted another process FD' >&2; exit 1; fi
 
-echo 'PASS: Cedar spike is dev-only, 900-frame, VDPAU-forced, and ioctl-evidenced'
+echo 'PASS: Cedar spike is dev-only, 900-frame, headless direct-VE, and ioctl-evidenced'

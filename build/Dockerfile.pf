@@ -1003,6 +1003,7 @@ ARG PF_TOOLCHAIN_GCC_VERSION
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:9adb541d841d8a18d7075d6619a070aa34893a7569b4ad17b41015e0bbccbebb \
   https://github.com/pocketforge-os/libvdpau-sunxi/archive/ebdf7844efbb997a1e858600ae76c90985ea865d.tar.gz /work/libvdpau-sunxi.tar.gz
+COPY cedar-headless.patch cedar-headless-test.c /work/
 COPY --from=cedar-lib /out/usr /usr
 COPY --from=cedar-lib /out/.pf-cedar-provenance /tmp/cedrus-provenance
 RUN <<'VDPAU'
@@ -1012,7 +1013,9 @@ tar -xzf /work/libvdpau-sunxi.tar.gz --strip-components=1 -C /work/libvdpau-sunx
 dpkg --add-architecture arm64
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  libavcodec-dev:arm64 libavformat-dev:arm64 libavutil-dev:arm64 \
   libpixman-1-dev:arm64 libvdpau-dev:arm64 libx11-dev:arm64
+patch -d /work/libvdpau-sunxi -p1 < /work/cedar-headless.patch
 export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
@@ -1022,6 +1025,12 @@ make -C /work/libvdpau-sunxi -j"$(nproc)" \
   LDFLAGS='-L/usr/lib -L/usr/lib/aarch64-linux-gnu'
 make -C /work/libvdpau-sunxi install DESTDIR=/out prefix=/usr MODULEDIR=/usr/lib/aarch64-linux-gnu/vdpau
 test "$(od -An -tx1 -j18 -N2 /out/usr/lib/aarch64-linux-gnu/vdpau/libvdpau_sunxi.so.1 | tr -d ' ')" = b700
+export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+install -d /out/usr/bin
+aarch64-none-linux-gnu-gcc -Wall -Wextra -Werror -O2 \
+  -ffile-prefix-map=/work=. /work/cedar-headless-test.c -o /out/usr/bin/cedar-headless-test \
+  $(pkg-config --cflags --libs libavformat libavcodec libavutil) -ldl -lvdpau
+test "$(od -An -tx1 -j18 -N2 /out/usr/bin/cedar-headless-test | tr -d ' ')" = b700
 cp -a /usr/lib/libcedrus.so* /out/usr/lib/
 {
   cat /tmp/cedrus-provenance

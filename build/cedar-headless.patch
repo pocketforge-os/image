@@ -1,0 +1,44 @@
+diff --git a/device.c b/device.c
+index 347c417..9861412 100644
+--- a/device.c
++++ b/device.c
+@@ -53,6 +53,30 @@ VdpStatus vdp_imp_device_create_x11(Display *display,
+ 	return VDP_STATUS_OK;
+ }
+ 
++/* PocketForge diagnostic entry point: decoding does not require presentation. */
++__attribute__((visibility("default")))
++VdpStatus vdp_imp_device_create_headless(VdpDevice *device,
++                                         VdpGetProcAddress **get_proc_address)
++{
++	if (!device || !get_proc_address)
++		return VDP_STATUS_INVALID_POINTER;
++
++	device_ctx_t *dev = handle_create(sizeof(*dev), device);
++	if (!dev)
++		return VDP_STATUS_RESOURCES;
++
++	dev->cedrus = cedrus_open();
++	if (!dev->cedrus)
++	{
++		handle_destroy(*device);
++		return VDP_STATUS_ERROR;
++	}
++
++	VDPAU_DBG("VE version 0x%04x opened headless", cedrus_get_ve_version(dev->cedrus));
++	*get_proc_address = vdp_get_proc_address;
++	return VDP_STATUS_OK;
++}
++
+ VdpStatus vdp_device_destroy(VdpDevice device)
+ {
+ 	device_ctx_t *dev = handle_get(device);
+@@ -62,7 +86,8 @@ VdpStatus vdp_device_destroy(VdpDevice device)
+ 		close(dev->g2d_fd);
+ 	cedrus_close(dev->cedrus);
+-	XCloseDisplay(dev->display);
++	if (dev->display)
++		XCloseDisplay(dev->display);
+ 
+ 	handle_destroy(device);
+ 

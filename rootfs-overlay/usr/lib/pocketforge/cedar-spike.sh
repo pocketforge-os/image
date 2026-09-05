@@ -14,28 +14,26 @@ fail() {
 
 [ -c /dev/cedar_dev ] || fail 0 cedar_device_missing
 [ -r "$CLIP" ] || fail 0 test_clip_missing
-command -v ffmpeg >/dev/null 2>&1 || fail 0 ffmpeg_missing
+command -v cedar-headless-test >/dev/null 2>&1 || fail 0 headless_decoder_missing
 command -v strace >/dev/null 2>&1 || fail 0 strace_missing
 
 # libvdpau's loader accepts either multiarch or traditional VDPAU module paths.
 DRIVER=$(find /usr/lib /usr/local/lib -type f -name 'libvdpau_sunxi.so*' 2>/dev/null | head -n 1 || true)
 [ -n "$DRIVER" ] || fail 0 libvdpau_sunxi_not_shipped
 
-# Capture opens and ioctls.  A successful ffmpeg exit alone is not evidence: ffmpeg
-# can fall back to its software H.264 decoder unless every hwaccel is constrained.
+# The direct decoder creates a libcedrus-backed device without X11 presentation.
+# FFmpeg libraries parse H.264 headers, but the program accepts VDPAU hardware
+# surfaces only; it has no software-output path.
 set +e
 # -yy resolves the descriptor target at each ioctl.  That makes the evidence
 # lifetime- and task-specific even when another thread closes/reuses the same
 # numeric descriptor; a bare same-number ioctl can never satisfy the check.
-VDPAU_DRIVER=sunxi strace -f -yy -qq -e trace=open,openat,close,dup2,dup3,ioctl -o "$TRACE" \
-    ffmpeg -nostdin -hide_banner -loglevel error \
-    -hwaccel vdpau -hwaccel_output_format vdpau \
-    -i "$CLIP" -an -sn -dn -f null - \
-    -progress "$PROGRESS"
+strace -f -yy -qq -e trace=open,openat,close,dup2,dup3,ioctl -o "$TRACE" \
+    cedar-headless-test "$CLIP" >"$PROGRESS" 2>&1
 rc=$?
 set -e
 
-frames=$(sed -n 's/^frame=//p' "$PROGRESS" 2>/dev/null | tail -n 1)
+frames=$(sed -n 's/^frames=//p' "$PROGRESS" 2>/dev/null | tail -n 1)
 frames=${frames:-0}
 grep -Eq 'open(at)?\(.*"/dev/cedar_dev".*\)[[:space:]]*=[[:space:]]*[0-9]+</dev/cedar_dev[^[:space:]]*>' "$TRACE" \
     || fail "$frames" cedar_device_not_opened

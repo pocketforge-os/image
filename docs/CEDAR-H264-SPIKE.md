@@ -14,23 +14,27 @@ The dev image now source-builds the clean-room legacy stack from the owned forks
 [`pocketforge-os/libcedrus`](https://github.com/pocketforge-os/libcedrus) commit
 `9b243c430a4d445b3853262552ad563fa9ea325d`, beneath
 [`pocketforge-os/libvdpau-sunxi`](https://github.com/pocketforge-os/libvdpau-sunxi) commit
-`ebdf7844efbb997a1e858600ae76c90985ea865d`, with FFmpeg's VDPAU hwaccel above it.
+`ebdf7844efbb997a1e858600ae76c90985ea865d`. The image applies a committed,
+reproducible patch that adds a decode-only headless device constructor, then builds
+`cedar-headless-test`: FFmpeg libraries parse the elementary stream while the
+sunxi decoder programs the VE through libcedrus. The decoder accepts VDPAU hardware
+surfaces only and aborts instead of returning a software frame.
 Dedicated Dockerfile stages fetch those exact immutable refs, cross-build AArch64
 libraries with the pinned toolchain, verify their ELF machine type, and copy only the
 libraries and provenance stamp into the dev rootfs. Release images do not install them.
 
-This dev-image spike adds Debian-snapshot-pinned FFmpeg, the generic VDPAU loader, and
-`strace`, plus a deterministic 30-second 1280x720 H.264 Annex-B clip and
+This dev-image spike adds Debian-snapshot-pinned FFmpeg libraries, the generic VDPAU
+loader, and `strace`, plus a deterministic 30-second 1280x720 H.264 Annex-B clip and
 `pf-cedar-spike`. The remaining result is deliberately pending the coordinator's
 batched DUT run. It reports PASS only when all of these hold:
 
-1. FFmpeg is forced to VDPAU output (no software fallback is selected).
+1. The headless decoder returns 900 VDPAU hardware frames (no software output is accepted).
 2. `/dev/cedar_dev` is successfully opened by a traced task.
 3. An ioctl is issued by the same process on the descriptor between its Cedar open and
    close. The verifier tracks `(pid, fd)` lifetimes and also requires `strace -yy` to
    resolve that ioctl descriptor to `/dev/cedar_dev`, preventing cross-task collisions
    and post-close FD reuse from becoming false hardware evidence.
-4. FFmpeg exits successfully and reports exactly 900 decoded frames (30 seconds at
+4. The direct decoder exits successfully and reports exactly 900 decoded frames (30 seconds at
    30 fps).
 
 ## Build and DUT handoff
@@ -54,6 +58,10 @@ FAIL names the first observed blocker.
   the legacy character device instead.
 - Stock Debian FFmpeg and `libvdpau1` provide the client and loader, not the sunxi
   VDPAU driver.  Their presence cannot constitute Cedar support.
+- VDPAU (ffmpeg/mpv) requires X — not viable headless on the current image;
+  direct-VE (libcedrus) is the headless path; the TV pipeline design must account
+  for this. `libvdpau-sunxi` remains installed because it contains the proven H.264
+  VE implementation, but the spike bypasses its X11 presentation constructor.
 - Decoder log text or successful playback alone cannot distinguish hardware from a
   software fallback; the runner traces the actual character-device FD and its ioctl.
 - Moving branch tips and non-owned source remotes are not acceptable provenance; both

@@ -1019,6 +1019,8 @@ if [ "${VARIANT}" = "dev" ]; then
     [ -f "${CEDAR_DIR}/usr/lib/aarch64-linux-gnu/vdpau/libvdpau_sunxi.so.1" ] \
         || { echo "FATAL: pinned sunxi VDPAU backend is missing" >&2; exit 1; }
     cp -a "${CEDAR_DIR}/usr/lib/libcedrus.so"* "${ROOTFS}/usr/lib/"
+    install -D -m 0755 "${CEDAR_DIR}/usr/bin/cedar-headless-test" \
+        "${ROOTFS}/usr/bin/cedar-headless-test"
     install -d "${ROOTFS}/usr/lib/aarch64-linux-gnu/vdpau"
     cp -a "${CEDAR_DIR}/usr/lib/aarch64-linux-gnu/vdpau/libvdpau_sunxi.so"* \
         "${ROOTFS}/usr/lib/aarch64-linux-gnu/vdpau/"
