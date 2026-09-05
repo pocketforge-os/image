@@ -38,12 +38,13 @@ static void die(const char *message)
 
 int main(int argc, char **argv)
 {
-    if (argc != 2)
-        die("usage: cedar-headless-test CLIP.h264");
+    if (argc != 3)
+        die("usage: cedar-headless-test VDPAU_MODULE CLIP.h264");
 
-    void *module = dlopen("libvdpau_sunxi.so.1", RTLD_NOW | RTLD_LOCAL);
+    void *module = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!module)
         die(dlerror());
+    printf("module=%s\n", argv[1]);
     create_headless_fn create_headless =
         (create_headless_fn)dlsym(module, "vdp_imp_device_create_headless");
     if (!create_headless)
@@ -54,7 +55,7 @@ int main(int argc, char **argv)
         die("could not open libcedrus device");
 
     AVFormatContext *format = NULL;
-    if (avformat_open_input(&format, argv[1], NULL, NULL) < 0)
+    if (avformat_open_input(&format, argv[2], NULL, NULL) < 0)
         die("could not open input");
     if (avformat_find_stream_info(format, NULL) < 0)
         die("could not parse input");

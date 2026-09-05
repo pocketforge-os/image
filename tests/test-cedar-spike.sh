@@ -13,7 +13,8 @@ grep -Fxq libpixman-1-0 "${ROOT}/rootfs-packages-dev.txt"
 grep -Fxq libx11-6 "${ROOT}/rootfs-packages-dev.txt"
 grep -Fxq strace "${ROOT}/rootfs-packages-dev.txt"
 
-grep -Fq 'cedar-headless-test "$CLIP"' "${RUNNER}"
+# shellcheck disable=SC2016 # Assert literal variables in the installed runner.
+grep -Fq 'cedar-headless-test "$DRIVER" "$CLIP"' "${RUNNER}"
 grep -Fq 'strace -f -yy' "${RUNNER}"
 grep -Fq 'live[result] = 1' "${RUNNER}"
 grep -Fq 'libvdpau_sunxi_not_shipped' "${RUNNER}"
@@ -31,6 +32,10 @@ grep -Fq 'patch -d /work/libvdpau-sunxi -p1 < /work/cedar-headless.patch' "${DOC
 grep -Fq 'cedar-headless-test.c -o /out/usr/bin/cedar-headless-test' "${DOCKERFILE}"
 grep -Fq 'vdp_imp_device_create_headless' "${ROOT}/build/cedar-headless.patch"
 grep -Fq 'return AV_PIX_FMT_NONE; /* Software fallback is forbidden. */' \
+    "${ROOT}/build/cedar-headless-test.c"
+grep -Fq 'dlopen(argv[1], RTLD_NOW | RTLD_LOCAL)' \
+    "${ROOT}/build/cedar-headless-test.c"
+grep -Fq 'printf("module=%s\n", argv[1]);' \
     "${ROOT}/build/cedar-headless-test.c"
 
 negative_output="$(${RUNNER} 2>&1 || true)"

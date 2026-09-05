@@ -18,7 +18,10 @@ The dev image now source-builds the clean-room legacy stack from the owned forks
 reproducible patch that adds a decode-only headless device constructor, then builds
 `cedar-headless-test`: FFmpeg libraries parse the elementary stream while the
 sunxi decoder programs the VE through libcedrus. The decoder accepts VDPAU hardware
-surfaces only and aborts instead of returning a software frame.
+surfaces only and aborts instead of returning a software frame. The runner passes
+the discovered absolute `libvdpau_sunxi.so.1` path to the probe, which prints that
+path before decoding; it does not depend on the VDPAU module directory being in the
+default dynamic-loader search path.
 Dedicated Dockerfile stages fetch those exact immutable refs, cross-build AArch64
 libraries with the pinned toolchain, verify their ELF machine type, and copy only the
 libraries and provenance stamp into the dev rootfs. Release images do not install them.

@@ -29,7 +29,7 @@ set +e
 # lifetime- and task-specific even when another thread closes/reuses the same
 # numeric descriptor; a bare same-number ioctl can never satisfy the check.
 strace -f -yy -qq -e trace=open,openat,close,dup2,dup3,ioctl -o "$TRACE" \
-    cedar-headless-test "$CLIP" >"$PROGRESS" 2>&1
+    cedar-headless-test "$DRIVER" "$CLIP" >"$PROGRESS" 2>&1
 rc=$?
 set -e
 
