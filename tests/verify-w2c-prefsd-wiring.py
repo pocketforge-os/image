@@ -52,7 +52,8 @@ assert runtime_guard == ["78e4754cd0d6ccdc0aa858bc2d889b7f33458ec0"], (
     "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 78e4754, "
     f"found: {runtime_guard}"
 )
-assert "cargo build --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
+assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
+assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
 
 recipe = text(ROOT / "scripts/build-rootfs.sh")
