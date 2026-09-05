@@ -43,6 +43,7 @@ GPU_UM_MESA_DIR="${GPU_UM_MESA_DIR:-/work/gpu-um-mesa}"
 WPA_DIR="${WPA_DIR:-/work/wpa}"
 RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-decode) from the runtime stage (tsp-e1b.11)
 LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
+HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/tsp"
 
@@ -101,6 +102,7 @@ echo "  blobs:     ${BLOBS_DIR}"
 echo "  kernel-tsp: ${KERNEL_TSP_DIR}"
 echo "  gpu-km-tsp: ${GPU_KM_TSP_DIR}"
 echo "  libsdl3:   ${LIBSDL3_DIR}"
+echo "  hwprobe:   ${HWPROBE_DIR}"
 echo "  out:       ${OUT_DIR}"
 echo "========================================================================"
 
@@ -485,6 +487,21 @@ if [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] && [ -d /work/libsdl3/testbin ] && 
     printf '/opt/pocketforge/lib\n' > "${ROOTFS}/etc/ld.so.conf.d/01-pocketforge.conf"
     chroot "$ROOTFS" ldconfig
     echo "[customize] SDL test binaries installed to /opt/pocketforge/bin (dev variant)"
+fi
+
+# pf-hwprobe is a development diagnostic. It is fully static for portability,
+# while SDL3_DYNAMIC_API in /etc/environment selects the device SDL at runtime.
+HWPROBE_BIN="${HWPROBE_DIR}/bin/pf-hwprobe"
+if [ "${VARIANT}" = dev ]; then
+    test -f "${HWPROBE_BIN}"
+    test "$(od -An -tx1 -j18 -N2 "${HWPROBE_BIN}" | tr -d ' ')" = b700
+    install -D -m0755 "${HWPROBE_BIN}" \
+        "${ROOTFS}/opt/pocketforge/bin/pf-hwprobe"
+    if [ -f "${HWPROBE_DIR}/.pf-hwprobe-provenance" ]; then
+        install -D -m0644 "${HWPROBE_DIR}/.pf-hwprobe-provenance" \
+            "${ROOTFS}/usr/share/pocketforge/hwprobe-provenance"
+    fi
+    echo "[customize] pf-hwprobe installed to /opt/pocketforge/bin (dev variant)"
 fi
 
 # --- Owned wpa_supplicant install (tsp-myp1.8.2; pattern from tsp-urq.7) -------

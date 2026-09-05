@@ -803,32 +803,10 @@ cat /out/.pf-wpa-provenance
 WPA
 
 # =============================================================================
-# runtime — the E2 runtime-layer binaries, cross-built from the committed
-# `runtime` ref (tsp-e1b.11). FIRST runtime-layer component packaged into the
-# image; establishes the runtime->image cross-build path every future runtime
-# component follows.
-#
-# ⚠ FIRST EXTERNAL BASE IMAGE in this Dockerfile — every other stage is
-# FROM ${PF_CONTAINER} (the owned, digest-pinned build container). This stage is
-# FROM a DIGEST-PINNED official Rust image because the owned base carries a GCC
-# aarch64 cross-toolchain but no Rust. It is BUILD-TIME-ONLY: multi-stage and
-# DISCARDED — ONLY the built static aarch64 binary + the committed unit file
-# leave it (COPY --from=runtime below), never the toolchain/std/shell — so
-# nothing un-owned SHIPS. A digest pin is the SAME content-addressed
-# reproducibility class as container.pin. Full precedent + rejected alternatives
-# + migration path: build/DECISION-runtime-stage.md (tsp-e1b.11 coordinator
-# ruling, Option A). If we ever want ZERO external bases the answer is B (bake
-# Rust into the owned container at the next container.pin re-pin), NOT a rustup
-# shell install.
-#
-# The crate's committed .cargo/config.toml pins target aarch64-unknown-linux-musl
-# + the rust-lld linker, so a static binary needs only `rustup target add` — no
-# cross-gcc, no musl-gcc. pf-input-decode depends only on libc (Cargo.lock-pinned
-# + checksummed); `cargo build --locked` is the reproducibility anchor (same
-# pin-not-airgap model as mmdebstrap's Debian snapshot). Per-component bit-repro
-# is finished under B6, as for the sdl/wpa stages.
+# runtime — runtime-layer binaries and the C SDK, built offline from the exact
+# platform.lock-selected source archive inside the owned build container.
 # =============================================================================
-FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS runtime
+FROM ${PF_CONTAINER} AS runtime
 ARG PF_DEVICE_ID
 ARG PF_SOC
 ARG PF_GPU_REPO
@@ -839,8 +817,17 @@ ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 COPY --from=runtime-src . /work/runtime
 RUN <<'RUNTIME'
 set -eux
-mkdir -p /out/bin /out/systemd
+mkdir -p /out/bin /out/systemd /out/sdk/include /out/sdk/lib
 [ "${PF_RUNTIME_SHA}" = "78e4754cd0d6ccdc0aa858bc2d889b7f33458ec0" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+cd /work/runtime
+# Build the SDK for every device: hwprobe is a separate build-graph input even
+# where runtime daemons are not shipped in that device's rootfs.
+CARGO_NET_OFFLINE=true CARGO_NET_LOCKED=1 \
+RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+cargo build --offline --locked --release --target aarch64-unknown-linux-gnu -p libpocketforge
+install -D -m 0644 include/pocketforge.h /out/sdk/include/pocketforge.h
+install -D -m 0644 target/aarch64-unknown-linux-gnu/release/libpocketforge.a /out/sdk/lib/libpocketforge.a
 # Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
 # proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). pf-input-decode
 # decodes the A133 pad MCU's ttyS3/ttyS4 frames — a133-only, unrelated to the GPU
@@ -853,10 +840,6 @@ if [ "${PF_SOC}" != "sun50iw10p1" ]; then
   cat /out/.pf-runtime-provenance
   exit 0
 fi
-if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
-# rust-lld (ships with the toolchain) does the musl link — only the std target is added.
-rustup target add "${PF_RUNTIME_TARGET}"
-cd /work/runtime
 # --locked: build EXACTLY the committed Cargo.lock (fails if it would change) — the
 # reproducibility anchor. --remap-path-prefix normalizes the embedded build path so the
 # artifact does not depend on this stage's absolute workdir.
@@ -866,7 +849,7 @@ cd /work/runtime
 # is OPEN-ONLY (tsp-mc9m.41.924.4 / top-coord RULING B-extended) — see the gated block below.
 CARGO_NET_LOCKED=1 \
 RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
-cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-decode
+cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-decode
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-decode"
 [ -f "${BIN}" ] || { echo "FATAL: pf-input-decode not built at ${BIN}"; exit 1; }
 # Gate 1: must be an aarch64 ELF (e_machine 0xB7 at offset 18) — same check as the wpa stage.
@@ -890,10 +873,10 @@ install -D -m 0644 crates/pf-input-decode/systemd/pf-input-decode.service /out/s
 if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   CARGO_NET_LOCKED=1 \
   RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
-  cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-session-authority --bin pf-session-authorityd
+  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-session-authority --bin pf-session-authorityd
   CARGO_NET_LOCKED=1 \
   RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
-  cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-prefsd --bin pf-prefsd
+  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-prefsd --bin pf-prefsd
   AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
   PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
   [ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
@@ -913,6 +896,83 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
 fi
 cat /out/.pf-runtime-provenance
 RUNTIME
+
+# =============================================================================
+# sdl-static — static AArch64 SDL used only to link pf-hwprobe.
+# sim owns the static configuration/toolchain. The already staged, lock-pinned
+# libsdl3-sunxifb archive supplies SDL source so this stage never clones/fetches.
+# =============================================================================
+FROM ${PF_CONTAINER} AS sdl-static
+ARG PF_SIM_SHA
+ARG PF_LIBSDL3_SHA
+ARG SOURCE_DATE_EPOCH
+COPY --from=sim-src . /work/sim
+COPY --from=sdl-src . /work/sdl-source
+RUN <<'SDLSTATIC'
+set -eux
+: "${PF_SIM_SHA:?}" "${PF_LIBSDL3_SHA:?}" "${SOURCE_DATE_EPOCH:?}"
+export SOURCE_DATE_EPOCH
+cmake -S /work/sdl-source/sdl3 -B /work/build/sdl-static -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=/work/sim/sdl3/aarch64-toolchain.cmake \
+  -DCMAKE_C_COMPILER=aarch64-none-linux-gnu-gcc \
+  -DCMAKE_CXX_COMPILER=aarch64-none-linux-gnu-g++ \
+  -DCMAKE_FIND_ROOT_PATH=/opt/arm-10.3-2021.07/aarch64-none-linux-gnu/libc \
+  -DCMAKE_INSTALL_PREFIX=/out \
+  -DSDL_STATIC=ON -DSDL_SHARED=OFF \
+  -DSDL_TEST_LIBRARY=OFF -DSDL_EXAMPLES=OFF -DSDL_TESTS=OFF -DSDL_INSTALL_TESTS=OFF \
+  -DSDL_UNIX_CONSOLE_BUILD=ON \
+  -DSDL_VIDEO=ON -DSDL_RENDER=ON \
+  -DSDL_AUDIO=OFF -DSDL_GPU=OFF -DSDL_CAMERA=OFF \
+  -DSDL_OPENGL=OFF -DSDL_OPENGLES=OFF -DSDL_VULKAN=OFF -DSDL_RENDER_GPU=OFF \
+  -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_DBUS=OFF -DSDL_IBUS=OFF \
+  -DSDL_UDEV=OFF -DSDL_HIDAPI=OFF -DSDL_LIBUSB=OFF \
+  -DSDL_PULSEAUDIO=OFF -DSDL_PIPEWIRE=OFF -DSDL_ALSA=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF \
+  -DSDL_SENSOR=OFF -DSDL_HAPTIC=OFF -DSDL_POWER=OFF -DSDL_DIALOG=OFF \
+  -DSDL_JOYSTICK=ON
+cmake --build /work/build/sdl-static --parallel
+cmake --install /work/build/sdl-static
+test -f /out/lib/libSDL3.a
+SDLSTATIC
+
+# =============================================================================
+# hwprobe — fully static AArch64 diagnostic executable plus input provenance.
+# =============================================================================
+FROM ${PF_CONTAINER} AS hwprobe
+ARG PF_HWPROBE_SHA
+ARG PF_RUNTIME_SHA
+ARG PF_SIM_SHA
+ARG PF_LIBSDL3_SHA
+ARG SOURCE_DATE_EPOCH
+COPY --from=hwprobe-src . /work/hwprobe
+COPY --from=runtime /out/sdk /work/runtime-sdk
+COPY --from=sdl-static /out /work/sdl-static
+RUN <<'HWPROBE'
+set -eux
+: "${PF_HWPROBE_SHA:?}" "${PF_RUNTIME_SHA:?}" "${PF_SIM_SHA:?}" "${PF_LIBSDL3_SHA:?}" "${SOURCE_DATE_EPOCH:?}"
+export SOURCE_DATE_EPOCH
+make -C /work/hwprobe \
+  CC=aarch64-none-linux-gnu-gcc \
+  STRIP=aarch64-none-linux-gnu-strip \
+  SDL3_INCLUDE=/work/sdl-static/include \
+  SDL3_STATIC=/work/sdl-static/lib/libSDL3.a \
+  PF_INCLUDE=/work/runtime-sdk/include \
+  PF_STATIC=/work/runtime-sdk/lib/libpocketforge.a \
+  OUT_DIR=/out/bin
+test "$(od -An -tx1 -j18 -N2 /out/bin/pf-hwprobe | tr -d ' ')" = b700
+! aarch64-none-linux-gnu-readelf -l /out/bin/pf-hwprobe | grep -q 'Requesting program interpreter'
+if aarch64-none-linux-gnu-readelf -d /out/bin/pf-hwprobe | grep -q NEEDED; then
+  echo 'FATAL: pf-hwprobe has a DT_NEEDED entry' >&2
+  exit 1
+fi
+{
+  printf 'pf-hwprobe@%s\n' "${PF_HWPROBE_SHA}"
+  printf 'runtime@%s\n' "${PF_RUNTIME_SHA}"
+  printf 'sim@%s\n' "${PF_SIM_SHA}"
+  printf 'libsdl3-sunxifb@%s\n' "${PF_LIBSDL3_SHA}"
+  printf 'binary_sha256=%s\n' "$(sha256sum /out/bin/pf-hwprobe | cut -d' ' -f1)"
+} > /out/.pf-hwprobe-provenance
+HWPROBE
 
 # =============================================================================
 # recovery — launcher-independent recovery surface (product-010 F16 authoring)
@@ -1066,6 +1126,8 @@ ARG PF_GPU_SHA
 ARG PF_LIBSDL3_SHA
 ARG PF_WPA_SHA
 ARG PF_RUNTIME_SHA
+ARG PF_HWPROBE_SHA
+ARG PF_SIM_SHA
 ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
 ARG PF_LAUNCHER_SHA
 ARG PF_BLOBS_SHA
@@ -1095,6 +1157,7 @@ COPY --from=gpu-um-mesa /out        /work/gpu-um-mesa
 COPY --from=sdl    /out/lib         /work/libsdl3
 COPY --from=wpa    /out             /work/wpa
 COPY --from=runtime /out            /work/runtime
+COPY --from=hwprobe /out            /work/hwprobe
 COPY --from=recovery /out           /work/recovery
 COPY --from=launcher /out           /work/launcher
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
@@ -1113,13 +1176,14 @@ case "${PF_SOC}" in
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
       GPU_UM_MESA_DIR=/work/gpu-um-mesa OUT_DIR=/out \
-      RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher \
+      RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher HWPROBE_DIR=/work/hwprobe \
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
       PF_IMAGE_SHA="${PF_IMAGE_SHA}" PF_KERNEL_SHA="${PF_KERNEL_SHA}" \
       PF_GPU_SHA="${PF_GPU_SHA}" PF_LIBSDL3_SHA="${PF_LIBSDL3_SHA}" \
       PF_WPA_SHA="${PF_WPA_SHA}" PF_RUNTIME_SHA="${PF_RUNTIME_SHA}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA}" \
+      PF_HWPROBE_SHA="${PF_HWPROBE_SHA}" PF_SIM_SHA="${PF_SIM_SHA}" \
       PF_RECOVERY_SHA="${PF_RECOVERY_SHA}" RECOVERY_DIR=/work/recovery \
       PF_BLOBS_SHA="${PF_BLOBS_SHA}" \
       PF_VENDOR_MANIFEST_SHA="${PF_VENDOR_MANIFEST_SHA}" \
