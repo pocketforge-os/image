@@ -946,20 +946,16 @@ RECOVERYDDK
 # its recovery-src reference) for every ddk build.
 # recovery@7044d49 uses slice::as_chunks_mut, stabilized in Rust 1.88.
 # rust:1.88 is REQUIRED: pocketforge-recovery-surface uses slice::as_chunks_mut
-# (feature slice_as_chunks, stabilized in Rust 1.88), so 1.85 fails to compile it. But
-# rust:1.88's default linker for aarch64-unknown-linux-musl drives the x86_64 host `cc` ->
-# host ld, which cannot link the aarch64 self-contained crt objects ("Relocations in generic
-# ELF (EM: 183) / crt1.o: file in wrong format"). Provide an aarch64 cross linker
-# (aarch64-linux-gnu-gcc) so cargo links the target binary; rustc still supplies the
-# self-contained static-musl crt + libs (-static -nostartfiles -nodefaultlibs), so the glibc
-# cross-gcc serves only as the aarch64 ld driver and the output stays static musl.
+# (feature slice_as_chunks, stabilized in Rust 1.88), so 1.85 fails to compile it. rust:1.88's
+# default linker for aarch64-unknown-linux-musl drives the x86_64 host `cc` -> host ld, which
+# cannot link the aarch64 self-contained crt objects ("Relocations in generic ELF (EM: 183) /
+# crt1.o: file in wrong format"). Pin rust-lld (bundled with the toolchain, no cross-gcc
+# install), mirroring runtime-src/.cargo/config.toml and the launcher-open stage.
 # recovery-open is OPEN-ONLY (closed a133/a523 land on the recovery-ddk stub), so nothing in
 # this stage can affect the closed/a523 byte-identical output.
 FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS recovery-open
 ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
 ARG SOURCE_DATE_EPOCH
-RUN apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu \
-    && rm -rf /var/lib/apt/lists/*
 COPY --from=image-src . /work/image
 COPY --from=recovery-src . /work/image/recovery
 RUN <<'RECOVERY'
@@ -970,7 +966,7 @@ set -eux
   exit 1
 }
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
-export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
 cd /work/image/apps/pocketforge-recovery-entry
 rustup target add aarch64-unknown-linux-musl
 cargo build --locked --release --target aarch64-unknown-linux-musl
@@ -1025,6 +1021,12 @@ mkdir -p /out/bin
 [ "${PF_LAUNCHER_SHA}" = "3fc6a8ebd71ebe7c2bf261908fcbfbd6e8df65ea" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 rustup target add "${PF_RUNTIME_TARGET}"
+# Pin rust-lld as the aarch64-unknown-linux-musl linker (the launcher repo has no
+# .cargo/config, unlike the runtime repo which pins this exact way). Without it, cargo drives
+# the x86_64 host `cc` -> host ld against the aarch64 self-contained crt objects and fails with
+# "crt1.o: Relocations in generic ELF (EM: 183) / file in wrong format". rust-lld ships with
+# the toolchain (no cross-gcc install). Mirrors runtime-src/.cargo/config.toml.
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
 cd /work/launcher
 CARGO_NET_LOCKED=1 RUSTFLAGS="--remap-path-prefix=/work/launcher=." \
   cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-shell
