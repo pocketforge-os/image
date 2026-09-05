@@ -58,7 +58,7 @@
 # separately so changes to apt deps in stage 2 don't re-download the 250 MB
 # tarball.
 # =============================================================================
-FROM debian:bookworm-slim AS toolchain-fetch
+FROM debian:bookworm-20260623-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS toolchain-fetch
 
 ARG TOOLCHAIN_VERSION=10.3-2021.07
 ARG TOOLCHAIN_TRIPLET=aarch64-none-linux-gnu
@@ -114,6 +114,60 @@ RUN "/opt/arm-${TOOLCHAIN_VERSION}/bin/${TOOLCHAIN_TRIPLET}-gcc" --version | \
         grep -F "10.3-2021.07"
 
 # =============================================================================
+# Stage — rust-toolchain-fetch
+# Fetch, verify, and install the official standalone Rust components. Keeping
+# the host toolchain and both standard libraries explicit avoids rustup and any
+# network access when downstream image stages compile Rust.
+# =============================================================================
+FROM debian:bookworm-20260623-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS rust-toolchain-fetch
+
+ARG RUST_VERSION=1.88.0
+ARG RUST_DIST_DATE=2025-06-26
+ARG RUST_DIST_BASE_URL=https://static.rust-lang.org/dist/${RUST_DIST_DATE}
+ARG RUST_HOST=x86_64-unknown-linux-gnu
+ARG RUST_CROSS_TARGET=aarch64-unknown-linux-gnu
+ARG RUSTC_SHA256=b049fd57fce274d10013e2cf0e05f215f68f6580865abc52178f66ae9bf43fd8
+ARG CARGO_SHA256=856962610ee821648cee32e3d6abac667af7bb7ea6ec6f3d184cc31e66044f6b
+ARG RUST_STD_HOST_SHA256=36d7eacf46bd5199cb433e49a9ed9c9b380d82f8a0ebc05e89b43b51c070c955
+ARG RUST_STD_CROSS_SHA256=e9ac4ff3c87247a2195fcceddbf1bdeee5c4fd337f014d8f4c4e3ac99002021f
+
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp/rust
+RUN set -eux; \
+    rustc_archive="rustc-${RUST_VERSION}-${RUST_HOST}.tar.xz"; \
+    cargo_archive="cargo-${RUST_VERSION}-${RUST_HOST}.tar.xz"; \
+    std_host_archive="rust-std-${RUST_VERSION}-${RUST_HOST}.tar.xz"; \
+    std_cross_archive="rust-std-${RUST_VERSION}-${RUST_CROSS_TARGET}.tar.xz"; \
+    for archive in \
+        "${rustc_archive}" \
+        "${cargo_archive}" \
+        "${std_host_archive}" \
+        "${std_cross_archive}"; do \
+        curl --fail --silent --show-error --location \
+             --output "${archive}" "${RUST_DIST_BASE_URL}/${archive}"; \
+    done; \
+    echo "${RUSTC_SHA256}  ${rustc_archive}" | sha256sum -c -; \
+    echo "${CARGO_SHA256}  ${cargo_archive}" | sha256sum -c -; \
+    echo "${RUST_STD_HOST_SHA256}  ${std_host_archive}" | sha256sum -c -; \
+    echo "${RUST_STD_CROSS_SHA256}  ${std_cross_archive}" | sha256sum -c -; \
+    for archive in \
+        "${rustc_archive}" \
+        "${cargo_archive}" \
+        "${std_host_archive}" \
+        "${std_cross_archive}"; do \
+        tar -xJf "${archive}"; \
+        component=${archive%.tar.xz}; \
+        "./${component}/install.sh" --prefix=/opt/rust --disable-ldconfig; \
+        rm -rf "${component}" "${archive}"; \
+    done
+
+# =============================================================================
 # Stage — kubo-fetch (B3 / tsp-1dl.3)
 # Single-purpose: fetch + dual-checksum + unpack the pinned kubo (go-ipfs) binary.
 # kubo runs ONLY in the discarded `fetch` stage of Dockerfile.pf (daemon-less blob
@@ -122,7 +176,7 @@ RUN "/opt/arm-${TOOLCHAIN_VERSION}/bin/${TOOLCHAIN_TRIPLET}-gcc" --version | \
 # OFFICIAL dist artifact — NOT the ipfs/kubo docker image (whose binary differs).
 # Modeled on toolchain-fetch (fetch -> dual-checksum -> smoke-test).
 # =============================================================================
-FROM debian:bookworm-slim AS kubo-fetch
+FROM debian:bookworm-20260623-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS kubo-fetch
 
 ARG KUBO_VERSION=0.42.0
 ARG KUBO_TARBALL_SHA512=054c38a0cf66f7d738e25085ad62cb3a42d03d4bac329b7dd25c1d71cf18e1ce87d55b1d1b705b04c65210dca9109973579e0eb1cd72f6341ecb3311d840d156
@@ -154,10 +208,15 @@ RUN set -eux; \
 # need across Phase 0 (SDL3 build) and Phase 1 (image composition) so we don't
 # need a second container later.
 # =============================================================================
-FROM debian:bookworm-slim AS final
+# This is the exact Debian base used by the previously published container;
+# pinning it keeps the 2026-06-01 apt snapshot resolvable after the moving
+# bookworm-slim tag advances.
+FROM debian:bookworm-20260623-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS final
 
 ARG TOOLCHAIN_VERSION=10.3-2021.07
 ARG TOOLCHAIN_TRIPLET=aarch64-none-linux-gnu
+ARG RUST_VERSION=1.88.0
+ARG RUST_CROSS_TARGET=aarch64-unknown-linux-gnu
 
 # Apt snapshot pin. Default committed in image/snapshot-date.txt; CI passes this
 # as --build-arg APT_SNAPSHOT_DATE=$(cat image/snapshot-date.txt). All apt
@@ -204,6 +263,7 @@ RUN dpkg --add-architecture arm64 \
 #                         qemu-user-static binfmt-support arch-test
 #   Reproducibility (M1.E): faketime disorderfs e2fsprogs (>=1.47.1 from backports)
 #   Cross-readelf:        binutils-aarch64-linux-gnu  (for symver gate)
+#   Artifact inspection:  file  (for cross-compiled ELF smoke gates)
 #   Scripting glue:       python3 python3-pip
 #   U-Boot pylibfdt:      python3-dev python3-setuptools swig  (binman builds a
 #                         SWIG _libfdt extension; required to embed BL31 into
@@ -256,6 +316,7 @@ RUN apt-get update \
         faketime \
         disorderfs \
         binutils-aarch64-linux-gnu \
+        file \
         python3 \
         python3-dev \
         python3-setuptools \
@@ -361,6 +422,9 @@ RUN set -eux; \
 # Pull the unpacked toolchain across from stage 1.
 COPY --from=toolchain-fetch /opt/arm-${TOOLCHAIN_VERSION} /opt/arm-${TOOLCHAIN_VERSION}
 
+# Pinned host Rust toolchain plus the GNU AArch64 standard library.
+COPY --from=rust-toolchain-fetch /opt/rust /opt/rust
+
 # kubo (go-ipfs) — hermetic in-build blob fetcher (runs ONLY in Dockerfile.pf's
 # discarded fetch stage; never used at device runtime). Pinned in image/kubo.pin.
 COPY --from=kubo-fetch /opt/kubo/ipfs /usr/local/bin/ipfs
@@ -368,10 +432,11 @@ COPY --from=kubo-fetch /opt/kubo/ipfs /usr/local/bin/ipfs
 # PATH wiring: prepend toolchain bin/ for both login and non-login shells.
 # /etc/profile.d/ handles login shells; ENV PATH handles `docker run ...
 # bash -c "..."` invocations that don't source profile.
-ENV PATH=/opt/arm-${TOOLCHAIN_VERSION}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/opt/rust/bin:/opt/arm-${TOOLCHAIN_VERSION}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-none-linux-gnu-gcc
 RUN printf '%s\n' \
         '# PocketForge cross-toolchain (10.3-2021.07)' \
-        'export PATH=/opt/arm-10.3-2021.07/bin:$PATH' \
+        'export PATH=/opt/rust/bin:/opt/arm-10.3-2021.07/bin:$PATH' \
         > /etc/profile.d/cross-toolchain.sh \
  && chmod +x /etc/profile.d/cross-toolchain.sh
 
@@ -407,6 +472,21 @@ RUN set -eux; \
     /usr/local/bin/check-glibc-symver hello; \
     cd /; \
     rm -rf /tmp/symver-check
+
+# Rust host/cross-target validation. Build a real executable through Cargo so
+# the durable target linker configuration and the GNU cross-link path are both
+# exercised before the container can be published.
+RUN set -eux; \
+    rustc -Vv | grep -F "release: 1.88."; \
+    cargo -V; \
+    test -f /opt/rust/lib/rustlib/${RUST_CROSS_TARGET}/lib/libstd-*.rlib; \
+    cargo new --bin /tmp/rust-cross-check; \
+    cargo build --manifest-path /tmp/rust-cross-check/Cargo.toml \
+        --target "${RUST_CROSS_TARGET}"; \
+    cross_hello="/tmp/rust-cross-check/target/${RUST_CROSS_TARGET}/debug/rust-cross-check"; \
+    test -s "${cross_hello}"; \
+    file "${cross_hello}" | grep -E 'ELF 64-bit .* ARM aarch64'; \
+    rm -rf /tmp/rust-cross-check
 
 # -----------------------------------------------------------------------------
 # Phase 1 tool inventory check (build-time)
@@ -450,6 +530,6 @@ WORKDIR /work
 # No CMD/ENTRYPOINT — invoked with explicit `bash -c "..."` per usage docs.
 # Image labels for traceability.
 LABEL org.opencontainers.image.title="pocketforge-build" \
-      org.opencontainers.image.description="ARM A-Profile Toolchain 10.3-2021.07 + image-composition tools for PocketForge / TrimUI Smart Pro (Phase 1+)" \
-      org.opencontainers.image.version="10.3-2021.07-bookworm" \
+      org.opencontainers.image.description="ARM A-Profile Toolchain 10.3-2021.07 + Rust 1.88.0 + image-composition tools for PocketForge / TrimUI Smart Pro (Phase 1+)" \
+      org.opencontainers.image.version="10.3-2021.07-rust-1.88.0-bookworm" \
       org.opencontainers.image.source="https://github.com/pocketforge-os/image"

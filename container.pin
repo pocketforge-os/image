@@ -7,4 +7,7 @@
 # the base from a registry (this is its durable home; the throwaway mm localhost:5000 mirrors it
 # for dev). Base build itself validates kubo via the kubo-fetch dual-checksum + the tool-inventory
 # `ipfs --version` smoke line.
-10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm@sha256:f37e83a08cbcf8b112f8fc2d3509c098e61cc71da6f21b7f7bece5f84da1f3d2
+# Re-pinned 2026-09-05: added the checksum-verified Rust 1.88.0 host toolchain,
+# aarch64-unknown-linux-gnu standard library, and a validated GNU cross-linker
+# configuration for hermetic runtime builds.
+10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r2@sha256:21c4bbf3bfa99538b211505e89945b482f1224f43ac729e9cf8e35e3bd202f31
