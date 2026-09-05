@@ -2,7 +2,14 @@
 
 Bead: `tsp-h5ed.17`
 
-## Build candidate: kernel and pinned userspace are integrated; DUT result pending
+## Build candidate: temporarily detached; harness preserved for re-land
+
+Hotfix `tsp-h5ed.20` removed the Cedar userspace stages and rootfs installation
+from the active image graph after image#88 made closed-DDK A133 and A523 builds
+compile the spike and fail. The source-owned probe, patch, runner, and this runbook
+remain in-tree. Re-land must first stage libcedrus development headers for the
+libvdpau-sunxi compile and introduce a selector that cannot include closed-DDK,
+release, or A523 profiles.
 
 The exact `platform.lock` kernel pin
 `a7cfec247898bb2c22e51bb705a7f18fd5910285` passes the kernel preflight. Its
@@ -10,7 +17,7 @@ The exact `platform.lock` kernel pin
 contains the enabled `allwinner,sunxi-cedar-ve` node, and the driver's probe
 registers the character device and creates `cedar_dev`. No kernel change is needed.
 
-The dev image now source-builds the clean-room legacy stack from the owned forks:
+The detached candidate source-builds the clean-room legacy stack from the owned forks:
 [`pocketforge-os/libcedrus`](https://github.com/pocketforge-os/libcedrus) commit
 `9b243c430a4d445b3853262552ad563fa9ea325d`, beneath
 [`pocketforge-os/libvdpau-sunxi`](https://github.com/pocketforge-os/libvdpau-sunxi) commit
@@ -22,12 +29,12 @@ surfaces only and aborts instead of returning a software frame. The runner passe
 the discovered absolute `libvdpau_sunxi.so.1` path to the probe, which prints that
 path before decoding; it does not depend on the VDPAU module directory being in the
 default dynamic-loader search path.
-Dedicated Dockerfile stages fetch those exact immutable refs, cross-build AArch64
+The removed Dockerfile stages fetched those exact immutable refs, cross-built AArch64
 libraries with the pinned toolchain, verify their ELF machine type, and copy only the
-libraries and provenance stamp into the dev rootfs. A build-graph selector uses the
-existing SoC and variant profile values, reaching the networked stages only for
-`sun50iw10p1` + `dev`; A523 and A133 release builds select an empty stage, so they
-neither fetch nor build Cedar. Release images do not install the payload.
+libraries and provenance stamp into the dev rootfs. Their SoC-and-variant-only
+selector was insufficient because it could not distinguish the closed-DDK A133 dev
+profile; the hotfix keeps these stages entirely outside the build graph pending a
+safe re-land.
 
 This dev-image spike adds Debian-snapshot-pinned FFmpeg libraries, the generic VDPAU
 loader, and `strace`, plus a deterministic 30-second 1280x720 H.264 Annex-B clip and
@@ -47,9 +54,10 @@ batched DUT run. It reports PASS only when all of these hold:
 
 ## Build and DUT handoff
 
-Build the normal A133 dev OS image on modelmaker. The build creates the clip inside
-the target rootfs with the snapshot-pinned target FFmpeg and installs the runner.  The
-coordinator records the resulting OS artifact SHA-256 and batches this exact command:
+After the integration is safely re-landed, build the eligible A133 dev OS image on
+modelmaker. The build creates the clip inside the target rootfs with the
+snapshot-pinned target FFmpeg and installs the runner. The coordinator records the
+resulting OS artifact SHA-256 and batches this exact command:
 
 ```sh
 sudo /usr/lib/pocketforge/cedar-spike.sh
@@ -68,8 +76,8 @@ FAIL names the first observed blocker.
   VDPAU driver.  Their presence cannot constitute Cedar support.
 - VDPAU (ffmpeg/mpv) requires X — not viable headless on the current image;
   direct-VE (libcedrus) is the headless path; the TV pipeline design must account
-  for this. `libvdpau-sunxi` remains installed because it contains the proven H.264
-  VE implementation, but the spike bypasses its X11 presentation constructor.
+  for this. The detached `libvdpau-sunxi` candidate contains the H.264 VE
+  implementation, and the preserved spike bypasses its X11 presentation constructor.
 - Decoder log text or successful playback alone cannot distinguish hardware from a
   software fallback; the runner traces the actual character-device FD and its ioctl.
 - Moving branch tips and non-owned source remotes are not acceptable provenance; both
