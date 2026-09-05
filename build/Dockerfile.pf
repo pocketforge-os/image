@@ -840,7 +840,7 @@ COPY --from=runtime-src . /work/runtime
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd
-[ "${PF_RUNTIME_SHA}" = "2478b37755bc9968a49105fb9223be1f55ca7ddd" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "78e4754cd0d6ccdc0aa858bc2d889b7f33458ec0" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
 # proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). pf-input-decode
 # decodes the A133 pad MCU's ttyS3/ttyS4 frames — a133-only, unrelated to the GPU

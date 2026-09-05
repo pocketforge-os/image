@@ -41,7 +41,7 @@ for relative in (
 assert text(ROOT / "rootfs-overlay/etc/environment").strip() == f"PF_PREFSD_SOCK={SOCKET}"
 
 dockerfile = text(ROOT / "build/Dockerfile.pf")
-assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" in dockerfile
+assert "78e4754cd0d6ccdc0aa858bc2d889b7f33458ec0" in dockerfile
 assert "cargo build --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
 
