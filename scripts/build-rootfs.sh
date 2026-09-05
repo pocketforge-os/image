@@ -1008,6 +1008,37 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-foregro
 # (see above). Unit-file apps join the target directly and don't need it.
 install -m 0755 "/work/src/rootfs-overlay/usr/bin/pf-take-panel" \
     "${ROOTFS}/usr/bin/pf-take-panel"
+
+# Cedar H.264 spike (tsp-h5ed.17): dev-only because this is a diagnostic payload,
+# not a production decoder integration.  Generate the source-owned test pattern with
+# the snapshot-pinned target ffmpeg already installed by mmdebstrap.  Raw Annex-B
+# avoids introducing a container/demux dependency into the actual decode question.
+if [ "${VARIANT}" = "dev" ]; then
+    install -D -m 0755 \
+        "/work/src/rootfs-overlay/usr/lib/pocketforge/cedar-spike.sh" \
+        "${ROOTFS}/usr/lib/pocketforge/cedar-spike.sh"
+    CEDAR_CLIP="${ROOTFS}/usr/share/pocketforge/cedar-spike-720p.h264"
+    install -d "$(dirname "${CEDAR_CLIP}")"
+    chroot "${ROOTFS}" ffmpeg -nostdin -hide_banner -loglevel error \
+        -f lavfi -i 'testsrc2=size=1280x720:rate=30:duration=30' \
+        -an -c:v libx264 -preset veryfast -threads 1 \
+        -pix_fmt yuv420p -profile:v high -level:v 3.1 \
+        -x264-params 'scenecut=0:open-gop=0:keyint=60:min-keyint=60' \
+        -map_metadata -1 -fflags +bitexact -flags:v +bitexact \
+        -f h264 /usr/share/pocketforge/cedar-spike-720p.h264
+    [ -s "${CEDAR_CLIP}" ] \
+        || { echo "FATAL: Cedar spike H.264 clip generation produced no data" >&2; exit 1; }
+    CEDAR_FRAMES="$(chroot "${ROOTFS}" ffprobe -v error -count_frames \
+        -select_streams v:0 -show_entries stream=nb_read_frames \
+        -of default=nokey=1:noprint_wrappers=1 \
+        /usr/share/pocketforge/cedar-spike-720p.h264)"
+    [ "${CEDAR_FRAMES}" = "900" ] \
+        || { echo "FATAL: Cedar spike clip has ${CEDAR_FRAMES} frames, expected 900" >&2; exit 1; }
+    touch -d "@${SOURCE_DATE_EPOCH}" "${CEDAR_CLIP}"
+    sha256sum "${CEDAR_CLIP}" | sed "s#${ROOTFS}##" \
+        > "${ROOTFS}/usr/share/pocketforge/cedar-spike-clip.sha256"
+    echo "[customize] Cedar spike: installed 900-frame H.264 clip and hardware-only verifier"
+fi
 install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"
 ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
     "${ROOTFS}/etc/systemd/system/basic.target.wants/pocketforge-boot-animator.service"
