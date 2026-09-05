@@ -945,16 +945,21 @@ RECOVERYDDK
 # Reached ONLY via the `FROM recovery-${PF_GPU_MODEL}` selector below, so BuildKit prunes it (and
 # its recovery-src reference) for every ddk build.
 # recovery@7044d49 uses slice::as_chunks_mut, stabilized in Rust 1.88.
-# rust:1.85 (matching runtime + launcher-open) — this exact base cross-compiles the
-# aarch64-unknown-linux-musl target with a plain `cargo build` (no linker config). op5a's
-# original rust:1.88 base regressed that: it drove `cc` -> the x86_64 host ld against the
-# aarch64 self-contained crt objects ("Relocations in generic ELF (EM: 183) / file in wrong
-# format"). recovery-entry + surface are edition 2021 (no MSRV need for 1.88), so 1.85 is safe.
-# recovery-open is OPEN-ONLY (closed a133/a523 land on the recovery-ddk stub), so this base
-# change cannot affect the closed/a523 byte-identical output.
-FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS recovery-open
+# rust:1.88 is REQUIRED: pocketforge-recovery-surface uses slice::as_chunks_mut
+# (feature slice_as_chunks, stabilized in Rust 1.88), so 1.85 fails to compile it. But
+# rust:1.88's default linker for aarch64-unknown-linux-musl drives the x86_64 host `cc` ->
+# host ld, which cannot link the aarch64 self-contained crt objects ("Relocations in generic
+# ELF (EM: 183) / crt1.o: file in wrong format"). Provide an aarch64 cross linker
+# (aarch64-linux-gnu-gcc) so cargo links the target binary; rustc still supplies the
+# self-contained static-musl crt + libs (-static -nostartfiles -nodefaultlibs), so the glibc
+# cross-gcc serves only as the aarch64 ld driver and the output stays static musl.
+# recovery-open is OPEN-ONLY (closed a133/a523 land on the recovery-ddk stub), so nothing in
+# this stage can affect the closed/a523 byte-identical output.
+FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS recovery-open
 ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
 ARG SOURCE_DATE_EPOCH
+RUN apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=image-src . /work/image
 COPY --from=recovery-src . /work/image/recovery
 RUN <<'RECOVERY'
@@ -965,6 +970,7 @@ set -eux
   exit 1
 }
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc
 cd /work/image/apps/pocketforge-recovery-entry
 rustup target add aarch64-unknown-linux-musl
 cargo build --locked --release --target aarch64-unknown-linux-musl
