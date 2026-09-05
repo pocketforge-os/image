@@ -914,10 +914,7 @@ set -eux
 export SOURCE_DATE_EPOCH
 cmake -S /work/sdl-source/sdl3 -B /work/build/sdl-static -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE=/work/sim/sdl3/aarch64-toolchain.cmake \
-  -DCMAKE_C_COMPILER=aarch64-none-linux-gnu-gcc \
-  -DCMAKE_CXX_COMPILER=aarch64-none-linux-gnu-g++ \
-  -DCMAKE_FIND_ROOT_PATH=/opt/arm-10.3-2021.07/aarch64-none-linux-gnu/libc \
+  -DCMAKE_TOOLCHAIN_FILE=/opt/cmake/toolchain-arm-10.3-2021.07.cmake \
   -DCMAKE_INSTALL_PREFIX=/out \
   -DSDL_STATIC=ON -DSDL_SHARED=OFF \
   -DSDL_TEST_LIBRARY=OFF -DSDL_EXAMPLES=OFF -DSDL_TESTS=OFF -DSDL_INSTALL_TESTS=OFF \
