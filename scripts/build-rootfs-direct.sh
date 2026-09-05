@@ -65,7 +65,11 @@ PF_LIBSDL3_SHA="$(tree_identity "${LIBSDL3_DIR}")"
 PF_WPA_SHA="$(tree_identity "${WPA_DIR}")"
 PF_RUNTIME_SHA="$(tree_identity "${RUNTIME_DIR}")"
 PF_LAUNCHER_SHA="$(tree_identity "${LAUNCHER_DIR}")"
-PF_HWPROBE_SHA="$(tree_identity "${HWPROBE_DIR}")"
+if [ "${variant}" = dev ]; then
+    PF_HWPROBE_SHA="$(tree_identity "${HWPROBE_DIR}")"
+else
+    PF_HWPROBE_SHA=""
+fi
 # The direct path consumes hwprobe's already-linked output tree rather than the
 # separately pinned sim source. Its tree identity is therefore the complete
 # identity of the hwprobe payload installed into this rootfs.

@@ -69,10 +69,42 @@ rm "${scratch}/out/userdata.ext4"
 vendor="$(run_direct "")"
 [ "${first}" != "${vendor}" ] || { echo "FAIL: owned and explicit vendor bootchain identities matched" >&2; exit 1; }
 
+missing_hwprobe="${scratch}/missing-hwprobe"
+release_builder="${scratch}/release-build-rootfs.sh"
+cat > "${release_builder}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "${PF_VARIANT}" = release ]
+[ -z "${PF_HWPROBE_SHA}" ]
+[ -z "${PF_SIM_SHA}" ]
+EOF
+chmod +x "${release_builder}"
+
+SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
+LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
+RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${missing_hwprobe}" \
+KERNEL_TSP_DIR="${scratch}/kernel" GPU_KM_TSP_DIR="${scratch}/gpu" \
+ROOTFS_BUILDER="${release_builder}" \
+bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release
+
+if SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
+    LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
+    RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${missing_hwprobe}" \
+    KERNEL_TSP_DIR="${scratch}/kernel" GPU_KM_TSP_DIR="${scratch}/gpu" \
+    ROOTFS_BUILDER="${release_builder}" \
+    bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant dev 2>"${scratch}/dev-missing-hwprobe.err"; then
+    echo "FAIL: dev direct path accepted an absent hwprobe input" >&2
+    exit 1
+fi
+grep -F "required input is absent: ${missing_hwprobe}" "${scratch}/dev-missing-hwprobe.err" >/dev/null || {
+    echo "FAIL: dev direct path did not report the absent hwprobe input" >&2
+    exit 1
+}
+
 case "${first}" in
     'device=trimui-smart-pro-a133 build='????????????) ;;
     *) echo "FAIL: direct build-id is not a single cat-readable line: ${first}" >&2; exit 1 ;;
 esac
 
-printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-hwprobe=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\n' \
+printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-hwprobe=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\nPASS release-without-hwprobe\nPASS dev-requires-hwprobe\n' \
     "${first}" "${different}" "${different_hwprobe}" "${different_uboot}" "${vendor}"
