@@ -839,6 +839,7 @@ ARG PF_DEVICE_ID
 ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_RUNTIME_SHA
+ARG PF_GPU_MODEL
 ARG SOURCE_DATE_EPOCH
 ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 COPY --from=runtime-src . /work/runtime
@@ -864,45 +865,58 @@ rustup target add "${PF_RUNTIME_TARGET}"
 cd /work/runtime
 # --locked: build EXACTLY the committed Cargo.lock (fails if it would change) — the
 # reproducibility anchor. --remap-path-prefix normalizes the embedded build path so the
-# artifact does not depend on this stage's absolute workdir. Only pf-input-decode is
-# built; the parallel tsp-bwrg crates carried in the pinned runtime archive are inert.
+# artifact does not depend on this stage's absolute workdir.
+#
+# pf-input-decode is the A133 pad-MCU decoder — part of the a133 BASELINE, built for EVERY
+# a133 variant (closed + open). The F13/F07 userspace stack (pf-session-authorityd + pf-prefsd)
+# is OPEN-ONLY (tsp-mc9m.41.924.4 / top-coord RULING B-extended) — see the gated block below.
 CARGO_NET_LOCKED=1 \
 RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
 cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-decode
-CARGO_NET_LOCKED=1 \
-RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
-cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-session-authority --bin pf-session-authorityd
-CARGO_NET_LOCKED=1 \
-RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
-cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-prefsd --bin pf-prefsd
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-decode"
-AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
-PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
 [ -f "${BIN}" ] || { echo "FATAL: pf-input-decode not built at ${BIN}"; exit 1; }
-[ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
-[ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-prefsd not built at ${PREFSD_BIN}"; exit 1; }
 # Gate 1: must be an aarch64 ELF (e_machine 0xB7 at offset 18) — same check as the wpa stage.
 E_MACHINE="$(od -An -tx1 -j18 -N2 "${BIN}" | tr -d ' ')"
 [ "${E_MACHINE}" = "b700" ] || { echo "FATAL: pf-input-decode is not aarch64 (e_machine=${E_MACHINE}, want b700)"; exit 1; }
 # Gate 2: must be STATIC (musl target defaults crt-static) — a dynamic musl binary would need a
 # musl loader the bookworm rootfs does not have. A static binary carries no interpreter path string.
 if grep -qa 'ld-musl\|ld-linux' "${BIN}"; then echo "FATAL: pf-input-decode is dynamically linked (expected static musl)"; exit 1; fi
-AUTHORITY_EM="$(od -An -tx1 -j18 -N2 "${AUTHORITY_BIN}" | tr -d ' ')"
-[ "${AUTHORITY_EM}" = "b700" ] || { echo "FATAL: pf-session-authorityd is not aarch64 (e_machine=${AUTHORITY_EM}, want b700)"; exit 1; }
-if grep -qa 'ld-musl\|ld-linux' "${AUTHORITY_BIN}"; then echo "FATAL: pf-session-authorityd is dynamically linked (expected static musl)"; exit 1; fi
-PREFSD_EM="$(od -An -tx1 -j18 -N2 "${PREFSD_BIN}" | tr -d ' ')"
-[ "${PREFSD_EM}" = "b700" ] || { echo "FATAL: pf-prefsd is not aarch64 (e_machine=${PREFSD_EM}, want b700)"; exit 1; }
-if grep -qa 'ld-musl\|ld-linux' "${PREFSD_BIN}"; then echo "FATAL: pf-prefsd is dynamically linked (expected static musl)"; exit 1; fi
 install -D -m 0755 "${BIN}" /out/bin/pf-input-decode
-install -D -m 0755 "${AUTHORITY_BIN}" /out/bin/pf-session-authorityd
-install -D -m 0755 "${PREFSD_BIN}" /out/bin/pf-prefsd
 install -D -m 0644 crates/pf-input-decode/systemd/pf-input-decode.service /out/systemd/pf-input-decode.service
+# Provenance: pf-input-decode always (a133 baseline); the open-only F13/F07 shas are appended below.
 {
   printf 'runtime@%s device=%s gpu=%s target=%s\n' "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" "${PF_RUNTIME_TARGET}"
   printf '  pf-input-decode sha256=%s\n' "$(sha256sum /out/bin/pf-input-decode | cut -d' ' -f1)"
-  printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
-  printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
 } > /out/.pf-runtime-provenance
+# F13/F07 userspace stack (pf-session-authorityd + pf-prefsd) — OPEN-ONLY (tsp-mc9m.41.924.4 /
+# top-coord RULING B-extended). Gated with pf-shell (launcher stage) on PF_GPU_MODEL=open so
+# closed a133 + a523 ship NONE of the F13/F07 stack (byte-identical baseline — top-coord). The
+# build-rootfs.sh pf-shell<->pf-session-authorityd both-or-neither pairing is kept as-is; with
+# both open-gated, closed a133/a523 land on neither and the pairing block simply never fires.
+if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-session-authority --bin pf-session-authorityd
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-prefsd --bin pf-prefsd
+  AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
+  PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
+  [ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
+  [ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-prefsd not built at ${PREFSD_BIN}"; exit 1; }
+  AUTHORITY_EM="$(od -An -tx1 -j18 -N2 "${AUTHORITY_BIN}" | tr -d ' ')"
+  [ "${AUTHORITY_EM}" = "b700" ] || { echo "FATAL: pf-session-authorityd is not aarch64 (e_machine=${AUTHORITY_EM}, want b700)"; exit 1; }
+  if grep -qa 'ld-musl\|ld-linux' "${AUTHORITY_BIN}"; then echo "FATAL: pf-session-authorityd is dynamically linked (expected static musl)"; exit 1; fi
+  PREFSD_EM="$(od -An -tx1 -j18 -N2 "${PREFSD_BIN}" | tr -d ' ')"
+  [ "${PREFSD_EM}" = "b700" ] || { echo "FATAL: pf-prefsd is not aarch64 (e_machine=${PREFSD_EM}, want b700)"; exit 1; }
+  if grep -qa 'ld-musl\|ld-linux' "${PREFSD_BIN}"; then echo "FATAL: pf-prefsd is dynamically linked (expected static musl)"; exit 1; fi
+  install -D -m 0755 "${AUTHORITY_BIN}" /out/bin/pf-session-authorityd
+  install -D -m 0755 "${PREFSD_BIN}" /out/bin/pf-prefsd
+  {
+    printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
+    printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
+  } >> /out/.pf-runtime-provenance
+fi
 cat /out/.pf-runtime-provenance
 RUNTIME
 
@@ -913,7 +927,39 @@ RUNTIME
 # customer state, copy, and rendering remain in the pinned recovery crate.
 # ======================================================================
 # recovery@7044d49 uses slice::as_chunks_mut, stabilized in Rust 1.88.
-FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS recovery
+# recovery is the MODEL-SELECTOR pattern (tsp-mc9m.41.924.4 / top-coord RULING B), mirroring
+# launcher/gpu-um-mesa EXACTLY: the recovery entry (product-010 F16) is source-built ONLY for the
+# open GPU model. closed a133 + a523 land on the recovery-ddk NOT-SHIPPED stub — no COPY
+# --from=recovery-src, builds nothing — so they never reference the (open-only) staged recovery-src
+# and stay byte-identical to the pre-op5a baseline (no pocketforge-recovery-entry, no .path unit;
+# build-rootfs.sh skips the recovery install for the ddk path). This ALSO un-breaks the ddk build:
+# before this change the single recovery stage did an UNCONDITIONAL COPY --from=recovery-src that
+# FATALed every ddk build at graph-solve (recovery-src is staged for open only).
+#
+# recovery-ddk — the NOT-SHIPPED closed-model stub (mirrors launcher-ddk / gpu-um-mesa-ddk). Runs
+# on the owned build container since it compiles nothing.
+FROM ${PF_CONTAINER} AS recovery-ddk
+RUN <<'RECOVERYDDK'
+set -eux
+mkdir -p /out
+printf 'recovery NOT SHIPPED (gpu_model=ddk; the recovery entry is source-built for the open GPU model only — tsp-mc9m.41.924.4 / RULING B)\n' \
+  > /out/.pf-recovery-provenance
+cat /out/.pf-recovery-provenance
+RECOVERYDDK
+
+# recovery-open — the real source build of pocketforge-recovery-entry for the a133-open stack.
+# Reached ONLY via the `FROM recovery-${PF_GPU_MODEL}` selector below, so BuildKit prunes it (and
+# its recovery-src reference) for every ddk build.
+# recovery@7044d49 uses slice::as_chunks_mut, stabilized in Rust 1.88.
+# rust:1.88 is REQUIRED: pocketforge-recovery-surface uses slice::as_chunks_mut
+# (feature slice_as_chunks, stabilized in Rust 1.88), so 1.85 fails to compile it. rust:1.88's
+# default linker for aarch64-unknown-linux-musl drives the x86_64 host `cc` -> host ld, which
+# cannot link the aarch64 self-contained crt objects ("Relocations in generic ELF (EM: 183) /
+# crt1.o: file in wrong format"). Pin rust-lld (bundled with the toolchain, no cross-gcc
+# install), mirroring runtime-src/.cargo/config.toml and the launcher-open stage.
+# recovery-open is OPEN-ONLY (closed a133/a523 land on the recovery-ddk stub), so nothing in
+# this stage can affect the closed/a523 byte-identical output.
+FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS recovery-open
 ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
 ARG SOURCE_DATE_EPOCH
 COPY --from=image-src . /work/image
@@ -926,6 +972,7 @@ set -eux
   exit 1
 }
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
 cd /work/image/apps/pocketforge-recovery-entry
 rustup target add aarch64-unknown-linux-musl
 cargo build --locked --release --target aarch64-unknown-linux-musl
@@ -935,32 +982,57 @@ printf 'recovery@%s\n' "${PF_RECOVERY_SHA}" > /out/.pf-recovery-provenance
 sha256sum /out/bin/pocketforge-recovery-entry >> /out/.pf-recovery-provenance
 cat /out/.pf-recovery-provenance
 RECOVERY
+
+# Selector: which of the two stages above answers to the `recovery` name the rootfs stage COPYs
+# --from. Same ARG mechanism as launcher / gpu-um-mesa (PF_GPU_MODEL declared pre-first-FROM).
+FROM recovery-${PF_GPU_MODEL} AS recovery
 # launcher — selected persistent shell owner, built from the platform.lock-resolved
 # launcher archive. The digest-pinned Rust toolchain, committed Cargo.lock and
 # --locked make the source/tool/dependency selection deterministic.
 # =============================================================================
-FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS launcher
+# launcher is the MODEL-SELECTOR pattern (tsp-mc9m.41.924.4 / top-coord RULING B), mirroring
+# gpu-um-mesa above EXACTLY: pf-shell is source-built ONLY for the open GPU model (a133-open).
+# closed a133 + a523 (+ any non-open model) land on the launcher-ddk NOT-SHIPPED stub — which
+# does NOT COPY launcher-src and builds nothing — so they never reference the (open-only) staged
+# launcher-src context and the ddk images stay byte-identical (no pf-shell). This ALSO un-breaks
+# the ddk build on main: before this change the single launcher stage did an UNCONDITIONAL
+# `COPY --from=launcher-src` that FATALed every ddk build (launcher-src is staged for open only).
+#
+# launcher-ddk — the NOT-SHIPPED closed-model stub (mirrors gpu-um-mesa-ddk / gpu-km / sdl).
+# No COPY --from=launcher-src, no pf-shell: just a provenance marker. Runs on the owned build
+# container (not the Rust image) since it compiles nothing.
+FROM ${PF_CONTAINER} AS launcher-ddk
+RUN <<'LAUNCHERDDK'
+set -eux
+mkdir -p /out
+printf 'launcher NOT SHIPPED (gpu_model=ddk; pf-shell is source-built for the open GPU model only — tsp-mc9m.41.924.4 / RULING B)\n' \
+  > /out/.pf-launcher-provenance
+cat /out/.pf-launcher-provenance
+LAUNCHERDDK
+
+# launcher-open — the real source build of pf-shell for the a133-open stack. Reached ONLY via
+# the `FROM launcher-${PF_GPU_MODEL}` selector below, so BuildKit prunes it (and its launcher-src
+# reference) for every ddk build. The digest-pinned Rust toolchain + committed Cargo.lock +
+# --locked make the source/tool/dependency selection deterministic.
+FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS launcher-open
 ARG PF_DEVICE_ID
-ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_LAUNCHER_SHA
 ARG SOURCE_DATE_EPOCH
 ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 COPY --from=launcher-src . /work/launcher
-RUN <<'LAUNCHER'
+RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
 [ "${PF_LAUNCHER_SHA}" = "3fc6a8ebd71ebe7c2bf261908fcbfbd6e8df65ea" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
-# Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
-# proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). pf-shell is
-# unrelated to the GPU choice — it ships on every a133 variant.
-if [ "${PF_SOC}" != "sun50iw10p1" ]; then
-  printf 'launcher@%s NOT SHIPPED for device=%s (soc=%s; pf-shell is selected for a133)\n' \
-    "${PF_LAUNCHER_SHA}" "${PF_DEVICE_ID}" "${PF_SOC}" > /out/.pf-launcher-provenance
-  exit 0
-fi
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 rustup target add "${PF_RUNTIME_TARGET}"
+# Pin rust-lld as the aarch64-unknown-linux-musl linker (the launcher repo has no
+# .cargo/config, unlike the runtime repo which pins this exact way). Without it, cargo drives
+# the x86_64 host `cc` -> host ld against the aarch64 self-contained crt objects and fails with
+# "crt1.o: Relocations in generic ELF (EM: 183) / file in wrong format". rust-lld ships with
+# the toolchain (no cross-gcc install). Mirrors runtime-src/.cargo/config.toml.
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
 cd /work/launcher
 CARGO_NET_LOCKED=1 RUSTFLAGS="--remap-path-prefix=/work/launcher=." \
   cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-shell
@@ -975,7 +1047,12 @@ install -D -m 0755 "${BIN}" /out/bin/pf-shell
   printf '  pf-shell sha256=%s\n' "$(sha256sum /out/bin/pf-shell | cut -d' ' -f1)"
 } > /out/.pf-launcher-provenance
 cat /out/.pf-launcher-provenance
-LAUNCHER
+LAUNCHEROPEN
+
+# Selector: which of the two stages above answers to the `launcher` name the rootfs stage COPYs
+# --from. ARGs declared before the file's first FROM (PF_GPU_MODEL, near the top) are usable in a
+# FROM instruction without redeclaration — the same mechanism gpu-um-mesa and PF_CONTAINER use.
+FROM launcher-${PF_GPU_MODEL} AS launcher
 
 # =============================================================================
 # cedar — legacy /dev/cedar_dev userspace, for the a133 dev-image spike only.

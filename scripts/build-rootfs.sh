@@ -1093,15 +1093,23 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.se
 # product-010 F16: recovery is an independently triggered entry, not a panel
 # owner and not part of the launcher restore seam.  The path unit consumes the
 # durable RecoveryRequired condition even when it appears after boot.
-install -m 0755 "${PF_RECOVERY_BIN}" \
-    "${ROOTFS}/opt/pocketforge/bin/pocketforge-recovery-entry"
-install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.service" \
-    "${ROOTFS}/etc/systemd/system/pocketforge-recovery.service"
-install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.path" \
-    "${ROOTFS}/etc/systemd/system/pocketforge-recovery.path"
-ln -sf /etc/systemd/system/pocketforge-recovery.path \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-recovery.path"
-echo "[customize] Recovery entry installed + condition path enabled (recovery@${PF_RECOVERY_SHA})"
+# OPEN-ONLY (tsp-mc9m.41.924.4 / top-coord RULING B): the recovery entry is part of the op5a
+# userspace wave gated off the closed a133/a523 image (byte-identical to the pre-op5a baseline).
+# For the ddk path the recovery stage is the NOT-SHIPPED stub (no pocketforge-recovery-entry in
+# ${RECOVERY_DIR}/bin), so install/enable ONLY for the open model — closed/a523 SKIP both.
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    install -m 0755 "${PF_RECOVERY_BIN}" \
+        "${ROOTFS}/opt/pocketforge/bin/pocketforge-recovery-entry"
+    install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.service" \
+        "${ROOTFS}/etc/systemd/system/pocketforge-recovery.service"
+    install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.path" \
+        "${ROOTFS}/etc/systemd/system/pocketforge-recovery.path"
+    ln -sf /etc/systemd/system/pocketforge-recovery.path \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-recovery.path"
+    echo "[customize] Recovery entry installed + condition path enabled (recovery@${PF_RECOVERY_SHA})"
+else
+    echo "[customize] recovery entry NOT-SHIPPED for the ddk model (open-only; closed a133/a523 byte-identical)"
+fi
 # ---- Panel owner selection (bd tsp-1cl7.1) ---------------------------------
 # WHICH UI OWNS THE PANEL IS ONE DECISION WITH TWO CONSEQUENCES, so it is made
 # ONCE here and both consequences are derived from it:
@@ -1454,14 +1462,25 @@ export PF_MENU_BIN
 
 # The recovery executable is built in its own hermetic Docker stage from the
 # platform.lock-selected recovery archive. Do not fall back to a host artifact.
-RECOVERY_DIR="${RECOVERY_DIR:-/work/recovery}"
-PF_RECOVERY_BIN="${RECOVERY_DIR}/bin/pocketforge-recovery-entry"
-[ -x "${PF_RECOVERY_BIN}" ] || { echo "FATAL: pinned recovery executable missing: ${PF_RECOVERY_BIN}" >&2; exit 1; }
-[ "${PF_RECOVERY_SHA:-}" = "7044d4980524c1d1f64e179760cbbd55c30899da" ] || {
-    echo "FATAL: recovery provenance is not pinned to F15 commit 7044d49" >&2
-    exit 1
-}
-export PF_RECOVERY_BIN
+# OPEN-ONLY (tsp-mc9m.41.924.4 / top-coord RULING B): recovery (F16) is part of the
+# op5a userspace wave, gated on PF_GPU_MODEL=open. For the ddk path the recovery stage
+# is the NOT-SHIPPED stub (no pocketforge-recovery-entry in ${RECOVERY_DIR}/bin), so
+# resolve/verify/export the pinned binary ONLY for the open model; closed a133/a523
+# leave PF_RECOVERY_BIN empty (never read — the install below is likewise open-gated),
+# keeping the ddk rootfs byte-identical to the pre-op5a baseline.
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    RECOVERY_DIR="${RECOVERY_DIR:-/work/recovery}"
+    PF_RECOVERY_BIN="${RECOVERY_DIR}/bin/pocketforge-recovery-entry"
+    [ -x "${PF_RECOVERY_BIN}" ] || { echo "FATAL: pinned recovery executable missing: ${PF_RECOVERY_BIN}" >&2; exit 1; }
+    [ "${PF_RECOVERY_SHA:-}" = "7044d4980524c1d1f64e179760cbbd55c30899da" ] || {
+        echo "FATAL: recovery provenance is not pinned to F15 commit 7044d49" >&2
+        exit 1
+    }
+    export PF_RECOVERY_BIN
+else
+    PF_RECOVERY_BIN=""
+    export PF_RECOVERY_BIN
+fi
 
 echo "  Running mmdebstrap (this may take several minutes under qemu...)..."
 POCKETFORGE_VARIANT="${VARIANT}" \
