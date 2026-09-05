@@ -263,6 +263,7 @@ RUN dpkg --add-architecture arm64 \
 #                         qemu-user-static binfmt-support arch-test
 #   Reproducibility (M1.E): faketime disorderfs e2fsprogs (>=1.47.1 from backports)
 #   Cross-readelf:        binutils-aarch64-linux-gnu  (for symver gate)
+#   Artifact inspection:  file  (for cross-compiled ELF smoke gates)
 #   Scripting glue:       python3 python3-pip
 #   U-Boot pylibfdt:      python3-dev python3-setuptools swig  (binman builds a
 #                         SWIG _libfdt extension; required to embed BL31 into
@@ -315,6 +316,7 @@ RUN apt-get update \
         faketime \
         disorderfs \
         binutils-aarch64-linux-gnu \
+        file \
         python3 \
         python3-dev \
         python3-setuptools \
@@ -431,6 +433,7 @@ COPY --from=kubo-fetch /opt/kubo/ipfs /usr/local/bin/ipfs
 # /etc/profile.d/ handles login shells; ENV PATH handles `docker run ...
 # bash -c "..."` invocations that don't source profile.
 ENV PATH=/opt/rust/bin:/opt/arm-${TOOLCHAIN_VERSION}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-none-linux-gnu-gcc
 RUN printf '%s\n' \
         '# PocketForge cross-toolchain (10.3-2021.07)' \
         'export PATH=/opt/rust/bin:/opt/arm-10.3-2021.07/bin:$PATH' \
@@ -470,19 +473,19 @@ RUN set -eux; \
     cd /; \
     rm -rf /tmp/symver-check
 
-# Rust host/cross-target validation. A static library exercises code generation
-# for the GNU AArch64 target without depending on a runtime linker or target
-# executable runner.
+# Rust host/cross-target validation. Build a real executable through Cargo so
+# the durable target linker configuration and the GNU cross-link path are both
+# exercised before the container can be published.
 RUN set -eux; \
     rustc -Vv | grep -F "release: 1.88."; \
     cargo -V; \
     test -f /opt/rust/lib/rustlib/${RUST_CROSS_TARGET}/lib/libstd-*.rlib; \
-    mkdir -p /tmp/rust-cross-check; \
-    printf '%s\n' 'pub fn pocketforge_rust_smoke() -> u32 { 88 }' \
-        > /tmp/rust-cross-check/hello.rs; \
-    rustc --target "${RUST_CROSS_TARGET}" --crate-type staticlib \
-        -o /tmp/rust-cross-check/libhello.a /tmp/rust-cross-check/hello.rs; \
-    test -s /tmp/rust-cross-check/libhello.a; \
+    cargo new --bin /tmp/rust-cross-check; \
+    cargo build --manifest-path /tmp/rust-cross-check/Cargo.toml \
+        --target "${RUST_CROSS_TARGET}"; \
+    cross_hello="/tmp/rust-cross-check/target/${RUST_CROSS_TARGET}/debug/rust-cross-check"; \
+    test -s "${cross_hello}"; \
+    file "${cross_hello}" | grep -E 'ELF 64-bit .* ARM aarch64'; \
     rm -rf /tmp/rust-cross-check
 
 # -----------------------------------------------------------------------------
