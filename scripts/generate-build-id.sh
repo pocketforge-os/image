@@ -2,8 +2,15 @@
 # Emit the image's deterministic, human-readable resolved-input identity.
 set -euo pipefail
 
+# PF_GPU_SHA is NOT required: the a133-open in-tree-KM profile has gpu.repo="" (the open GPU
+# uses the in-tree 6.x PowerVR DRM, not a separate gpu-km-tsp repo), so PF_GPU_SHA is
+# legitimately empty there. Dropping it from required[] is byte-identity-NEUTRAL for closed —
+# closed a133/a523 still resolve a non-empty PF_GPU_SHA, so their build-id `gpu=<sha>` line is
+# unchanged; this only stops the a133-open FATAL (tsp-mc9m.41.924.4, coordinator-approved).
+# (PF_LAUNCHER_SHA — empty on closed ddk — is HELD in required[] pending the A'/B/C invariant
+#  ruling; it will be dropped in the same edit once the ruling lands.)
 required=(
-    PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA PF_GPU_SHA
+    PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA
     PF_LIBSDL3_SHA PF_WPA_SHA PF_RUNTIME_SHA PF_LAUNCHER_SHA PF_BLOBS_SHA
     PF_VENDOR_MANIFEST_SHA PF_CAR_SHA256 SOURCE_DATE_EPOCH
 )
