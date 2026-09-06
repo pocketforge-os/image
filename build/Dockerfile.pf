@@ -1024,6 +1024,17 @@ set -eux
 }
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
+mkdir -p /work/image/.cargo
+cat > /work/image/.cargo/config.toml <<'CARGOCFG'
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "/work/image/recovery/vendor"
+
+[net]
+offline = true
+CARGOCFG
 cd /work/image/apps/pocketforge-recovery-entry
 cargo build --offline --locked --release --target aarch64-unknown-linux-musl
 install -D -m0755 target/aarch64-unknown-linux-musl/release/pocketforge-recovery-entry \
