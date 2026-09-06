@@ -1448,8 +1448,8 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     RECOVERY_DIR="${RECOVERY_DIR:-/work/recovery}"
     PF_RECOVERY_BIN="${RECOVERY_DIR}/bin/pocketforge-recovery-entry"
     [ -x "${PF_RECOVERY_BIN}" ] || { echo "FATAL: pinned recovery executable missing: ${PF_RECOVERY_BIN}" >&2; exit 1; }
-    [ "${PF_RECOVERY_SHA:-}" = "7044d4980524c1d1f64e179760cbbd55c30899da" ] || {
-        echo "FATAL: recovery provenance is not pinned to F15 commit 7044d49" >&2
+    [ "${PF_RECOVERY_SHA:-}" = "443a84e47c96d83de967948844d8e5eaa41d7413" ] || {
+        echo "FATAL: recovery provenance is not pinned to F15 commit 443a84e" >&2
         exit 1
     }
     export PF_RECOVERY_BIN

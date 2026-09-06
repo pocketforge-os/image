@@ -977,7 +977,7 @@ HWPROBE
 # image-owned executable is deliberately only an fbdev/persistence adapter; all
 # customer state, copy, and rendering remain in the pinned recovery crate.
 # ======================================================================
-# recovery@7044d49 uses slice::as_chunks_mut, stabilized in Rust 1.88.
+# recovery@443a84e uses slice::as_chunks_mut, stabilized in Rust 1.88.
 # recovery is the MODEL-SELECTOR pattern (tsp-mc9m.41.924.4 / top-coord RULING B), mirroring
 # launcher/gpu-um-mesa EXACTLY: the recovery entry (product-010 F16) is source-built ONLY for the
 # open GPU model. closed a133 + a523 land on the recovery-ddk NOT-SHIPPED stub — no COPY
@@ -1001,32 +1001,42 @@ RECOVERYDDK
 # recovery-open — the real source build of pocketforge-recovery-entry for the a133-open stack.
 # Reached ONLY via the `FROM recovery-${PF_GPU_MODEL}` selector below, so BuildKit prunes it (and
 # its recovery-src reference) for every ddk build.
-# recovery@7044d49 uses slice::as_chunks_mut, stabilized in Rust 1.88.
-# rust:1.88 is REQUIRED: pocketforge-recovery-surface uses slice::as_chunks_mut
-# (feature slice_as_chunks, stabilized in Rust 1.88), so 1.85 fails to compile it. rust:1.88's
-# default linker for aarch64-unknown-linux-musl drives the x86_64 host `cc` -> host ld, which
-# cannot link the aarch64 self-contained crt objects ("Relocations in generic ELF (EM: 183) /
-# crt1.o: file in wrong format"). Pin rust-lld (bundled with the toolchain, no cross-gcc
-# install), mirroring runtime-src/.cargo/config.toml and the launcher-open stage.
+# recovery@443a84e uses slice::as_chunks_mut, stabilized in Rust 1.88. The owned,
+# digest-pinned PF_CONTAINER supplies Rust 1.88 and the aarch64 musl standard library.
+# Its default linker for aarch64-unknown-linux-musl would drive the x86_64 host `cc` -> host ld,
+# which cannot link the aarch64 self-contained crt objects ("Relocations in generic ELF
+# (EM: 183) / crt1.o: file in wrong format"). Pin the bundled rust-lld explicitly, matching
+# the launcher-open stage; the recovery repository does not configure a musl linker itself.
 # recovery-open is OPEN-ONLY (closed a133/a523 land on the recovery-ddk stub), so nothing in
 # this stage can affect the closed/a523 byte-identical output.
-FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS recovery-open
-ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
+FROM ${PF_CONTAINER} AS recovery-open
+ARG PF_RECOVERY_SHA=443a84e47c96d83de967948844d8e5eaa41d7413
 ARG SOURCE_DATE_EPOCH
+ENV CARGO_NET_OFFLINE=true CARGO_NET_LOCKED=1
 COPY --from=image-src . /work/image
 COPY --from=recovery-src . /work/image/recovery
 RUN <<'RECOVERY'
 set -eux
 : "${PF_RECOVERY_SHA:?PF_RECOVERY_SHA must be resolved from platform.lock}"
-[ "${PF_RECOVERY_SHA}" = "7044d4980524c1d1f64e179760cbbd55c30899da" ] || {
-  echo "FATAL: recovery source must stay pinned to product-010 F15 (7044d49)" >&2
+[ "${PF_RECOVERY_SHA}" = "443a84e47c96d83de967948844d8e5eaa41d7413" ] || {
+  echo "FATAL: recovery source must stay pinned to product-010 F15 (443a84e)" >&2
   exit 1
 }
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
+mkdir -p /work/image/.cargo
+cat > /work/image/.cargo/config.toml <<'CARGOCFG'
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "/work/image/recovery/vendor"
+
+[net]
+offline = true
+CARGOCFG
 cd /work/image/apps/pocketforge-recovery-entry
-rustup target add aarch64-unknown-linux-musl
-cargo build --locked --release --target aarch64-unknown-linux-musl
+cargo build --offline --locked --release --target aarch64-unknown-linux-musl
 install -D -m0755 target/aarch64-unknown-linux-musl/release/pocketforge-recovery-entry \
   /out/bin/pocketforge-recovery-entry
 printf 'recovery@%s\n' "${PF_RECOVERY_SHA}" > /out/.pf-recovery-provenance
@@ -1065,28 +1075,28 @@ LAUNCHERDDK
 # the `FROM launcher-${PF_GPU_MODEL}` selector below, so BuildKit prunes it (and its launcher-src
 # reference) for every ddk build. The digest-pinned Rust toolchain + committed Cargo.lock +
 # --locked make the source/tool/dependency selection deterministic.
-FROM rust:1.85-slim-bookworm@sha256:9f841bbe9e7d8e37ceb96ed907265a3a0df7f44e3737d0b100e7907a679acb36 AS launcher-open
+FROM ${PF_CONTAINER} AS launcher-open
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
 ARG PF_LAUNCHER_SHA
 ARG SOURCE_DATE_EPOCH
 ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
+ENV CARGO_NET_OFFLINE=true CARGO_NET_LOCKED=1
 COPY --from=launcher-src . /work/launcher
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "3fc6a8ebd71ebe7c2bf261908fcbfbd6e8df65ea" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "f3fcdd938899b18c96e26e42a1571fc84233194f" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
-rustup target add "${PF_RUNTIME_TARGET}"
-# Pin rust-lld as the aarch64-unknown-linux-musl linker (the launcher repo has no
-# .cargo/config, unlike the runtime repo which pins this exact way). Without it, cargo drives
-# the x86_64 host `cc` -> host ld against the aarch64 self-contained crt objects and fails with
+# Pin rust-lld as the aarch64-unknown-linux-musl linker (the launcher repo's
+# .cargo/config.toml configures vendored/offline sources but no musl linker). Without it, cargo
+# drives the x86_64 host `cc` -> host ld against the aarch64 self-contained crt objects and fails with
 # "crt1.o: Relocations in generic ELF (EM: 183) / file in wrong format". rust-lld ships with
-# the toolchain (no cross-gcc install). Mirrors runtime-src/.cargo/config.toml.
+# the toolchain (no cross-gcc install).
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
 cd /work/launcher
-CARGO_NET_LOCKED=1 RUSTFLAGS="--remap-path-prefix=/work/launcher=." \
-  cargo build --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-shell
+RUSTFLAGS="--remap-path-prefix=/work/launcher=." \
+  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-shell
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-shell"
 [ -f "${BIN}" ] || { echo "FATAL: pf-shell not built at ${BIN}"; exit 1; }
 E_MACHINE="$(od -An -tx1 -j18 -N2 "${BIN}" | tr -d ' ')"
@@ -1125,7 +1135,7 @@ ARG PF_WPA_SHA
 ARG PF_RUNTIME_SHA
 ARG PF_HWPROBE_SHA
 ARG PF_SIM_SHA
-ARG PF_RECOVERY_SHA=7044d4980524c1d1f64e179760cbbd55c30899da
+ARG PF_RECOVERY_SHA=443a84e47c96d83de967948844d8e5eaa41d7413
 ARG PF_LAUNCHER_SHA=
 ARG PF_BLOBS_SHA
 ARG PF_VENDOR_MANIFEST_SHA
