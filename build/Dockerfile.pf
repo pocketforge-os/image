@@ -60,9 +60,10 @@ ARG PF_CONTAINER=pocketforge/build:10.3-2021.07-bookworm
 # existing PF_GPU_MODEL:-ddk fallback already used in the rootfs stage.
 ARG PF_GPU_MODEL=ddk
 
-# hwprobe is a dev-only diagnostic. Select an empty producer for release so BuildKit
-# prunes the real stage and its source contexts entirely.
-ARG PF_HWPROBE_STAGE=dev
+# The image variant is declared globally so the hwprobe selector cannot drift from
+# the variant passed to the rootfs and assemble stages. Release selects an empty
+# producer; dev selects the real diagnostic producer.
+ARG PF_VARIANT=dev
 
 # =============================================================================
 # fetch — vendor blobs (irreducibly-closed originals), by CID (B3 / tsp-1dl.3).
@@ -978,7 +979,7 @@ HWPROBE
 FROM ${PF_CONTAINER} AS hwprobe-release
 RUN mkdir -p /out
 
-FROM hwprobe-${PF_HWPROBE_STAGE} AS hwprobe
+FROM hwprobe-${PF_VARIANT} AS hwprobe
 
 # =============================================================================
 # recovery — launcher-independent recovery surface (product-010 F16 authoring)
