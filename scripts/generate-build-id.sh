@@ -22,6 +22,18 @@ for name in "${required[@]}"; do
     [ -n "${!name:-}" ] || { echo "generate-build-id: ${name} is required" >&2; exit 1; }
 done
 
+case "${PF_VARIANT}" in
+    dev)
+        [ -n "${PF_HWPROBE_SHA:-}" ] && [ -n "${PF_SIM_SHA:-}" ] \
+            || { echo "generate-build-id: dev requires PF_HWPROBE_SHA and PF_SIM_SHA" >&2; exit 1; }
+        ;;
+    release)
+        [ -z "${PF_HWPROBE_SHA:-}" ] && [ -z "${PF_SIM_SHA:-}" ] \
+            || { echo "generate-build-id: release requires empty PF_HWPROBE_SHA and PF_SIM_SHA" >&2; exit 1; }
+        ;;
+    *) echo "generate-build-id: PF_VARIANT must be dev or release" >&2; exit 1 ;;
+esac
+
 # Names, ordering, and separators are fixed so this serialization is unambiguous.
 # Bootchain SHAs are empty for devices whose platform profile has no source bootchain.
 identity="$({
