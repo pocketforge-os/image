@@ -29,6 +29,16 @@ export PF_KERNEL_SHA
 different="$(${generator})"
 [ "${first}" != "${different}" ] || { echo "FAIL: different inputs matched" >&2; exit 1; }
 
+PF_VARIANT=release PF_HWPROBE_SHA= PF_SIM_SHA= "${generator}" >/dev/null
+if PF_VARIANT=release PF_HWPROBE_SHA=x PF_SIM_SHA= "${generator}" >/dev/null 2>&1; then
+    echo "FAIL: release accepted a populated hwprobe/sim pair" >&2
+    exit 1
+fi
+if PF_VARIANT=dev PF_HWPROBE_SHA= PF_SIM_SHA= "${generator}" >/dev/null 2>&1; then
+    echo "FAIL: dev accepted an empty hwprobe/sim pair" >&2
+    exit 1
+fi
+
 case "${first}" in
     'device=trimui-smart-pro-a133 build='????????????) ;;
     *) echo "FAIL: build-id is not a single cat-readable line: ${first}" >&2; exit 1 ;;

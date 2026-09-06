@@ -60,6 +60,11 @@ ARG PF_CONTAINER=pocketforge/build:10.3-2021.07-bookworm
 # existing PF_GPU_MODEL:-ddk fallback already used in the rootfs stage.
 ARG PF_GPU_MODEL=ddk
 
+# The image variant is declared globally so the hwprobe selector cannot drift from
+# the variant passed to the rootfs and assemble stages. Release selects an empty
+# producer; dev selects the real diagnostic producer.
+ARG PF_VARIANT=dev
+
 # =============================================================================
 # fetch — vendor blobs (irreducibly-closed originals), by CID (B3 / tsp-1dl.3).
 # DECIDED mechanism: HERMETIC KUBO-IN-BUILD (owner + research, 2026-07-02). kubo (pinned
@@ -935,7 +940,7 @@ SDLSTATIC
 # =============================================================================
 # hwprobe — fully static AArch64 diagnostic executable plus input provenance.
 # =============================================================================
-FROM ${PF_CONTAINER} AS hwprobe
+FROM ${PF_CONTAINER} AS hwprobe-dev
 ARG PF_HWPROBE_SHA
 ARG PF_RUNTIME_SHA
 ARG PF_SIM_SHA
@@ -970,6 +975,11 @@ fi
   printf 'binary_sha256=%s\n' "$(sha256sum /out/bin/pf-hwprobe | cut -d' ' -f1)"
 } > /out/.pf-hwprobe-provenance
 HWPROBE
+
+FROM ${PF_CONTAINER} AS hwprobe-release
+RUN mkdir -p /out
+
+FROM hwprobe-${PF_VARIANT} AS hwprobe
 
 # =============================================================================
 # recovery — launcher-independent recovery surface (product-010 F16 authoring)
