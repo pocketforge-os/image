@@ -107,7 +107,15 @@ fi
 # The initrd module set, in load order. NOTE: videobuf2-dma-contig.ko is
 # HYPHENATED on disk (runtime/lsmod name is underscored). Verified on blobs.
 if [ "${PF_GPU_MODEL}" = "open" ]; then
-    MODULES="videobuf2-dma-contig.ko"
+    # The open GPU/camera stack (incl. videobuf2) is brought up AFTER switch_root
+    # by modprobe, which resolves the full mc->common->memops->dma-contig chain.
+    # The initrd ships NO vb2 module: mainline 6.16 split videobuf2 into
+    # mc/common/memops/dma-contig, so a lone videobuf2-dma-contig insmod fails on
+    # unresolved symbols (vb2_common_vm_ops, frame_vector_to_pfns, ...) and the
+    # fatal handler drops to a rescue shell before switch_root. The insmod is
+    # also vestigial pre-switch_root -- nothing between it and switch_root uses
+    # vb2 in the open initrd (tsp-hqm1p.17.12).
+    MODULES=""
 else
     MODULES="videobuf2-dma-contig.ko pvrsrvkm.ko dc_sunxi.ko"
 fi
@@ -205,6 +213,8 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     # tracked source file.
     sed -i \
         -e '/^# Load order: vb2 (DMA buffers) -> pvrsrvkm (GPU KMD) -> dc_sunxi (DC bridge)\.$/d' \
+        -e '/^log "STAGE: insmod videobuf2-dma-contig"$/d' \
+        -e '/^insmod \/lib\/modules\/videobuf2-dma-contig\.ko || fail "insmod videobuf2-dma-contig failed (rc=\$?)"$/d' \
         -e '/^log "STAGE: insmod pvrsrvkm"$/d' \
         -e '/^insmod \/lib\/modules\/pvrsrvkm\.ko || fail "insmod pvrsrvkm failed (rc=\$?)"$/d' \
         -e '/^log "STAGE: insmod dc_sunxi"$/d' \
@@ -215,8 +225,13 @@ fi
 
 # Module set (flat under /lib/modules to match the insmod paths in /init).
 if [ "$SUBSTRATE" = "owned" ]; then
-    # Owned substrate: videobuf2 from kernel-tsp; closed GPU modules only for ddk.
-    cp "${KERNEL_VB2}" "${STAGING}/lib/modules/videobuf2-dma-contig.ko"
+    # Owned substrate: videobuf2 from kernel-tsp -- but NOT for the open model,
+    # which ships no vb2 module in the initrd (tsp-hqm1p.17.12); its full
+    # mc->common->memops->dma-contig stack is modprobed after switch_root.
+    # Closed GPU modules only for ddk.
+    if [ "${PF_GPU_MODEL}" != "open" ]; then
+        cp "${KERNEL_VB2}" "${STAGING}/lib/modules/videobuf2-dma-contig.ko"
+    fi
     if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         cp "${GPU_PVRSRVKM}" "${STAGING}/lib/modules/pvrsrvkm.ko"
         cp "${GPU_DC_SUNXI}" "${STAGING}/lib/modules/dc_sunxi.ko"
