@@ -2,14 +2,40 @@
 set -eu
 
 rootfs="${1:?usage: verify-rootfs-firmware.sh ROOTFS}"
+rootfs="$(realpath -m -- "$rootfs")"
+
+require_rootfs_file() {
+    path="$1"
+    candidate="${rootfs}/${path}"
+    depth=0
+
+    while [ -L "$candidate" ]; do
+        depth=$((depth + 1))
+        if [ "$depth" -gt 40 ]; then
+            return 1
+        fi
+
+        target="$(readlink -- "$candidate")"
+        case "$target" in
+            /*) candidate="${rootfs}${target}" ;;
+            *) candidate="$(dirname -- "$candidate")/${target}" ;;
+        esac
+        candidate="$(realpath -ms -- "$candidate")"
+        case "$candidate" in
+            "$rootfs"/*) ;;
+            *) return 1 ;;
+        esac
+    done
+
+    [ -f "$candidate" ] && [ -s "$candidate" ]
+}
 
 for path in \
     lib/firmware/regulatory.db \
     lib/firmware/regulatory.db.p7s; do
-    # Debian manages these as absolute update-alternatives symlinks. Such a
-    # link is deliberately dangling when inspected outside its chroot, so -f
-    # alone would reject a valid extracted rootfs.
-    if [ ! -f "${rootfs}/${path}" ] && [ ! -L "${rootfs}/${path}" ]; then
+    # Follow Debian's absolute update-alternatives links inside the extracted
+    # rootfs, with a bounded chain, and require non-empty final artifacts.
+    if ! require_rootfs_file "$path"; then
         echo "FATAL: rootfs firmware: /${path} is missing (wireless-regdb 2026.02.04-1~deb12u1)" >&2
         exit 1
     fi
