@@ -81,8 +81,10 @@ fi
 export SOURCE_DATE_EPOCH
 
 # Load committed UUIDs
-# shellcheck source=boards/tsp/fs-uuids.env
+# shellcheck disable=SC1091 # BOARD_DIR is configurable; the build validates the file.
 source "${BOARD_DIR}/fs-uuids.env"
+# shellcheck source=scripts/kernel-module-form.sh
+source "${SRC_DIR}/scripts/kernel-module-form.sh"
 
 # Frozen snapshot mirror
 SNAPSHOT_DATE="$(cat "${SRC_DIR}/snapshot-date.txt")"
@@ -214,20 +216,27 @@ if [ "${PF_GPU_MODEL}" = "ddk" ]; then
     # All three are required: the closed install loop below FATALs on any missing one and
     # modules-load.d/pocketforge-wifi.conf loads the full triplet at boot. Spot-check
     # all three here so a broken kernel-tsp wifi build fails fast, before mmdebstrap.
-    [ -n "${KERNEL_WIFI_MAC}" ] && [ -n "${KERNEL_WIFI_CORE}" ] && [ -n "${KERNEL_WIFI_WLAN}" ] \
-        || { echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2; exit 1; }
+    if [ -z "${KERNEL_WIFI_MAC}" ] || [ -z "${KERNEL_WIFI_CORE}" ] || [ -z "${KERNEL_WIFI_WLAN}" ]; then
+        echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2
+        exit 1
+    fi
 else
-    KERNEL_POWERVR="$(find "${KERNEL_TSP_DIR}" -name 'powervr.ko' -type f | head -1)"
-    [ -n "${KERNEL_POWERVR}" ] || { echo "FATAL: powervr.ko not found in kernel-tsp" >&2; exit 1; }
-    KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
-    [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp (open model)" >&2; exit 1; }
+    KERNEL_RELEASE_DIR="$(find "${KERNEL_TSP_DIR}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+    [ -n "${KERNEL_RELEASE_DIR}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
+    IFS=$'\t' read -r KERNEL_POWERVR_FORM KERNEL_POWERVR \
+        < <(kernel_module_form "${KERNEL_RELEASE_DIR}" powervr)
+    IFS=$'\t' read -r KERNEL_VB2_FORM KERNEL_VB2 \
+        < <(kernel_module_form "${KERNEL_RELEASE_DIR}" videobuf2-dma-contig)
+    IFS=$'\t' read -r KERNEL_CSI_FORM KERNEL_CSI \
+        < <(kernel_module_form "${KERNEL_RELEASE_DIR}" sun6i-csi)
     # kernel-sunxi-6.x builds the upstream-shaped XR829 driver as one xradio.ko,
     # unlike the closed 4.9 tree's xr829_mac/core/wlan triplet.
-    KERNEL_WIFI="$(find "${KERNEL_TSP_DIR}" -name 'xradio.ko' -type f | head -1)"
-    [ -n "${KERNEL_WIFI}" ] || { echo "FATAL: xradio.ko not found in kernel-tsp (open model)" >&2; exit 1; }
-    KERNEL_RELEASE_DIR="$(find "${KERNEL_TSP_DIR}" -mindepth 1 -maxdepth 1 -type d | head -1)"
-    [ -n "${KERNEL_RELEASE_DIR}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
-    echo "  powervr.ko (in-tree, kernel-tsp): ${KERNEL_POWERVR}"
+    IFS=$'\t' read -r KERNEL_WIFI_FORM KERNEL_WIFI \
+        < <(kernel_module_form "${KERNEL_RELEASE_DIR}" xradio)
+    echo "  powervr.ko (in-tree, kernel-tsp): ${KERNEL_POWERVR} (${KERNEL_POWERVR_FORM})"
+    echo "  videobuf2-dma-contig (${KERNEL_VB2_FORM}, kernel-tsp): ${KERNEL_VB2}"
+    echo "  sun6i-csi (${KERNEL_CSI_FORM}, kernel-tsp): ${KERNEL_CSI}"
+    echo "  xradio (${KERNEL_WIFI_FORM}, kernel-tsp): ${KERNEL_WIFI}"
 fi
 # WiFi firmware still from blobs (same firmware regardless of module name)
 [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
@@ -804,14 +813,18 @@ xr829_core
 xr829_wlan
 WIFI_MODULES_EOF
 else
-    cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
+    if [ "${KERNEL_WIFI_FORM}" = "module" ]; then
+        cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
 # WiFi driver for the XR829 (kernel-sunxi-6.x in-tree driver).
 xradio
 WIFI_MODULES_EOF
+    fi
     # The Odyssey DT supplies img,img-rogue. depmod/udev autoload the in-tree
     # driver from its OF alias; no modules-load workaround is used.
-    grep -F 'img,img-rogue' "${ROOTFS}/lib/modules/${KREL}/modules.alias" >/dev/null \
-        || { echo "FATAL: powervr depmod alias for img,img-rogue missing" >&2; exit 1; }
+    if [ "${KERNEL_POWERVR_FORM}" = "module" ]; then
+        grep -F 'img,img-rogue' "${ROOTFS}/lib/modules/${KREL}/modules.alias" >/dev/null \
+            || { echo "FATAL: powervr depmod alias for img,img-rogue missing" >&2; exit 1; }
+    fi
 fi
 
 # XR829 WiFi MAC address persistence directory.
@@ -1495,7 +1508,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-module} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-module} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
