@@ -937,6 +937,8 @@ if [ -f "${RUNTIME_BIN}" ]; then
     install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
     install -D -m 0755 "${RUNTIME_BIN}"  "${ROOTFS}/usr/bin/pf-input-decode"
     install -D -m 0644 "${RUNTIME_UNIT}" "${ROOTFS}/etc/systemd/system/pf-input-decode.service"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/72-pocketforge-input.rules" \
+        "${ROOTFS}/etc/udev/rules.d/72-pocketforge-input.rules"
     ln -sf /etc/systemd/system/pf-input-decode.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-input-decode.service"
     [ -f "${RUNTIME_DIR}/.pf-runtime-provenance" ] && \
