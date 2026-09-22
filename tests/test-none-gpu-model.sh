@@ -39,7 +39,15 @@ mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
     "$tmpdir/directory-dirty/usr/share/vulkan/icd.d" \
     "$tmpdir/driver-dirty/usr/lib/aarch64-linux-gnu/dri" \
     "$tmpdir/icd-symlink-dirty/usr/share/vulkan/icd.d" \
-    "$tmpdir/driver-symlink-dirty/usr/lib/aarch64-linux-gnu/dri"
+    "$tmpdir/driver-symlink-dirty/usr/lib/aarch64-linux-gnu/dri" \
+    "$tmpdir/icd-absolute-symlink-dirty/usr/share/vulkan/icd.d" \
+    "$tmpdir/icd-relative-symlink-dirty/usr/share/vulkan/icd.d" \
+    "$tmpdir/icd-directory-symlink-dirty/usr/share/vulkan" \
+    "$tmpdir/icd-directory-symlink-dirty/opt/icds" \
+    "$tmpdir/driver-directory-symlink-dirty/usr/lib/aarch64-linux-gnu" \
+    "$tmpdir/driver-directory-symlink-dirty/opt/drivers" \
+    "$tmpdir/icd-hardlink-dirty/usr/share/vulkan/icd.d" \
+    "$tmpdir/icd-escape-symlink-dirty/usr/share/vulkan/icd.d"
 : >"$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc/sunxi-mmc.ko"
 : >"$tmpdir/clean/usr/lib/aarch64-linux-gnu/libvulkan.so.1.3.239"
 : >"$tmpdir/file-dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination/powervr.ko"
@@ -49,6 +57,23 @@ ln -s ../../../lib/aarch64-linux-gnu/vendor.json \
     "$tmpdir/icd-symlink-dirty/usr/share/vulkan/icd.d/vendor.json"
 ln -s ../missing-vendor-driver.so \
     "$tmpdir/driver-symlink-dirty/usr/lib/aarch64-linux-gnu/dri/vendor_dri.so"
+: >"$tmpdir/icd-absolute-symlink-dirty/vendor.json"
+ln -s /vendor.json \
+    "$tmpdir/icd-absolute-symlink-dirty/usr/share/vulkan/icd.d/vendor.json"
+: >"$tmpdir/icd-relative-symlink-dirty/vendor.json"
+ln -s ../../../../vendor.json \
+    "$tmpdir/icd-relative-symlink-dirty/usr/share/vulkan/icd.d/vendor.json"
+: >"$tmpdir/icd-directory-symlink-dirty/opt/icds/vendor.json"
+ln -s /opt/icds \
+    "$tmpdir/icd-directory-symlink-dirty/usr/share/vulkan/icd.d"
+: >"$tmpdir/driver-directory-symlink-dirty/opt/drivers/vendor_dri.so"
+ln -s ../../../../opt/drivers \
+    "$tmpdir/driver-directory-symlink-dirty/usr/lib/aarch64-linux-gnu/dri"
+: >"$tmpdir/icd-hardlink-dirty/source.json"
+ln "$tmpdir/icd-hardlink-dirty/source.json" \
+    "$tmpdir/icd-hardlink-dirty/usr/share/vulkan/icd.d/vendor.json"
+ln -s ../../../../../../outside-rootfs/vendor.json \
+    "$tmpdir/icd-escape-symlink-dirty/usr/share/vulkan/icd.d/vendor.json"
 PF_GPU_MODEL=none "$verifier" "$tmpdir/clean" test-fixture >/dev/null
 if PF_GPU_MODEL=none "$verifier" "$tmpdir/file-dirty" test-fixture >/dev/null 2>&1; then
     echo 'FAIL: none-model verifier accepted nested powervr.ko' >&2
@@ -70,8 +95,32 @@ if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-symlink-dirty" test-fixture >/d
     echo 'FAIL: none-model verifier accepted a dangling Mesa DRI driver symlink' >&2
     exit 1
 fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-absolute-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted an absolute Vulkan ICD manifest symlink' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-relative-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a relative Vulkan ICD manifest symlink' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-directory-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a symlinked Vulkan ICD directory' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-directory-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a symlinked Mesa DRI directory' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-hardlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a hardlinked Vulkan ICD manifest' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-escape-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a rootfs-escaping Vulkan ICD symlink' >&2
+    exit 1
+fi
 echo 'PASS: none-model permits the vendor-neutral Vulkan loader without an ICD'
-echo 'PASS: none-model negative controls reject nested powervr.ko, ICD manifests, DRI drivers, and symlink forms'
+echo 'PASS: none-model negative controls reject nested powervr.ko, ICD/DRI files, links, linked directories, hardlinks, and rootfs escapes'
 
 # Execute the generated hook's exact none-model epilogue with SRC_DIR absent.
 # The verifier wrapper records that the real call is reached before delegating.

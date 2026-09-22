@@ -11,11 +11,15 @@ if [ "${PF_GPU_MODEL:-none}" = "none" ]; then
     # may arrive transitively (for example ffmpeg -> libavfilter -> libplacebo)
     # and cannot expose hardware without an installed ICD.  Reject the actual
     # capability-bearing boundary instead: ICD manifests, DRI drivers, vendor
-    # userspace, kernel modules, and firmware.
+    # userspace, kernel modules, and firmware.  Inspect boundary entries by
+    # their lexical paths and never follow symlinks: a link (even dangling or
+    # rootfs-escaping) still advertises capability, while following it could
+    # inspect a host path.  Real empty boundary directories remain harmless.
     found=$(
         find "$root" \
             \( \
                 -path '*/lib/firmware/powervr' -o -path '*/usr/lib/pvr-rogue' -o \
+                \( -type l \( -path '*/vulkan/icd.d' -o -path '*/dri' \) \) -o \
                 -path '*/vulkan/icd.d/*' -o -path '*/dri/*.so*' -o \
                 -name 'pvrsrvkm.ko' -o -name 'dc_sunxi.ko' -o -name 'powervr.ko' -o \
                 -name 'rgx.fw*' -o -name 'rgx.sh*' -o -name 'rogue*.fw' -o \
