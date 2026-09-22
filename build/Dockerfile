@@ -209,6 +209,29 @@ RUN set -eux; \
     /opt/kubo/ipfs --version | grep -F "${KUBO_VERSION}"
 
 # =============================================================================
+# Stage — dtschema-fetch
+# Fetch the platform-independent dtschema wheel and verify its immutable digest.
+# Runtime Python dependencies come from the pinned Debian snapshot in `final`;
+# downstream, egress-locked runners therefore need no package-network access.
+# =============================================================================
+FROM debian:bookworm-20260623-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS dtschema-fetch
+
+ARG DTSCHEMA_VERSION=2025.8
+ARG DTSCHEMA_WHEEL=dtschema-${DTSCHEMA_VERSION}-py3-none-any.whl
+ARG DTSCHEMA_URL=https://files.pythonhosted.org/packages/ab/d5/d66218f2ea751e0f5a032101cb276921caf99d23d41d936beb8dfe9697fb/${DTSCHEMA_WHEEL}
+ARG DTSCHEMA_SHA256=772e8e5016d4603a4fb83f1d07393bff79b5dedd6485a3aa3d3f46ca89e05099
+
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    curl --fail --silent --show-error --location \
+         --output "/${DTSCHEMA_WHEEL}" "${DTSCHEMA_URL}"; \
+    echo "${DTSCHEMA_SHA256}  /${DTSCHEMA_WHEEL}" | sha256sum -c -
+
+# =============================================================================
 # Stage 2 — final
 # Inherits the unpacked toolchain via COPY --from. apt-installs everything we
 # need across Phase 0 (SDL3 build) and Phase 1 (image composition) so we don't
@@ -271,6 +294,9 @@ RUN dpkg --add-architecture arm64 \
 #   Reproducibility (M1.E): faketime disorderfs e2fsprogs (>=1.47.1 from backports)
 #   Cross-readelf:        binutils-aarch64-linux-gnu  (for symver gate)
 #   Artifact inspection:  file  (for cross-compiled ELF smoke gates)
+#   DT schema validation: dtschema wheel plus snapshot-pinned Python runtime
+#                         packages (PyYAML, jsonschema, ruamel.yaml, rfc3987,
+#                         pylibfdt)
 #   Scripting glue:       python3 python3-pip
 #   U-Boot pylibfdt:      python3-dev python3-setuptools swig  (binman builds a
 #                         SWIG _libfdt extension; required to embed BL31 into
@@ -325,8 +351,14 @@ RUN apt-get update \
         binutils-aarch64-linux-gnu \
         file \
         python3 \
+        python3-pip \
         python3-dev \
         python3-setuptools \
+        python3-jsonschema \
+        python3-libfdt \
+        python3-rfc3987 \
+        python3-ruamel.yaml \
+        python3-yaml \
         swig \
         bc \
         bison \
@@ -436,6 +468,16 @@ COPY --from=rust-toolchain-fetch /opt/rust /opt/rust
 # discarded fetch stage; never used at device runtime). Pinned in image/kubo.pin.
 COPY --from=kubo-fetch /opt/kubo/ipfs /usr/local/bin/ipfs
 
+# dtschema itself is an exact, checksum-verified wheel. Install without dependency
+# resolution: every runtime dependency is supplied reproducibly by the Debian
+# snapshot transaction above rather than fetched implicitly from PyPI.
+ARG DTSCHEMA_VERSION=2025.8
+COPY --from=dtschema-fetch /dtschema-${DTSCHEMA_VERSION}-py3-none-any.whl /tmp/
+RUN set -eux; \
+    python3 -m pip install --break-system-packages --no-deps \
+        "/tmp/dtschema-${DTSCHEMA_VERSION}-py3-none-any.whl"; \
+    rm -f "/tmp/dtschema-${DTSCHEMA_VERSION}-py3-none-any.whl"
+
 # PATH wiring: prepend toolchain bin/ for both login and non-login shells.
 # /etc/profile.d/ handles login shells; ENV PATH handles `docker run ...
 # bash -c "..."` invocations that don't source profile.
@@ -511,6 +553,7 @@ RUN set -eux; \
 #   mke2fs         >= 1.47.1
 #   genimage, abootimg, dtc, sunxi-tools, qemu-aarch64-static — Phase 0 carry-overs
 #   bc, bison, flex, openssl headers, elf headers — Phase 2 kernel build
+COPY tests/known-good-binding.yaml /tmp/pocketforge,container-test.yaml
 RUN set -eux; \
     mmdebstrap --version | grep -Eo 'mmdebstrap [0-9.]+'; \
     faketime --version | head -1; \
@@ -530,7 +573,10 @@ RUN set -eux; \
     bison --version | head -1; \
     flex --version | head -1; \
     test -f /usr/include/openssl/evp.h; \
-    test -f /usr/include/libelf.h
+    test -f /usr/include/libelf.h; \
+    dt-doc-validate --version; \
+    dt-doc-validate /tmp/pocketforge,container-test.yaml; \
+    rm -f /tmp/pocketforge,container-test.yaml
 
 # Default workdir matches the documented bind-mount layout: build commands
 # `cd /work/src` (read-only source), produce into `/work/out`.

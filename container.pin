@@ -12,4 +12,4 @@
 # configuration for hermetic runtime builds.
 # Re-pinned 2026-09-05: added the checksum-verified aarch64-unknown-linux-musl std
 # for hermetic static runtime builds.
-10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r3@sha256:7db398b08abced1d602fe94b08178819a49dbb907e33ed9a6af5382cdcd20dde
+10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
