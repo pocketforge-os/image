@@ -29,7 +29,11 @@ grep -F 'submit=ok' "$probe" >/dev/null
 grep -F 'COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe' "$dockerfile" >/dev/null
 grep -F 'install -D -m 0755 /work/gpu-um-mesa/usr/lib/pocketforge/open-gpu-probe' "$customize" >/dev/null
 grep -F 'libvulkan-dev:arm64' "$dockerfile" >/dev/null
-grep -F 'AS gpu-um-bookworm-sysroot' "$dockerfile" >/dev/null
+# shellcheck disable=SC2016 # Dockerfile variable is intentionally literal.
+grep -F 'FROM ${PF_CONTAINER} AS gpu-um-build' "$dockerfile" >/dev/null
+grep -F 'gpu_um_toolchain_probe=ok distro=debian-bookworm' "$dockerfile" >/dev/null
+grep -F 'FATAL gpu_um_toolchain_probe=compile-link' "$dockerfile" >/dev/null
+grep -F 'gpu_um_native_runtime=ok distro=noble isolation=bundled' "$dockerfile" >/dev/null
 grep -F 'target_abi=debian-bookworm' "$dockerfile" >/dev/null
 grep -F 'build/check-rootfs-abi.sh' "$customize" >/dev/null
 grep -F 'GPU_UM_MESA_DIR' "$customize" >/dev/null

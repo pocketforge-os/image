@@ -500,6 +500,33 @@ install "$(find build-native -type f -name pco_clc -perm /111 -print -quit)" /op
 install "$(find build-native -type f -name vtn_bindgen2 -perm /111 -print -quit)" /opt/mesa-native/bin/vtn_bindgen2
 file /opt/mesa-native/bin/mesa_clc /opt/mesa-native/bin/pco_clc /opt/mesa-native/bin/vtn_bindgen2 \
   | grep -c 'x86-64' | grep -qx 3
+# These host-only generators were built on Noble.  Bundle their complete ELF
+# dependency closure so the Bookworm target-build stage never falls back to a
+# host library (and, in particular, never needs a mixed-distro toolchain).
+mkdir -p /opt/mesa-native/noble-root
+pending=/tmp/mesa-native-elf-pending
+seen=/tmp/mesa-native-elf-seen
+find /opt/mesa-native/bin -type f -perm /111 -print >"${pending}"
+: >"${seen}"
+while [ -s "${pending}" ]; do
+  elf="$(sed -n '1p' "${pending}")"
+  sed -i '1d' "${pending}"
+  grep -Fxq "${elf}" "${seen}" && continue
+  printf '%s\n' "${elf}" >>"${seen}"
+  ldd "${elf}" | awk '
+    /=> \/.* \(0x/ { print $3 }
+    /^[[:space:]]*\/.* \(0x/ { print $1 }
+  ' | while read -r dependency; do
+    [ -f "${dependency}" ] || { echo "FATAL gpu_um_native_runtime_missing=${dependency}"; exit 1; }
+    destination="/opt/mesa-native/noble-root${dependency}"
+    if [ ! -e "${destination}" ]; then
+      install -D -m 0755 "$(readlink -f "${dependency}")" "${destination}"
+      printf '%s\n' "${destination}" >>"${pending}"
+    fi
+  done
+done
+find /opt/mesa-native/noble-root -type f -print0 | sort -z | xargs -0 sha256sum \
+  >/opt/mesa-native/noble-runtime-sha256.txt
 GPUUMNATIVE
 
 # --- 4/5 build: the aarch64 cross build itself — Zink gallium + EGL + GBM (GLESv2 rides
@@ -507,63 +534,77 @@ GPUUMNATIVE
 # byte-identical compare is gpu-um-tsp's OWN reproducibility self-check (the SAME
 # sha256/cmp gate build-ge8300-mesa-cross.sh's caller relies on), kept verbatim: a
 # non-reproducible cross build here would silently ship a different binary than CI proved.
-# Produce a Bookworm cross-toolchain/sysroot payload from the same digest-pinned,
-# snapshot-configured container used for the rootfs.  Its x86_64 compiler runs on
-# Noble (newer glibc), while every target header/startfile/library remains Debian
-# Bookworm.  Keeping the actual build in the Noble stage is necessary because the
-# already-built native Mesa precompilers require Noble's host glibc.
-FROM ${PF_CONTAINER} AS gpu-um-bookworm-sysroot
+# Run the complete target build in the same digest-pinned, snapshot-configured
+# Bookworm container used to assemble the rootfs.  The Noble stage above only
+# supplies host-native Mesa generators and their isolated runtime; it supplies
+# no compiler, linker, target header, startfile, or target library.
+FROM ${PF_CONTAINER} AS gpu-um-build
+WORKDIR /src
+ARG SOURCE_DATE_EPOCH
+ARG PF_GPU_UM_SHA
+COPY --from=gpu-um-src . /src/
+COPY --from=gpu-um-src docker/pkg-config/ /usr/local/bin/
+COPY --from=gpu-um-src docker/meson/ /usr/local/share/mesa-cross/
+COPY --from=gpu-um-native-precompilers /opt/mesa-native /opt/mesa-native
+COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
 RUN <<'GPUUMSYSROOT'
 set -eux
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
-  libdrm-dev:arm64 libvulkan-dev:arm64
-mkdir -p /bookworm-toolchain/usr/bin /bookworm-toolchain/usr/lib /bookworm-toolchain/usr/include
-cp -a /usr/bin/aarch64-linux-gnu-* /bookworm-toolchain/usr/bin/
-cp -a /usr/lib/gcc-cross /bookworm-toolchain/usr/lib/
-cp -a /usr/lib/aarch64-linux-gnu /bookworm-toolchain/usr/lib/
-cp -a /usr/aarch64-linux-gnu /bookworm-toolchain/usr/
-for headers in drm libdrm vulkan; do
-  [ ! -e "/usr/include/${headers}" ] || cp -a "/usr/include/${headers}" /bookworm-toolchain/usr/include/
-done
-dpkg-query -W > /bookworm-toolchain/toolchain-packages.txt
-cp /etc/pocketforge-apt-snapshot-date /bookworm-toolchain/apt-snapshot-date
+  ccache gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
+  libdrm-dev:arm64 libvulkan-dev:arm64 python3-pip
+PIP_ROOT_USER_ACTION=ignore python3 -m pip install --break-system-packages \
+  'meson==1.7.2' 'ninja==1.11.1.4'
+chmod 0755 /usr/local/bin/aarch64-linux-gnu-pkg-config /usr/local/bin/x86_64-linux-gnu-pkg-config
+: "${PF_GPU_UM_SHA:?}" "${SOURCE_DATE_EPOCH:?}"
+printf '%s\n' "${PF_GPU_UM_SHA}" >/mesa-source-commit
+dpkg-query -W > /toolchain-packages.txt
+cp /etc/pocketforge-apt-snapshot-date /bookworm-apt-snapshot-date
 printf 'libc6-dev=%s\ngcc=%s\n' \
   "$(dpkg-query -W -f='${Version}' libc6-dev:arm64)" \
   "$(aarch64-linux-gnu-gcc -dumpfullversion)" \
-  > /bookworm-toolchain/target-toolchain.txt
+  > /bookworm-target-toolchain.txt
 GPUUMSYSROOT
-
-FROM gpu-um-native-precompilers AS gpu-um-build
-WORKDIR /src
-ARG SOURCE_DATE_EPOCH
-ARG PF_GPU_UM_SHA
-COPY --from=gpu-um-bookworm-sysroot /bookworm-toolchain/usr /opt/bookworm-toolchain/usr
-COPY --from=gpu-um-bookworm-sysroot /bookworm-toolchain/toolchain-packages.txt /toolchain-packages.txt
-COPY --from=gpu-um-bookworm-sysroot /bookworm-toolchain/apt-snapshot-date /bookworm-apt-snapshot-date
-COPY --from=gpu-um-bookworm-sysroot /bookworm-toolchain/target-toolchain.txt /bookworm-target-toolchain.txt
-COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
 ENV PATH=/opt/mesa-native/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN --mount=type=cache,id=ge8300-mesa-cross-ccache,target=/root/.cache/ccache,sharing=locked <<'GPUUMBUILD'
 set -eux
-# Replace, rather than overlay, Noble's target compiler/sysroot so no unowned
-# 2.38 startfile or library can survive under a Bookworm filename.
-find /usr/bin -maxdepth 1 -name 'aarch64-linux-gnu-*' -delete
-for path in /usr/lib/gcc-cross /usr/lib/aarch64-linux-gnu /usr/aarch64-linux-gnu; do
-  [ ! -e "$path" ] || { find "$path" -depth -delete; rmdir "$path" 2>/dev/null || true; }
+# Execute Noble's host-only generators with their bundled loader and libraries.
+noble_loader="$(find /opt/mesa-native/noble-root -type f -name 'ld-linux-x86-64.so.2' -print -quit)"
+[ -n "${noble_loader}" ] || { echo 'FATAL gpu_um_native_runtime_missing=loader'; exit 1; }
+noble_library_path="$(find /opt/mesa-native/noble-root -type f -name '*.so*' -printf '%h\n' | sort -u | paste -sd: -)"
+for tool in mesa_clc pco_clc vtn_bindgen2; do
+  mv "/opt/mesa-native/bin/${tool}" "/opt/mesa-native/bin/${tool}.noble"
+  printf '#!/bin/sh\nexec %s --library-path %s %s "$@"\n' \
+    "${noble_loader}" "${noble_library_path}" "/opt/mesa-native/bin/${tool}.noble" \
+    >"/opt/mesa-native/bin/${tool}"
+  chmod 0755 "/opt/mesa-native/bin/${tool}"
+  set +e
+  "/opt/mesa-native/bin/${tool}" --help >/dev/null 2>&1
+  tool_rc=$?
+  set -e
+  [ "${tool_rc}" -ne 127 ] || { echo "FATAL gpu_um_native_runtime_unusable=${tool}"; exit 1; }
 done
-cp -a /opt/bookworm-toolchain/usr/bin/aarch64-linux-gnu-* /usr/bin/
-cp -a /opt/bookworm-toolchain/usr/lib/gcc-cross /usr/lib/
-cp -a /opt/bookworm-toolchain/usr/lib/aarch64-linux-gnu /usr/lib/
-cp -a /opt/bookworm-toolchain/usr/aarch64-linux-gnu /usr/
-for headers in drm libdrm vulkan; do
-  [ ! -e "/usr/include/${headers}" ] || { find "/usr/include/${headers}" -depth -delete; rmdir "/usr/include/${headers}" 2>/dev/null || true; }
-  [ ! -e "/opt/bookworm-toolchain/usr/include/${headers}" ] || cp -a "/opt/bookworm-toolchain/usr/include/${headers}" /usr/include/
-done
-# Point target pkg-config exclusively at the imported Bookworm multiarch tree.
+echo 'gpu_um_native_runtime=ok distro=noble isolation=bundled'
+# Point target pkg-config exclusively at Bookworm's multiarch tree.
 sed -i 's|^export PKG_CONFIG_LIBDIR=.*|export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig|' \
   /usr/local/bin/aarch64-linux-gnu-pkg-config
+# Fail in seconds, with a named reason, if the host/cross linker closure is
+# incomplete.  This deliberately precedes the first Meson invocation.
+aarch64-linux-gnu-gcc -Wl,--version >/tmp/gpu-um-linker-version.txt 2>&1 || {
+  cat /tmp/gpu-um-linker-version.txt
+  echo 'FATAL gpu_um_toolchain_probe=linker-version'
+  exit 1
+}
+printf 'int main(void) { return 0; }\n' >/tmp/gpu-um-toolchain-probe.c
+aarch64-linux-gnu-gcc /tmp/gpu-um-toolchain-probe.c -o /tmp/gpu-um-toolchain-probe || {
+  echo 'FATAL gpu_um_toolchain_probe=compile-link'
+  exit 1
+}
+readelf -h /tmp/gpu-um-toolchain-probe | grep -Eq 'Machine:[[:space:]]+AArch64' || {
+  echo 'FATAL gpu_um_toolchain_probe=wrong-architecture'
+  exit 1
+}
+echo 'gpu_um_toolchain_probe=ok distro=debian-bookworm'
 start="$(date +%s)"
 for pass in 1 2; do
   build_dir=build-cross
