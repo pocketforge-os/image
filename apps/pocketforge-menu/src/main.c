@@ -20,7 +20,8 @@
  *
  * Font: 8x16 monospace bitmap, hand-crafted for the ~22 glyphs the three
  * labels use plus space and '.'. Rendered at scale 4 on a logical landscape
- * canvas, then rotated into memory when fb0 exposes the portrait-native glass.
+ * canvas, then rotated clockwise into memory when fb0 exposes portrait-native
+ * glass: scene top -> buffer right, scene left -> buffer top.
  * libc only — no freetype/harfbuzz.
  */
 
@@ -200,11 +201,12 @@ static void fill_rect(unsigned char *page, unsigned int stride,
             unsigned int px = (unsigned int)x;
             unsigned int py = (unsigned int)y;
             if (fb_width < fb_height) {
-                /* The TSP glass is portrait-native and mounted 270 degrees.
-                 * Rotate the logical landscape canvas into native fb memory;
-                 * fbdev has no connector-orientation API for clients. */
-                px = (unsigned int)y;
-                py = fb_height - 1u - (unsigned int)x;
+                /* The panel displays native fb memory 90 degrees CCW. Write
+                 * the logical scene 90 degrees CW so scene top -> buffer
+                 * right and scene left -> buffer top. Equivalently:
+                 * buffer(x,y) = scene(y, fb_width - 1 - x). */
+                px = fb_width - 1u - (unsigned int)y;
+                py = (unsigned int)x;
             }
             put_px(page + (size_t)py * stride + (size_t)px * 4, r, g, b);
         }

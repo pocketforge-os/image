@@ -57,8 +57,8 @@ static void assert_portrait_is_rotated_landscape(void) {
             const unsigned char *logical =
                 landscape + ((size_t)y * landscape_width + x) * 4;
             const unsigned char *native =
-                portrait + ((size_t)(portrait_height - 1 - x) *
-                            portrait_width + y) * 4;
+                portrait + ((size_t)x * portrait_width +
+                            portrait_width - 1 - y) * 4;
             assert(memcmp(logical, native, 4) == 0);
         }
     }
@@ -67,10 +67,32 @@ static void assert_portrait_is_rotated_landscape(void) {
     free(landscape);
 }
 
+static void assert_portrait_corner_mapping(void) {
+    const unsigned int width = 720, height = 1280, stride = width * 4;
+    unsigned char *portrait = calloc(height, stride);
+    assert(portrait != NULL);
+
+    /* scene (0,0) -> buffer (719,0) */
+    fill_rect(portrait, stride, width, height, 0, 0, 1, 1, 1, 2, 3);
+    const unsigned char *top_left = portrait + (size_t)719 * 4;
+    assert(top_left[0] == 3 && top_left[1] == 2 && top_left[2] == 1);
+
+    /* scene (1279,719) -> buffer (0,1279) */
+    fill_rect(portrait, stride, width, height,
+              1279, 719, 1280, 720, 4, 5, 6);
+    const unsigned char *bottom_right =
+        portrait + ((size_t)1279 * width) * 4;
+    assert(bottom_right[0] == 6 && bottom_right[1] == 5 &&
+           bottom_right[2] == 4);
+
+    free(portrait);
+}
+
 int main(void) {
     assert_highlight_spans_long_axis(1280, 720);
     assert_highlight_spans_long_axis(720, 1280);
     assert_portrait_is_rotated_landscape();
+    assert_portrait_corner_mapping();
     puts("menu layout: PASS (1280x720 and 720x1280)");
     return 0;
 }
