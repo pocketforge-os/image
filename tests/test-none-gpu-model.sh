@@ -33,15 +33,38 @@ echo 'PASS: none rootfs installs the discovered kernel release and rejects GPU a
 tmpdir=$(mktemp -d)
 trap 'find "$tmpdir" -mindepth 1 -delete; rmdir "$tmpdir"' EXIT
 mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
-    "$tmpdir/dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination"
+    "$tmpdir/file-dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination" \
+    "$tmpdir/directory-dirty/usr/share/vulkan/icd.d"
 : >"$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc/sunxi-mmc.ko"
-: >"$tmpdir/dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination/powervr.ko"
+: >"$tmpdir/file-dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination/powervr.ko"
+: >"$tmpdir/directory-dirty/usr/share/vulkan/icd.d/software-renderer.json"
 PF_GPU_MODEL=none "$verifier" "$tmpdir/clean" test-fixture >/dev/null
-if PF_GPU_MODEL=none "$verifier" "$tmpdir/dirty" test-fixture >/dev/null 2>&1; then
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/file-dirty" test-fixture >/dev/null 2>&1; then
     echo 'FAIL: none-model verifier accepted nested powervr.ko' >&2
     exit 1
 fi
-echo 'PASS: none-model negative control rejects a nested in-tree GPU module'
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/directory-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a forbidden Vulkan ICD directory' >&2
+    exit 1
+fi
+echo 'PASS: none-model negative controls reject forbidden GPU files and directories'
+
+# Execute the generated hook's exact none-model epilogue with SRC_DIR absent.
+# The verifier wrapper records that the real call is reached before delegating.
+mkdir -p "$tmpdir/hook/work/src/scripts" "$tmpdir/hook/rootfs"
+cat >"$tmpdir/hook/work/src/scripts/verify-no-gpu-artifacts.sh" <<EOF
+#!/bin/sh
+: >"$tmpdir/hook/verifier-reached"
+exec "$verifier" "\$@"
+EOF
+chmod +x "$tmpdir/hook/work/src/scripts/verify-no-gpu-artifacts.sh"
+sed -n '/^if \[ "\${PF_GPU_MODEL}" = "none" \] || \[ "\${PF_DISPLAY_PIPELINE}" = "none" \]; then$/,/^echo "\[customize\] Customization complete\."$/p' "$rootfs" |
+    sed "s|/work/src/scripts/verify-no-gpu-artifacts.sh|$tmpdir/hook/work/src/scripts/verify-no-gpu-artifacts.sh|" >"$tmpdir/hook/epilogue.sh"
+env -u SRC_DIR PF_GPU_MODEL=none PF_DISPLAY_PIPELINE=none ROOTFS="$tmpdir/hook/rootfs" \
+    sh -eu "$tmpdir/hook/epilogue.sh" >"$tmpdir/hook/output"
+test -f "$tmpdir/hook/verifier-reached"
+grep -F '[customize] Customization complete.' "$tmpdir/hook/output" >/dev/null
+echo 'PASS: standalone none-model customize hook reaches verification and completes without SRC_DIR'
 
 mkdir -p "$tmpdir/display-clean/etc/systemd/system/multi-user.target.wants" \
     "$tmpdir/display-dirty/opt/pocketforge/boot-anim/frames" \

@@ -1454,7 +1454,7 @@ fi
 
 if [ "${PF_GPU_MODEL}" = "none" ] || [ "${PF_DISPLAY_PIPELINE}" = "none" ]; then
     PF_GPU_MODEL="${PF_GPU_MODEL}" PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \
-        "${SRC_DIR}/scripts/verify-no-gpu-artifacts.sh" "${ROOTFS}" rootfs
+        /work/src/scripts/verify-no-gpu-artifacts.sh "${ROOTFS}" rootfs
 fi
 
 echo "[customize] Customization complete."
