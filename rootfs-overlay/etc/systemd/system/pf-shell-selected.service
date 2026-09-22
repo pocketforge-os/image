@@ -10,7 +10,6 @@ ConditionPathExists=/dev/fb0
 [Service]
 Type=simple
 User=gamer
-Environment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
 SupplementaryGroups=input video
 ExecStart=/usr/bin/pf-shell --fbdev --device /dev/fb0 --input /dev/input/event0 --state-dir /var/lib/pocketforge/shell

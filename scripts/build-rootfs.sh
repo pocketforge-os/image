@@ -1067,6 +1067,12 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
         "${ROOTFS}/usr/lib/pocketforge/open-gpu-gate.sh"
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service" \
         "${ROOTFS}/etc/systemd/system/pf-open-gpu-gate.service"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf" \
+        "${ROOTFS}/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf" \
+        "${ROOTFS}/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf" \
+        "${ROOTFS}/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf"
     ln -sf ../pf-open-gpu-gate.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-open-gpu-gate.service"
     for ui_unit in pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
