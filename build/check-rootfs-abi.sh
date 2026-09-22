@@ -19,9 +19,18 @@ version_max() {
 root_definition_max() {
     prefix=$1
     shift
-    found=$(find "$rootfs" \( -type f -o -type l \) "$@" 2>/dev/null | head -n 1 || true)
-    [ -n "$found" ] || return 0
-    "$readelf_bin" --version-info "$found" 2>/dev/null | version_max "$prefix"
+    old_ifs=$IFS
+    IFS='
+'
+    for candidate in $(find "$rootfs" \( -type f -o -type l \) "$@" 2>/dev/null | LC_ALL=C sort); do
+        if "$readelf_bin" -h "$candidate" >/dev/null 2>&1; then
+            IFS=$old_ifs
+            "$readelf_bin" --version-info "$candidate" 2>/dev/null | version_max "$prefix"
+            return 0
+        fi
+    done
+    IFS=$old_ifs
+    return 0
 }
 
 root_glibc=$(root_definition_max 'GLIBC_' -path '*/libc.so.6')
