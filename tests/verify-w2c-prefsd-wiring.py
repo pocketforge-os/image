@@ -22,9 +22,15 @@ assert (
     f"--socket {SOCKET}"
 ) in prefsd
 assert "User=gamer" in prefsd
+assert "Group=gamer" in prefsd
 assert "StateDirectory=pocketforge/shell" in prefsd
 assert "RuntimeDirectory=pocketforge" in prefsd
-assert "RuntimeDirectory=pocketforge" in text(SYSTEMD / "pf-session-authorityd.service")
+assert "RuntimeDirectoryPreserve=restart" in prefsd
+session_authority = text(SYSTEMD / "pf-session-authorityd.service")
+assert "User=gamer" in session_authority
+assert "Group=gamer" in session_authority
+assert "RuntimeDirectory=pocketforge" in session_authority
+assert "RuntimeDirectoryPreserve=restart" in session_authority
 assert "Restart=on-failure" in prefsd
 assert "WantedBy=multi-user.target" in prefsd
 
