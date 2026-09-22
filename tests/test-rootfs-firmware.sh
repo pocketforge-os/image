@@ -12,12 +12,18 @@ grep -Fx 'wireless-regdb' "$packages" >/dev/null
 grep -F 'Debian bookworm 2026.02.04-1~deb12u1' "$packages" >/dev/null
 grep -F 'scripts/verify-rootfs-firmware.sh' "$builder" >/dev/null
 grep -F -- '--set regulatory.db /lib/firmware/regulatory.db-upstream' "$builder" >/dev/null
+# Literal build-script variables are intentional in these structural assertions.
+# shellcheck disable=SC2016
+grep -F '[ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829_bt.bin" ]' "$builder" >/dev/null
+# shellcheck disable=SC2016
+grep -F 'install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/fw_xr829_bt.bin" "${ROOTFS}/lib/firmware/"' "$builder" >/dev/null
 
 mkdir -p "$fixture/lib/firmware"
 printf 'database\n' > "$fixture/lib/firmware/regulatory.db"
 printf 'signature\n' > "$fixture/lib/firmware/regulatory.db.p7s"
 cp "$fixture/lib/firmware/regulatory.db" "$fixture/lib/firmware/regulatory.db-upstream"
 cp "$fixture/lib/firmware/regulatory.db.p7s" "$fixture/lib/firmware/regulatory.db.p7s-upstream"
+printf 'bluetooth firmware\n' > "$fixture/lib/firmware/fw_xr829_bt.bin"
 "$verifier" "$fixture" >/dev/null
 
 # Match Debian's update-alternatives layout: absolute links look dangling from
@@ -26,6 +32,7 @@ find "$fixture" -mindepth 1 -delete
 mkdir -p "$fixture/lib/firmware" "$fixture/etc/alternatives"
 printf 'database\n' > "$fixture/lib/firmware/regulatory.db-upstream"
 printf 'signature\n' > "$fixture/lib/firmware/regulatory.db.p7s-upstream"
+printf 'bluetooth firmware\n' > "$fixture/lib/firmware/fw_xr829_bt.bin"
 ln -s /etc/alternatives/regulatory.db "$fixture/lib/firmware/regulatory.db"
 ln -s /etc/alternatives/regulatory.db.p7s "$fixture/lib/firmware/regulatory.db.p7s"
 ln -s /lib/firmware/regulatory.db-upstream "$fixture/etc/alternatives/regulatory.db"
@@ -58,8 +65,8 @@ if "$verifier" "$fixture" >/dev/null 2>&1; then
     exit 1
 fi
 
-# Negative controls: both signed-regdb files are required, and the explicitly
-# declined XR829 BT blob must make image assembly fail closed if it appears.
+# Negative controls: both signed-regdb files and the owner-approved embedded
+# XR829 Bluetooth firmware are required.
 find "$fixture" -mindepth 1 -delete
 mkdir -p "$fixture/lib/firmware"
 printf 'database\n' > "$fixture/lib/firmware/regulatory.db"
@@ -71,9 +78,16 @@ fi
 
 printf 'signature\n' > "$fixture/lib/firmware/regulatory.db.p7s"
 printf 'signature\n' > "$fixture/lib/firmware/regulatory.db.p7s-upstream"
-: > "$fixture/lib/firmware/fw_xr829_bt.bin"
 if "$verifier" "$fixture" >/dev/null 2>&1; then
-    echo 'verifier accepted non-redistributable fw_xr829_bt.bin' >&2
+    echo 'verifier accepted a rootfs without fw_xr829_bt.bin' >&2
+    exit 1
+fi
+
+printf 'bluetooth firmware\n' > "$fixture/lib/firmware/fw_xr829_bt.bin"
+status="$($verifier "$fixture")"
+printf '%s\n' "$status" | grep -F 'xr829_bt=EMBEDDED' >/dev/null
+if printf '%s\n' "$status" | grep -F 'xr829_bt=NOT-SHIPPED' >/dev/null; then
+    echo 'verifier still reports fw_xr829_bt.bin as not shipped' >&2
     exit 1
 fi
 

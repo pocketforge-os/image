@@ -26,9 +26,10 @@ grep -F 'powervr.ko (in-tree, kernel-tsp)' "$customize" >/dev/null
 grep -F "grep -F 'img,img-rogue'" "$customize" >/dev/null
 grep -F '/lib/firmware/powervr/rogue_22.102.54.38_v1.fw' "$gate" >/dev/null
 # Firmware policy paths are asserted at extracted-rootfs assembly time alongside
-# the PowerVR custody checks: signed regdb ships; non-redistributable XR829 BT does not.
+# the PowerVR custody checks: signed regdb and owner-approved XR829 BT both ship.
 grep -F 'lib/firmware/regulatory.db' "$root/scripts/verify-rootfs-firmware.sh" >/dev/null
 grep -F 'lib/firmware/fw_xr829_bt.bin' "$root/scripts/verify-rootfs-firmware.sh" >/dev/null
+grep -F 'wifi-firmware/fw_xr829_bt.bin' "$customize" >/dev/null
 grep -F 'llvmpipe' "$probe" >/dev/null
 grep -F 'PF-OPEN-GPU PASS:' "$gate" >/dev/null
 grep -Fx 'DefaultEnvironment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$manager_environment" >/dev/null
