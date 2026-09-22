@@ -36,12 +36,46 @@ mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
     "$tmpdir/dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination"
 : >"$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc/sunxi-mmc.ko"
 : >"$tmpdir/dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination/powervr.ko"
-"$verifier" "$tmpdir/clean" test-fixture >/dev/null
-if "$verifier" "$tmpdir/dirty" test-fixture >/dev/null 2>&1; then
+PF_GPU_MODEL=none "$verifier" "$tmpdir/clean" test-fixture >/dev/null
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/dirty" test-fixture >/dev/null 2>&1; then
     echo 'FAIL: none-model verifier accepted nested powervr.ko' >&2
     exit 1
 fi
 echo 'PASS: none-model negative control rejects a nested in-tree GPU module'
+
+mkdir -p "$tmpdir/display-clean/etc/systemd/system/multi-user.target.wants" \
+    "$tmpdir/display-dirty/opt/pocketforge/boot-anim/frames" \
+    "$tmpdir/unit-dirty/etc/systemd/system/multi-user.target.wants"
+: >"$tmpdir/display-dirty/opt/pocketforge/boot-anim/frames/frame-000.png"
+cat >"$tmpdir/unit-dirty/etc/systemd/system/panel.service" <<'EOF'
+[Service]
+ExecStart=/usr/bin/example --device /dev/fb0
+EOF
+ln -s /etc/systemd/system/panel.service "$tmpdir/unit-dirty/etc/systemd/system/multi-user.target.wants/panel.service"
+PF_GPU_MODEL=open PF_DISPLAY_PIPELINE=none "$verifier" "$tmpdir/display-clean" test-fixture >/dev/null
+if PF_GPU_MODEL=open PF_DISPLAY_PIPELINE=none "$verifier" "$tmpdir/display-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: display-pipeline verifier accepted boot animation frames' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=open PF_DISPLAY_PIPELINE=none "$verifier" "$tmpdir/unit-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: display-pipeline verifier accepted an enabled fbdev unit' >&2
+    exit 1
+fi
+echo 'PASS: none display pipeline rejects framebuffer UI artifacts and enabled fbdev units'
+
+grep -F 'PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:?FATAL: PF_DISPLAY_PIPELINE is required (fbdev|drm|none)}"' "$rootfs" >/dev/null
+grep -F 'if [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then' "$rootfs" >/dev/null
+if unset_error=$(env -u PF_DISPLAY_PIPELINE PF_GPU_MODEL=none bash "$rootfs" 2>&1); then
+    echo 'FAIL: rootfs builder accepted an unset display pipeline' >&2
+    exit 1
+fi
+printf '%s\n' "$unset_error" | grep -F 'FATAL: PF_DISPLAY_PIPELINE is required (fbdev|drm|none)' >/dev/null
+if invalid_error=$(PF_DISPLAY_PIPELINE=bogus PF_GPU_MODEL=none bash "$rootfs" 2>&1); then
+    echo 'FAIL: rootfs builder accepted an invalid display pipeline' >&2
+    exit 1
+fi
+printf '%s\n' "$invalid_error" | grep -F "FATAL: PF_DISPLAY_PIPELINE must be fbdev|drm|none, got 'bogus'" >/dev/null
+echo 'PASS: display pipeline is required and independently gates framebuffer UI'
 
 # Existing models remain explicit branches, rather than falling through the new mode.
 grep -F 'if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then' "$rootfs" >/dev/null

@@ -41,6 +41,11 @@ case "${PF_GPU_MODEL}" in
     ddk|open|none) ;;
     *) echo "FATAL: PF_GPU_MODEL must be ddk|open|none, got '${PF_GPU_MODEL}'" >&2; exit 2 ;;
 esac
+PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:?FATAL: PF_DISPLAY_PIPELINE is required (fbdev|drm|none)}"
+case "${PF_DISPLAY_PIPELINE}" in
+    fbdev|drm|none) ;;
+    *) echo "FATAL: PF_DISPLAY_PIPELINE must be fbdev|drm|none, got '${PF_DISPLAY_PIPELINE}'" >&2; exit 2 ;;
+esac
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
 # The C1 open-Mesa install tree (tsp-mc9m.41.924.6 / C4): its own /usr/local/{include,lib}
 # meson DESTDIR install — only meaningful (non-marker-only) for PF_GPU_MODEL=open.
@@ -1028,6 +1033,7 @@ fi
 ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-setup.service"
 
+if [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
 # pocketforge-boot-animator (bd tsp-3rd3.4: kernel-handoff fb0 boot animator).
 # Supersedes pocketforge-fb-clear — the animator owns fb0 from kernel-fb0
 # registration and unbinds fbcon itself, so a separate "zero fb0 to hide
@@ -1088,6 +1094,7 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-foregro
 # (see above). Unit-file apps join the target directly and don't need it.
 install -m 0755 "/work/src/rootfs-overlay/usr/bin/pf-take-panel" \
     "${ROOTFS}/usr/bin/pf-take-panel"
+fi
 
 if [ "${PF_GPU_MODEL}" = "open" ]; then
     install -D -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules" \
@@ -1119,6 +1126,7 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     done
 fi
 
+if [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
 install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"
 ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
     "${ROOTFS}/etc/systemd/system/basic.target.wants/pocketforge-boot-animator.service"
@@ -1157,6 +1165,7 @@ install -m 0755 "${PF_MENU_BIN}" "${ROOTFS}/opt/pocketforge/bin/pocketforge-menu
 echo "[customize] Menu installed: $(du -h "${PF_MENU_BIN}" | awk '{print $1}') stripped"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.service" \
     "${ROOTFS}/etc/systemd/system/pocketforge-menu.service"
+fi
 
 # product-010 F16: recovery is an independently triggered entry, not a panel
 # owner and not part of the launcher restore seam.  The path unit consumes the
@@ -1179,6 +1188,7 @@ else
     echo "[customize] recovery entry NOT-SHIPPED for the ddk model (open-only; closed a133/a523 byte-identical)"
 fi
 # ---- Panel owner selection (bd tsp-1cl7.1) ---------------------------------
+if [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
 # WHICH UI OWNS THE PANEL IS ONE DECISION WITH TWO CONSEQUENCES, so it is made
 # ONCE here and both consequences are derived from it:
 #   1. the multi-user.target.wants enable symlink (which UI starts at boot), and
@@ -1233,6 +1243,9 @@ install -d "${ROOTFS}/etc/systemd/system/pocketforge-foreground.target.d"
 install -m 0644 "${PF_PANEL_OWNER_DROPIN}" \
     "${ROOTFS}/etc/systemd/system/pocketforge-foreground.target.d/10-owner-${PF_PANEL_OWNER}.conf"
 echo "[customize] Panel owner: ${PF_PANEL_OWNER} (enabled unit: ${PF_PANEL_OWNER_UNIT:-<none, animator at basic.target>}; restore drop-in: 10-owner-${PF_PANEL_OWNER}.conf)"
+else
+    echo "[customize] Display UI NOT-SHIPPED (display_pipeline=none): animator, frames, menu, placeholder, and panel owner"
+fi
 
 # pocketforge-wifi-powersave.service (disable xradio power-save → stop flap)
 # bd tsp-mc9m.14.8: like wpa_supplicant@wlan0 above, pull this in via the wlan0
@@ -1439,8 +1452,9 @@ elif [ "${VARIANT}" = "release" ] && [ "${PF_GPU_MODEL}" != "none" ]; then
     fi
 fi
 
-if [ "${PF_GPU_MODEL}" = "none" ]; then
-    "${SRC_DIR}/scripts/verify-no-gpu-artifacts.sh" "${ROOTFS}" rootfs
+if [ "${PF_GPU_MODEL}" = "none" ] || [ "${PF_DISPLAY_PIPELINE}" = "none" ]; then
+    PF_GPU_MODEL="${PF_GPU_MODEL}" PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \
+        "${SRC_DIR}/scripts/verify-no-gpu-artifacts.sh" "${ROOTFS}" rootfs
 fi
 
 echo "[customize] Customization complete."
@@ -1480,6 +1494,7 @@ ANIMATOR_SRC_DIR="${SRC_DIR}/apps/pocketforge-boot-animator"
 PF_ANIMATOR_BIN="${WORK}/pocketforge-boot-animator"
 CROSS_CC="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-gcc"
 CROSS_STRIP="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-strip"
+if [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
 echo "  Cross-compiling pocketforge-boot-animator (aarch64)..."
 "${CROSS_CC}" \
     -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
@@ -1531,6 +1546,13 @@ echo "  Cross-compiling pocketforge-menu (aarch64)..."
 "${CROSS_STRIP}" "${PF_MENU_BIN}"
 echo "    -> $(du -h "${PF_MENU_BIN}" | awk '{print $1}') stripped"
 export PF_MENU_BIN
+else
+    PF_ANIMATOR_BIN=""
+    PF_PLACEHOLDER_BIN=""
+    PF_MENU_BIN=""
+    export PF_ANIMATOR_BIN PF_PLACEHOLDER_BIN PF_MENU_BIN
+    echo "  Display UI build NOT-SHIPPED (display_pipeline=none)"
+fi
 
 # The recovery executable is built in its own hermetic Docker stage from the
 # platform.lock-selected recovery archive. Do not fall back to a host artifact.
@@ -1566,7 +1588,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-module} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-module} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-module} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-module} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \

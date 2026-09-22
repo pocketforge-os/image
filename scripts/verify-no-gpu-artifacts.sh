@@ -6,8 +6,9 @@ label=${2:-tree}
 
 [ -d "$root" ] || { echo "FATAL: gpu_model=none verification root missing: $root" >&2; exit 2; }
 
-found=$(
-    find "$root" \
+if [ "${PF_GPU_MODEL:-none}" = "none" ]; then
+    found=$(
+        find "$root" \
         \( -type d \( -path '*/lib/firmware/powervr' -o -path '*/usr/lib/pvr-rogue' -o -path '*/vulkan/icd.d' \) \) -o \
         \( -type f \( \
             -name 'pvrsrvkm.ko' -o -name 'dc_sunxi.ko' -o -name 'powervr.ko' -o \
@@ -17,11 +18,47 @@ found=$(
             -name 'libSDL3-pocketforge.so*' -o -name 'LICENSE.powervr' -o \
             -name 'pf-shell' -o -name 'pocketforge-recovery-entry' \
         \) \) -print -quit
-)
+    )
 
-if [ -n "$found" ]; then
-    echo "FATAL: GPU/display artifact reached gpu_model=none ${label}: ${found#"$root"/}" >&2
-    exit 1
+    if [ -n "$found" ]; then
+        echo "FATAL: GPU artifact reached gpu_model=none ${label}: ${found#"$root"/}" >&2
+        exit 1
+    fi
 fi
 
-echo "PASS: gpu_model=none ${label} contains no GPU module, firmware, loader, PowerVR userspace, SDL, launcher, or recovery artifact"
+if [ "${PF_DISPLAY_PIPELINE:-}" = "none" ]; then
+    display_found=$(
+        find "$root" \
+            \( \
+                \( -type d -path '*/opt/pocketforge/boot-anim/frames' \) -o \
+                \( -type f \( \
+                    -name 'pocketforge-boot-animator' -o \
+                    -name 'pocketforge-menu' -o \
+                    -name 'pocketforge-placeholder' \
+                \) \) \
+            \) -print -quit
+    )
+    if [ -n "$display_found" ]; then
+        echo "FATAL: framebuffer UI artifact reached display_pipeline=none ${label}: ${display_found#"$root"/}" >&2
+        exit 1
+    fi
+
+    wants_root="$root/etc/systemd/system"
+    if [ -d "$wants_root" ]; then
+        for enabled in "$wants_root"/*.target.wants/* "$wants_root"/*.wants/*; do
+            [ -L "$enabled" ] || continue
+            target=$(readlink "$enabled")
+            case "$target" in
+                /*) unit="$root$target" ;;
+                *) unit=$(readlink -f "$enabled") ;;
+            esac
+            case "$unit" in "$root"/*) ;; *) continue ;; esac
+            if [ -f "$unit" ] && grep -Eiq '(^|[^[:alnum:]_])(/dev/)?fb[0-9]+([^[:alnum:]_]|$)|framebuffer' "$unit"; then
+                echo "FATAL: enabled framebuffer unit reached display_pipeline=none ${label}: ${enabled#"$root"/}" >&2
+                exit 1
+            fi
+        done
+    fi
+fi
+
+echo "PASS: ${label} satisfies gpu_model=${PF_GPU_MODEL:-unspecified} and display_pipeline=${PF_DISPLAY_PIPELINE:-unspecified} negative artifact policy"

@@ -57,8 +57,10 @@ ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.
 # Declared before the first FROM (global pre-FROM scope) SOLELY so the gpu-um-mesa
 # selector stage below can interpolate it into a `FROM gpu-um-mesa-${PF_GPU_MODEL}`
 # (tsp-mc9m.41.924.6 / C1). "ddk" | "open" (profile.py validate()); default matches the
-# existing PF_GPU_MODEL:-ddk fallback already used in the rootfs stage.
+# existing PF_GPU_MODEL:-ddk fallback already used in the rootfs stage. Display
+# availability is an independent required profile fact; it deliberately has no default.
 ARG PF_GPU_MODEL=ddk
+ARG PF_DISPLAY_PIPELINE
 
 # The image variant is declared globally so the hwprobe selector cannot drift from
 # the variant passed to the rootfs and assemble stages. Release selects an empty
@@ -1351,6 +1353,7 @@ ARG PF_ARCH
 ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_GPU_MODEL
+ARG PF_DISPLAY_PIPELINE
 ARG PF_VARIANT=dev
 ARG PF_IMAGE_SHA
 ARG PF_KERNEL_SHA
@@ -1413,6 +1416,7 @@ case "${PF_SOC}" in
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
+      PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \
       PF_IMAGE_SHA="${PF_IMAGE_SHA}" PF_KERNEL_SHA="${PF_KERNEL_SHA}" \
       PF_GPU_SHA="${PF_GPU_SHA:-}" PF_LIBSDL3_SHA="${PF_LIBSDL3_SHA}" \
       PF_WPA_SHA="${PF_WPA_SHA}" PF_RUNTIME_SHA="${PF_RUNTIME_SHA}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA:-}" \
