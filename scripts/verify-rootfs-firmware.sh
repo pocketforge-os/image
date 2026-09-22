@@ -5,8 +5,8 @@ rootfs="${1:?usage: verify-rootfs-firmware.sh ROOTFS}"
 rootfs="$(realpath -m -- "$rootfs")"
 
 require_rootfs_file() {
-    path="$1"
-    candidate="${rootfs}/${path}"
+    rootfs_relative_path="$1"
+    candidate="${rootfs}/${rootfs_relative_path}"
     depth=0
 
     while [ -L "$candidate" ]; do
@@ -27,16 +27,28 @@ require_rootfs_file() {
         esac
     done
 
-    [ -f "$candidate" ] && [ -s "$candidate" ]
+    [ -f "$candidate" ] && [ -s "$candidate" ] || return 1
+    resolved_rootfs_file="$candidate"
 }
 
-for path in \
-    lib/firmware/regulatory.db \
-    lib/firmware/regulatory.db.p7s; do
+# Verify lib/firmware/regulatory.db and its .p7s against the package's
+# kernel.org-signed payload rather than merely accepting any alternatives target.
+for artifact in regulatory.db regulatory.db.p7s; do
     # Follow Debian's absolute update-alternatives links inside the extracted
     # rootfs, with a bounded chain, and require non-empty final artifacts.
-    if ! require_rootfs_file "$path"; then
-        echo "FATAL: rootfs firmware: /${path} is missing (wireless-regdb 2026.02.04-1~deb12u1)" >&2
+    if ! require_rootfs_file "lib/firmware/${artifact}"; then
+        echo "FATAL: rootfs firmware: /lib/firmware/${artifact} is missing (wireless-regdb 2026.02.04-1~deb12u1)" >&2
+        exit 1
+    fi
+    selected="$resolved_rootfs_file"
+
+    if ! require_rootfs_file "lib/firmware/${artifact}-upstream"; then
+        echo "FATAL: rootfs firmware: packaged upstream /lib/firmware/${artifact}-upstream is missing" >&2
+        exit 1
+    fi
+
+    if ! cmp -s -- "$selected" "$resolved_rootfs_file"; then
+        echo "FATAL: rootfs firmware: /lib/firmware/${artifact} does not select the upstream-signed variant" >&2
         exit 1
     fi
 done
@@ -52,4 +64,4 @@ if [ -e "${rootfs}/lib/firmware/fw_xr829_bt.bin" ] || \
     exit 1
 fi
 
-echo 'rootfs-firmware=PASS regulatory.db=wireless-regdb_2026.02.04-1~deb12u1 xr829_bt=NOT-SHIPPED'
+echo 'rootfs-firmware=PASS regulatory.db=wireless-regdb_2026.02.04-1~deb12u1-upstream xr829_bt=NOT-SHIPPED'
