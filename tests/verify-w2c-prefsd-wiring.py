@@ -55,6 +55,23 @@ assert runtime_guard == ["2e7e4d96f2a4148d0d5926b11238d36d12f0c73e"], (
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
 assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
+for crate in (
+    "pf-scene",
+    "pf-ports",
+    "pf-render",
+    "pf-framehost",
+    "pf-framehost-wayland",
+    "pf-theme",
+    "pf-input-map",
+    "pf-prefs",
+    "pf-prefs-port",
+    "pf-session-client",
+    "pf-session-authority",
+    "pf-wire",
+):
+    assert re.search(rf"\b{re.escape(crate)}\b", dockerfile), crate
+assert "COPY --from=runtime-src . /work/runtime-contract" in dockerfile
+assert "check-launcher-runtime-contract /work/launcher /work/runtime-contract" in dockerfile
 
 recipe = text(ROOT / "scripts/build-rootfs.sh")
 assert '"${ROOTFS}/usr/bin/pf-prefsd"' in recipe
