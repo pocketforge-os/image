@@ -40,9 +40,37 @@ static void assert_highlight_spans_long_axis(unsigned int width,
     free(buffer);
 }
 
+static void assert_portrait_is_rotated_landscape(void) {
+    const unsigned int landscape_width = 1280, landscape_height = 720;
+    const unsigned int portrait_width = 720, portrait_height = 1280;
+    unsigned char *landscape = calloc(landscape_height, landscape_width * 4);
+    unsigned char *portrait = calloc(portrait_height, portrait_width * 4);
+    assert(landscape != NULL && portrait != NULL);
+
+    draw_menu(landscape, landscape_width * 4,
+              landscape_width, landscape_height, 0);
+    draw_menu(portrait, portrait_width * 4,
+              portrait_width, portrait_height, 0);
+
+    for (unsigned int y = 0; y < landscape_height; y++) {
+        for (unsigned int x = 0; x < landscape_width; x++) {
+            const unsigned char *logical =
+                landscape + ((size_t)y * landscape_width + x) * 4;
+            const unsigned char *native =
+                portrait + ((size_t)(portrait_height - 1 - x) *
+                            portrait_width + y) * 4;
+            assert(memcmp(logical, native, 4) == 0);
+        }
+    }
+
+    free(portrait);
+    free(landscape);
+}
+
 int main(void) {
     assert_highlight_spans_long_axis(1280, 720);
     assert_highlight_spans_long_axis(720, 1280);
+    assert_portrait_is_rotated_landscape();
     puts("menu layout: PASS (1280x720 and 720x1280)");
     return 0;
 }
