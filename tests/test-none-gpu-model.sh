@@ -44,8 +44,14 @@ resolve_packages() {
     variant=$1
     gpu_model=$2
     display_pipeline=$3
+    if [ "$display_pipeline" = none ]; then
+        has_display=0
+    else
+        has_display=1
+    fi
     SRC_DIR="$root" VARIANT="$variant" PF_GPU_MODEL="$gpu_model" \
-        PF_DISPLAY_PIPELINE="$display_pipeline" sh "$package_section" |
+        PF_DISPLAY_PIPELINE="$display_pipeline" PF_HAS_DISPLAY="$has_display" \
+        sh "$package_section" |
         sed -n 's/^  package list: //p'
 }
 
@@ -79,9 +85,49 @@ for variant in release dev; do
 done
 grep -F 'elif [ "${PF_GPU_MODEL}" = "open" ]; then' "$rootfs" >/dev/null
 grep -F 'elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then' "$rootfs" >/dev/null
-test "$(grep -Fc 'if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then' "$rootfs")" -eq 2
-grep -F 'if [ "${PF_DISPLAY_PIPELINE}" != "none" ] && [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] &&' "$rootfs" >/dev/null
+test "$(grep -Fc 'if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_HAS_DISPLAY}" = 1 ]; then' "$rootfs")" -eq 2
+grep -F 'if [ "${PF_HAS_DISPLAY}" = 1 ] && [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] &&' "$rootfs" >/dev/null
 echo 'PASS: open + none keeps the headless GPU stack while omitting SDL presentation clients'
+
+# Execute the exact framebuffer-shell and recovery hook sections with all their
+# artifacts staged, as they are for the open model. The single display predicate
+# must keep both framebuffer consumers out while retaining independent session
+# authority; the unchanged verifier then proves the resulting root is clean.
+mkdir -p "$tmpdir/open-none/rootfs" \
+    "$tmpdir/open-none/launcher/bin" \
+    "$tmpdir/open-none/runtime/bin" \
+    "$tmpdir/open-none/runtime/systemd" \
+    "$tmpdir/open-none/runtime/tmpfiles.d" \
+    "$tmpdir/open-none/recovery/bin"
+cp /bin/true "$tmpdir/open-none/launcher/bin/pf-shell"
+cp /bin/true "$tmpdir/open-none/runtime/bin/pf-session-authorityd"
+for binary in "$tmpdir/open-none/launcher/bin/pf-shell" \
+    "$tmpdir/open-none/runtime/bin/pf-session-authorityd"; do
+    printf '\267\000' | dd of="$binary" bs=1 seek=18 conv=notrunc status=none
+done
+: >"$tmpdir/open-none/runtime/systemd/pf-session-authorityd.service"
+: >"$tmpdir/open-none/runtime/tmpfiles.d/pocketforge.conf"
+: >"$tmpdir/open-none/recovery/bin/pocketforge-recovery-entry"
+chmod +x "$tmpdir/open-none/recovery/bin/pocketforge-recovery-entry"
+sed -n '/^# --- F13 shell owner/,/^# --- W2c preference state authority/p' "$rootfs" | sed '$d' \
+    >"$tmpdir/open-none/hook-sections.sh"
+sed -n '/^# product-010 F16: recovery/,/^# ---- Panel owner selection/p' "$rootfs" | sed '$d' \
+    >>"$tmpdir/open-none/hook-sections.sh"
+sed -i "s|/work/src|$root|g" "$tmpdir/open-none/hook-sections.sh"
+ROOTFS="$tmpdir/open-none/rootfs" \
+    LAUNCHER_DIR="$tmpdir/open-none/launcher" \
+    RUNTIME_DIR="$tmpdir/open-none/runtime" \
+    PF_RECOVERY_BIN="$tmpdir/open-none/recovery/bin/pocketforge-recovery-entry" \
+    PF_GPU_MODEL=open PF_DISPLAY_PIPELINE=none PF_HAS_DISPLAY=0 \
+    sh -eu "$tmpdir/open-none/hook-sections.sh" >/dev/null
+test -x "$tmpdir/open-none/rootfs/usr/bin/pf-session-authorityd"
+test -L "$tmpdir/open-none/rootfs/etc/systemd/system/multi-user.target.wants/pf-session-authorityd.service"
+test ! -e "$tmpdir/open-none/rootfs/usr/bin/pf-shell"
+test ! -e "$tmpdir/open-none/rootfs/etc/systemd/system/pf-shell-selected.service"
+test ! -e "$tmpdir/open-none/rootfs/opt/pocketforge/bin/pocketforge-recovery-entry"
+test ! -e "$tmpdir/open-none/rootfs/etc/systemd/system/pocketforge-recovery.path"
+PF_GPU_MODEL=open PF_DISPLAY_PIPELINE=none "$verifier" "$tmpdir/open-none/rootfs" test-fixture >/dev/null
+echo 'PASS: open + none customize hook rejects staged framebuffer shell and recovery while retaining headless authority'
 
 mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
     "$tmpdir/clean/usr/lib/aarch64-linux-gnu" \
@@ -276,7 +322,9 @@ fi
 echo 'PASS: none display pipeline rejects framebuffer UI artifacts and enabled fbdev units'
 
 grep -F 'PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:?FATAL: PF_DISPLAY_PIPELINE is required (fbdev|drm|none)}"' "$rootfs" >/dev/null
-grep -F 'if [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then' "$rootfs" >/dev/null
+grep -F 'fbdev|drm) PF_HAS_DISPLAY=1 ;;' "$rootfs" >/dev/null
+grep -F 'none) PF_HAS_DISPLAY=0 ;;' "$rootfs" >/dev/null
+grep -F 'if [ "${PF_HAS_DISPLAY}" = 1 ]; then' "$rootfs" >/dev/null
 if unset_error=$(env -u PF_DISPLAY_PIPELINE PF_GPU_MODEL=none bash "$rootfs" 2>&1); then
     echo 'FAIL: rootfs builder accepted an unset display pipeline' >&2
     exit 1

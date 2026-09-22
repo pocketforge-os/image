@@ -43,9 +43,11 @@ case "${PF_GPU_MODEL}" in
 esac
 PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:?FATAL: PF_DISPLAY_PIPELINE is required (fbdev|drm|none)}"
 case "${PF_DISPLAY_PIPELINE}" in
-    fbdev|drm|none) ;;
+    fbdev|drm) PF_HAS_DISPLAY=1 ;;
+    none) PF_HAS_DISPLAY=0 ;;
     *) echo "FATAL: PF_DISPLAY_PIPELINE must be fbdev|drm|none, got '${PF_DISPLAY_PIPELINE}'" >&2; exit 2 ;;
 esac
+export PF_HAS_DISPLAY
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
 # The C1 open-Mesa install tree (tsp-mc9m.41.924.6 / C4): its own /usr/local/{include,lib}
 # meson DESTDIR install — only meaningful (non-marker-only) for PF_GPU_MODEL=open.
@@ -166,7 +168,7 @@ fi
 # GLX Mesa, while libavutil depends on VDPAU and Debian's recommended VDPAU/VA
 # providers pull Mesa's driver packages.  Both paths reach the complete Mesa DRI
 # driver set even though the codec packages look unrelated to display.
-if [ "${PF_DISPLAY_PIPELINE}" = "none" ]; then
+if [ "${PF_HAS_DISPLAY}" = 0 ]; then
     DISPLAY_PACKAGE_ROOTS="libavcodec59 libavutil57 libegl1 libepoxy0 libgbm1 libgles2 libwayland-egl1 ffmpeg libvdpau1"
     for package in ${DISPLAY_PACKAGE_ROOTS}; do
         PKG_LIST="$(printf '%s\n' "${PKG_LIST}" | tr ',' '\n' |
@@ -270,7 +272,7 @@ echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
 
 # Verify the libSDL3 artifact for display-capable GPU builds. The sdl stage builds a
 # real sunxifb .so for both GPU models, but a display-less bring-up has no SDL client.
-if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
+if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_HAS_DISPLAY}" = 1 ]; then
     LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
     [ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
     echo "  libsdl3: ${LIBSDL3_SO}"
@@ -535,7 +537,7 @@ echo "[customize] Firmware: $(ls "${ROOTFS}/lib/firmware/" | wc -l) files"
 # C3/C4 review fix — closed-DDK-only was a review finding: this install stayed gated
 # after C3 wired the open-Mesa link, so the a133-open FINAL rootfs never got the .so
 # C3 had already built). Display-less bring-up images omit this graphics client.
-if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
+if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_HAS_DISPLAY}" = 1 ]; then
     echo "[customize] Installing libSDL3-pocketforge..."
     install -d "${ROOTFS}/opt/pocketforge/lib"
     # Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
@@ -546,7 +548,7 @@ fi
 # SDL test binaries (bd tsp-tyt) — dev variant only; present only when the sdl
 # stage built them (a133/sunxifb). Lets the sunxifb functional gate
 # (SDL_VIDEODRIVER=sunxifb testgles2) run on-device without scp.
-if [ "${PF_DISPLAY_PIPELINE}" != "none" ] && [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] &&
+if [ "${PF_HAS_DISPLAY}" = 1 ] && [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] &&
     [ -d /work/libsdl3/testbin ] && ls /work/libsdl3/testbin/* >/dev/null 2>&1; then
     install -d "${ROOTFS}/opt/pocketforge/bin"
     install -m 0755 /work/libsdl3/testbin/* "${ROOTFS}/opt/pocketforge/bin/"
@@ -1007,24 +1009,29 @@ if [ -f "${SHELL_BIN}" ] || [ -f "${AUTHORITY_BIN}" ]; then
         binary_em="$(od -An -tx1 -j18 -N2 "${binary}" | tr -d ' ')"
         [ "${binary_em}" = "b700" ] || { echo "FATAL: ${binary} is not an aarch64 ELF (e_machine=${binary_em}, want b700)" >&2; exit 1; }
     done
-    install -D -m 0755 "${SHELL_BIN}" "${ROOTFS}/usr/bin/pf-shell"
     install -D -m 0755 "${AUTHORITY_BIN}" "${ROOTFS}/usr/bin/pf-session-authorityd"
     install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-session-authorityd.service" \
         "${ROOTFS}/etc/systemd/system/pf-session-authorityd.service"
     install -D -m 0644 "${RUNTIME_DIR}/tmpfiles.d/pocketforge.conf" \
         "${ROOTFS}/usr/lib/tmpfiles.d/pocketforge.conf"
-    for unit in pf-foreground@.service pf-shell-selected.service; do
-        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/${unit}" \
-            "${ROOTFS}/etc/systemd/system/${unit}"
-    done
     install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
     ln -sf /etc/systemd/system/pf-session-authorityd.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-session-authorityd.service"
-    ln -sf /etc/systemd/system/pf-shell-selected.service \
-        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-shell-selected.service"
-    [ -f "${LAUNCHER_DIR}/.pf-launcher-provenance" ] && \
-        install -D -m 0644 "${LAUNCHER_DIR}/.pf-launcher-provenance" "${ROOTFS}/usr/share/pocketforge/launcher-provenance"
-    echo "[customize] F13 pf-shell selected owner + independent pf-session-authorityd installed and enabled"
+    echo "[customize] Independent pf-session-authorityd installed and enabled"
+    if [ "${PF_HAS_DISPLAY}" = 1 ]; then
+        install -D -m 0755 "${SHELL_BIN}" "${ROOTFS}/usr/bin/pf-shell"
+        for unit in pf-foreground@.service pf-shell-selected.service; do
+            install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/${unit}" \
+                "${ROOTFS}/etc/systemd/system/${unit}"
+        done
+        ln -sf /etc/systemd/system/pf-shell-selected.service \
+            "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-shell-selected.service"
+        [ -f "${LAUNCHER_DIR}/.pf-launcher-provenance" ] && \
+            install -D -m 0644 "${LAUNCHER_DIR}/.pf-launcher-provenance" "${ROOTFS}/usr/share/pocketforge/launcher-provenance"
+        echo "[customize] F13 pf-shell selected framebuffer owner installed and enabled"
+    else
+        echo "[customize] F13 pf-shell NOT-SHIPPED (display_pipeline=none)"
+    fi
 fi
 
 # --- W2c preference state authority (tsp-op5a.134) --------------------------
@@ -1050,7 +1057,7 @@ fi
 ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-setup.service"
 
-if [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
+if [ "${PF_HAS_DISPLAY}" = 1 ]; then
 # pocketforge-boot-animator (bd tsp-3rd3.4: kernel-handoff fb0 boot animator).
 # Supersedes pocketforge-fb-clear — the animator owns fb0 from kernel-fb0
 # registration and unbinds fbcon itself, so a separate "zero fb0 to hide
@@ -1126,24 +1133,26 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
         "${ROOTFS}/usr/lib/pocketforge/open-gpu-gate.sh"
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service" \
         "${ROOTFS}/etc/systemd/system/pf-open-gpu-gate.service"
-    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf" \
-        "${ROOTFS}/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf"
-    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf" \
-        "${ROOTFS}/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf"
-    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf" \
-        "${ROOTFS}/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf"
     ln -sf ../pf-open-gpu-gate.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-open-gpu-gate.service"
-    for ui_unit in pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
-        dropin="${ROOTFS}/etc/systemd/system/${ui_unit}.d"
-        install -d "${dropin}"
-        install -m 0644 \
-            "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf" \
-            "${dropin}/20-open-gpu-required.conf"
-    done
+    if [ "${PF_HAS_DISPLAY}" = 1 ]; then
+        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf" \
+            "${ROOTFS}/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf"
+        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf" \
+            "${ROOTFS}/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf"
+        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf" \
+            "${ROOTFS}/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf"
+        for ui_unit in pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
+            dropin="${ROOTFS}/etc/systemd/system/${ui_unit}.d"
+            install -d "${dropin}"
+            install -m 0644 \
+                "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf" \
+                "${dropin}/20-open-gpu-required.conf"
+        done
+    fi
 fi
 
-if [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
+if [ "${PF_HAS_DISPLAY}" = 1 ]; then
 install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"
 ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
     "${ROOTFS}/etc/systemd/system/basic.target.wants/pocketforge-boot-animator.service"
@@ -1191,7 +1200,7 @@ fi
 # userspace wave gated off the closed a133/a523 image (byte-identical to the pre-op5a baseline).
 # For the ddk path the recovery stage is the NOT-SHIPPED stub (no pocketforge-recovery-entry in
 # ${RECOVERY_DIR}/bin), so install/enable ONLY for the open model — closed/a523 SKIP both.
-if [ "${PF_GPU_MODEL}" = "open" ]; then
+if [ "${PF_GPU_MODEL}" = "open" ] && [ "${PF_HAS_DISPLAY}" = 1 ]; then
     install -m 0755 "${PF_RECOVERY_BIN}" \
         "${ROOTFS}/opt/pocketforge/bin/pocketforge-recovery-entry"
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-recovery.service" \
@@ -1202,10 +1211,10 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-recovery.path"
     echo "[customize] Recovery entry installed + condition path enabled (recovery@${PF_RECOVERY_SHA})"
 else
-    echo "[customize] recovery entry NOT-SHIPPED for the ddk model (open-only; closed a133/a523 byte-identical)"
+    echo "[customize] recovery entry NOT-SHIPPED (requires open GPU and a display; closed a133/a523 byte-identical)"
 fi
 # ---- Panel owner selection (bd tsp-1cl7.1) ---------------------------------
-if [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
+if [ "${PF_HAS_DISPLAY}" = 1 ]; then
 # WHICH UI OWNS THE PANEL IS ONE DECISION WITH TWO CONSEQUENCES, so it is made
 # ONCE here and both consequences are derived from it:
 #   1. the multi-user.target.wants enable symlink (which UI starts at boot), and
@@ -1454,7 +1463,7 @@ if [ "${VARIANT}" = "dev" ]; then
     chroot "${ROOTFS}" systemctl enable ssh-keygen-firstboot.service
     chroot "${ROOTFS}" systemctl enable ssh.service
     echo "[customize] dev: build-time SSH host keys removed; first-boot keygen and ssh.service enabled"
-elif [ "${VARIANT}" = "release" ] && [ "${PF_GPU_MODEL}" != "none" ]; then
+elif [ "${VARIANT}" = "release" ] && [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_HAS_DISPLAY}" = 1 ]; then
     # Release: strip libSDL3 + future supervisor binary
     if command -v aarch64-none-linux-gnu-strip >/dev/null 2>&1; then
         aarch64-none-linux-gnu-strip --strip-unneeded \
@@ -1511,7 +1520,7 @@ ANIMATOR_SRC_DIR="${SRC_DIR}/apps/pocketforge-boot-animator"
 PF_ANIMATOR_BIN="${WORK}/pocketforge-boot-animator"
 CROSS_CC="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-gcc"
 CROSS_STRIP="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-strip"
-if [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
+if [ "${PF_HAS_DISPLAY}" = 1 ]; then
 echo "  Cross-compiling pocketforge-boot-animator (aarch64)..."
 "${CROSS_CC}" \
     -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
@@ -1579,7 +1588,7 @@ fi
 # resolve/verify/export the pinned binary ONLY for the open model; closed a133/a523
 # leave PF_RECOVERY_BIN empty (never read — the install below is likewise open-gated),
 # keeping the ddk rootfs byte-identical to the pre-op5a baseline.
-if [ "${PF_GPU_MODEL}" = "open" ]; then
+if [ "${PF_GPU_MODEL}" = "open" ] && [ "${PF_HAS_DISPLAY}" = 1 ]; then
     RECOVERY_DIR="${RECOVERY_DIR:-/work/recovery}"
     PF_RECOVERY_BIN="${RECOVERY_DIR}/bin/pocketforge-recovery-entry"
     [ -x "${PF_RECOVERY_BIN}" ] || { echo "FATAL: pinned recovery executable missing: ${PF_RECOVERY_BIN}" >&2; exit 1; }
@@ -1605,7 +1614,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-module} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-module} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-module} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-module} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
