@@ -332,6 +332,8 @@ else
     echo "[customize] Installing open Mesa GLES/EGL/GBM userspace (Zink, GE8300)..."
     install -d "${ROOTFS}/usr/local"
     cp -a /work/gpu-um-mesa/usr/local/. "${ROOTFS}/usr/local/"
+    install -D -m 0755 /work/gpu-um-mesa/usr/lib/pocketforge/open-gpu-probe \
+        "${ROOTFS}/usr/lib/pocketforge/open-gpu-probe"
     printf '/usr/local/lib\n' > "${ROOTFS}/etc/ld.so.conf.d/00-mesa-powervr.conf"
     chroot "$ROOTFS" ldconfig
     echo "[customize] open Mesa: ldconfig done"

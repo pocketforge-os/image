@@ -7,6 +7,7 @@ customize="$root/scripts/build-rootfs.sh"
 gate="$root/rootfs-overlay/usr/lib/pocketforge/open-gpu-gate.sh"
 unit="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service"
 required="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf"
+probe="$root/tools/open-gpu-probe.c"
 
 # Literal Dockerfile variables are intentional in these structural assertions.
 # shellcheck disable=SC2016
@@ -18,11 +19,18 @@ grep -F 'LICENSE.powervr' "$dockerfile" >/dev/null
 grep -F 'powervr.ko (in-tree, kernel-tsp)' "$customize" >/dev/null
 grep -F "grep -F 'img,img-rogue'" "$customize" >/dev/null
 grep -F '/lib/firmware/powervr/rogue_22.102.54.38_v1.fw' "$gate" >/dev/null
-grep -F 'llvmpipe' "$gate" >/dev/null
+grep -F 'llvmpipe' "$probe" >/dev/null
 grep -F 'PF-OPEN-GPU PASS:' "$gate" >/dev/null
-grep -F 'timeout 25s env SDL_VIDEODRIVER=sunxifb' "$gate" >/dev/null
-if grep -F 'pf-take-panel' "$gate" >/dev/null || grep -F 'systemctl' "$gate" >/dev/null; then
-    echo 'open GPU gate must not wait on the foreground handoff or another unit' >&2
+grep -F '/usr/lib/pocketforge/open-gpu-probe' "$gate" >/dev/null
+grep -F 'VK_PHYSICAL_DEVICE_TYPE_CPU' "$probe" >/dev/null
+grep -F 'vkQueueSubmit' "$probe" >/dev/null
+grep -F 'vkWaitForFences' "$probe" >/dev/null
+grep -F 'submit=ok' "$probe" >/dev/null
+grep -F 'COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe' "$dockerfile" >/dev/null
+grep -F 'install -D -m 0755 /work/gpu-um-mesa/usr/lib/pocketforge/open-gpu-probe' "$customize" >/dev/null
+grep -F 'libvulkan-dev:arm64' "$dockerfile" >/dev/null
+if grep -Eq 'testgles2|SDL_VIDEODRIVER|pf-take-panel|systemctl|fb0|boot-animator|foreground' "$gate"; then
+    echo 'open GPU gate must not reference display machinery or dev diagnostics' >&2
     exit 1
 fi
 grep -F 'Before=pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service' "$unit" >/dev/null
@@ -47,6 +55,10 @@ awk '
 # The gate may wait for device discovery, but must not wait for the foreground
 # target or any UI unit that is itself gated by this service.
 after="$(sed -n 's/^After=//p' "$unit")"
+if [ "$after" != 'systemd-udev-settle.service dev-dri-renderD128.device' ]; then
+    echo "open GPU gate has unexpected After= ordering: $after" >&2
+    exit 1
+fi
 for forbidden in pocketforge-foreground.target pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
     case " $after " in
         *" $forbidden "*)

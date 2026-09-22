@@ -452,7 +452,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   g++-aarch64-linux-gnu \
   gcc-aarch64-linux-gnu \
   libc6-dev:arm64 \
-  libdrm-dev:arm64
+  libdrm-dev:arm64 \
+  libvulkan-dev:arm64
 dpkg-query -W > /toolchain-packages.txt
 GPUUMTOOLCHAIN
 COPY --from=gpu-um-src docker/pkg-config/ /usr/local/bin/
@@ -510,6 +511,7 @@ FROM gpu-um-native-precompilers AS gpu-um-build
 WORKDIR /src
 ARG SOURCE_DATE_EPOCH
 ARG PF_GPU_UM_SHA
+COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
 ENV PATH=/opt/mesa-native/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN --mount=type=cache,id=ge8300-mesa-cross-ccache,target=/root/.cache/ccache,sharing=locked <<'GPUUMBUILD'
 set -eux
@@ -542,6 +544,10 @@ sha256sum /first-cross-build.so "build-cross/${so}" >/src/cross-build-sha256.txt
 elapsed="$(( $(date +%s) - start ))"
 printf 'two_builds_elapsed_seconds=%s\n' "${elapsed}" >/src/cross-build-time.txt
 DESTDIR=/instroot SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" meson install -C build-cross --no-rebuild --skip-subprojects
+aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
+  /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe -lvulkan
+readelf -h /tmp/open-gpu-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
+install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
 # Provenance (this file's convention — a `.pf-*-provenance` marker for every stage):
 # the full install-tree manifest by sha256, so C's acceptance evidence lists real
 # staged artifact paths + hashes rather than a hand-picked subset.
@@ -566,6 +572,7 @@ COPY --from=gpu-um-build /src/cross-build-time.txt /cross-build-time.txt
 COPY --from=gpu-um-build /src/.pf-gpu-um-provenance /out/.pf-gpu-um-provenance
 COPY --from=gpu-um-build /src/build-cross/src/imagination/vulkan/libvulkan_powervr_mesa.so /libvulkan_powervr_mesa.so
 COPY --from=gpu-um-build /instroot/usr/local /out/usr/local
+COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe
 
 # Selector: which of the two stages above answers to the `gpu-um-mesa` name every
 # downstream consumer (sdl, rootfs) COPYs --from. ARGs declared before the file's first
