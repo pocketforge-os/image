@@ -19,8 +19,9 @@
  * refreshes ONLY on FBIOPAN_DISPLAY, so we redraw the inactive page and pan.
  *
  * Font: 8x16 monospace bitmap, hand-crafted for the ~22 glyphs the three
- * labels use plus space and '.'. Rendered at scale 4 → 32x64 per glyph, plenty
- * readable on the 1280x720 landscape panel. libc only — no freetype/harfbuzz.
+ * labels use plus space and '.'. Rendered at scale 4 on a logical landscape
+ * canvas, then rotated into memory when fb0 exposes the portrait-native glass.
+ * libc only — no freetype/harfbuzz.
  */
 
 #define _GNU_SOURCE           /* ppoll(2) */
@@ -40,9 +41,6 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-#define FB_W  1280
-#define FB_H  720
 
 /* Warm near-black field + PocketForge ember accent (matches placeholder). */
 #define BG_R  0x14
@@ -188,21 +186,35 @@ static inline void put_px(unsigned char *p, unsigned char r,
 }
 
 static void fill_rect(unsigned char *page, unsigned int stride,
+                      unsigned int fb_width, unsigned int fb_height,
                       int x0, int y0, int x1, int y1,
                       unsigned char r, unsigned char g, unsigned char b) {
+    const int width = fb_width >= fb_height ? (int)fb_width : (int)fb_height;
+    const int height = fb_width >= fb_height ? (int)fb_height : (int)fb_width;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
-    if (x1 > FB_W) x1 = FB_W;
-    if (y1 > FB_H) y1 = FB_H;
+    if (x1 > width) x1 = width;
+    if (y1 > height) y1 = height;
     for (int y = y0; y < y1; y++) {
-        unsigned char *dp = page + (size_t)y * stride + (size_t)x0 * 4;
-        for (int x = x0; x < x1; x++) { put_px(dp, r, g, b); dp += 4; }
+        for (int x = x0; x < x1; x++) {
+            unsigned int px = (unsigned int)x;
+            unsigned int py = (unsigned int)y;
+            if (fb_width < fb_height) {
+                /* The TSP glass is portrait-native and mounted 270 degrees.
+                 * Rotate the logical landscape canvas into native fb memory;
+                 * fbdev has no connector-orientation API for clients. */
+                px = (unsigned int)y;
+                py = fb_height - 1u - (unsigned int)x;
+            }
+            put_px(page + (size_t)py * stride + (size_t)px * 4, r, g, b);
+        }
     }
 }
 
 /* Draw one 8x16 glyph at (x, y), scale s, in colour (r,g,b). Zeroed glyph
  * slots render as blank — safe for chars we do not have a bitmap for. */
 static void draw_glyph(unsigned char *page, unsigned int stride,
+                       unsigned int width, unsigned int height,
                        int x, int y, int s, unsigned char c,
                        unsigned char r, unsigned char g, unsigned char b) {
     if (c >= 128) return;
@@ -212,7 +224,7 @@ static void draw_glyph(unsigned char *page, unsigned int stride,
         if (!bits) continue;
         for (int gx = 0; gx < GLYPH_W; gx++) {
             if (bits & (0x80 >> gx))
-                fill_rect(page, stride,
+                fill_rect(page, stride, width, height,
                           x + gx * s, y + gy * s,
                           x + (gx + 1) * s, y + (gy + 1) * s,
                           r, g, b);
@@ -221,25 +233,30 @@ static void draw_glyph(unsigned char *page, unsigned int stride,
 }
 
 static void draw_string(unsigned char *page, unsigned int stride,
+                        unsigned int width, unsigned int height,
                         int x, int y, int s, const char *str,
                         unsigned char r, unsigned char g, unsigned char b) {
     for (const unsigned char *p = (const unsigned char *)str; *p; p++) {
-        draw_glyph(page, stride, x, y, s, *p, r, g, b);
+        draw_glyph(page, stride, width, height, x, y, s, *p, r, g, b);
         x += GLYPH_W * s;
     }
 }
 
 /* Full page repaint keyed on `highlight` (0..2). */
-static void draw_menu(unsigned char *page, unsigned int stride, int highlight) {
-    fill_rect(page, stride, 0, 0, FB_W, FB_H, BG_R, BG_G, BG_B);
+static void draw_menu(unsigned char *page, unsigned int stride,
+                      unsigned int fb_width, unsigned int fb_height,
+                      int highlight) {
+    const unsigned int width = fb_width >= fb_height ? fb_width : fb_height;
+    const unsigned int height = fb_width >= fb_height ? fb_height : fb_width;
+    fill_rect(page, stride, fb_width, fb_height, 0, 0, width, height,
+              BG_R, BG_G, BG_B);
 
-    const int row_h = FB_H / ROW_COUNT;              /* 240 px per row */
-    const int text_w_char = GLYPH_W * GLYPH_SCALE;   /* 32 px per char */
-    const int text_h = GLYPH_H * GLYPH_SCALE;        /* 64 px tall     */
-
+    const int slot_extent = (int)height / ROW_COUNT;
     for (int i = 0; i < ROW_COUNT; i++) {
-        const int y0 = i * row_h;
-        const int y1 = y0 + row_h;
+        const int x0 = 0;
+        const int x1 = (int)width;
+        const int y0 = i * slot_extent;
+        const int y1 = y0 + slot_extent;
         const int is_hi = (i == highlight);
 
         /* Highlight = ember fill + charcoal text; else charcoal fill + ember
@@ -254,15 +271,19 @@ static void draw_menu(unsigned char *page, unsigned int stride, int highlight) {
 
         if (is_hi) {
             const int m = 32;
-            fill_rect(page, stride, m, y0 + m, FB_W - m, y1 - m,
+            fill_rect(page, stride, fb_width, fb_height,
+                      x0 + m, y0 + m, x1 - m, y1 - m,
                       bgr, bgg, bgb);
         }
 
         const char *label = LABELS[i];
         const int len = (int)strlen(label);
-        const int tx = (FB_W - len * text_w_char) / 2;
-        const int ty = y0 + (row_h - text_h) / 2;
-        draw_string(page, stride, tx, ty, GLYPH_SCALE, label,
+        const int text_w_char = GLYPH_W * GLYPH_SCALE;
+        const int text_h = GLYPH_H * GLYPH_SCALE;
+        const int tx = x0 + (x1 - x0 - len * text_w_char) / 2;
+        const int ty = y0 + (y1 - y0 - text_h) / 2;
+        draw_string(page, stride, fb_width, fb_height,
+                    tx, ty, GLYPH_SCALE, label,
                     fgr, fgg, fgb);
     }
 }
@@ -368,10 +389,12 @@ int main(void) {
         close(fb);
         return 1;
     }
-    if (vinfo.xres != FB_W || vinfo.yres != FB_H || vinfo.bits_per_pixel != 32) {
-        fprintf(stderr, "menu: unexpected fb0 geometry %ux%u @%ubpp; "
-                        "expected %ux%u @32bpp\n",
-                vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, FB_W, FB_H);
+    if (vinfo.xres == 0 || vinfo.yres == 0 || vinfo.bits_per_pixel != 32 ||
+        finfo.line_length < vinfo.xres * 4) {
+        fprintf(stderr, "menu: unsupported fb0 geometry %ux%u @%ubpp, "
+                        "stride=%u\n",
+                vinfo.xres, vinfo.yres, vinfo.bits_per_pixel,
+                finfo.line_length);
         close(fb);
         return 1;
     }
@@ -402,7 +425,8 @@ int main(void) {
     int highlight = 0;
 
     /* Initial paint + present. */
-    draw_menu(fbmap + (size_t)page * page_bytes, finfo.line_length, highlight);
+    draw_menu(fbmap + (size_t)page * page_bytes, finfo.line_length,
+              vinfo.xres, vinfo.yres, highlight);
     msync(fbmap, map_bytes, MS_SYNC);
     vinfo.xoffset = 0;
     vinfo.yoffset = page * vinfo.yres;
@@ -481,7 +505,7 @@ int main(void) {
 
         page = (n_pages > 1) ? (page ^ 1u) : 0;
         draw_menu(fbmap + (size_t)page * page_bytes, finfo.line_length,
-                  highlight);
+                  vinfo.xres, vinfo.yres, highlight);
         msync(fbmap, map_bytes, MS_SYNC);
         vinfo.xoffset = 0;
         vinfo.yoffset = page * vinfo.yres;

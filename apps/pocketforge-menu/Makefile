@@ -14,10 +14,17 @@ CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
 BIN     := pocketforge-menu
 SRC     := src/main.c
+TEST_BIN := layout-test
 
 $(BIN): $(SRC)
 	$(CC) $(CFLAGS) -o $@ $(SRC)
 
-.PHONY: clean
+.PHONY: test clean
+test: $(TEST_BIN)
+	./$(TEST_BIN)
+
+$(TEST_BIN): tests/layout_test.c $(SRC)
+	$(CC) $(CFLAGS) -o $@ tests/layout_test.c
+
 clean:
-	rm -f $(BIN)
+	$(RM) $(BIN) $(TEST_BIN)
