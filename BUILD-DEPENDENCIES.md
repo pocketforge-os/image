@@ -136,16 +136,9 @@ image). Documented bind-mount paths:
   the container by `@sha256:digest` from `image/container.pin`, never by `:tag`.
   Tag-pinning lets a base-layer rebuild silently break reproducibility.
 
-> **`container.pin` is STALE as of 2026-06-12 (bead `tsp-iuz.1.6`).** The
-> Dockerfile gained a baked-in `busybox-arm64` initrd payload + `cpio` this
-> session and was rebuilt locally (image id `fadc8f24a05a`), but the container
-> was **not** re-pushed to the registry, so `container.pin` still holds the
-> previous digest (`sha256:98fed4f9…`). Re-pin on the next deliberate
-> container-publish pass (natural fit for M1.E's CI hardening): push the rebuilt
-> container, then `docker inspect … RepoDigests` → write the new
-> `image@sha256:` line into `container.pin` in one commit. The local rebuild is
-> what every initrd/image build this session ran against; reproducibility of the
-> *initrd artifact* is already verified (`logs/m1b-initrd-build-verification.txt`).
+`container.pin` was re-pinned on 2026-09-22 after publishing the dtschema-enabled
+`10.3-2021.07-bookworm-rust-1.88.0-r4` container. Its current registry digest is
+`sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e`.
 
 ## Fallback if the container becomes burdensome
 
