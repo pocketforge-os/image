@@ -15,6 +15,8 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
+grep -F '[ "${PF_LAUNCHER_SHA}" = "2ebc09145b975f55bc690758a8fee8ee92738969" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }' "$dockerfile" >/dev/null
+grep -F '[ "${PF_RUNTIME_SHA}" = "b5b6559b354ed6ddf033141f867c8ff74b650409" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }' "$dockerfile" >/dev/null
 
 scratch=$(mktemp -d)
 trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT HUP INT TERM

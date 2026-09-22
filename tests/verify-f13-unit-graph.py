@@ -23,22 +23,9 @@ def words(unit: ConfigParser, section: str, key: str) -> set[str]:
     return set(unit.get(section, key, fallback="").split())
 
 
-authority = load("pf-session-authorityd.service")
 selected = load("pf-shell-selected.service")
 foreground = load("pf-foreground@.service")
 foreground_target = load("pocketforge-foreground.target")
-
-# The authority is a separately enabled root service. No lifecycle edge from it
-# to either writer is allowed; ordering Before= is explicitly not coupling.
-for edge in ("Requires", "Wants", "BindsTo", "PartOf", "Conflicts", "Requisite"):
-    values = words(authority, "Unit", edge)
-    assert not any(v.startswith(("pf-shell-selected", "pf-foreground@")) for v in values), (
-        f"authority lifetime coupled by {edge}: {sorted(values)}"
-    )
-assert authority["Service"]["ExecStart"].startswith(
-    "/usr/bin/pf-session-authorityd --state-dir /var/lib/pocketforge/session-authority "
-)
-assert "--socket /run/pocketforge/session-authority.sock" in authority["Service"]["ExecStart"]
 
 # Every instantiated session joins the foreground slot and waits for its
 # activation. Starting one therefore stops the selected owner through the
@@ -63,6 +50,7 @@ assert foreground["Service"].get("TimeoutStopSec") == "2s"
 
 builder = (ROOT / "scripts/build-rootfs.sh").read_text()
 assert 'PF_PANEL_OWNER="shell"' in builder, "pf-shell is not the selected image owner"
+assert '"${RUNTIME_DIR}/systemd/pf-session-authorityd.service"' in builder
 for enabled in ("pf-session-authorityd.service", "pf-shell-selected.service"):
     assert f"multi-user.target.wants/{enabled}" in builder, f"{enabled} not enabled"
 

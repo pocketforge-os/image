@@ -970,7 +970,11 @@ if [ -f "${SHELL_BIN}" ] || [ -f "${AUTHORITY_BIN}" ]; then
     done
     install -D -m 0755 "${SHELL_BIN}" "${ROOTFS}/usr/bin/pf-shell"
     install -D -m 0755 "${AUTHORITY_BIN}" "${ROOTFS}/usr/bin/pf-session-authorityd"
-    for unit in pf-session-authorityd.service pf-foreground@.service pf-shell-selected.service; do
+    install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-session-authorityd.service" \
+        "${ROOTFS}/etc/systemd/system/pf-session-authorityd.service"
+    install -D -m 0644 "${RUNTIME_DIR}/tmpfiles.d/pocketforge.conf" \
+        "${ROOTFS}/usr/lib/tmpfiles.d/pocketforge.conf"
+    for unit in pf-foreground@.service pf-shell-selected.service; do
         install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/${unit}" \
             "${ROOTFS}/etc/systemd/system/${unit}"
     done
@@ -990,7 +994,7 @@ if [ -f "${PREFSD_BIN}" ]; then
     prefsd_em="$(od -An -tx1 -j18 -N2 "${PREFSD_BIN}" | tr -d ' ')"
     [ "${prefsd_em}" = "b700" ] || { echo "FATAL: ${PREFSD_BIN} is not an aarch64 ELF (e_machine=${prefsd_em}, want b700)" >&2; exit 1; }
     install -D -m 0755 "${PREFSD_BIN}" "${ROOTFS}/usr/bin/pf-prefsd"
-    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-prefsd.service" \
+    install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-prefsd.service" \
         "${ROOTFS}/etc/systemd/system/pf-prefsd.service"
     install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-broker.service.d/10-prefsd.conf" \
         "${ROOTFS}/etc/systemd/system/pf-broker.service.d/10-prefsd.conf"
