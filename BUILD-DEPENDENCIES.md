@@ -46,6 +46,23 @@ package, which is unique per snapshot date).
 | `python3` | bookworm | scripting glue |
 | `binutils-aarch64-linux-gnu` | bookworm | `aarch64-linux-gnu-readelf` for the symver gate |
 
+### Devicetree schema validation
+
+| Item | Version / pin | Provenance |
+|---|---|---|
+| `dtschema` | `2025.8` | PyPI wheel; SHA-256 `772e8e5016d4603a4fb83f1d07393bff79b5dedd6485a3aa3d3f46ca89e05099` verified in Dockerfile |
+| `python3-jsonschema` | `4.10.3-1` | bookworm snapshot |
+| `python3-libfdt` | `1.6.1-4+b1` | bookworm snapshot |
+| `python3-rfc3987` | `1.3.8-2` | bookworm snapshot |
+| `python3-ruamel.yaml` | `0.17.21-1` | bookworm snapshot |
+| `python3-yaml` | `6.0-3+b2` | bookworm snapshot |
+
+The dtschema wheel is installed with `--no-deps`; all runtime dependencies
+come from the same `APT_SNAPSHOT_DATE` as the rest of the image. The container
+build gate runs `dt-doc-validate --version` and validates
+`build/tests/known-good-binding.yaml`, so a missing or incompatible dependency
+fails publication rather than a downstream kernel build.
+
 ### Image composition (Phase 1 M1.B + M1.E)
 
 | Package | Source | Min version | Notes |
