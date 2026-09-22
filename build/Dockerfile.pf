@@ -387,10 +387,11 @@ FROM ubuntu:24.04@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adb
 COPY --from=gpu-um-src scripts/install-mesa-buildenv.sh /usr/local/src/install-mesa-buildenv.sh
 RUN <<'GPUUMTOOLCHAIN'
 set -eux
-# The interactive installer's own `rm -f` cleanup step is stripped (same edit
-# gpu-um-tsp's own Dockerfile makes) so its intermediate apt/tool state stays
-# available to this Docker layer rather than being deleted mid-script.
-sed -i '/rm -f/d' /usr/local/src/install-mesa-buildenv.sh
+# Strip only the EXIT trap that deletes the downloaded LLVM key so the key
+# survives into this layer. A blanket `rm -f` deletion hollows conditional
+# bodies and makes the script invalid; match gpu-um-tsp's
+# docker/Dockerfile.ge8300-mesa-cross transform.
+sed -i '/^trap .rm -f -- /d' /usr/local/src/install-mesa-buildenv.sh
 /usr/local/src/install-mesa-buildenv.sh
 sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
 sed -i 's/^deb \[/deb [arch=amd64 /' /etc/apt/sources.list.d/llvm-20.list

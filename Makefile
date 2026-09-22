@@ -53,6 +53,11 @@ generate-wifi-config:
 		rm -f "$(WIFI_TXT)"; \
 	fi
 
+# ---- hermetic build-file tests ----------------------------------------------
+.PHONY: test-dockerfile-pf-transforms
+test-dockerfile-pf-transforms:
+	@tests/test-dockerfile-pf-transforms.sh
+
 # ---- clean ------------------------------------------------------------------
 .PHONY: clean clean-all
 clean clean-all:
@@ -71,6 +76,7 @@ help:
 	@echo ""
 	@echo "  Dev helpers:"
 	@echo "    generate-wifi-config  Stage boards/tsp/boot-resource/wifi.txt from PF_WIFI_PSK/keyring"
+	@echo "    test-dockerfile-pf-transforms  Test Dockerfile source transforms (no Docker/network)"
 	@echo ""
 	@echo "  Cleanup:"
 	@echo "    clean / clean-all     Remove the work/ directory"
