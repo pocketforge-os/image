@@ -379,12 +379,16 @@ cat /out/.pf-gpu-um-provenance
 GPUUMDDK
 
 # --- 1/5 toolchain: Ubuntu 24.04 (native x86_64) + the arm64 cross toolchain + LLVM 20 ---
-# Same base image digest as gpu-um-tsp's own docker/Dockerfile.ge8300-mesa-cross. Do NOT
-# add --platform=linux/arm64 anywhere in this subgraph: every program this recipe executes
-# is x86_64 (the "native precompilers" stage below is the whole reason a cross build needs
-# a native pass at all — mesa_clc/pco_clc/vtn_bindgen2 run at BUILD time, not on-device).
+# Keep the load-bearing toolchain settings aligned with gpu-um-tsp's
+# docker/Dockerfile.ge8300-mesa-cross at 0dc9d15a. Do NOT add
+# --platform=linux/arm64 anywhere in this subgraph: every program this recipe executes is
+# x86_64 (the "native precompilers" stage below is the whole reason a cross build needs a
+# native pass at all — mesa_clc/pco_clc/vtn_bindgen2 run at BUILD time, not on-device).
 FROM ubuntu:24.04@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb AS gpu-um-toolchain
 COPY --from=gpu-um-src scripts/install-mesa-buildenv.sh /usr/local/src/install-mesa-buildenv.sh
+# snapshot.ubuntu.com requires Ubuntu Pro for /ubuntu-ports/, so using a
+# snapshot for amd64 while arm64 comes from the live archive breaks Multi-Arch packages.
+ENV MESA_UBUNTU_SNAPSHOT=none
 RUN <<'GPUUMTOOLCHAIN'
 set -eux
 # Strip only the EXIT trap that deletes the downloaded LLVM key so the key
@@ -401,6 +405,7 @@ printf '%s\n' \
   'Suites: noble noble-updates noble-backports noble-security' \
   'Components: main universe restricted multiverse' \
   'Architectures: arm64' \
+  'Snapshot: no' \
   'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
   >/etc/apt/sources.list.d/ubuntu-arm64.sources
 dpkg --add-architecture arm64
