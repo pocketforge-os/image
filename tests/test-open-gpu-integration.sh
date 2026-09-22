@@ -26,6 +26,10 @@ if grep -F 'pf-take-panel' "$gate" >/dev/null || grep -F 'systemctl' "$gate" >/d
     exit 1
 fi
 grep -F 'Before=pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service' "$unit" >/dev/null
+if grep -Eq '^[[:space:]]*(Condition|Assert)[A-Za-z]*=' "$unit"; then
+    echo 'open GPU gate must not skip on a missing required artifact' >&2
+    exit 1
+fi
 grep -F 'multi-user.target.wants/pf-open-gpu-gate.service' "$customize" >/dev/null
 grep -Fx 'Requires=pf-open-gpu-gate.service' "$required" >/dev/null
 grep -Fx 'After=pf-open-gpu-gate.service' "$required" >/dev/null
