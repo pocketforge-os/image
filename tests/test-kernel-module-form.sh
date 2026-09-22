@@ -29,4 +29,28 @@ fi
 grep -F "videobuf2-dma-contig.ko not found as a module under ${release_dir}" "${scratch}/missing.err" >/dev/null
 grep -F "or as a built-in in ${builtin_file}" "${scratch}/missing.err" >/dev/null
 
+# Exercise the real assemble-stage initrd input check. Open kernels need not
+# provide a loadable VB2 object because the initrd omits it and the rootfs uses
+# the built-in implementation. The deliberately absent busybox stops the build
+# immediately after its input checks, keeping this regression hermetic.
+assemble_kernel_dir="${scratch}/assemble-kernel"
+assemble_release_dir="${assemble_kernel_dir}/lib/modules/6.18.0-pocketforge"
+mkdir -p "${assemble_release_dir}"
+printf 'kernel/drivers/media/common/videobuf2/videobuf2-dma-contig.ko\n' \
+    > "${assemble_release_dir}/modules.builtin"
+if PF_GPU_MODEL=open BUSYBOX_ARM64="${scratch}/absent-busybox" \
+    bash "${repo_dir}/boards/tsp/initrd/build-initrd.sh" \
+        --src "${repo_dir}" \
+        --kernel-tsp-dir "${assemble_kernel_dir}" \
+        --gpu-km-dir "${scratch}/unused-gpu-km" \
+        --out "${scratch}/unused-initrd.gz" \
+        >"${scratch}/assemble.out" 2>"${scratch}/assemble.err"; then
+    echo 'FAIL: assemble-stage fixture unexpectedly built an initrd' >&2
+    exit 1
+fi
+grep -F "videobuf2 (builtin): ${assemble_release_dir}/modules.builtin" \
+    "${scratch}/assemble.out" >/dev/null
+grep -F "FATAL: baked busybox not found at ${scratch}/absent-busybox" \
+    "${scratch}/assemble.err" >/dev/null
+
 echo 'kernel-module-form=PASS'
