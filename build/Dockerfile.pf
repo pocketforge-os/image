@@ -507,14 +507,63 @@ GPUUMNATIVE
 # byte-identical compare is gpu-um-tsp's OWN reproducibility self-check (the SAME
 # sha256/cmp gate build-ge8300-mesa-cross.sh's caller relies on), kept verbatim: a
 # non-reproducible cross build here would silently ship a different binary than CI proved.
+# Produce a Bookworm cross-toolchain/sysroot payload from the same digest-pinned,
+# snapshot-configured container used for the rootfs.  Its x86_64 compiler runs on
+# Noble (newer glibc), while every target header/startfile/library remains Debian
+# Bookworm.  Keeping the actual build in the Noble stage is necessary because the
+# already-built native Mesa precompilers require Noble's host glibc.
+FROM ${PF_CONTAINER} AS gpu-um-bookworm-sysroot
+RUN <<'GPUUMSYSROOT'
+set -eux
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
+  libdrm-dev:arm64 libvulkan-dev:arm64
+mkdir -p /bookworm-toolchain/usr/bin /bookworm-toolchain/usr/lib /bookworm-toolchain/usr/include
+cp -a /usr/bin/aarch64-linux-gnu-* /bookworm-toolchain/usr/bin/
+cp -a /usr/lib/gcc-cross /bookworm-toolchain/usr/lib/
+cp -a /usr/lib/aarch64-linux-gnu /bookworm-toolchain/usr/lib/
+cp -a /usr/aarch64-linux-gnu /bookworm-toolchain/usr/
+for headers in drm libdrm vulkan; do
+  [ ! -e "/usr/include/${headers}" ] || cp -a "/usr/include/${headers}" /bookworm-toolchain/usr/include/
+done
+dpkg-query -W > /bookworm-toolchain/toolchain-packages.txt
+cp /etc/pocketforge-apt-snapshot-date /bookworm-toolchain/apt-snapshot-date
+printf 'libc6-dev=%s\ngcc=%s\n' \
+  "$(dpkg-query -W -f='${Version}' libc6-dev:arm64)" \
+  "$(aarch64-linux-gnu-gcc -dumpfullversion)" \
+  > /bookworm-toolchain/target-toolchain.txt
+GPUUMSYSROOT
+
 FROM gpu-um-native-precompilers AS gpu-um-build
 WORKDIR /src
 ARG SOURCE_DATE_EPOCH
 ARG PF_GPU_UM_SHA
+COPY --from=gpu-um-bookworm-sysroot /bookworm-toolchain/usr /opt/bookworm-toolchain/usr
+COPY --from=gpu-um-bookworm-sysroot /bookworm-toolchain/toolchain-packages.txt /toolchain-packages.txt
+COPY --from=gpu-um-bookworm-sysroot /bookworm-toolchain/apt-snapshot-date /bookworm-apt-snapshot-date
+COPY --from=gpu-um-bookworm-sysroot /bookworm-toolchain/target-toolchain.txt /bookworm-target-toolchain.txt
 COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
 ENV PATH=/opt/mesa-native/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN --mount=type=cache,id=ge8300-mesa-cross-ccache,target=/root/.cache/ccache,sharing=locked <<'GPUUMBUILD'
 set -eux
+# Replace, rather than overlay, Noble's target compiler/sysroot so no unowned
+# 2.38 startfile or library can survive under a Bookworm filename.
+find /usr/bin -maxdepth 1 -name 'aarch64-linux-gnu-*' -delete
+for path in /usr/lib/gcc-cross /usr/lib/aarch64-linux-gnu /usr/aarch64-linux-gnu; do
+  [ ! -e "$path" ] || { find "$path" -depth -delete; rmdir "$path" 2>/dev/null || true; }
+done
+cp -a /opt/bookworm-toolchain/usr/bin/aarch64-linux-gnu-* /usr/bin/
+cp -a /opt/bookworm-toolchain/usr/lib/gcc-cross /usr/lib/
+cp -a /opt/bookworm-toolchain/usr/lib/aarch64-linux-gnu /usr/lib/
+cp -a /opt/bookworm-toolchain/usr/aarch64-linux-gnu /usr/
+for headers in drm libdrm vulkan; do
+  [ ! -e "/usr/include/${headers}" ] || { find "/usr/include/${headers}" -depth -delete; rmdir "/usr/include/${headers}" 2>/dev/null || true; }
+  [ ! -e "/opt/bookworm-toolchain/usr/include/${headers}" ] || cp -a "/opt/bookworm-toolchain/usr/include/${headers}" /usr/include/
+done
+# Point target pkg-config exclusively at the imported Bookworm multiarch tree.
+sed -i 's|^export PKG_CONFIG_LIBDIR=.*|export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig|' \
+  /usr/local/bin/aarch64-linux-gnu-pkg-config
 start="$(date +%s)"
 for pass in 1 2; do
   build_dir=build-cross
@@ -553,6 +602,9 @@ install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
 # staged artifact paths + hashes rather than a hand-picked subset.
 {
   printf 'gpu-um-tsp@%s (open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)\n' "${PF_GPU_UM_SHA}"
+  printf 'target_abi=debian-bookworm snapshot=%s %s meson=%s\n' \
+    "$(cat /bookworm-apt-snapshot-date)" \
+    "$(tr '\n' ' ' </bookworm-target-toolchain.txt)" "$(meson --version)"
   find /instroot/usr/local -type f \( -name '*.so*' -o -name '*.json' \) -printf '%P\n' | LC_ALL=C sort | while read -r f; do
     printf '  %s sha256=%s\n' "${f}" "$(sha256sum "/instroot/usr/local/${f}" | cut -d' ' -f1)"
   done

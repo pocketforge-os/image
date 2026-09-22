@@ -381,6 +381,13 @@ else
     echo "[customize] open Mesa: Vulkan loader present at ${VULKAN_LOADER#"${ROOTFS}"}"
 fi
 
+# Foreign-stage ABI tripwire.  Check the producer trees themselves so every ELF
+# copied from a build stage is covered, including files not installed by this
+# variant.  The ceilings are read from this just-created rootfs, never hardcoded.
+"${SRC_DIR}/build/check-rootfs-abi.sh" "${ROOTFS}" \
+    "${GPU_UM_MESA_DIR}" "${LIBSDL3_DIR}" "${WPA_DIR}" \
+    "${RUNTIME_DIR}" "${LAUNCHER_DIR}" "${HWPROBE_DIR}" "${RECOVERY_DIR:-/work/recovery}"
+
 # --- Kernel modules install --------------------------------------------------
 echo "[customize] Installing kernel modules..."
 

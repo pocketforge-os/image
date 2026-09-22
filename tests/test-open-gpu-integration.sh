@@ -29,6 +29,10 @@ grep -F 'submit=ok' "$probe" >/dev/null
 grep -F 'COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe' "$dockerfile" >/dev/null
 grep -F 'install -D -m 0755 /work/gpu-um-mesa/usr/lib/pocketforge/open-gpu-probe' "$customize" >/dev/null
 grep -F 'libvulkan-dev:arm64' "$dockerfile" >/dev/null
+grep -F 'AS gpu-um-bookworm-sysroot' "$dockerfile" >/dev/null
+grep -F 'target_abi=debian-bookworm' "$dockerfile" >/dev/null
+grep -F 'build/check-rootfs-abi.sh' "$customize" >/dev/null
+grep -F 'GPU_UM_MESA_DIR' "$customize" >/dev/null
 # The open-model install block is shared by release and dev construction. Keep
 # the production probe outside every POCKETFORGE_VARIANT conditional.
 probe_install_block="$(sed -n '/# Open Mesa GLES\/EGL\/GBM userspace/,/open Mesa: userspace install verified/p' "$customize")"
