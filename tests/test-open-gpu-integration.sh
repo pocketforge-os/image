@@ -29,6 +29,14 @@ grep -F 'submit=ok' "$probe" >/dev/null
 grep -F 'COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe' "$dockerfile" >/dev/null
 grep -F 'install -D -m 0755 /work/gpu-um-mesa/usr/lib/pocketforge/open-gpu-probe' "$customize" >/dev/null
 grep -F 'libvulkan-dev:arm64' "$dockerfile" >/dev/null
+# The open-model install block is shared by release and dev construction. Keep
+# the production probe outside every POCKETFORGE_VARIANT conditional.
+probe_install_block="$(sed -n '/# Open Mesa GLES\/EGL\/GBM userspace/,/open Mesa: userspace install verified/p' "$customize")"
+printf '%s\n' "$probe_install_block" | grep -F 'open-gpu-probe' >/dev/null
+if printf '%s\n' "$probe_install_block" | grep -F 'POCKETFORGE_VARIANT' >/dev/null; then
+    echo 'open GPU probe install must not be variant-gated' >&2
+    exit 1
+fi
 if grep -Eq 'testgles2|SDL_VIDEODRIVER|pf-take-panel|systemctl|fb0|boot-animator|foreground' "$gate"; then
     echo 'open GPU gate must not reference display machinery or dev diagnostics' >&2
     exit 1
