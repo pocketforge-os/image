@@ -7,14 +7,20 @@ label=${2:-tree}
 [ -d "$root" ] || { echo "FATAL: gpu_model=none verification root missing: $root" >&2; exit 2; }
 
 if [ "${PF_GPU_MODEL:-none}" = "none" ]; then
+    # libvulkan.so is the vendor-neutral dispatch loader, not a GPU driver.  It
+    # may arrive transitively (for example ffmpeg -> libavfilter -> libplacebo)
+    # and cannot expose hardware without an installed ICD.  Reject the actual
+    # capability-bearing boundary instead: ICD manifests, DRI drivers, vendor
+    # userspace, kernel modules, and firmware.
     found=$(
         find "$root" \
             \( \
-                \( -type d \( -path '*/lib/firmware/powervr' -o -path '*/usr/lib/pvr-rogue' -o -path '*/vulkan/icd.d' \) \) -o \
+                \( -type d \( -path '*/lib/firmware/powervr' -o -path '*/usr/lib/pvr-rogue' \) \) -o \
                 \( -type f \( \
                     -name 'pvrsrvkm.ko' -o -name 'dc_sunxi.ko' -o -name 'powervr.ko' -o \
                     -name 'rgx.fw*' -o -name 'rgx.sh*' -o -name 'rogue*.fw' -o \
-                    -name 'libvulkan.so*' -o -name 'libvulkan_powervr*' -o \
+                    -path '*/vulkan/icd.d/*' -o -path '*/dri/*.so*' -o \
+                    -name 'libvulkan_powervr*' -o \
                     -name 'libsrv_um.so*' -o -name 'libIMGegl.so*' -o \
                     -name 'libSDL3-pocketforge.so*' -o -name 'LICENSE.powervr' -o \
                     -name 'pf-shell' -o -name 'pocketforge-recovery-entry' \

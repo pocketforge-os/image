@@ -33,11 +33,16 @@ echo 'PASS: none rootfs installs the discovered kernel release and rejects GPU a
 tmpdir=$(mktemp -d)
 trap 'find "$tmpdir" -mindepth 1 -delete; rmdir "$tmpdir"' EXIT
 mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
+    "$tmpdir/clean/usr/lib/aarch64-linux-gnu" \
+    "$tmpdir/clean/usr/share/vulkan/icd.d" \
     "$tmpdir/file-dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination" \
-    "$tmpdir/directory-dirty/usr/share/vulkan/icd.d"
+    "$tmpdir/directory-dirty/usr/share/vulkan/icd.d" \
+    "$tmpdir/driver-dirty/usr/lib/aarch64-linux-gnu/dri"
 : >"$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc/sunxi-mmc.ko"
+: >"$tmpdir/clean/usr/lib/aarch64-linux-gnu/libvulkan.so.1.3.239"
 : >"$tmpdir/file-dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination/powervr.ko"
 : >"$tmpdir/directory-dirty/usr/share/vulkan/icd.d/software-renderer.json"
+: >"$tmpdir/driver-dirty/usr/lib/aarch64-linux-gnu/dri/unlisted_vendor_dri.so"
 PF_GPU_MODEL=none "$verifier" "$tmpdir/clean" test-fixture >/dev/null
 if PF_GPU_MODEL=none "$verifier" "$tmpdir/file-dirty" test-fixture >/dev/null 2>&1; then
     echo 'FAIL: none-model verifier accepted nested powervr.ko' >&2
@@ -47,7 +52,12 @@ if PF_GPU_MODEL=none "$verifier" "$tmpdir/directory-dirty" test-fixture >/dev/nu
     echo 'FAIL: none-model verifier accepted a forbidden Vulkan ICD directory' >&2
     exit 1
 fi
-echo 'PASS: none-model negative controls reject forbidden GPU files and directories'
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted an unlisted Mesa DRI driver' >&2
+    exit 1
+fi
+echo 'PASS: none-model permits the vendor-neutral Vulkan loader without an ICD'
+echo 'PASS: none-model negative controls reject nested powervr.ko, ICD manifests, and DRI drivers'
 
 # Execute the generated hook's exact none-model epilogue with SRC_DIR absent.
 # The verifier wrapper records that the real call is reached before delegating.
