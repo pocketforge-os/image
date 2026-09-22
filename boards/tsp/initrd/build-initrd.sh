@@ -61,6 +61,9 @@ case "${PF_GPU_MODEL}" in
     *) echo "build-initrd.sh: --gpu-model must be ddk|open (got '${PF_GPU_MODEL}')" >&2; exit 2 ;;
 esac
 
+# shellcheck source=scripts/kernel-module-form.sh
+source "${SRC_DIR}/scripts/kernel-module-form.sh"
+
 # Determine substrate mode from args
 SUBSTRATE="vendor"
 if [ -n "$KERNEL_TSP_DIR" ] && [ -n "$GPU_KM_DIR" ]; then
@@ -80,13 +83,15 @@ if [ "$SUBSTRATE" = "owned" ]; then
         KERNEL_MODULES_ROOT="${KERNEL_TSP_DIR}/lib/modules"
         KERNEL_RELEASE_DIR="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d | head -1)"
         [ -n "${KERNEL_RELEASE_DIR}" ] || { echo "FATAL: no kernel release dir under ${KERNEL_MODULES_ROOT}" >&2; exit 1; }
-        KERNEL_VB2="$(find "${KERNEL_RELEASE_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+        IFS=$'\t' read -r KERNEL_VB2_FORM KERNEL_VB2 \
+            < <(kernel_module_form "${KERNEL_RELEASE_DIR}" videobuf2-dma-contig)
     else
         KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
+        [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp build tree" >&2; exit 1; }
+        KERNEL_VB2_FORM=module
     fi
-    [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp build tree" >&2; exit 1; }
 
-    echo "  videobuf2: ${KERNEL_VB2}"
+    echo "  videobuf2 (${KERNEL_VB2_FORM}): ${KERNEL_VB2}"
     if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         # Closed GPU modules from gpu-km-tsp.
         GPU_PVRSRVKM="${GPU_KM_DIR}/pvrsrvkm.ko"
