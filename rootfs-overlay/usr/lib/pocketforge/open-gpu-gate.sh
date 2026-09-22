@@ -5,6 +5,7 @@ set -eu
 fw=/lib/firmware/powervr/rogue_22.102.54.38_v1.fw
 provenance=/usr/lib/pocketforge/gpu-fw-provenance
 probe=/usr/lib/pocketforge/open-gpu-probe
+export PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1
 
 [ -d /sys/module/powervr ] || { echo "PF-OPEN-GPU FAIL: powervr is not loaded" >&2; exit 1; }
 [ -e /dev/dri/renderD128 ] || { echo "PF-OPEN-GPU FAIL: /dev/dri/renderD128 is absent" >&2; exit 1; }
@@ -23,6 +24,9 @@ km="$(modinfo -F version powervr 2>/dev/null || true)"
 [ -n "$km" ] || km=unknown
 
 probe_result="$(timeout 15s "$probe")" || {
+    if [ -z "${PVR_I_WANT_A_BROKEN_VULKAN_DRIVER:-}" ]; then
+        echo "PF-OPEN-GPU HINT: set PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1" >&2
+    fi
     echo "PF-OPEN-GPU FAIL: Vulkan submission probe failed" >&2
     exit 1
 }

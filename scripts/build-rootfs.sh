@@ -1057,10 +1057,22 @@ install -m 0755 "/work/src/rootfs-overlay/usr/bin/pf-take-panel" \
     "${ROOTFS}/usr/bin/pf-take-panel"
 
 if [ "${PF_GPU_MODEL}" = "open" ]; then
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf" \
+        "${ROOTFS}/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf" \
+        "${ROOTFS}/etc/environment.d/50-pocketforge-open-gpu.conf"
+    install -D -m 0755 "/work/src/rootfs-overlay/etc/profile.d/pocketforge-open-gpu.sh" \
+        "${ROOTFS}/etc/profile.d/pocketforge-open-gpu.sh"
     install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/open-gpu-gate.sh" \
         "${ROOTFS}/usr/lib/pocketforge/open-gpu-gate.sh"
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service" \
         "${ROOTFS}/etc/systemd/system/pf-open-gpu-gate.service"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf" \
+        "${ROOTFS}/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf" \
+        "${ROOTFS}/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf" \
+        "${ROOTFS}/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf"
     ln -sf ../pf-open-gpu-gate.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-open-gpu-gate.service"
     for ui_unit in pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
