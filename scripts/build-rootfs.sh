@@ -452,9 +452,11 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.sh.22.102.54.38" "${ROOTFS}/lib/firmware/"
 else
     OPEN_FW=/work/gpu-fw-tsp/rogue_22.102.54.38_v1.fw
-    [ -f "${OPEN_FW}" ] || { echo "FATAL: source-built open GPU firmware missing: ${OPEN_FW}" >&2; exit 1; }
+    [ -f "${OPEN_FW}" ] || { echo "FATAL: unmodified open GPU firmware missing: ${OPEN_FW}" >&2; exit 1; }
     install -D -m 0644 "${OPEN_FW}" \
         "${ROOTFS}/lib/firmware/powervr/rogue_22.102.54.38_v1.fw"
+    install -D -m 0644 /work/gpu-fw-tsp/LICENSE.powervr \
+        "${ROOTFS}/lib/firmware/powervr/LICENSE.powervr"
     install -D -m 0644 /work/gpu-fw-tsp/.pf-gpu-fw-provenance \
         "${ROOTFS}/usr/lib/pocketforge/gpu-fw-provenance"
 fi
@@ -1039,6 +1041,13 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
         "${ROOTFS}/etc/systemd/system/pf-open-gpu-gate.service"
     ln -sf ../pf-open-gpu-gate.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-open-gpu-gate.service"
+    for ui_unit in pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
+        dropin="${ROOTFS}/etc/systemd/system/${ui_unit}.d"
+        install -d "${dropin}"
+        install -m 0644 \
+            "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf" \
+            "${dropin}/20-open-gpu-required.conf"
+    done
 fi
 
 install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"

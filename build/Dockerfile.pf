@@ -91,6 +91,10 @@ ARG PF_BLOBS_SHA               # provenance marker for the fallback path
 # manifest.toml + fetch-group.py from the pinned vendor-manifest (git-archive build context;
 # context root = repo root, so fetch-group.py is at scripts/). Both land in /work/vm/ by basename.
 COPY --from=vendor-manifest-src manifest.toml scripts/fetch-group.py /work/vm/
+# Redistributable inputs live in the committed public tree rather than the
+# private vendor-originals CAR. Import them with the manifest's pinned UnixFS
+# profile; fetch-group remains the fail-closed CID + sha256 verifier.
+COPY --from=vendor-manifest-src public /work/vm/public
 # the CARv2 of the vendor originals (content-addressed; CIDs unchanged by the path reorg):
 COPY --from=blobs-car vendor-originals.car /work/vendor-originals.car
 # merge-1 fallback source (git tree of binaries at sunxi/a133/…); dropped after the strip merges:
@@ -102,6 +106,8 @@ RUN set -eux; \
       export IPFS_PATH=/work/ipfs; \
       ipfs init --profile server >/dev/null; \
       ipfs dag import --pin-roots=false /work/vendor-originals.car; \
+      find /work/vm/public -type f -exec ipfs add --cid-version=1 --raw-leaves \
+        --chunker=size-1048576 --pin -Q {} \; ; \
       for g in $(echo "${PF_BLOB_GROUPS}" | tr ' ' '\n' | sort); do \
         python3 /work/vm/fetch-group.py --manifest /work/vm/manifest.toml \
           --group "$g" --out /out --offline ; \
@@ -336,16 +342,15 @@ cat /out/modules/.pf-gpu-provenance
 GPUKM
 
 # =============================================================================
-# gpu-fw — reproducibly transform the preserved upstream Rogue firmware through
-# gpu-fw-tsp's committed CW04 recipe. The input is fetched by content hash in the
-# fetch stage; neither the preserved original nor the generated image is copied
-# from a bench bundle.
+# gpu-fw — stage the unmodified, redistributable open Rogue firmware fetched
+# from vendor-manifest's public tree. LICENSE.powervr permits redistribution
+# without modification, so the instrumented CW04 bench transform is excluded.
 # =============================================================================
 FROM ${PF_CONTAINER} AS gpu-fw
 ARG PF_GPU_MODEL
-ARG PF_GPU_FW_SHA=
-COPY --from=gpu-fw-src . /work/gpu-fw
+ARG PF_VENDOR_MANIFEST_SHA
 COPY --from=fetch /out /work/blobs
+COPY --from=vendor-manifest-src LICENSE.powervr /work/vendor-manifest/LICENSE.powervr
 RUN <<'GPUFW'
 set -eux
 mkdir -p /out
@@ -353,17 +358,19 @@ if [ "${PF_GPU_MODEL}" != "open" ]; then
   printf 'gpu-fw NOT-SHIPPED (gpu_model=%s)\n' "${PF_GPU_MODEL}" > /out/.pf-gpu-fw-provenance
   exit 0
 fi
-: "${PF_GPU_FW_SHA:?}"
-input=/work/blobs/sunxi/a133/22.102.54.38/firmware/rogue_22.102.54.38_v1.fw
-output=/out/rogue_22.102.54.38_v1.fw
-[ -f "$input" ] || { echo "GPU FW FAIL: preserved open firmware input missing: $input"; exit 1; }
-python3 /work/gpu-fw/experiments/config-window-diff/build_cfgwin_bundle.py open "$input" "$output"
-actual="$(sha256sum "$output" | cut -d' ' -f1)"
-expected=f902bbfeddfcae95e9202006f9cd86ade05c6f33b11d9763c4db260351f42610
-[ "$actual" = "$expected" ] || { echo "GPU FW FAIL: CW04 sha256 $actual != $expected"; exit 1; }
+input=/work/blobs/sunxi/a133/fw-open-22.102.54.38/rogue_22.102.54.38_v1.fw
+license=/work/vendor-manifest/LICENSE.powervr
+[ -f "$input" ] || { echo "GPU FW FAIL: unmodified open firmware missing: $input"; exit 1; }
+[ -f "$license" ] || { echo "GPU FW FAIL: required LICENSE.powervr missing: $license"; exit 1; }
+actual="$(sha256sum "$input" | cut -d' ' -f1)"
+expected=b571cdd90312c20fe87f14aae43484f7279859921ae3abe58e935412040c7f98
+[ "$actual" = "$expected" ] || { echo "GPU FW FAIL: firmware sha256 $actual != $expected"; exit 1; }
+[ "$(wc -c < "$input")" -eq 118784 ] || { echo "GPU FW FAIL: firmware size is not 118784 bytes"; exit 1; }
+cp "$input" /out/rogue_22.102.54.38_v1.fw
+cp "$license" /out/LICENSE.powervr
 {
-  printf 'gpu-fw gpu-fw-tsp@%s\n' "${PF_GPU_FW_SHA}"
-  printf 'path=/lib/firmware/powervr/rogue_22.102.54.38_v1.fw sha256=%s\n' "$actual"
+  printf 'gpu-fw group=pvr-fw-open-22.102.54.38 vendor-manifest@%s\n' "${PF_VENDOR_MANIFEST_SHA}"
+  printf 'path=/lib/firmware/powervr/rogue_22.102.54.38_v1.fw sha256=%s size=118784\n' "$actual"
 } > /out/.pf-gpu-fw-provenance
 cat /out/.pf-gpu-fw-provenance
 GPUFW
