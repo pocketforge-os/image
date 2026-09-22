@@ -61,23 +61,27 @@ test "$(resolve_packages dev open drm)" = "$expected_open_dev"
 for variant in release dev; do
     package_list=$(resolve_packages "$variant" open none)
     for forbidden in libavcodec59 libavutil57 libegl1 libepoxy0 libgbm1 libgles2 \
-        libwayland-egl1 ffmpeg libvdpau1 libvulkan1; do
+        libwayland-egl1 ffmpeg libvdpau1; do
         if printf '%s\n' "$package_list" | tr ',' '\n' | grep -Fxq "$forbidden"; then
             echo "FAIL: display_pipeline=none retained graphics package root $forbidden ($variant)" >&2
             exit 1
         fi
     done
 done
-echo 'PASS: display-less package sets omit every Mesa/EGL/GBM/GLES root while display-capable sets are byte-identical'
+echo 'PASS: display-less package sets omit every presentation/media graphics root while display-capable sets are byte-identical'
 
-# An open kernel/firmware bring-up is a valid display-less combination.  It must
-# not preflight or install the Mesa/SDL client trees whose Debian loader was
-# removed above; display-capable open builds retain those checks and installs.
-grep -F 'elif [ "${PF_GPU_MODEL}" = "open" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then' "$rootfs" >/dev/null
-grep -F 'elif [ "${PF_GPU_MODEL:-ddk}" = "open" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then' "$rootfs" >/dev/null
+# The Vulkan loader belongs to the GPU stack, not the presentation stack.  An
+# open + none image keeps libvulkan1, Mesa, its probe, and its boot gate for
+# headless/offscreen rendering while omitting only the SDL presentation client.
+for variant in release dev; do
+    package_list=$(resolve_packages "$variant" open none)
+    printf '%s\n' "$package_list" | tr ',' '\n' | grep -Fxq libvulkan1
+done
+grep -F 'elif [ "${PF_GPU_MODEL}" = "open" ]; then' "$rootfs" >/dev/null
+grep -F 'elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then' "$rootfs" >/dev/null
 test "$(grep -Fc 'if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then' "$rootfs")" -eq 2
 grep -F 'if [ "${PF_DISPLAY_PIPELINE}" != "none" ] && [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] &&' "$rootfs" >/dev/null
-echo 'PASS: open + none omits Mesa/SDL client installation while retaining the open kernel and firmware path'
+echo 'PASS: open + none keeps the headless GPU stack while omitting SDL presentation clients'
 
 mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
     "$tmpdir/clean/usr/lib/aarch64-linux-gnu" \

@@ -167,7 +167,7 @@ fi
 # providers pull Mesa's driver packages.  Both paths reach the complete Mesa DRI
 # driver set even though the codec packages look unrelated to display.
 if [ "${PF_DISPLAY_PIPELINE}" = "none" ]; then
-    DISPLAY_PACKAGE_ROOTS="libavcodec59 libavutil57 libegl1 libepoxy0 libgbm1 libgles2 libwayland-egl1 ffmpeg libvdpau1 libvulkan1"
+    DISPLAY_PACKAGE_ROOTS="libavcodec59 libavutil57 libegl1 libepoxy0 libgbm1 libgles2 libwayland-egl1 ffmpeg libvdpau1"
     for package in ${DISPLAY_PACKAGE_ROOTS}; do
         PKG_LIST="$(printf '%s\n' "${PKG_LIST}" | tr ',' '\n' |
             awk -v drop="${package}" '$0 != drop' | paste -sd, -)"
@@ -212,7 +212,7 @@ if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         "${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38"; do
         [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
     done
-elif [ "${PF_GPU_MODEL}" = "open" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
+elif [ "${PF_GPU_MODEL}" = "open" ]; then
     # Open GPU model (tsp-mc9m.41.924.6 / C4): verify the C1 gpu-um-mesa stage produced a
     # REAL install tree, not just its NOT-SHIPPED-for-ddk marker (which would mean the
     # Dockerfile's PF_GPU_MODEL/gpu-um-mesa-${PF_GPU_MODEL} selector picked the wrong stage).
@@ -366,7 +366,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
         exit 1
     fi
     echo "[customize] PowerVR DDK: SONAME symlinks verified (libEGL.so.1 exists)"
-elif [ "${PF_GPU_MODEL:-ddk}" = "open" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
+elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     # Open Mesa GLES/EGL/GBM userspace (tsp-mc9m.41.924.6 / C4): install the C1
     # gpu-um-mesa stage's FULL meson DESTDIR tree verbatim at the SAME prefix it was
     # built for (/usr/local) — the Zink DRI driver, gbm backend loader, and Vulkan ICD
