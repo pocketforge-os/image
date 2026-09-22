@@ -15,16 +15,14 @@ if [ "${PF_GPU_MODEL:-none}" = "none" ]; then
     found=$(
         find "$root" \
             \( \
-                \( -type d \( -path '*/lib/firmware/powervr' -o -path '*/usr/lib/pvr-rogue' \) \) -o \
-                \( -type f \( \
-                    -name 'pvrsrvkm.ko' -o -name 'dc_sunxi.ko' -o -name 'powervr.ko' -o \
-                    -name 'rgx.fw*' -o -name 'rgx.sh*' -o -name 'rogue*.fw' -o \
-                    -path '*/vulkan/icd.d/*' -o -path '*/dri/*.so*' -o \
-                    -name 'libvulkan_powervr*' -o \
-                    -name 'libsrv_um.so*' -o -name 'libIMGegl.so*' -o \
-                    -name 'libSDL3-pocketforge.so*' -o -name 'LICENSE.powervr' -o \
-                    -name 'pf-shell' -o -name 'pocketforge-recovery-entry' \
-                \) \) \
+                -path '*/lib/firmware/powervr' -o -path '*/usr/lib/pvr-rogue' -o \
+                -path '*/vulkan/icd.d/*' -o -path '*/dri/*.so*' -o \
+                -name 'pvrsrvkm.ko' -o -name 'dc_sunxi.ko' -o -name 'powervr.ko' -o \
+                -name 'rgx.fw*' -o -name 'rgx.sh*' -o -name 'rogue*.fw' -o \
+                -name 'libvulkan_powervr*' -o \
+                -name 'libsrv_um.so*' -o -name 'libIMGegl.so*' -o \
+                -name 'libSDL3-pocketforge.so*' -o -name 'LICENSE.powervr' -o \
+                -name 'pf-shell' -o -name 'pocketforge-recovery-entry' \
             \) -print -quit
     )
 
