@@ -249,6 +249,7 @@ elif [ "${PF_GPU_MODEL}" = "open" ]; then
 fi
 # WiFi firmware still from blobs (same firmware regardless of module name)
 [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
+[ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829_bt.bin" ] || { echo "FATAL: Bluetooth firmware not found in blobs" >&2; exit 1; }
 echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
 
 # Verify libSDL3 artifact exists. The sdl stage builds a real sunxifb .so for BOTH
@@ -511,6 +512,7 @@ fi
 install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin" "${ROOTFS}/lib/firmware/"
 install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/boot_xr829.bin" "${ROOTFS}/lib/firmware/"
 install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/sdd_xr829.bin" "${ROOTFS}/lib/firmware/"
+install -m 0644 "/work/blobs/sunxi/a133/wifi-firmware/fw_xr829_bt.bin" "${ROOTFS}/lib/firmware/"
 
 echo "[customize] Firmware: $(ls "${ROOTFS}/lib/firmware/" | wc -l) files"
 
@@ -1614,7 +1616,7 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
 "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${ROOTFS_EXTRACTED}"
 
 # Assert the signed Wi-Fi regulatory database is in the assembled filesystem,
-# and enforce the vendor-manifest non-redistribution decision for XR829 BT.
+# and enforce the owner-approved XR829 image-embedding policy.
 "${SRC_DIR}/scripts/verify-rootfs-firmware.sh" "${ROOTFS_EXTRACTED}"
 
 # Report rootfs size
