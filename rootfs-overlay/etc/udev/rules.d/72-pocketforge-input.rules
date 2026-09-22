@@ -1,0 +1,2 @@
+# Stable name for the gamepad created by pf-input-decode through uinput.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="TRIMUI Player1", ATTRS{id/vendor}=="045e", ATTRS{id/product}=="028e", SYMLINK+="input/pf-gamepad"

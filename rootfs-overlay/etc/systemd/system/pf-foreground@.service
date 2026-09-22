@@ -1,7 +1,7 @@
 [Unit]
 Description=PocketForge foreground session %i
 Wants=pf-prefsd.service
-After=dev-fb0.device pocketforge-foreground.target pf-prefsd.service pf-shell-selected.service
+After=dev-fb0.device pf-input-decode.service pocketforge-foreground.target pf-prefsd.service pf-shell-selected.service
 Requires=dev-fb0.device pocketforge-foreground.target
 Conflicts=pf-shell-selected.service pocketforge-boot-animator.service pocketforge-menu.service pocketforge-placeholder.service shutdown.target
 Before=shutdown.target
@@ -12,7 +12,8 @@ Type=simple
 User=gamer
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
 SupplementaryGroups=input video
-ExecStart=/usr/bin/pf-shell --fbdev --device /dev/fb0 --input /dev/input/event0 --state-dir /var/lib/pocketforge/sessions/%i
+ExecStartPre=/bin/sh -c 'i=0; while [ ! -e /dev/input/pf-gamepad ] && [ "$i" -lt 20 ]; do sleep 0.2; i=$((i + 1)); done; exit 0'
+ExecStart=/usr/bin/pf-shell --fbdev --device /dev/fb0 --input /dev/input/pf-gamepad --state-dir /var/lib/pocketforge/sessions/%i
 StateDirectory=pocketforge/sessions/%i
 KillSignal=SIGTERM
 TimeoutStopSec=2s

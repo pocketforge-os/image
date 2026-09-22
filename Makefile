@@ -57,6 +57,7 @@ generate-wifi-config:
 .PHONY: test-dockerfile-pf-transforms
 test-dockerfile-pf-transforms:
 	@tests/test-dockerfile-pf-transforms.sh
+	@python3 tests/verify-gamepad-input-wiring.py
 
 # ---- clean ------------------------------------------------------------------
 .PHONY: clean clean-all

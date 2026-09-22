@@ -12,7 +12,8 @@ Type=simple
 User=gamer
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
 SupplementaryGroups=input video
-ExecStart=/usr/bin/pf-shell --fbdev --device /dev/fb0 --input /dev/input/event0 --state-dir /var/lib/pocketforge/shell
+ExecStartPre=/bin/sh -c 'i=0; while [ ! -e /dev/input/pf-gamepad ] && [ "$i" -lt 20 ]; do sleep 0.2; i=$((i + 1)); done; exit 0'
+ExecStart=/usr/bin/pf-shell --fbdev --device /dev/fb0 --input /dev/input/pf-gamepad --state-dir /var/lib/pocketforge/shell
 StateDirectory=pocketforge/shell
 KillSignal=SIGTERM
 TimeoutStopSec=2s
