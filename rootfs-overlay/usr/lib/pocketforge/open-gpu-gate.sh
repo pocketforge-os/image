@@ -24,7 +24,7 @@ km="$(modinfo -F version powervr 2>/dev/null || true)"
 
 log="$(mktemp)"
 trap 'find "$(dirname "$log")" -maxdepth 1 -name "$(basename "$log")" -delete' EXIT
-if ! timeout 25s pf-take-panel env SDL_VIDEODRIVER=sunxifb \
+if ! timeout 25s env SDL_VIDEODRIVER=sunxifb \
         "$testbin" --quit-after-ms 15000 >"$log" 2>&1; then
     cat "$log" >&2
     echo "PF-OPEN-GPU FAIL: sunxifb testgles2 gate failed" >&2

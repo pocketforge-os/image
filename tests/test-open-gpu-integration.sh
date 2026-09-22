@@ -20,6 +20,11 @@ grep -F "grep -F 'img,img-rogue'" "$customize" >/dev/null
 grep -F '/lib/firmware/powervr/rogue_22.102.54.38_v1.fw' "$gate" >/dev/null
 grep -F 'llvmpipe' "$gate" >/dev/null
 grep -F 'PF-OPEN-GPU PASS:' "$gate" >/dev/null
+grep -F 'timeout 25s env SDL_VIDEODRIVER=sunxifb' "$gate" >/dev/null
+if grep -F 'pf-take-panel' "$gate" >/dev/null || grep -F 'systemctl' "$gate" >/dev/null; then
+    echo 'open GPU gate must not wait on the foreground handoff or another unit' >&2
+    exit 1
+fi
 grep -F 'Before=pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service' "$unit" >/dev/null
 grep -F 'multi-user.target.wants/pf-open-gpu-gate.service' "$customize" >/dev/null
 grep -Fx 'Requires=pf-open-gpu-gate.service' "$required" >/dev/null
@@ -34,5 +39,17 @@ awk '
     /^After=pf-open-gpu-gate.service$/ { after=1 }
     END { exit !(requires && after) }
 ' "$required"
+
+# The gate may wait for device discovery, but must not wait for the foreground
+# target or any UI unit that is itself gated by this service.
+after="$(sed -n 's/^After=//p' "$unit")"
+for forbidden in pocketforge-foreground.target pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
+    case " $after " in
+        *" $forbidden "*)
+            echo "open GPU gate has cyclic After= dependency on $forbidden" >&2
+            exit 1
+            ;;
+    esac
+done
 
 echo 'open-gpu-integration=PASS'
