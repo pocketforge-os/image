@@ -212,7 +212,7 @@ if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         "${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38"; do
         [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
     done
-elif [ "${PF_GPU_MODEL}" = "open" ]; then
+elif [ "${PF_GPU_MODEL}" = "open" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
     # Open GPU model (tsp-mc9m.41.924.6 / C4): verify the C1 gpu-um-mesa stage produced a
     # REAL install tree, not just its NOT-SHIPPED-for-ddk marker (which would mean the
     # Dockerfile's PF_GPU_MODEL/gpu-um-mesa-${PF_GPU_MODEL} selector picked the wrong stage).
@@ -268,11 +268,9 @@ fi
 [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829_bt.bin" ] || { echo "FATAL: Bluetooth firmware not found in blobs" >&2; exit 1; }
 echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
 
-# Verify libSDL3 artifact exists. The sdl stage builds a real sunxifb .so for BOTH
-# GPU models now (tsp-mc9m.41.924.6 / C3 wires the open-Mesa link that used to leave a
-# DEFERRED marker here for PF_GPU_MODEL=open — B3/tsp-mc9m.41.924.2), so this check no
-# longer needs to branch on PF_GPU_MODEL.
-if [ "${PF_GPU_MODEL}" != "none" ]; then
+# Verify the libSDL3 artifact for display-capable GPU builds. The sdl stage builds a
+# real sunxifb .so for both GPU models, but a display-less bring-up has no SDL client.
+if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
     LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
     [ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
     echo "  libsdl3: ${LIBSDL3_SO}"
@@ -368,7 +366,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
         exit 1
     fi
     echo "[customize] PowerVR DDK: SONAME symlinks verified (libEGL.so.1 exists)"
-elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
+elif [ "${PF_GPU_MODEL:-ddk}" = "open" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
     # Open Mesa GLES/EGL/GBM userspace (tsp-mc9m.41.924.6 / C4): install the C1
     # gpu-um-mesa stage's FULL meson DESTDIR tree verbatim at the SAME prefix it was
     # built for (/usr/local) — the Zink DRI driver, gbm backend loader, and Vulkan ICD
@@ -536,8 +534,8 @@ echo "[customize] Firmware: $(ls "${ROOTFS}/lib/firmware/" | wc -l) files"
 # The sdl stage builds a real sunxifb .so for BOTH GPU models now (tsp-mc9m.41.924.6 /
 # C3/C4 review fix — closed-DDK-only was a review finding: this install stayed gated
 # after C3 wired the open-Mesa link, so the a133-open FINAL rootfs never got the .so
-# C3 had already built), so this install no longer branches on PF_GPU_MODEL.
-if [ "${PF_GPU_MODEL}" != "none" ]; then
+# C3 had already built). Display-less bring-up images omit this graphics client.
+if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then
     echo "[customize] Installing libSDL3-pocketforge..."
     install -d "${ROOTFS}/opt/pocketforge/lib"
     # Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
@@ -548,7 +546,8 @@ fi
 # SDL test binaries (bd tsp-tyt) — dev variant only; present only when the sdl
 # stage built them (a133/sunxifb). Lets the sunxifb functional gate
 # (SDL_VIDEODRIVER=sunxifb testgles2) run on-device without scp.
-if [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] && [ -d /work/libsdl3/testbin ] && ls /work/libsdl3/testbin/* >/dev/null 2>&1; then
+if [ "${PF_DISPLAY_PIPELINE}" != "none" ] && [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] &&
+    [ -d /work/libsdl3/testbin ] && ls /work/libsdl3/testbin/* >/dev/null 2>&1; then
     install -d "${ROOTFS}/opt/pocketforge/bin"
     install -m 0755 /work/libsdl3/testbin/* "${ROOTFS}/opt/pocketforge/bin/"
     # Let the test bins resolve their SDL DT_NEEDED (either soname spelling) from

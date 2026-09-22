@@ -70,6 +70,15 @@ for variant in release dev; do
 done
 echo 'PASS: display-less package sets omit every Mesa/EGL/GBM/GLES root while display-capable sets are byte-identical'
 
+# An open kernel/firmware bring-up is a valid display-less combination.  It must
+# not preflight or install the Mesa/SDL client trees whose Debian loader was
+# removed above; display-capable open builds retain those checks and installs.
+grep -F 'elif [ "${PF_GPU_MODEL}" = "open" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then' "$rootfs" >/dev/null
+grep -F 'elif [ "${PF_GPU_MODEL:-ddk}" = "open" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then' "$rootfs" >/dev/null
+test "$(grep -Fc 'if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_DISPLAY_PIPELINE}" != "none" ]; then' "$rootfs")" -eq 2
+grep -F 'if [ "${PF_DISPLAY_PIPELINE}" != "none" ] && [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] &&' "$rootfs" >/dev/null
+echo 'PASS: open + none omits Mesa/SDL client installation while retaining the open kernel and firmware path'
+
 mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
     "$tmpdir/clean/usr/lib/aarch64-linux-gnu" \
     "$tmpdir/clean/usr/share/vulkan/icd.d" \
