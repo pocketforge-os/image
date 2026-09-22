@@ -258,16 +258,11 @@ COPY --from=gpu-src . /work/gpu
 RUN <<'GPUKM'
 set -eux
 mkdir -p /out/modules
-# Device gate (tsp-mc9m.41.924.2 / B4 review fix): this stage builds the CLOSED
-# out-of-tree DDK KM against PF_GPU_REPO — meaningless for the open model, whose KM is
-# in-tree in kernel-sunxi-6.x (km_model="in-tree-6.x" per devices/a133-open/profile.toml)
-# and needs a different consumer entirely (that wiring is step C/D's job — the
-# rootfs stage's `COPY --from=gpu-km` is unconditional, so this stage must not hard-fail
-# on PF_GPU_REPO="" the same way wpa/runtime/launcher/sdl/rootfs no longer do). Emit a
-# DEFERRED marker + empty /out/modules (mirrors the bootchain stage's NOT-SHIPPED
-# pattern) rather than the closed recipe's `: "${PF_GPU_REPO:?}"` hard-fail.
+# The open model uses the in-tree, upstream-shaped powervr DRM module. It is
+# selected by the Odyssey DT's img,img-rogue compatible and consumes the Rogue
+# firmware produced below. Keep the closed DDK recipe unreachable for open.
 if [ "${PF_GPU_MODEL}" != "ddk" ]; then
-  printf 'gpu-km DEFERRED for device=%s (gpu_model=%s; in-tree open KM consumption lands in step C/D)\n' \
+  printf 'gpu-km DEFERRED for device=%s (gpu_model=%s; in-tree open DRM KM)\n' \
     "${PF_DEVICE_ID}" "${PF_GPU_MODEL}" > /out/modules/.pf-gpu-provenance
   cat /out/modules/.pf-gpu-provenance
   exit 0
@@ -339,6 +334,39 @@ done
 } > /out/modules/.pf-gpu-provenance
 cat /out/modules/.pf-gpu-provenance
 GPUKM
+
+# =============================================================================
+# gpu-fw — reproducibly transform the preserved upstream Rogue firmware through
+# gpu-fw-tsp's committed CW04 recipe. The input is fetched by content hash in the
+# fetch stage; neither the preserved original nor the generated image is copied
+# from a bench bundle.
+# =============================================================================
+FROM ${PF_CONTAINER} AS gpu-fw
+ARG PF_GPU_MODEL
+ARG PF_GPU_FW_SHA=
+COPY --from=gpu-fw-src . /work/gpu-fw
+COPY --from=fetch /out /work/blobs
+RUN <<'GPUFW'
+set -eux
+mkdir -p /out
+if [ "${PF_GPU_MODEL}" != "open" ]; then
+  printf 'gpu-fw NOT-SHIPPED (gpu_model=%s)\n' "${PF_GPU_MODEL}" > /out/.pf-gpu-fw-provenance
+  exit 0
+fi
+: "${PF_GPU_FW_SHA:?}"
+input=/work/blobs/sunxi/a133/22.102.54.38/firmware/rogue_22.102.54.38_v1.fw
+output=/out/rogue_22.102.54.38_v1.fw
+[ -f "$input" ] || { echo "GPU FW FAIL: preserved open firmware input missing: $input"; exit 1; }
+python3 /work/gpu-fw/experiments/config-window-diff/build_cfgwin_bundle.py open "$input" "$output"
+actual="$(sha256sum "$output" | cut -d' ' -f1)"
+expected=f902bbfeddfcae95e9202006f9cd86ade05c6f33b11d9763c4db260351f42610
+[ "$actual" = "$expected" ] || { echo "GPU FW FAIL: CW04 sha256 $actual != $expected"; exit 1; }
+{
+  printf 'gpu-fw gpu-fw-tsp@%s\n' "${PF_GPU_FW_SHA}"
+  printf 'path=/lib/firmware/powervr/rogue_22.102.54.38_v1.fw sha256=%s\n' "$actual"
+} > /out/.pf-gpu-fw-provenance
+cat /out/.pf-gpu-fw-provenance
+GPUFW
 
 # =============================================================================
 # gpu-um-mesa — open Mesa GLES/EGL/GBM/Vulkan userspace for the a133-open GPU
@@ -1176,6 +1204,7 @@ COPY --from=image-src . /work/src
 COPY --from=fetch  /out /work/blobs
 COPY --from=kernel /out/lib/modules /work/kernel-tsp
 COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
+COPY --from=gpu-fw /out             /work/gpu-fw-tsp
 COPY --from=gpu-um-mesa /out        /work/gpu-um-mesa
 COPY --from=sdl    /out/lib         /work/libsdl3
 COPY --from=wpa    /out             /work/wpa

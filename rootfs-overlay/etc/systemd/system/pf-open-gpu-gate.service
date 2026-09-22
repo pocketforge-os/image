@@ -1,0 +1,16 @@
+[Unit]
+Description=PocketForge open GPU boot acceptance gate
+After=systemd-udev-settle.service dev-fb0.device
+Wants=systemd-udev-settle.service dev-fb0.device
+Before=pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service
+ConditionPathExists=/opt/pocketforge/bin/testgles2
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/pocketforge/open-gpu-gate.sh
+TimeoutStartSec=35s
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
