@@ -274,6 +274,16 @@ ROOTFS="$1"
 
 echo "[customize] Starting PocketForge rootfs customization..."
 
+# Debian gives its locally re-signed regulatory database a higher alternatives
+# priority than the kernel.org-signed copy.  The PocketForge kernel trusts the
+# upstream sforshee/wens certificates, not Debian's signing key, so select both
+# upstream artifacts explicitly rather than relying on package priority.  The
+# signature is a slave of the regulatory.db alternative, so setting the master
+# switches the pair atomically.
+chroot "${ROOTFS}" update-alternatives \
+    --set regulatory.db /lib/firmware/regulatory.db-upstream
+echo "[customize] regulatory.db: selected upstream-signed database and signature"
+
 # --- User + groups -----------------------------------------------------------
 echo "[customize] Creating groups and gamer user..."
 # audio=29 is vendor-pinned (stock ALSA nodes are root:audio 0660)
