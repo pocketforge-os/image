@@ -45,3 +45,5 @@ grep -q '^  rm -f /etc/apt/apt.conf.d/50mesa-snapshot$' "$fixture"
 grep -q '^  rm -f /etc/apt/preferences.d/50mesa-snapshot$' "$fixture"
 
 printf 'PASS: Dockerfile preserves conditional cleanup bodies and strips only the LLVM key EXIT trap\n'
+
+python3 "$root/build/tests/test_gpu_um_toolchain_drift.py"
