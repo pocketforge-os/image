@@ -28,6 +28,9 @@ grep -Fx 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$session_environment" >/dev/null
 grep -Fx 'Environment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$unit" >/dev/null
 grep -Fx 'export PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$gate" >/dev/null
 grep -F 'hint=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=%s' "$probe" >/dev/null
+grep -F 'install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"' "$customize" >/dev/null
+grep -F 'install -D -m 0644 "/work/src/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf"' "$customize" >/dev/null
+grep -F 'install -D -m 0755 "/work/src/rootfs-overlay/etc/profile.d/pocketforge-open-gpu.sh"' "$customize" >/dev/null
 grep -F '/usr/lib/pocketforge/open-gpu-probe' "$gate" >/dev/null
 grep -F 'VK_PHYSICAL_DEVICE_TYPE_CPU' "$probe" >/dev/null
 grep -F 'vkQueueSubmit' "$probe" >/dev/null
