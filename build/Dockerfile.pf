@@ -91,6 +91,10 @@ ARG PF_BLOBS_SHA               # provenance marker for the fallback path
 # manifest.toml + fetch-group.py from the pinned vendor-manifest (git-archive build context;
 # context root = repo root, so fetch-group.py is at scripts/). Both land in /work/vm/ by basename.
 COPY --from=vendor-manifest-src manifest.toml scripts/fetch-group.py /work/vm/
+# Redistributable inputs live in the committed public tree rather than the
+# private vendor-originals CAR. Import them with the manifest's pinned UnixFS
+# profile; fetch-group remains the fail-closed CID + sha256 verifier.
+COPY --from=vendor-manifest-src public /work/vm/public
 # the CARv2 of the vendor originals (content-addressed; CIDs unchanged by the path reorg):
 COPY --from=blobs-car vendor-originals.car /work/vendor-originals.car
 # merge-1 fallback source (git tree of binaries at sunxi/a133/…); dropped after the strip merges:
@@ -102,6 +106,8 @@ RUN set -eux; \
       export IPFS_PATH=/work/ipfs; \
       ipfs init --profile server >/dev/null; \
       ipfs dag import --pin-roots=false /work/vendor-originals.car; \
+      find /work/vm/public -type f -exec ipfs add --cid-version=1 --raw-leaves \
+        --chunker=size-1048576 --pin -Q {} \; ; \
       for g in $(echo "${PF_BLOB_GROUPS}" | tr ' ' '\n' | sort); do \
         python3 /work/vm/fetch-group.py --manifest /work/vm/manifest.toml \
           --group "$g" --out /out --offline ; \
@@ -258,16 +264,11 @@ COPY --from=gpu-src . /work/gpu
 RUN <<'GPUKM'
 set -eux
 mkdir -p /out/modules
-# Device gate (tsp-mc9m.41.924.2 / B4 review fix): this stage builds the CLOSED
-# out-of-tree DDK KM against PF_GPU_REPO — meaningless for the open model, whose KM is
-# in-tree in kernel-sunxi-6.x (km_model="in-tree-6.x" per devices/a133-open/profile.toml)
-# and needs a different consumer entirely (that wiring is step C/D's job — the
-# rootfs stage's `COPY --from=gpu-km` is unconditional, so this stage must not hard-fail
-# on PF_GPU_REPO="" the same way wpa/runtime/launcher/sdl/rootfs no longer do). Emit a
-# DEFERRED marker + empty /out/modules (mirrors the bootchain stage's NOT-SHIPPED
-# pattern) rather than the closed recipe's `: "${PF_GPU_REPO:?}"` hard-fail.
+# The open model uses the in-tree, upstream-shaped powervr DRM module. It is
+# selected by the Odyssey DT's img,img-rogue compatible and consumes the Rogue
+# firmware produced below. Keep the closed DDK recipe unreachable for open.
 if [ "${PF_GPU_MODEL}" != "ddk" ]; then
-  printf 'gpu-km DEFERRED for device=%s (gpu_model=%s; in-tree open KM consumption lands in step C/D)\n' \
+  printf 'gpu-km DEFERRED for device=%s (gpu_model=%s; in-tree open DRM KM)\n' \
     "${PF_DEVICE_ID}" "${PF_GPU_MODEL}" > /out/modules/.pf-gpu-provenance
   cat /out/modules/.pf-gpu-provenance
   exit 0
@@ -339,6 +340,40 @@ done
 } > /out/modules/.pf-gpu-provenance
 cat /out/modules/.pf-gpu-provenance
 GPUKM
+
+# =============================================================================
+# gpu-fw — stage the unmodified, redistributable open Rogue firmware fetched
+# from vendor-manifest's public tree. LICENSE.powervr permits redistribution
+# without modification, so the instrumented CW04 bench transform is excluded.
+# =============================================================================
+FROM ${PF_CONTAINER} AS gpu-fw
+ARG PF_GPU_MODEL
+ARG PF_VENDOR_MANIFEST_SHA
+COPY --from=fetch /out /work/blobs
+COPY --from=vendor-manifest-src LICENSE.powervr /work/vendor-manifest/LICENSE.powervr
+RUN <<'GPUFW'
+set -eux
+mkdir -p /out
+if [ "${PF_GPU_MODEL}" != "open" ]; then
+  printf 'gpu-fw NOT-SHIPPED (gpu_model=%s)\n' "${PF_GPU_MODEL}" > /out/.pf-gpu-fw-provenance
+  exit 0
+fi
+input=/work/blobs/sunxi/a133/fw-open-22.102.54.38/rogue_22.102.54.38_v1.fw
+license=/work/vendor-manifest/LICENSE.powervr
+[ -f "$input" ] || { echo "GPU FW FAIL: unmodified open firmware missing: $input"; exit 1; }
+[ -f "$license" ] || { echo "GPU FW FAIL: required LICENSE.powervr missing: $license"; exit 1; }
+actual="$(sha256sum "$input" | cut -d' ' -f1)"
+expected=b571cdd90312c20fe87f14aae43484f7279859921ae3abe58e935412040c7f98
+[ "$actual" = "$expected" ] || { echo "GPU FW FAIL: firmware sha256 $actual != $expected"; exit 1; }
+[ "$(wc -c < "$input")" -eq 118784 ] || { echo "GPU FW FAIL: firmware size is not 118784 bytes"; exit 1; }
+cp "$input" /out/rogue_22.102.54.38_v1.fw
+cp "$license" /out/LICENSE.powervr
+{
+  printf 'gpu-fw group=pvr-fw-open-22.102.54.38 vendor-manifest@%s\n' "${PF_VENDOR_MANIFEST_SHA}"
+  printf 'path=/lib/firmware/powervr/rogue_22.102.54.38_v1.fw sha256=%s size=118784\n' "$actual"
+} > /out/.pf-gpu-fw-provenance
+cat /out/.pf-gpu-fw-provenance
+GPUFW
 
 # =============================================================================
 # gpu-um-mesa — open Mesa GLES/EGL/GBM/Vulkan userspace for the a133-open GPU
@@ -417,7 +452,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   g++-aarch64-linux-gnu \
   gcc-aarch64-linux-gnu \
   libc6-dev:arm64 \
-  libdrm-dev:arm64
+  libdrm-dev:arm64 \
+  libvulkan-dev:arm64
 dpkg-query -W > /toolchain-packages.txt
 GPUUMTOOLCHAIN
 COPY --from=gpu-um-src docker/pkg-config/ /usr/local/bin/
@@ -475,6 +511,7 @@ FROM gpu-um-native-precompilers AS gpu-um-build
 WORKDIR /src
 ARG SOURCE_DATE_EPOCH
 ARG PF_GPU_UM_SHA
+COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
 ENV PATH=/opt/mesa-native/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN --mount=type=cache,id=ge8300-mesa-cross-ccache,target=/root/.cache/ccache,sharing=locked <<'GPUUMBUILD'
 set -eux
@@ -507,6 +544,10 @@ sha256sum /first-cross-build.so "build-cross/${so}" >/src/cross-build-sha256.txt
 elapsed="$(( $(date +%s) - start ))"
 printf 'two_builds_elapsed_seconds=%s\n' "${elapsed}" >/src/cross-build-time.txt
 DESTDIR=/instroot SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" meson install -C build-cross --no-rebuild --skip-subprojects
+aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
+  /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe -lvulkan
+readelf -h /tmp/open-gpu-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
+install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
 # Provenance (this file's convention — a `.pf-*-provenance` marker for every stage):
 # the full install-tree manifest by sha256, so C's acceptance evidence lists real
 # staged artifact paths + hashes rather than a hand-picked subset.
@@ -531,6 +572,7 @@ COPY --from=gpu-um-build /src/cross-build-time.txt /cross-build-time.txt
 COPY --from=gpu-um-build /src/.pf-gpu-um-provenance /out/.pf-gpu-um-provenance
 COPY --from=gpu-um-build /src/build-cross/src/imagination/vulkan/libvulkan_powervr_mesa.so /libvulkan_powervr_mesa.so
 COPY --from=gpu-um-build /instroot/usr/local /out/usr/local
+COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe
 
 # Selector: which of the two stages above answers to the `gpu-um-mesa` name every
 # downstream consumer (sdl, rootfs) COPYs --from. ARGs declared before the file's first
@@ -1176,6 +1218,7 @@ COPY --from=image-src . /work/src
 COPY --from=fetch  /out /work/blobs
 COPY --from=kernel /out/lib/modules /work/kernel-tsp
 COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
+COPY --from=gpu-fw /out             /work/gpu-fw-tsp
 COPY --from=gpu-um-mesa /out        /work/gpu-um-mesa
 COPY --from=sdl    /out/lib         /work/libsdl3
 COPY --from=wpa    /out             /work/wpa

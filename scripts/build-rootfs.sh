@@ -217,12 +217,8 @@ if [ "${PF_GPU_MODEL}" = "ddk" ]; then
     [ -n "${KERNEL_WIFI_MAC}" ] && [ -n "${KERNEL_WIFI_CORE}" ] && [ -n "${KERNEL_WIFI_WLAN}" ] \
         || { echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2; exit 1; }
 else
-    # Open GPU model (tsp-mc9m.41.924.6 / C2/C4): the open KM is IN-TREE in kernel-sunxi-6.x
-    # (devices/a133-open/profile.toml km_model="in-tree-6.x"), so powervr.ko comes from the
-    # KERNEL stage's own modules_install output (KERNEL_TSP_DIR) — NOT gpu-km-tsp, which
-    # DEFERS entirely for the open model (no DDK repo to build against). Spot-check it here.
     KERNEL_POWERVR="$(find "${KERNEL_TSP_DIR}" -name 'powervr.ko' -type f | head -1)"
-    [ -n "${KERNEL_POWERVR}" ] || { echo "FATAL: powervr.ko not found in kernel-tsp (kernel-sunxi-6.x in-tree KM build)" >&2; exit 1; }
+    [ -n "${KERNEL_POWERVR}" ] || { echo "FATAL: powervr.ko not found in kernel-tsp" >&2; exit 1; }
     KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
     [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp (open model)" >&2; exit 1; }
     # kernel-sunxi-6.x builds the upstream-shaped XR829 driver as one xradio.ko,
@@ -336,6 +332,8 @@ else
     echo "[customize] Installing open Mesa GLES/EGL/GBM userspace (Zink, GE8300)..."
     install -d "${ROOTFS}/usr/local"
     cp -a /work/gpu-um-mesa/usr/local/. "${ROOTFS}/usr/local/"
+    install -D -m 0755 /work/gpu-um-mesa/usr/lib/pocketforge/open-gpu-probe \
+        "${ROOTFS}/usr/lib/pocketforge/open-gpu-probe"
     printf '/usr/local/lib\n' > "${ROOTFS}/etc/ld.so.conf.d/00-mesa-powervr.conf"
     chroot "$ROOTFS" ldconfig
     echo "[customize] open Mesa: ldconfig done"
@@ -455,7 +453,14 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38" "${ROOTFS}/lib/firmware/"
     install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.sh.22.102.54.38" "${ROOTFS}/lib/firmware/"
 else
-    echo "[customize] PF_GPU_MODEL=${PF_GPU_MODEL:-} — closed GPU firmware install skipped (open Mesa install lands in step C/D)"
+    OPEN_FW=/work/gpu-fw-tsp/rogue_22.102.54.38_v1.fw
+    [ -f "${OPEN_FW}" ] || { echo "FATAL: unmodified open GPU firmware missing: ${OPEN_FW}" >&2; exit 1; }
+    install -D -m 0644 "${OPEN_FW}" \
+        "${ROOTFS}/lib/firmware/powervr/rogue_22.102.54.38_v1.fw"
+    install -D -m 0644 /work/gpu-fw-tsp/LICENSE.powervr \
+        "${ROOTFS}/lib/firmware/powervr/LICENSE.powervr"
+    install -D -m 0644 /work/gpu-fw-tsp/.pf-gpu-fw-provenance \
+        "${ROOTFS}/usr/lib/pocketforge/gpu-fw-provenance"
 fi
 
 # WiFi firmware
@@ -803,6 +808,10 @@ else
 # WiFi driver for the XR829 (kernel-sunxi-6.x in-tree driver).
 xradio
 WIFI_MODULES_EOF
+    # The Odyssey DT supplies img,img-rogue. depmod/udev autoload the in-tree
+    # driver from its OF alias; no modules-load workaround is used.
+    grep -F 'img,img-rogue' "${ROOTFS}/lib/modules/${KREL}/modules.alias" >/dev/null \
+        || { echo "FATAL: powervr depmod alias for img,img-rogue missing" >&2; exit 1; }
 fi
 
 # XR829 WiFi MAC address persistence directory.
@@ -1026,6 +1035,22 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-foregro
 # (see above). Unit-file apps join the target directly and don't need it.
 install -m 0755 "/work/src/rootfs-overlay/usr/bin/pf-take-panel" \
     "${ROOTFS}/usr/bin/pf-take-panel"
+
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/open-gpu-gate.sh" \
+        "${ROOTFS}/usr/lib/pocketforge/open-gpu-gate.sh"
+    install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service" \
+        "${ROOTFS}/etc/systemd/system/pf-open-gpu-gate.service"
+    ln -sf ../pf-open-gpu-gate.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-open-gpu-gate.service"
+    for ui_unit in pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
+        dropin="${ROOTFS}/etc/systemd/system/${ui_unit}.d"
+        install -d "${dropin}"
+        install -m 0644 \
+            "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf" \
+            "${dropin}/20-open-gpu-required.conf"
+    done
+fi
 
 install -d "${ROOTFS}/etc/systemd/system/basic.target.wants"
 ln -sf /etc/systemd/system/pocketforge-boot-animator.service \
