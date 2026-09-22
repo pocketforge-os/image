@@ -17,6 +17,18 @@ mkdir -p "$fixture/lib/firmware"
 : > "$fixture/lib/firmware/regulatory.db.p7s"
 "$verifier" "$fixture" >/dev/null
 
+# Match Debian's update-alternatives layout: absolute links look dangling from
+# the build host but resolve correctly after the extracted tree becomes `/`.
+find "$fixture" -mindepth 1 -delete
+mkdir -p "$fixture/lib/firmware" "$fixture/etc/alternatives"
+: > "$fixture/lib/firmware/regulatory.db-debian"
+: > "$fixture/lib/firmware/regulatory.db.p7s-debian"
+ln -s /etc/alternatives/regulatory.db "$fixture/lib/firmware/regulatory.db"
+ln -s /etc/alternatives/regulatory.db.p7s "$fixture/lib/firmware/regulatory.db.p7s"
+ln -s /lib/firmware/regulatory.db-debian "$fixture/etc/alternatives/regulatory.db"
+ln -s /lib/firmware/regulatory.db.p7s-debian "$fixture/etc/alternatives/regulatory.db.p7s"
+"$verifier" "$fixture" >/dev/null
+
 # Negative controls: both signed-regdb files are required, and the explicitly
 # declined XR829 BT blob must make image assembly fail closed if it appears.
 find "$fixture" -mindepth 1 -delete
