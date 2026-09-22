@@ -6,9 +6,13 @@ guard="${repo_root}/scripts/check-launcher-runtime-contract.sh"
 dockerfile="${repo_root}/build/Dockerfile.pf"
 crates="pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme pf-input-map pf-prefs pf-prefs-port pf-session-client pf-session-authority pf-wire"
 
-for crate in $crates; do
-    grep -qw "$crate" "$dockerfile"
-done
+guard_call=$(sed -n \
+    '/^check-launcher-runtime-contract \/work\/launcher \/work\/runtime-contract/,/pf-session-authority pf-wire$/p' \
+    "$dockerfile" | tr -d '\\')
+set -- $guard_call
+test "$1 $2 $3" = "check-launcher-runtime-contract /work/launcher /work/runtime-contract"
+shift 3
+test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 
