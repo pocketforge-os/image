@@ -32,6 +32,44 @@ echo 'PASS: none rootfs installs the discovered kernel release and rejects GPU a
 
 tmpdir=$(mktemp -d)
 trap 'find "$tmpdir" -mindepth 1 -delete; rmdir "$tmpdir"' EXIT
+
+# Evaluate the package-list section in isolation so the test observes its actual
+# output without invoking mmdebstrap.  Display-capable package lists must remain
+# byte-identical; display-less dev and release lists must drop every explicit
+# root that can install or transitively select Mesa/EGL/GBM/GLES artifacts.
+package_section="$tmpdir/package-section.sh"
+sed -n '/^PKG_FILE=/,/^echo "  package list: ${PKG_LIST}"$/p' "$rootfs" >"$package_section"
+
+resolve_packages() {
+    variant=$1
+    gpu_model=$2
+    display_pipeline=$3
+    SRC_DIR="$root" VARIANT="$variant" PF_GPU_MODEL="$gpu_model" \
+        PF_DISPLAY_PIPELINE="$display_pipeline" sh "$package_section" |
+        sed -n 's/^  package list: //p'
+}
+
+expected_release=$(sed '/^\s*#/d;/^\s*$/d' "$root/rootfs-packages.txt" | paste -sd, -)
+expected_dev="${expected_release},$(sed '/^\s*#/d;/^\s*$/d' "$root/rootfs-packages-dev.txt" | paste -sd, -)"
+expected_open="${expected_release},$(sed '/^\s*#/d;/^\s*$/d' "$root/rootfs-packages-mainline.txt" | paste -sd, -),libvulkan1"
+test "$(resolve_packages release ddk fbdev)" = "$expected_release"
+test "$(resolve_packages dev ddk fbdev)" = "$expected_dev"
+test "$(resolve_packages release open fbdev)" = "$expected_open"
+expected_open_dev="${expected_dev},$(sed '/^\s*#/d;/^\s*$/d' "$root/rootfs-packages-mainline.txt" | paste -sd, -),libvulkan1"
+test "$(resolve_packages dev open drm)" = "$expected_open_dev"
+
+for variant in release dev; do
+    package_list=$(resolve_packages "$variant" open none)
+    for forbidden in libavcodec59 libavutil57 libegl1 libepoxy0 libgbm1 libgles2 \
+        libwayland-egl1 ffmpeg libvdpau1 libvulkan1; do
+        if printf '%s\n' "$package_list" | tr ',' '\n' | grep -Fxq "$forbidden"; then
+            echo "FAIL: display_pipeline=none retained graphics package root $forbidden ($variant)" >&2
+            exit 1
+        fi
+    done
+done
+echo 'PASS: display-less package sets omit every Mesa/EGL/GBM/GLES root while display-capable sets are byte-identical'
+
 mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
     "$tmpdir/clean/usr/lib/aarch64-linux-gnu" \
     "$tmpdir/clean/usr/share/vulkan/icd.d" \

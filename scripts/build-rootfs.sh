@@ -159,6 +159,22 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     echo "  gpu_model=open: added open-GPU package (libvulkan1)"
 fi
 
+# These explicit roots provide the product UI's graphics client stack.  Keep the
+# existing package string untouched for display-capable builds, but remove every
+# root when the profile says there is no display.  In particular, Debian's
+# FFmpeg roots the stack twice: its binary depends on SDL2, which pulls GBM and
+# GLX Mesa, while libavutil depends on VDPAU and Debian's recommended VDPAU/VA
+# providers pull Mesa's driver packages.  Both paths reach the complete Mesa DRI
+# driver set even though the codec packages look unrelated to display.
+if [ "${PF_DISPLAY_PIPELINE}" = "none" ]; then
+    DISPLAY_PACKAGE_ROOTS="libavcodec59 libavutil57 libegl1 libepoxy0 libgbm1 libgles2 libwayland-egl1 ffmpeg libvdpau1 libvulkan1"
+    for package in ${DISPLAY_PACKAGE_ROOTS}; do
+        PKG_LIST="$(printf '%s\n' "${PKG_LIST}" | tr ',' '\n' |
+            awk -v drop="${package}" '$0 != drop' | paste -sd, -)"
+    done
+    echo "  display_pipeline=none: omitted graphics package roots (${DISPLAY_PACKAGE_ROOTS})"
+fi
+
 echo "  package list: ${PKG_LIST}"
 
 # ---- step 2: verify prerequisites ------------------------------------------
