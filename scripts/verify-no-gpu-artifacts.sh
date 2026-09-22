@@ -11,10 +11,36 @@ if [ "${PF_GPU_MODEL:-none}" = "none" ]; then
     # may arrive transitively (for example ffmpeg -> libavfilter -> libplacebo)
     # and cannot expose hardware without an installed ICD.  Reject the actual
     # capability-bearing boundary instead: ICD manifests, DRI drivers, vendor
-    # userspace, kernel modules, and firmware.  Inspect boundary entries by
-    # their lexical paths and never follow symlinks: a link (even dangling or
-    # rootfs-escaping) still advertises capability, while following it could
-    # inspect a host path.  Real empty boundary directories remain harmless.
+    # userspace, kernel modules, and firmware.  Every component leading to an
+    # ICD/DRI boundary must be a real directory: rejecting links at any depth
+    # prevents a runtime-reachable artifact from hiding behind an ancestor and
+    # avoids following a rootfs-escaping link into the host.  Boundary entries
+    # are likewise matched lexically, so dangling links are rejected.  A real,
+    # empty ICD directory remains harmless.
+    boundary_link=
+    for boundary in \
+        usr/share/vulkan/icd.d \
+        usr/lib/aarch64-linux-gnu/dri
+    do
+        component=$root
+        old_ifs=$IFS
+        IFS=/
+        for name in $boundary; do
+            component=$component/$name
+            if [ -L "$component" ]; then
+                boundary_link=$component
+                break 2
+            fi
+        done
+        IFS=$old_ifs
+    done
+    IFS=$old_ifs
+
+    if [ -n "$boundary_link" ]; then
+        echo "FATAL: GPU artifact boundary reached through symlink in gpu_model=none ${label}: ${boundary_link#"$root"/}" >&2
+        exit 1
+    fi
+
     found=$(
         find "$root" \
             \( \

@@ -46,6 +46,14 @@ mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
     "$tmpdir/icd-directory-symlink-dirty/opt/icds" \
     "$tmpdir/driver-directory-symlink-dirty/usr/lib/aarch64-linux-gnu" \
     "$tmpdir/driver-directory-symlink-dirty/opt/drivers" \
+    "$tmpdir/icd-parent-symlink-dirty/usr/share" \
+    "$tmpdir/icd-parent-symlink-dirty/opt/gpu/icd.d" \
+    "$tmpdir/icd-grandparent-symlink-dirty/usr" \
+    "$tmpdir/icd-grandparent-symlink-dirty/opt/share/vulkan/icd.d" \
+    "$tmpdir/driver-parent-symlink-dirty/usr/lib" \
+    "$tmpdir/driver-parent-symlink-dirty/opt/arch/dri" \
+    "$tmpdir/driver-grandparent-symlink-dirty/usr" \
+    "$tmpdir/driver-grandparent-symlink-dirty/opt/lib/aarch64-linux-gnu/dri" \
     "$tmpdir/icd-hardlink-dirty/usr/share/vulkan/icd.d" \
     "$tmpdir/icd-escape-symlink-dirty/usr/share/vulkan/icd.d"
 : >"$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc/sunxi-mmc.ko"
@@ -69,6 +77,14 @@ ln -s /opt/icds \
 : >"$tmpdir/driver-directory-symlink-dirty/opt/drivers/vendor_dri.so"
 ln -s ../../../../opt/drivers \
     "$tmpdir/driver-directory-symlink-dirty/usr/lib/aarch64-linux-gnu/dri"
+: >"$tmpdir/icd-parent-symlink-dirty/opt/gpu/icd.d/vendor.json"
+ln -s /opt/gpu "$tmpdir/icd-parent-symlink-dirty/usr/share/vulkan"
+: >"$tmpdir/icd-grandparent-symlink-dirty/opt/share/vulkan/icd.d/vendor.json"
+ln -s ../opt/share "$tmpdir/icd-grandparent-symlink-dirty/usr/share"
+: >"$tmpdir/driver-parent-symlink-dirty/opt/arch/dri/vendor_dri.so"
+ln -s /opt/arch "$tmpdir/driver-parent-symlink-dirty/usr/lib/aarch64-linux-gnu"
+: >"$tmpdir/driver-grandparent-symlink-dirty/opt/lib/aarch64-linux-gnu/dri/vendor_dri.so"
+ln -s ../opt/lib "$tmpdir/driver-grandparent-symlink-dirty/usr/lib"
 : >"$tmpdir/icd-hardlink-dirty/source.json"
 ln "$tmpdir/icd-hardlink-dirty/source.json" \
     "$tmpdir/icd-hardlink-dirty/usr/share/vulkan/icd.d/vendor.json"
@@ -111,6 +127,22 @@ if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-directory-symlink-dirty" test-f
     echo 'FAIL: none-model verifier accepted a symlinked Mesa DRI directory' >&2
     exit 1
 fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-parent-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a Vulkan ICD behind a linked parent' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-grandparent-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a Vulkan ICD behind a linked grandparent' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-parent-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a Mesa DRI driver behind a linked parent' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-grandparent-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a Mesa DRI driver behind a linked grandparent' >&2
+    exit 1
+fi
 if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-hardlink-dirty" test-fixture >/dev/null 2>&1; then
     echo 'FAIL: none-model verifier accepted a hardlinked Vulkan ICD manifest' >&2
     exit 1
@@ -120,7 +152,7 @@ if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-escape-symlink-dirty" test-fixture
     exit 1
 fi
 echo 'PASS: none-model permits the vendor-neutral Vulkan loader without an ICD'
-echo 'PASS: none-model negative controls reject nested powervr.ko, ICD/DRI files, links, linked directories, hardlinks, and rootfs escapes'
+echo 'PASS: none-model negative controls reject nested powervr.ko, ICD/DRI files, links at every path depth, hardlinks, and rootfs escapes'
 
 # Execute the generated hook's exact none-model epilogue with SRC_DIR absent.
 # The verifier wrapper records that the real call is reached before delegating.
