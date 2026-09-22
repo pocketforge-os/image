@@ -9,6 +9,7 @@ unit="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service"
 manager_environment="$root/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"
 session_environment="$root/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf"
 required="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf"
+drm_systemd_rule="$root/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
 probe="$root/tools/open-gpu-probe.c"
 open_gpu_units='pocketforge-menu.service pf-shell-selected.service pf-foreground@.service'
 
@@ -32,7 +33,12 @@ grep -F 'hint=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=%s' "$probe" >/dev/null
 grep -F 'install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"' "$customize" >/dev/null
 grep -F 'install -D -m 0644 "/work/src/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf"' "$customize" >/dev/null
 grep -F 'install -D -m 0755 "/work/src/rootfs-overlay/etc/profile.d/pocketforge-open-gpu.sh"' "$customize" >/dev/null
+# shellcheck disable=SC2016 # Match the literal build-script variable.
 open_model_block="$(sed -n '/^if \[ "${PF_GPU_MODEL}" = "open" \]; then$/,/^fi$/p' "$customize")"
+grep -Fx 'SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="systemd"' "$drm_systemd_rule" >/dev/null
+printf '%s\n' "$open_model_block" | grep -F '/etc/udev/rules.d/70-pocketforge-drm-systemd.rules' >/dev/null
+[ "$(grep -Fc '/etc/udev/rules.d/70-pocketforge-drm-systemd.rules' "$customize")" -eq \
+  "$(printf '%s\n' "$open_model_block" | grep -Fc '/etc/udev/rules.d/70-pocketforge-drm-systemd.rules')" ]
 for open_gpu_unit in $open_gpu_units; do
     shared_unit="$root/rootfs-overlay/etc/systemd/system/$open_gpu_unit"
     dropin="$root/rootfs-overlay/etc/systemd/system/$open_gpu_unit.d/50-open-gpu.conf"

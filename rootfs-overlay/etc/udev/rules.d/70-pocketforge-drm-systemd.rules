@@ -1,0 +1,3 @@
+# Expose DRM render nodes as systemd device units so open-GPU services can
+# order directly on the render node becoming available.
+SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="systemd"
