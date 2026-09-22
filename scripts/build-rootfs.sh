@@ -1440,18 +1440,7 @@ elif [ "${VARIANT}" = "release" ] && [ "${PF_GPU_MODEL}" != "none" ]; then
 fi
 
 if [ "${PF_GPU_MODEL}" = "none" ]; then
-    for forbidden in \
-        lib/modules/*/pvrsrvkm.ko lib/modules/*/dc_sunxi.ko lib/modules/*/powervr.ko \
-        lib/firmware/rgx.* lib/firmware/powervr \
-        usr/lib/pvr-rogue usr/local/lib/libvulkan_powervr_mesa.so \
-        usr/share/vulkan/icd.d/*powervr* opt/pocketforge/lib/libSDL3-pocketforge.so.0 \
-        opt/pocketforge/bin/pf-shell opt/pocketforge/bin/pocketforge-recovery-entry; do
-        if compgen -G "${ROOTFS}/${forbidden}" >/dev/null; then
-            echo "FATAL: GPU/display artifact reached gpu_model=none rootfs: ${forbidden}" >&2
-            exit 1
-        fi
-    done
-    echo "PASS: gpu_model=none rootfs contains no GPU module, firmware, loader, PowerVR userspace, launcher, or recovery artifact"
+    "${SRC_DIR}/scripts/verify-no-gpu-artifacts.sh" "${ROOTFS}" rootfs
 fi
 
 echo "[customize] Customization complete."

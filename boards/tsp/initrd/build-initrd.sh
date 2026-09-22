@@ -251,11 +251,7 @@ else
 fi
 
 if [ "${PF_GPU_MODEL}" = "none" ]; then
-    if find "${STAGING}" -type f \( -iname '*pvr*' -o -iname '*powervr*' -o -iname '*rogue*' -o -iname '*gpu*' \) | grep -q .; then
-        echo "FATAL: GPU artifact reached gpu_model=none initramfs" >&2
-        exit 1
-    fi
-    echo "PASS: gpu_model=none initramfs contains no GPU module or firmware artifact"
+    "${SRC_DIR}/scripts/verify-no-gpu-artifacts.sh" "${STAGING}" initramfs
 fi
 # Ensure consistent permissions regardless of source
 for m in $MODULES; do
