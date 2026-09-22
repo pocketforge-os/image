@@ -6,6 +6,8 @@ dockerfile="$root/build/Dockerfile.pf"
 customize="$root/scripts/build-rootfs.sh"
 gate="$root/rootfs-overlay/usr/lib/pocketforge/open-gpu-gate.sh"
 unit="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service"
+manager_environment="$root/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"
+session_environment="$root/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf"
 required="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf"
 probe="$root/tools/open-gpu-probe.c"
 
@@ -21,6 +23,11 @@ grep -F "grep -F 'img,img-rogue'" "$customize" >/dev/null
 grep -F '/lib/firmware/powervr/rogue_22.102.54.38_v1.fw' "$gate" >/dev/null
 grep -F 'llvmpipe' "$probe" >/dev/null
 grep -F 'PF-OPEN-GPU PASS:' "$gate" >/dev/null
+grep -Fx 'DefaultEnvironment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$manager_environment" >/dev/null
+grep -Fx 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$session_environment" >/dev/null
+grep -Fx 'Environment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$unit" >/dev/null
+grep -Fx 'export PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$gate" >/dev/null
+grep -F 'hint=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=%s' "$probe" >/dev/null
 grep -F '/usr/lib/pocketforge/open-gpu-probe' "$gate" >/dev/null
 grep -F 'VK_PHYSICAL_DEVICE_TYPE_CPU' "$probe" >/dev/null
 grep -F 'vkQueueSubmit' "$probe" >/dev/null

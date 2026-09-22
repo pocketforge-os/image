@@ -63,7 +63,15 @@ int main(void)
     if (result != VK_SUCCESS)
         fail("vkCreateInstance failed", result);
     result = vkEnumeratePhysicalDevices(instance, &physical_count, NULL);
-    if (result != VK_SUCCESS || physical_count == 0)
+    if (physical_count == 0) {
+        fprintf(stderr,
+                "open-gpu-probe: no Vulkan physical device (VkResult=%d) "
+                "hint=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=%s\n",
+                result,
+                getenv("PVR_I_WANT_A_BROKEN_VULKAN_DRIVER") != NULL ? "set" : "unset");
+        exit(1);
+    }
+    if (result != VK_SUCCESS)
         fail("no Vulkan physical device", result);
     physical_devices = calloc(physical_count, sizeof(*physical_devices));
     if (physical_devices == NULL)
