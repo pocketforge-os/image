@@ -57,8 +57,10 @@ ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.
 # Declared before the first FROM (global pre-FROM scope) SOLELY so the gpu-um-mesa
 # selector stage below can interpolate it into a `FROM gpu-um-mesa-${PF_GPU_MODEL}`
 # (tsp-mc9m.41.924.6 / C1). "ddk" | "open" (profile.py validate()); default matches the
-# existing PF_GPU_MODEL:-ddk fallback already used in the rootfs stage.
+# existing PF_GPU_MODEL:-ddk fallback already used in the rootfs stage. Display
+# availability is an independent required profile fact; it deliberately has no default.
 ARG PF_GPU_MODEL=ddk
+ARG PF_DISPLAY_PIPELINE
 
 # The image variant is declared globally so the hwprobe selector cannot drift from
 # the variant passed to the rootfs and assemble stages. Release selects an empty
@@ -212,6 +214,16 @@ make INSTALL_MOD_PATH=/out modules_install
 # modules_install leaves build/source symlinks pointing at /work/kernel (absent in the
 # rootfs) — drop them so they cannot leak a dangling link into the reproducible image.
 rm -f "/out/lib/modules/${krel}/build" "/out/lib/modules/${krel}/source"
+# Every installed module must identify the release selected from this locked
+# kernel build. This catches a stale/cross-line module before it reaches either
+# the rootfs or initramfs; MODVERSIONS is disabled, so vermagic is the load gate.
+for module in $(find "/out/lib/modules/${krel}" -type f -name '*.ko' -print); do
+  module_vermagic="$(aarch64-none-linux-gnu-objcopy -O binary --only-section=.modinfo "$module" /dev/stdout | tr '\0' '\n' | sed -n 's/^vermagic=//p')"
+  case "${module_vermagic}" in
+    "${krel}"|"${krel} "*) ;;
+    *) echo "kernel module release FAIL: ${module} vermagic '${module_vermagic}' does not belong to ${krel}"; exit 1 ;;
+  esac
+done
 # Kernel build-tree handoff for the GPU-KM stage (tsp-1dl.4.3 links vs this Module.symvers;
 # it also COPYs the full built /work/kernel tree it needs for `make -C … M=…`).
 install -D -m0644 Module.symvers /out/build/Module.symvers
@@ -238,7 +250,7 @@ KERNEL
 # COPY --from=kernel the build tree so vermagic matches (silent-load-failure gate).
 # Per-IP: a133 gpu-km-tsp (pvrsrvkm.ko+dc_sunxi.ko); a523 gpu-km-tsp-a523 (mali_kbase.ko).
 # =============================================================================
-FROM ${PF_CONTAINER} AS gpu-km
+FROM ${PF_CONTAINER} AS gpu-km-build
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
 ARG PF_GPU_MODEL
@@ -341,12 +353,20 @@ done
 cat /out/modules/.pf-gpu-provenance
 GPUKM
 
+FROM gpu-km-build AS gpu-km-ddk
+FROM gpu-km-build AS gpu-km-open
+FROM ${PF_CONTAINER} AS gpu-km-none
+RUN mkdir -p /out/modules && \
+    printf 'gpu-km NOT-SHIPPED (gpu_model=none; graphics deliberately absent)\n' \
+      > /out/modules/.pf-gpu-provenance
+FROM gpu-km-${PF_GPU_MODEL} AS gpu-km
+
 # =============================================================================
 # gpu-fw — stage the unmodified, redistributable open Rogue firmware fetched
 # from vendor-manifest's public tree. LICENSE.powervr permits redistribution
 # without modification, so the instrumented CW04 bench transform is excluded.
 # =============================================================================
-FROM ${PF_CONTAINER} AS gpu-fw
+FROM ${PF_CONTAINER} AS gpu-fw-open
 ARG PF_GPU_MODEL
 ARG PF_VENDOR_MANIFEST_SHA
 COPY --from=fetch /out /work/blobs
@@ -374,6 +394,12 @@ cp "$license" /out/LICENSE.powervr
 } > /out/.pf-gpu-fw-provenance
 cat /out/.pf-gpu-fw-provenance
 GPUFW
+
+FROM ${PF_CONTAINER} AS gpu-fw-ddk
+RUN mkdir -p /out && printf 'gpu-fw NOT-SHIPPED (gpu_model=ddk)\n' > /out/.pf-gpu-fw-provenance
+FROM ${PF_CONTAINER} AS gpu-fw-none
+RUN mkdir -p /out && printf 'gpu-fw NOT-SHIPPED (gpu_model=none; graphics deliberately absent)\n' > /out/.pf-gpu-fw-provenance
+FROM gpu-fw-${PF_GPU_MODEL} AS gpu-fw
 
 # =============================================================================
 # gpu-um-mesa — open Mesa GLES/EGL/GBM/Vulkan userspace for the a133-open GPU
@@ -412,6 +438,15 @@ printf 'gpu-um-mesa NOT SHIPPED (gpu_model=ddk; closed DDK userspace comes from 
   > /out/.pf-gpu-um-provenance
 cat /out/.pf-gpu-um-provenance
 GPUUMDDK
+
+FROM ${PF_CONTAINER} AS gpu-um-mesa-none
+RUN <<'GPUUMNONE'
+set -eux
+mkdir -p /out
+printf 'gpu-um-mesa NOT-SHIPPED (gpu_model=none; graphics deliberately absent)\n' \
+  > /out/.pf-gpu-um-provenance
+cat /out/.pf-gpu-um-provenance
+GPUUMNONE
 
 # --- 1/5 toolchain: Ubuntu 24.04 (native x86_64) + the arm64 cross toolchain + LLVM 20 ---
 # Keep the load-bearing toolchain settings aligned with gpu-um-tsp's
@@ -820,6 +855,12 @@ if [ "${PF_SOC}" != "sun50iw10p1" ]; then
   cat /out/lib/.pf-sdl-provenance
   exit 0
 fi
+if [ "${PF_GPU_MODEL}" = "none" ]; then
+  printf 'libsdl3-sunxifb NOT-SHIPPED (gpu_model=none; graphics deliberately absent)\n' \
+    > /out/lib/.pf-sdl-provenance
+  cat /out/lib/.pf-sdl-provenance
+  exit 0
+fi
 # Deterministic timestamp (image commit epoch, resolved from the pinned SHA — never wall-clock);
 # cmake/gcc honour SOURCE_DATE_EPOCH. Per-lib bit-for-bit repro is finished under B6 (tsp-1dl.6).
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
@@ -1156,6 +1197,15 @@ printf 'recovery NOT SHIPPED (gpu_model=ddk; the recovery entry is source-built 
 cat /out/.pf-recovery-provenance
 RECOVERYDDK
 
+FROM ${PF_CONTAINER} AS recovery-none
+RUN <<'RECOVERYNONE'
+set -eux
+mkdir -p /out
+printf 'recovery NOT-SHIPPED (gpu_model=none; no graphics or display surface)\n' \
+  > /out/.pf-recovery-provenance
+cat /out/.pf-recovery-provenance
+RECOVERYNONE
+
 # recovery-open — the real source build of pocketforge-recovery-entry for the a133-open stack.
 # Reached ONLY via the `FROM recovery-${PF_GPU_MODEL}` selector below, so BuildKit prunes it (and
 # its recovery-src reference) for every ddk build.
@@ -1229,6 +1279,15 @@ printf 'launcher NOT SHIPPED (gpu_model=ddk; pf-shell is source-built for the op
 cat /out/.pf-launcher-provenance
 LAUNCHERDDK
 
+FROM ${PF_CONTAINER} AS launcher-none
+RUN <<'LAUNCHERNONE'
+set -eux
+mkdir -p /out
+printf 'launcher NOT-SHIPPED (gpu_model=none; no graphics or display surface)\n' \
+  > /out/.pf-launcher-provenance
+cat /out/.pf-launcher-provenance
+LAUNCHERNONE
+
 # launcher-open — the real source build of pf-shell for the a133-open stack. Reached ONLY via
 # the `FROM launcher-${PF_GPU_MODEL}` selector below, so BuildKit prunes it (and its launcher-src
 # reference) for every ddk build. The digest-pinned Rust toolchain + committed Cargo.lock +
@@ -1294,6 +1353,7 @@ ARG PF_ARCH
 ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_GPU_MODEL
+ARG PF_DISPLAY_PIPELINE
 ARG PF_VARIANT=dev
 ARG PF_IMAGE_SHA
 ARG PF_KERNEL_SHA
@@ -1356,6 +1416,7 @@ case "${PF_SOC}" in
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
+      PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \
       PF_IMAGE_SHA="${PF_IMAGE_SHA}" PF_KERNEL_SHA="${PF_KERNEL_SHA}" \
       PF_GPU_SHA="${PF_GPU_SHA:-}" PF_LIBSDL3_SHA="${PF_LIBSDL3_SHA}" \
       PF_WPA_SHA="${PF_WPA_SHA}" PF_RUNTIME_SHA="${PF_RUNTIME_SHA}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA:-}" \

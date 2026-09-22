@@ -57,8 +57,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "${PF_GPU_MODEL}" in
-    ddk|open) ;;
-    *) echo "build-initrd.sh: --gpu-model must be ddk|open (got '${PF_GPU_MODEL}')" >&2; exit 2 ;;
+    ddk|open|none) ;;
+    *) echo "build-initrd.sh: --gpu-model must be ddk|open|none (got '${PF_GPU_MODEL}')" >&2; exit 2 ;;
 esac
 
 # shellcheck source=scripts/kernel-module-form.sh
@@ -85,13 +85,15 @@ if [ "$SUBSTRATE" = "owned" ]; then
         [ -n "${KERNEL_RELEASE_DIR}" ] || { echo "FATAL: no kernel release dir under ${KERNEL_MODULES_ROOT}" >&2; exit 1; }
         IFS=$'\t' read -r KERNEL_VB2_FORM KERNEL_VB2 \
             < <(kernel_module_form "${KERNEL_RELEASE_DIR}" videobuf2-dma-contig)
-    else
+    elif [ "${PF_GPU_MODEL}" = "ddk" ]; then
         KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
         [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp build tree" >&2; exit 1; }
         KERNEL_VB2_FORM=module
     fi
 
-    echo "  videobuf2 (${KERNEL_VB2_FORM}): ${KERNEL_VB2}"
+    if [ "${PF_GPU_MODEL}" != "none" ]; then
+        echo "  videobuf2 (${KERNEL_VB2_FORM}): ${KERNEL_VB2}"
+    fi
     if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         # Closed GPU modules from gpu-km-tsp.
         GPU_PVRSRVKM="${GPU_KM_DIR}/pvrsrvkm.ko"
@@ -111,7 +113,7 @@ fi
 
 # The initrd module set, in load order. NOTE: videobuf2-dma-contig.ko is
 # HYPHENATED on disk (runtime/lsmod name is underscored). Verified on blobs.
-if [ "${PF_GPU_MODEL}" = "open" ]; then
+if [ "${PF_GPU_MODEL}" = "open" ] || [ "${PF_GPU_MODEL}" = "none" ]; then
     # The open GPU/camera stack (incl. videobuf2) is brought up AFTER switch_root
     # by modprobe, which resolves the full mc->common->memops->dma-contig chain.
     # The initrd ships NO vb2 module: mainline 6.16 split videobuf2 into
@@ -211,7 +213,7 @@ fi
 
 # /init
 install -m 0755 "${INITRD_SRC}/init" "${STAGING}/init"
-if [ "${PF_GPU_MODEL}" = "open" ]; then
+if [ "${PF_GPU_MODEL}" = "open" ] || [ "${PF_GPU_MODEL}" = "none" ]; then
     # Open GPU initialization is deferred until after switch_root. Keep vb2 for
     # the existing early DMA-buffer plumbing, but omit the closed DDK insmods
     # from the shipped open-model /init. The ddk copy remains byte-for-byte the
@@ -234,7 +236,7 @@ if [ "$SUBSTRATE" = "owned" ]; then
     # which ships no vb2 module in the initrd (tsp-hqm1p.17.12); its full
     # mc->common->memops->dma-contig stack is modprobed after switch_root.
     # Closed GPU modules only for ddk.
-    if [ "${PF_GPU_MODEL}" != "open" ]; then
+    if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         cp "${KERNEL_VB2}" "${STAGING}/lib/modules/videobuf2-dma-contig.ko"
     fi
     if [ "${PF_GPU_MODEL}" = "ddk" ]; then
@@ -246,6 +248,10 @@ else
     for m in $MODULES; do
         cp "${MODULES_DIR}/${m}" "${STAGING}/lib/modules/${m}"
     done
+fi
+
+if [ "${PF_GPU_MODEL}" = "none" ]; then
+    "${SRC_DIR}/scripts/verify-no-gpu-artifacts.sh" "${STAGING}" initramfs
 fi
 # Ensure consistent permissions regardless of source
 for m in $MODULES; do
