@@ -10,6 +10,7 @@ ExecStart=/usr/bin/pf-prefsd --state-dir /var/lib/pocketforge/shell --socket /ru
 StateDirectory=pocketforge/shell
 RuntimeDirectory=pocketforge
 RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
 Restart=on-failure
 RestartSec=1s
 

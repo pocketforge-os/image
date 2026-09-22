@@ -5,11 +5,13 @@ Before=pf-shell-selected.service
 
 [Service]
 Type=simple
+User=gamer
 Group=gamer
 ExecStart=/usr/bin/pf-session-authorityd --state-dir /var/lib/pocketforge/session-authority --socket /run/pocketforge/session-authority.sock
 StateDirectory=pocketforge/session-authority
 RuntimeDirectory=pocketforge
 RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
 UMask=0007
 Restart=on-failure
 RestartSec=1s
