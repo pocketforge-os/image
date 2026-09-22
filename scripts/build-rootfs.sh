@@ -37,6 +37,10 @@ BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 # .so + firmware install stays UNCONDITIONAL for THIS bead (step D removes/reworks it —
 # see the tsp-mc9m.41.924.2 bead comment for the full handoff list).
 PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
+case "${PF_GPU_MODEL}" in
+    ddk|open|none) ;;
+    *) echo "FATAL: PF_GPU_MODEL must be ddk|open|none, got '${PF_GPU_MODEL}'" >&2; exit 2 ;;
+esac
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
 # The C1 open-Mesa install tree (tsp-mc9m.41.924.6 / C4): its own /usr/local/{include,lib}
 # meson DESTDIR install — only meaningful (non-marker-only) for PF_GPU_MODEL=open.
@@ -187,7 +191,7 @@ if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         "${BLOBS_DIR}/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38"; do
         [ -f "$f" ] || { echo "FATAL: required blob not found: $f" >&2; exit 1; }
     done
-else
+elif [ "${PF_GPU_MODEL}" = "open" ]; then
     # Open GPU model (tsp-mc9m.41.924.6 / C4): verify the C1 gpu-um-mesa stage produced a
     # REAL install tree, not just its NOT-SHIPPED-for-ddk marker (which would mean the
     # Dockerfile's PF_GPU_MODEL/gpu-um-mesa-${PF_GPU_MODEL} selector picked the wrong stage).
@@ -220,7 +224,7 @@ if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         echo "FATAL: xr829 wifi module triplet (mac/core/wlan) not all found in kernel-tsp" >&2
         exit 1
     fi
-else
+elif [ "${PF_GPU_MODEL}" = "open" ]; then
     KERNEL_RELEASE_DIR="$(find "${KERNEL_TSP_DIR}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
     [ -n "${KERNEL_RELEASE_DIR}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
     IFS=$'\t' read -r KERNEL_POWERVR_FORM KERNEL_POWERVR \
@@ -246,9 +250,11 @@ echo "  blobs + kernel-tsp + gpu-km-tsp: spot-check passed"
 # GPU models now (tsp-mc9m.41.924.6 / C3 wires the open-Mesa link that used to leave a
 # DEFERRED marker here for PF_GPU_MODEL=open — B3/tsp-mc9m.41.924.2), so this check no
 # longer needs to branch on PF_GPU_MODEL.
-LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
-[ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
-echo "  libsdl3: ${LIBSDL3_SO}"
+if [ "${PF_GPU_MODEL}" != "none" ]; then
+    LIBSDL3_SO="$(find "${LIBSDL3_DIR}" -name 'libSDL3-pocketforge.so*' -type f | head -1)"
+    [ -n "${LIBSDL3_SO}" ] || { echo "FATAL: libSDL3-pocketforge.so.* not found in ${LIBSDL3_DIR}" >&2; exit 1; }
+    echo "  libsdl3: ${LIBSDL3_SO}"
+fi
 
 # Verify the owned wpa_supplicant artifact exists (wpa stage output; tsp-myp1.8.2).
 # The a133 wlan supplicant is the owned wpa-supplicant-tsp fork — a missing
@@ -340,7 +346,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
         exit 1
     fi
     echo "[customize] PowerVR DDK: SONAME symlinks verified (libEGL.so.1 exists)"
-else
+elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     # Open Mesa GLES/EGL/GBM userspace (tsp-mc9m.41.924.6 / C4): install the C1
     # gpu-um-mesa stage's FULL meson DESTDIR tree verbatim at the SAME prefix it was
     # built for (/usr/local) — the Zink DRI driver, gbm backend loader, and Vulkan ICD
@@ -412,9 +418,12 @@ echo "[customize] Installing kernel modules..."
 # The model-specific spot-check above verifies the open tree's actual module names.
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     KREL="4.9.191"
-else
+elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     KREL="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
     [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
+else
+    KREL="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
+    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (none model)" >&2; exit 1; }
 fi
 install -d "${ROOTFS}/lib/modules/${KREL}"
 
@@ -442,7 +451,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
 
     chroot "$ROOTFS" depmod "${KREL}"
     echo "[customize] Modules installed: $(ls "${ROOTFS}/lib/modules/${KREL}/"*.ko | wc -l) .ko files"
-else
+elif [ "${PF_GPU_MODEL}" = "open" ]; then
     cp -a "/work/kernel-tsp/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
 
     DEPMOD_STDERR="$(mktemp)"
@@ -460,6 +469,10 @@ else
     fi
     rm -f "${DEPMOD_STDERR}"
     echo "[customize] Modules installed: $(find "${ROOTFS}/lib/modules/${KREL}" -name '*.ko' -type f | wc -l) .ko files"
+else
+    cp -a "/work/kernel-tsp/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
+    chroot "$ROOTFS" depmod "${KREL}"
+    echo "[customize] gpu_model=none: full ${KREL} kernel module tree installed"
 fi
 
 # Verify depmod produced output
@@ -478,7 +491,7 @@ install -d "${ROOTFS}/lib/firmware"
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.fw.22.102.54.38" "${ROOTFS}/lib/firmware/"
     install -m 0644 "/work/blobs/sunxi/a133/22.102.54.38/firmware/rgx.sh.22.102.54.38" "${ROOTFS}/lib/firmware/"
-else
+elif [ "${PF_GPU_MODEL}" = "open" ]; then
     OPEN_FW=/work/gpu-fw-tsp/rogue_22.102.54.38_v1.fw
     [ -f "${OPEN_FW}" ] || { echo "FATAL: unmodified open GPU firmware missing: ${OPEN_FW}" >&2; exit 1; }
     install -D -m 0644 "${OPEN_FW}" \
@@ -501,11 +514,13 @@ echo "[customize] Firmware: $(ls "${ROOTFS}/lib/firmware/" | wc -l) files"
 # C3/C4 review fix — closed-DDK-only was a review finding: this install stayed gated
 # after C3 wired the open-Mesa link, so the a133-open FINAL rootfs never got the .so
 # C3 had already built), so this install no longer branches on PF_GPU_MODEL.
-echo "[customize] Installing libSDL3-pocketforge..."
-install -d "${ROOTFS}/opt/pocketforge/lib"
-# Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
-LIBSDL3_SRC="$(find /work/libsdl3 -name 'libSDL3-pocketforge.so*' -type f | head -1)"
-install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketforge.so.0"
+if [ "${PF_GPU_MODEL}" != "none" ]; then
+    echo "[customize] Installing libSDL3-pocketforge..."
+    install -d "${ROOTFS}/opt/pocketforge/lib"
+    # Find the libSDL3 artifact (may be named .so.0 or .so.0.5.0)
+    LIBSDL3_SRC="$(find /work/libsdl3 -name 'libSDL3-pocketforge.so*' -type f | head -1)"
+    install -m 0755 "${LIBSDL3_SRC}" "${ROOTFS}/opt/pocketforge/lib/libSDL3-pocketforge.so.0"
+fi
 
 # SDL test binaries (bd tsp-tyt) — dev variant only; present only when the sdl
 # stage built them (a133/sunxifb). Lets the sunxifb functional gate
@@ -829,7 +844,7 @@ xr829_mac
 xr829_core
 xr829_wlan
 WIFI_MODULES_EOF
-else
+elif [ "${PF_GPU_MODEL}" = "open" ]; then
     if [ "${KERNEL_WIFI_FORM}" = "module" ]; then
         cat > "${ROOTFS}/etc/modules-load.d/pocketforge-wifi.conf" << 'WIFI_MODULES_EOF'
 # WiFi driver for the XR829 (kernel-sunxi-6.x in-tree driver).
@@ -838,10 +853,12 @@ WIFI_MODULES_EOF
     fi
     # The Odyssey DT supplies img,img-rogue. depmod/udev autoload the in-tree
     # driver from its OF alias; no modules-load workaround is used.
-    if [ "${KERNEL_POWERVR_FORM}" = "module" ]; then
+    if [ "${PF_GPU_MODEL}" = "open" ] && [ "${KERNEL_POWERVR_FORM}" = "module" ]; then
         grep -F 'img,img-rogue' "${ROOTFS}/lib/modules/${KREL}/modules.alias" >/dev/null \
             || { echo "FATAL: powervr depmod alias for img,img-rogue missing" >&2; exit 1; }
     fi
+else
+    echo "[customize] gpu_model=none: no GPU or display module autoload configuration"
 fi
 
 # XR829 WiFi MAC address persistence directory.
@@ -1407,7 +1424,7 @@ if [ "${VARIANT}" = "dev" ]; then
     chroot "${ROOTFS}" systemctl enable ssh-keygen-firstboot.service
     chroot "${ROOTFS}" systemctl enable ssh.service
     echo "[customize] dev: build-time SSH host keys removed; first-boot keygen and ssh.service enabled"
-elif [ "${VARIANT}" = "release" ]; then
+elif [ "${VARIANT}" = "release" ] && [ "${PF_GPU_MODEL}" != "none" ]; then
     # Release: strip libSDL3 + future supervisor binary
     if command -v aarch64-none-linux-gnu-strip >/dev/null 2>&1; then
         aarch64-none-linux-gnu-strip --strip-unneeded \
@@ -1420,6 +1437,21 @@ elif [ "${VARIANT}" = "release" ]; then
     else
         echo "[customize] WARN: no aarch64 strip available; skipping"
     fi
+fi
+
+if [ "${PF_GPU_MODEL}" = "none" ]; then
+    for forbidden in \
+        lib/modules/*/pvrsrvkm.ko lib/modules/*/dc_sunxi.ko lib/modules/*/powervr.ko \
+        lib/firmware/rgx.* lib/firmware/powervr \
+        usr/lib/pvr-rogue usr/local/lib/libvulkan_powervr_mesa.so \
+        usr/share/vulkan/icd.d/*powervr* opt/pocketforge/lib/libSDL3-pocketforge.so.0 \
+        opt/pocketforge/bin/pf-shell opt/pocketforge/bin/pocketforge-recovery-entry; do
+        if compgen -G "${ROOTFS}/${forbidden}" >/dev/null; then
+            echo "FATAL: GPU/display artifact reached gpu_model=none rootfs: ${forbidden}" >&2
+            exit 1
+        fi
+    done
+    echo "PASS: gpu_model=none rootfs contains no GPU module, firmware, loader, PowerVR userspace, launcher, or recovery artifact"
 fi
 
 echo "[customize] Customization complete."

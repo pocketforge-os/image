@@ -57,8 +57,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 case "${PF_GPU_MODEL}" in
-    ddk|open) ;;
-    *) echo "build-sd-image.sh: PF_GPU_MODEL must be ddk|open (got '${PF_GPU_MODEL}')" >&2; exit 2 ;;
+    ddk|open|none) ;;
+    *) echo "build-sd-image.sh: PF_GPU_MODEL must be ddk|open|none (got '${PF_GPU_MODEL}')" >&2; exit 2 ;;
 esac
 case "${BOOT_CHAIN}" in
     vendor|owned-spl) ;;
@@ -128,6 +128,14 @@ fi
 INITRD_ARGS+=(--kernel-tsp-dir "${KERNEL_TSP_DIR}" --gpu-km-dir "${GPU_KM_TSP_DIR}")
 INITRD_ARGS+=(--gpu-model "${PF_GPU_MODEL}")
 bash "${BOARD_DIR}/initrd/build-initrd.sh" "${INITRD_ARGS[@]}"
+if [ "${PF_GPU_MODEL}" = "none" ]; then
+    if gzip -dc "${WORK}/initrd.gz" | cpio -t 2>/dev/null \
+        | grep -Ei '(^|/)(pvrsrvkm|dc_sunxi|powervr)\.ko$|(^|/)lib/firmware/(powervr|rgx\.)'; then
+        echo "FATAL: GPU artifact reached gpu_model=none initramfs" >&2
+        exit 1
+    fi
+    echo "PASS: gpu_model=none assembled initramfs contains no GPU module or firmware"
+fi
 
 # ---- step 2: compile DTB ---------------------------------------------------
 # (boot.img does NOT depend on DTB; only boot_package.fex does.
