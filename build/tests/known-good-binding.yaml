@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/pocketforge,container-test.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: PocketForge build-container schema smoke test
+title: PocketForge synthetic container test device
 
 maintainers:
   - PocketForge CI <ci@pocketforge.org>

@@ -553,7 +553,7 @@ RUN set -eux; \
 #   mke2fs         >= 1.47.1
 #   genimage, abootimg, dtc, sunxi-tools, qemu-aarch64-static — Phase 0 carry-overs
 #   bc, bison, flex, openssl headers, elf headers — Phase 2 kernel build
-COPY tests/known-good-binding.yaml /tmp/dtschema-known-good.yaml
+COPY tests/known-good-binding.yaml /tmp/pocketforge,container-test.yaml
 RUN set -eux; \
     mmdebstrap --version | grep -Eo 'mmdebstrap [0-9.]+'; \
     faketime --version | head -1; \
@@ -575,8 +575,8 @@ RUN set -eux; \
     test -f /usr/include/openssl/evp.h; \
     test -f /usr/include/libelf.h; \
     dt-doc-validate --version; \
-    dt-doc-validate /tmp/dtschema-known-good.yaml; \
-    rm -f /tmp/dtschema-known-good.yaml
+    dt-doc-validate /tmp/pocketforge,container-test.yaml; \
+    rm -f /tmp/pocketforge,container-test.yaml
 
 # Default workdir matches the documented bind-mount layout: build commands
 # `cd /work/src` (read-only source), produce into `/work/out`.
