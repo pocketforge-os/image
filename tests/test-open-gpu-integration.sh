@@ -6,6 +6,8 @@ dockerfile="$root/build/Dockerfile.pf"
 customize="$root/scripts/build-rootfs.sh"
 gate="$root/rootfs-overlay/usr/lib/pocketforge/open-gpu-gate.sh"
 unit="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service"
+selected_unit="$root/rootfs-overlay/etc/systemd/system/pf-shell-selected.service"
+foreground_unit="$root/rootfs-overlay/etc/systemd/system/pf-foreground@.service"
 manager_environment="$root/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"
 session_environment="$root/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf"
 required="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf"
@@ -89,6 +91,7 @@ if grep -Eq 'testgles2|SDL_VIDEODRIVER|pf-take-panel|systemctl|fb0|boot-animator
     exit 1
 fi
 grep -F 'Before=pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service' "$unit" >/dev/null
+grep -Fx 'RemainAfterExit=yes' "$unit" >/dev/null
 if grep -Eq '^[[:space:]]*(Condition|Assert)[A-Za-z]*=' "$unit"; then
     echo 'open GPU gate must not skip on a missing required artifact' >&2
     exit 1
@@ -121,6 +124,17 @@ for forbidden in pocketforge-foreground.target pf-shell-selected.service pocketf
             exit 1
             ;;
     esac
+done
+
+# Shell processes consume the prefs socket. Keep their dependency soft so prefsd
+# can restart independently, while ordering initial startup behind its start job.
+for shell_unit in "$selected_unit" "$foreground_unit"; do
+    grep -Fx 'Wants=pf-prefsd.service' "$shell_unit" >/dev/null
+    grep -E '^After=.*(^|[[:space:]])pf-prefsd\.service([[:space:]]|$)' "$shell_unit" >/dev/null
+    if grep -Fx 'Requires=pf-prefsd.service' "$shell_unit" >/dev/null; then
+        echo "shell unit must not couple its lifetime to prefsd: $shell_unit" >&2
+        exit 1
+    fi
 done
 
 echo 'open-gpu-integration=PASS'
