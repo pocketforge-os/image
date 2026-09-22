@@ -1234,14 +1234,24 @@ FROM ${PF_CONTAINER} AS launcher-open
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
 ARG PF_LAUNCHER_SHA
+ARG PF_RUNTIME_SHA
 ARG SOURCE_DATE_EPOCH
 ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 ENV CARGO_NET_OFFLINE=true CARGO_NET_LOCKED=1
 COPY --from=launcher-src . /work/launcher
+COPY --from=runtime-src . /work/runtime-contract
+COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/check-launcher-runtime-contract
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
 [ "${PF_LAUNCHER_SHA}" = "4a076d63464715ae06df5530f32edf8ac5b078eb" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+# pf-shell vendors these twelve runtime crates. Compare every source tree, not
+# only today's daemon-facing subset: the remaining crates share wire types and
+# can acquire contract-bearing code without requiring another allowlist update.
+check-launcher-runtime-contract /work/launcher /work/runtime-contract \
+  pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme \
+  pf-input-map pf-prefs pf-prefs-port pf-session-client \
+  pf-session-authority pf-wire
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 # Pin rust-lld as the aarch64-unknown-linux-musl linker (the launcher repo's
 # .cargo/config.toml configures vendored/offline sources but no musl linker). Without it, cargo
