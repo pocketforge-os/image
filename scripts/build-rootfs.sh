@@ -1057,6 +1057,8 @@ install -m 0755 "/work/src/rootfs-overlay/usr/bin/pf-take-panel" \
     "${ROOTFS}/usr/bin/pf-take-panel"
 
 if [ "${PF_GPU_MODEL}" = "open" ]; then
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules" \
+        "${ROOTFS}/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
     install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf" \
         "${ROOTFS}/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"
     install -D -m 0644 "/work/src/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf" \
