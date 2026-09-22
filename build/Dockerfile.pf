@@ -968,7 +968,7 @@ COPY --from=runtime-src . /work/runtime
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "78e4754cd0d6ccdc0aa858bc2d889b7f33458ec0" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "2e7e4d96f2a4148d0d5926b11238d36d12f0c73e" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 cd /work/runtime
 # Build the SDK for every device: hwprobe is a separate build-graph input even
@@ -1241,7 +1241,7 @@ COPY --from=launcher-src . /work/launcher
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "f3fcdd938899b18c96e26e42a1571fc84233194f" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "4a076d63464715ae06df5530f32edf8ac5b078eb" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 # Pin rust-lld as the aarch64-unknown-linux-musl linker (the launcher repo's
 # .cargo/config.toml configures vendored/offline sources but no musl linker). Without it, cargo

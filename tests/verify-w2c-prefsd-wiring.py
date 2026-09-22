@@ -48,8 +48,8 @@ runtime_guard = re.findall(
     dockerfile,
     flags=re.MULTILINE,
 )
-assert runtime_guard == ["78e4754cd0d6ccdc0aa858bc2d889b7f33458ec0"], (
-    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 78e4754, "
+assert runtime_guard == ["2e7e4d96f2a4148d0d5926b11238d36d12f0c73e"], (
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 2e7e4d9, "
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
