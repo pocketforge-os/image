@@ -1554,6 +1554,10 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
 # structural image check; lease population itself is verified on tsp-f956's boot.
 "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${ROOTFS_EXTRACTED}"
 
+# Assert the signed Wi-Fi regulatory database is in the assembled filesystem,
+# and enforce the vendor-manifest non-redistribution decision for XR829 BT.
+"${SRC_DIR}/scripts/verify-rootfs-firmware.sh" "${ROOTFS_EXTRACTED}"
+
 # Report rootfs size
 ROOTFS_DU="$(du -sm "${ROOTFS_EXTRACTED}" | cut -f1)"
 echo "  rootfs extracted: ${ROOTFS_DU} MiB"
