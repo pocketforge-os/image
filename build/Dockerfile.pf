@@ -546,13 +546,17 @@ COPY --from=gpu-um-src . /src/
 COPY --from=gpu-um-src docker/pkg-config/ /usr/local/bin/
 COPY --from=gpu-um-src docker/meson/ /usr/local/share/mesa-cross/
 COPY --from=gpu-um-native-precompilers /opt/mesa-native /opt/mesa-native
+# mesa_clc resolves Clang's builtin OpenCL headers from this compiled-in host
+# resource path.  They are generator inputs only, never target headers.
+COPY --from=gpu-um-native-precompilers /usr/lib/llvm-20/lib/clang /usr/lib/llvm-20/lib/clang
 COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
 RUN <<'GPUUMSYSROOT'
 set -eux
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  ccache gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
-  libdrm-dev:arm64 libvulkan-dev:arm64 python3-pip
+  ccache g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
+  libdrm-dev:arm64 libvulkan-dev:arm64 python3-mako python3-packaging \
+  python3-pip python3-ply python3-yaml
 PIP_ROOT_USER_ACTION=ignore python3 -m pip install --break-system-packages \
   'meson==1.7.2' 'ninja==1.11.1.4'
 chmod 0755 /usr/local/bin/aarch64-linux-gnu-pkg-config /usr/local/bin/x86_64-linux-gnu-pkg-config
