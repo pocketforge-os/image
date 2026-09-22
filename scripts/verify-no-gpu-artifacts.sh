@@ -1,24 +1,80 @@
 #!/bin/sh
 set -eu
 
+# Khronos' Linux driver-discovery table appends /vulkan/icd.d to these
+# system and image-user fallback bases.  The three users are the homes created
+# by this image.  Environment overrides are not image paths; the generic
+# lexical scan below still rejects their contents.
+vulkan_icd_boundaries='etc/xdg/vulkan/icd.d
+usr/local/etc/vulkan/icd.d
+etc/vulkan/icd.d
+root/.config/vulkan/icd.d
+root/.local/share/vulkan/icd.d
+home/gamer/.config/vulkan/icd.d
+home/gamer/.local/share/vulkan/icd.d
+home/debug/.config/vulkan/icd.d
+home/debug/.local/share/vulkan/icd.d
+usr/local/share/vulkan/icd.d
+usr/share/vulkan/icd.d'
+# Mesa installs DRI drivers in the configured libdir/dri.  Debian arm64's
+# compiled libdir is the multiarch directory below.
+mesa_dri_boundaries='usr/lib/aarch64-linux-gnu/dri'
+
+case "${1:-}" in
+    --print-vulkan-icd-boundaries) printf '%s\n' "$vulkan_icd_boundaries"; exit 0 ;;
+    --print-mesa-dri-boundaries) printf '%s\n' "$mesa_dri_boundaries"; exit 0 ;;
+esac
+
 root=${1:?usage: verify-no-gpu-artifacts.sh ROOT [LABEL]}
 label=${2:-tree}
 
 [ -d "$root" ] || { echo "FATAL: gpu_model=none verification root missing: $root" >&2; exit 2; }
 
 if [ "${PF_GPU_MODEL:-none}" = "none" ]; then
+    # libvulkan.so is the vendor-neutral dispatch loader, not a GPU driver.  It
+    # may arrive transitively (for example ffmpeg -> libavfilter -> libplacebo)
+    # and cannot expose hardware without an installed ICD.  Reject the actual
+    # capability-bearing boundary instead: ICD manifests, DRI drivers, vendor
+    # userspace, kernel modules, and firmware.  Every component leading to an
+    # ICD/DRI boundary must be a real directory: rejecting links at any depth
+    # prevents a runtime-reachable artifact from hiding behind an ancestor and
+    # avoids following a rootfs-escaping link into the host.  Boundary entries
+    # are likewise matched lexically, so dangling links are rejected.  A real,
+    # empty ICD directory remains harmless.
+    boundary_link=
+    for boundary in $vulkan_icd_boundaries $mesa_dri_boundaries
+    do
+        component=$root
+        old_ifs=$IFS
+        IFS=/
+        for name in $boundary; do
+            component=$component/$name
+            if [ -L "$component" ]; then
+                boundary_link=$component
+                break 2
+            fi
+        done
+        IFS=$old_ifs
+    done
+    IFS=$old_ifs
+
+    if [ -n "$boundary_link" ]; then
+        echo "FATAL: GPU artifact boundary reached through symlink in gpu_model=none ${label}: ${boundary_link#"$root"/}" >&2
+        exit 1
+    fi
+
     found=$(
         find "$root" \
             \( \
-                \( -type d \( -path '*/lib/firmware/powervr' -o -path '*/usr/lib/pvr-rogue' -o -path '*/vulkan/icd.d' \) \) -o \
-                \( -type f \( \
-                    -name 'pvrsrvkm.ko' -o -name 'dc_sunxi.ko' -o -name 'powervr.ko' -o \
-                    -name 'rgx.fw*' -o -name 'rgx.sh*' -o -name 'rogue*.fw' -o \
-                    -name 'libvulkan.so*' -o -name 'libvulkan_powervr*' -o \
-                    -name 'libsrv_um.so*' -o -name 'libIMGegl.so*' -o \
-                    -name 'libSDL3-pocketforge.so*' -o -name 'LICENSE.powervr' -o \
-                    -name 'pf-shell' -o -name 'pocketforge-recovery-entry' \
-                \) \) \
+                -path '*/lib/firmware/powervr' -o -path '*/usr/lib/pvr-rogue' -o \
+                \( -type l \( -path '*/vulkan/icd.d' -o -path '*/dri' \) \) -o \
+                -path '*/vulkan/icd.d/*' -o -path '*/dri/*.so*' -o \
+                -name 'pvrsrvkm.ko' -o -name 'dc_sunxi.ko' -o -name 'powervr.ko' -o \
+                -name 'rgx.fw*' -o -name 'rgx.sh*' -o -name 'rogue*.fw' -o \
+                -name 'libvulkan_powervr*' -o \
+                -name 'libsrv_um.so*' -o -name 'libIMGegl.so*' -o \
+                -name 'libSDL3-pocketforge.so*' -o -name 'LICENSE.powervr' -o \
+                -name 'pf-shell' -o -name 'pocketforge-recovery-entry' \
             \) -print -quit
     )
 

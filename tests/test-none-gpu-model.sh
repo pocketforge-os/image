@@ -33,11 +33,95 @@ echo 'PASS: none rootfs installs the discovered kernel release and rejects GPU a
 tmpdir=$(mktemp -d)
 trap 'find "$tmpdir" -mindepth 1 -delete; rmdir "$tmpdir"' EXIT
 mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
+    "$tmpdir/clean/usr/lib/aarch64-linux-gnu" \
+    "$tmpdir/clean/usr/share/vulkan/icd.d" \
     "$tmpdir/file-dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination" \
-    "$tmpdir/directory-dirty/usr/share/vulkan/icd.d"
+    "$tmpdir/directory-dirty/usr/share/vulkan/icd.d" \
+    "$tmpdir/driver-dirty/usr/lib/aarch64-linux-gnu/dri" \
+    "$tmpdir/icd-symlink-dirty/usr/share/vulkan/icd.d" \
+    "$tmpdir/driver-symlink-dirty/usr/lib/aarch64-linux-gnu/dri" \
+    "$tmpdir/icd-absolute-symlink-dirty/usr/share/vulkan/icd.d" \
+    "$tmpdir/icd-relative-symlink-dirty/usr/share/vulkan/icd.d" \
+    "$tmpdir/icd-directory-symlink-dirty/usr/share/vulkan" \
+    "$tmpdir/icd-directory-symlink-dirty/opt/icds" \
+    "$tmpdir/driver-directory-symlink-dirty/usr/lib/aarch64-linux-gnu" \
+    "$tmpdir/driver-directory-symlink-dirty/opt/drivers" \
+    "$tmpdir/icd-parent-symlink-dirty/usr/share" \
+    "$tmpdir/icd-parent-symlink-dirty/opt/gpu/icd.d" \
+    "$tmpdir/icd-grandparent-symlink-dirty/usr" \
+    "$tmpdir/icd-grandparent-symlink-dirty/opt/share/vulkan/icd.d" \
+    "$tmpdir/driver-parent-symlink-dirty/usr/lib" \
+    "$tmpdir/driver-parent-symlink-dirty/opt/arch/dri" \
+    "$tmpdir/driver-grandparent-symlink-dirty/usr" \
+    "$tmpdir/driver-grandparent-symlink-dirty/opt/lib/aarch64-linux-gnu/dri" \
+    "$tmpdir/icd-hardlink-dirty/usr/share/vulkan/icd.d" \
+    "$tmpdir/icd-escape-symlink-dirty/usr/share/vulkan/icd.d"
 : >"$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc/sunxi-mmc.ko"
+: >"$tmpdir/clean/usr/lib/aarch64-linux-gnu/libvulkan.so.1.3.239"
 : >"$tmpdir/file-dirty/lib/modules/7.2.0/kernel/drivers/gpu/drm/imagination/powervr.ko"
 : >"$tmpdir/directory-dirty/usr/share/vulkan/icd.d/software-renderer.json"
+: >"$tmpdir/driver-dirty/usr/lib/aarch64-linux-gnu/dri/unlisted_vendor_dri.so"
+ln -s ../../../lib/aarch64-linux-gnu/vendor.json \
+    "$tmpdir/icd-symlink-dirty/usr/share/vulkan/icd.d/vendor.json"
+ln -s ../missing-vendor-driver.so \
+    "$tmpdir/driver-symlink-dirty/usr/lib/aarch64-linux-gnu/dri/vendor_dri.so"
+: >"$tmpdir/icd-absolute-symlink-dirty/vendor.json"
+ln -s /vendor.json \
+    "$tmpdir/icd-absolute-symlink-dirty/usr/share/vulkan/icd.d/vendor.json"
+: >"$tmpdir/icd-relative-symlink-dirty/vendor.json"
+ln -s ../../../../vendor.json \
+    "$tmpdir/icd-relative-symlink-dirty/usr/share/vulkan/icd.d/vendor.json"
+: >"$tmpdir/icd-directory-symlink-dirty/opt/icds/vendor.json"
+ln -s /opt/icds \
+    "$tmpdir/icd-directory-symlink-dirty/usr/share/vulkan/icd.d"
+: >"$tmpdir/driver-directory-symlink-dirty/opt/drivers/vendor_dri.so"
+ln -s ../../../../opt/drivers \
+    "$tmpdir/driver-directory-symlink-dirty/usr/lib/aarch64-linux-gnu/dri"
+: >"$tmpdir/icd-parent-symlink-dirty/opt/gpu/icd.d/vendor.json"
+ln -s /opt/gpu "$tmpdir/icd-parent-symlink-dirty/usr/share/vulkan"
+: >"$tmpdir/icd-grandparent-symlink-dirty/opt/share/vulkan/icd.d/vendor.json"
+ln -s ../opt/share "$tmpdir/icd-grandparent-symlink-dirty/usr/share"
+: >"$tmpdir/driver-parent-symlink-dirty/opt/arch/dri/vendor_dri.so"
+ln -s /opt/arch "$tmpdir/driver-parent-symlink-dirty/usr/lib/aarch64-linux-gnu"
+: >"$tmpdir/driver-grandparent-symlink-dirty/opt/lib/aarch64-linux-gnu/dri/vendor_dri.so"
+ln -s ../opt/lib "$tmpdir/driver-grandparent-symlink-dirty/usr/lib"
+: >"$tmpdir/icd-hardlink-dirty/source.json"
+ln "$tmpdir/icd-hardlink-dirty/source.json" \
+    "$tmpdir/icd-hardlink-dirty/usr/share/vulkan/icd.d/vendor.json"
+ln -s ../../../../../../outside-rootfs/vendor.json \
+    "$tmpdir/icd-escape-symlink-dirty/usr/share/vulkan/icd.d/vendor.json"
+
+# Khronos' Linux discovery table appends vulkan/icd.d to these system and
+# image-user fallback bases.  Give every derived boundary an independent,
+# attacker-shaped manifest control so an unwired list entry cannot pass.
+icd_boundaries=$("$verifier" --print-vulkan-icd-boundaries)
+boundary_number=0
+for boundary in $icd_boundaries; do
+    boundary_number=$((boundary_number + 1))
+    fixture="$tmpdir/icd-boundary-$boundary_number"
+    mkdir -p "$fixture/$(dirname "$boundary")" "$fixture/opt/hidden-$boundary_number"
+    : >"$fixture/opt/hidden-$boundary_number/vendor.json"
+    ln -s "/opt/hidden-$boundary_number" "$fixture/$boundary"
+    if PF_GPU_MODEL=none "$verifier" "$fixture" test-fixture >/dev/null 2>&1; then
+        echo "FAIL: none-model verifier accepted Vulkan ICD boundary $boundary" >&2
+        exit 1
+    fi
+done
+
+dri_boundaries=$("$verifier" --print-mesa-dri-boundaries)
+boundary_number=0
+for boundary in $dri_boundaries; do
+    boundary_number=$((boundary_number + 1))
+    fixture="$tmpdir/dri-boundary-$boundary_number"
+    mkdir -p "$fixture/$(dirname "$boundary")" "$fixture/opt/dri-hidden-$boundary_number"
+    : >"$fixture/opt/dri-hidden-$boundary_number/vendor_dri.so"
+    ln -s "/opt/dri-hidden-$boundary_number" "$fixture/$boundary"
+    if PF_GPU_MODEL=none "$verifier" "$fixture" test-fixture >/dev/null 2>&1; then
+        echo "FAIL: none-model verifier accepted Mesa DRI boundary $boundary" >&2
+        exit 1
+    fi
+done
+
 PF_GPU_MODEL=none "$verifier" "$tmpdir/clean" test-fixture >/dev/null
 if PF_GPU_MODEL=none "$verifier" "$tmpdir/file-dirty" test-fixture >/dev/null 2>&1; then
     echo 'FAIL: none-model verifier accepted nested powervr.ko' >&2
@@ -47,7 +131,61 @@ if PF_GPU_MODEL=none "$verifier" "$tmpdir/directory-dirty" test-fixture >/dev/nu
     echo 'FAIL: none-model verifier accepted a forbidden Vulkan ICD directory' >&2
     exit 1
 fi
-echo 'PASS: none-model negative controls reject forbidden GPU files and directories'
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted an unlisted Mesa DRI driver' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a dangling Vulkan ICD manifest symlink' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a dangling Mesa DRI driver symlink' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-absolute-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted an absolute Vulkan ICD manifest symlink' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-relative-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a relative Vulkan ICD manifest symlink' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-directory-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a symlinked Vulkan ICD directory' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-directory-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a symlinked Mesa DRI directory' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-parent-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a Vulkan ICD behind a linked parent' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-grandparent-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a Vulkan ICD behind a linked grandparent' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-parent-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a Mesa DRI driver behind a linked parent' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/driver-grandparent-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a Mesa DRI driver behind a linked grandparent' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-hardlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a hardlinked Vulkan ICD manifest' >&2
+    exit 1
+fi
+if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-escape-symlink-dirty" test-fixture >/dev/null 2>&1; then
+    echo 'FAIL: none-model verifier accepted a rootfs-escaping Vulkan ICD symlink' >&2
+    exit 1
+fi
+echo 'PASS: none-model permits the vendor-neutral Vulkan loader without an ICD'
+echo 'PASS: every documented Vulkan ICD fallback and the configured Mesa DRI boundary has a negative control'
+echo 'PASS: none-model negative controls reject nested powervr.ko, ICD/DRI files, links at every path depth, hardlinks, and rootfs escapes'
 
 # Execute the generated hook's exact none-model epilogue with SRC_DIR absent.
 # The verifier wrapper records that the real call is reached before delegating.
