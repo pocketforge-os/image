@@ -967,8 +967,8 @@ ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 COPY --from=runtime-src . /work/runtime
 RUN <<'RUNTIME'
 set -eux
-mkdir -p /out/bin /out/systemd /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "2e7e4d96f2a4148d0d5926b11238d36d12f0c73e" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
+[ "${PF_RUNTIME_SHA}" = "b5b6559b354ed6ddf033141f867c8ff74b650409" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 cd /work/runtime
 # Build the SDK for every device: hwprobe is a separate build-graph input even
@@ -1039,6 +1039,9 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   if grep -qa 'ld-musl\|ld-linux' "${PREFSD_BIN}"; then echo "FATAL: pf-prefsd is dynamically linked (expected static musl)"; exit 1; fi
   install -D -m 0755 "${AUTHORITY_BIN}" /out/bin/pf-session-authorityd
   install -D -m 0755 "${PREFSD_BIN}" /out/bin/pf-prefsd
+  install -D -m 0644 systemd/pf-session-authorityd.service /out/systemd/pf-session-authorityd.service
+  install -D -m 0644 systemd/pf-prefsd.service /out/systemd/pf-prefsd.service
+  install -D -m 0644 systemd/pocketforge.conf /out/tmpfiles.d/pocketforge.conf
   {
     printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
     printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
@@ -1244,7 +1247,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "4a076d63464715ae06df5530f32edf8ac5b078eb" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "2ebc09145b975f55bc690758a8fee8ee92738969" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these twelve runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.

@@ -67,8 +67,8 @@ run_fault_rung() {
 case "${1:---check}" in
     --check)
         grep -F 'TimeoutStopSec=2s' "$(dirname "$0")/../rootfs-overlay/etc/systemd/system/pf-foreground@.service" >/dev/null
-        grep -F 'ExecStart=/usr/bin/pf-session-authorityd --state-dir /var/lib/pocketforge/session-authority --socket /run/pocketforge/session-authority.sock' \
-            "$(dirname "$0")/../rootfs-overlay/etc/systemd/system/pf-session-authorityd.service" >/dev/null
+        grep -F '"${RUNTIME_DIR}/systemd/pf-session-authorityd.service"' \
+            "$(dirname "$0")/../scripts/build-rootfs.sh" >/dev/null
         printf '%s\n' 'F13 fault definitions: PASS (syntax/contracts; execution deferred)'
         ;;
     --run) run_fault_rung ;;

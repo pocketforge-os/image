@@ -14,20 +14,6 @@ def text(path: Path) -> str:
     return path.read_text()
 
 
-prefsd = text(SYSTEMD / "pf-prefsd.service")
-assert "Description=PocketForge preference state authority" in prefsd
-assert (
-    "ExecStart=/usr/bin/pf-prefsd "
-    "--state-dir /var/lib/pocketforge/shell "
-    f"--socket {SOCKET}"
-) in prefsd
-assert "User=gamer" in prefsd
-assert "StateDirectory=pocketforge/shell" in prefsd
-assert "RuntimeDirectory=pocketforge" in prefsd
-assert "RuntimeDirectory=pocketforge" in text(SYSTEMD / "pf-session-authorityd.service")
-assert "Restart=on-failure" in prefsd
-assert "WantedBy=multi-user.target" in prefsd
-
 for relative in (
     "pf-shell-selected.service",
     "pf-foreground@.service",
@@ -48,13 +34,16 @@ runtime_guard = re.findall(
     dockerfile,
     flags=re.MULTILINE,
 )
-assert runtime_guard == ["2e7e4d96f2a4148d0d5926b11238d36d12f0c73e"], (
-    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 2e7e4d9, "
+assert runtime_guard == ["b5b6559b354ed6ddf033141f867c8ff74b650409"], (
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime b5b6559b, "
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
 assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
+assert "systemd/pf-prefsd.service /out/systemd/pf-prefsd.service" in dockerfile
+assert "systemd/pf-session-authorityd.service /out/systemd/pf-session-authorityd.service" in dockerfile
+assert "systemd/pocketforge.conf /out/tmpfiles.d/pocketforge.conf" in dockerfile
 for crate in (
     "pf-scene",
     "pf-ports",
@@ -76,7 +65,13 @@ assert "check-launcher-runtime-contract /work/launcher /work/runtime-contract" i
 recipe = text(ROOT / "scripts/build-rootfs.sh")
 assert '"${ROOTFS}/usr/bin/pf-prefsd"' in recipe
 assert 'multi-user.target.wants/pf-prefsd.service' in recipe
+assert '"${RUNTIME_DIR}/systemd/pf-prefsd.service"' in recipe
+assert '"${RUNTIME_DIR}/systemd/pf-session-authorityd.service"' in recipe
+assert '"${RUNTIME_DIR}/tmpfiles.d/pocketforge.conf"' in recipe
+assert '"${ROOTFS}/usr/lib/tmpfiles.d/pocketforge.conf"' in recipe
 assert 'rootfs-overlay/etc/environment' in recipe
 assert "grep -qxF 'PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock'" in recipe
+assert not (SYSTEMD / "pf-prefsd.service").exists()
+assert not (SYSTEMD / "pf-session-authorityd.service").exists()
 
 print("PASS W2c pf-prefsd recipe wiring")
