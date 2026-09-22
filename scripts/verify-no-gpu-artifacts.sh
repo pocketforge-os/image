@@ -1,6 +1,30 @@
 #!/bin/sh
 set -eu
 
+# Khronos' Linux driver-discovery table appends /vulkan/icd.d to these
+# system and image-user fallback bases.  The three users are the homes created
+# by this image.  Environment overrides are not image paths; the generic
+# lexical scan below still rejects their contents.
+vulkan_icd_boundaries='etc/xdg/vulkan/icd.d
+usr/local/etc/vulkan/icd.d
+etc/vulkan/icd.d
+root/.config/vulkan/icd.d
+root/.local/share/vulkan/icd.d
+home/gamer/.config/vulkan/icd.d
+home/gamer/.local/share/vulkan/icd.d
+home/debug/.config/vulkan/icd.d
+home/debug/.local/share/vulkan/icd.d
+usr/local/share/vulkan/icd.d
+usr/share/vulkan/icd.d'
+# Mesa installs DRI drivers in the configured libdir/dri.  Debian arm64's
+# compiled libdir is the multiarch directory below.
+mesa_dri_boundaries='usr/lib/aarch64-linux-gnu/dri'
+
+case "${1:-}" in
+    --print-vulkan-icd-boundaries) printf '%s\n' "$vulkan_icd_boundaries"; exit 0 ;;
+    --print-mesa-dri-boundaries) printf '%s\n' "$mesa_dri_boundaries"; exit 0 ;;
+esac
+
 root=${1:?usage: verify-no-gpu-artifacts.sh ROOT [LABEL]}
 label=${2:-tree}
 
@@ -18,9 +42,7 @@ if [ "${PF_GPU_MODEL:-none}" = "none" ]; then
     # are likewise matched lexically, so dangling links are rejected.  A real,
     # empty ICD directory remains harmless.
     boundary_link=
-    for boundary in \
-        usr/share/vulkan/icd.d \
-        usr/lib/aarch64-linux-gnu/dri
+    for boundary in $vulkan_icd_boundaries $mesa_dri_boundaries
     do
         component=$root
         old_ifs=$IFS

@@ -90,6 +90,38 @@ ln "$tmpdir/icd-hardlink-dirty/source.json" \
     "$tmpdir/icd-hardlink-dirty/usr/share/vulkan/icd.d/vendor.json"
 ln -s ../../../../../../outside-rootfs/vendor.json \
     "$tmpdir/icd-escape-symlink-dirty/usr/share/vulkan/icd.d/vendor.json"
+
+# Khronos' Linux discovery table appends vulkan/icd.d to these system and
+# image-user fallback bases.  Give every derived boundary an independent,
+# attacker-shaped manifest control so an unwired list entry cannot pass.
+icd_boundaries=$("$verifier" --print-vulkan-icd-boundaries)
+boundary_number=0
+for boundary in $icd_boundaries; do
+    boundary_number=$((boundary_number + 1))
+    fixture="$tmpdir/icd-boundary-$boundary_number"
+    mkdir -p "$fixture/$(dirname "$boundary")" "$fixture/opt/hidden-$boundary_number"
+    : >"$fixture/opt/hidden-$boundary_number/vendor.json"
+    ln -s "/opt/hidden-$boundary_number" "$fixture/$boundary"
+    if PF_GPU_MODEL=none "$verifier" "$fixture" test-fixture >/dev/null 2>&1; then
+        echo "FAIL: none-model verifier accepted Vulkan ICD boundary $boundary" >&2
+        exit 1
+    fi
+done
+
+dri_boundaries=$("$verifier" --print-mesa-dri-boundaries)
+boundary_number=0
+for boundary in $dri_boundaries; do
+    boundary_number=$((boundary_number + 1))
+    fixture="$tmpdir/dri-boundary-$boundary_number"
+    mkdir -p "$fixture/$(dirname "$boundary")" "$fixture/opt/dri-hidden-$boundary_number"
+    : >"$fixture/opt/dri-hidden-$boundary_number/vendor_dri.so"
+    ln -s "/opt/dri-hidden-$boundary_number" "$fixture/$boundary"
+    if PF_GPU_MODEL=none "$verifier" "$fixture" test-fixture >/dev/null 2>&1; then
+        echo "FAIL: none-model verifier accepted Mesa DRI boundary $boundary" >&2
+        exit 1
+    fi
+done
+
 PF_GPU_MODEL=none "$verifier" "$tmpdir/clean" test-fixture >/dev/null
 if PF_GPU_MODEL=none "$verifier" "$tmpdir/file-dirty" test-fixture >/dev/null 2>&1; then
     echo 'FAIL: none-model verifier accepted nested powervr.ko' >&2
@@ -152,6 +184,7 @@ if PF_GPU_MODEL=none "$verifier" "$tmpdir/icd-escape-symlink-dirty" test-fixture
     exit 1
 fi
 echo 'PASS: none-model permits the vendor-neutral Vulkan loader without an ICD'
+echo 'PASS: every documented Vulkan ICD fallback and the configured Mesa DRI boundary has a negative control'
 echo 'PASS: none-model negative controls reject nested powervr.ko, ICD/DRI files, links at every path depth, hardlinks, and rootfs escapes'
 
 # Execute the generated hook's exact none-model epilogue with SRC_DIR absent.
