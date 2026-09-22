@@ -6,6 +6,7 @@ Before=pf-shell-selected.service pocketforge-menu.service pocketforge-placeholde
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 Environment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1
 ExecStart=/usr/lib/pocketforge/open-gpu-gate.sh
 TimeoutStartSec=35s
