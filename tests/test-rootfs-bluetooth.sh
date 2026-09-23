@@ -26,13 +26,20 @@ grep -Fq 'ExecStart=/usr/libexec/pocketforge/xr829-hciattach /dev/ttyS1' "$unit"
 grep -Fq 'BindsTo=dev-ttyS1.device' "$unit"
 grep -Fq 'After=systemd-udev-settle.service systemd-rfkill.service dev-ttyS1.device' "$unit"
 grep -Fq 'Restart=no' "$unit"
-# This is intentionally a literal shell fragment in the builder.
+# The attach path is selected by the target device profile, never GPU policy.
 # shellcheck disable=SC2016
-grep -Fq '[ "${PF_GPU_MODEL}" = "open" ]' "$builder"
+test "$(grep -Fc 'if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then' "$builder")" -eq 3
+if sed -n '/XR829 vendor attach helper installed/,/fi/p' "$builder" |
+	grep -Fq 'PF_GPU_MODEL'; then
+	echo 'FAIL: Bluetooth install is coupled to GPU policy' >&2
+	exit 1
+fi
 # shellcheck disable=SC2016
 grep -Fq 'build/check-rootfs-abi.sh" "${ROOTFS}" "${PF_BT_ATTACH_BIN}"' "$builder"
 # shellcheck disable=SC2016
 grep -Fq 'PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN}' "$builder"
+# shellcheck disable=SC2016
+grep -Fq 'PF_DEVICE_ID=${PF_DEVICE_ID}' "$builder"
 grep -Fq 'scripts/verify-rootfs-bluetooth.sh' "$builder"
 
 mkdir -p "$fixture/root/usr/libexec/pocketforge" \
@@ -51,5 +58,12 @@ if "$verifier" "$fixture/root" >/dev/null 2>&1; then
 	echo 'FAIL: Bluetooth verifier accepted a rootfs without the attach binary' >&2
 	exit 1
 fi
+
+# The assembled-image gate for the exact target profile must invoke that same
+# verifier outside the install block, so a skipped install fails the build.
+verify_gate="$(sed -n '/Assert the signed Wi-Fi regulatory database/,/Report rootfs size/p' "$builder")"
+# shellcheck disable=SC2016
+printf '%s\n' "$verify_gate" | grep -Fq 'if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then'
+printf '%s\n' "$verify_gate" | grep -Fq 'scripts/verify-rootfs-bluetooth.sh'
 
 echo 'rootfs-bluetooth-test=PASS'

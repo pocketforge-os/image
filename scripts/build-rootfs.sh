@@ -41,6 +41,7 @@ case "${PF_GPU_MODEL}" in
     ddk|open|none) ;;
     *) echo "FATAL: PF_GPU_MODEL must be ddk|open|none, got '${PF_GPU_MODEL}'" >&2; exit 2 ;;
 esac
+PF_DEVICE_ID="${PF_DEVICE_ID:?FATAL: PF_DEVICE_ID is required}"
 PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:?FATAL: PF_DISPLAY_PIPELINE is required (fbdev|drm|none)}"
 case "${PF_DISPLAY_PIPELINE}" in
     fbdev|drm) PF_HAS_DISPLAY=1 ;;
@@ -819,10 +820,12 @@ UDEV_INPUT_EOF
 # --- WiFi + networking (bd: tsp-iuz.2.2) -------------------------------------
 echo "[customize] Installing WiFi + networking configuration..."
 
-# The mainline A133 image needs the XR829 vendor boot-ROM/firmware sequence
+# The a133-open-7x image needs the XR829 vendor boot-ROM/firmware sequence
 # before the kernel H4 line discipline can expose hci0. This deliberately ships
 # only the source-built attach helper, not BlueZ/bluetoothd or a profile stack.
-if [ "${PF_GPU_MODEL}" = "open" ]; then
+# This is temporarily keyed to the exact device profile because image currently
+# receives no Bluetooth capability from platform; do not couple it to GPU policy.
+if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then
     [ -x "${PF_BT_ATTACH_BIN}" ] \
         || { echo "FATAL: source-built XR829 attach helper is missing: ${PF_BT_ATTACH_BIN}" >&2; exit 1; }
     install -D -m 0755 "${PF_BT_ATTACH_BIN}" \
@@ -1547,8 +1550,8 @@ CROSS_CC="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-gcc"
 CROSS_STRIP="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-strip"
 
 # Build the minimal XR829 vendor attach helper from committed GPL source. It
-# links only libc and is installed only in the mainline/open A133 rootfs.
-if [ "${PF_GPU_MODEL}" = "open" ]; then
+# links only libc and is installed only in the a133-open-7x rootfs.
+if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then
     PF_BT_ATTACH_BIN="${WORK}/xr829-hciattach"
     "${CROSS_CC}" -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
         -std=gnu11 -static-libgcc \
@@ -1657,7 +1660,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-module} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-module} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_GPU_MODEL=${PF_GPU_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-module} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-module} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
@@ -1685,7 +1688,7 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
 # Assert the signed Wi-Fi regulatory database is in the assembled filesystem,
 # and enforce the owner-approved XR829 image-embedding policy.
 "${SRC_DIR}/scripts/verify-rootfs-firmware.sh" "${ROOTFS_EXTRACTED}"
-if [ "${PF_GPU_MODEL}" = "open" ]; then
+if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then
     "${SRC_DIR}/scripts/verify-rootfs-bluetooth.sh" "${ROOTFS_EXTRACTED}"
 fi
 
