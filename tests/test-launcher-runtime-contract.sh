@@ -77,4 +77,32 @@ printf '%s\n' "$output" | grep -Fqx \
     'FATAL: unresolved vendored reference: pf-wire: pf-wire/Cargo.toml:6: ../../../outside'
 test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 3
 
+# Raw Rust strings are live include syntax, while identical-looking text in line,
+# nested block comments, and strings is not. Exercise both verdicts together.
+printf '%s\n' \
+    'const RAW_MISSING: &str = include_str!(r"../raw-missing");' \
+    'const HASHED_RAW_MISSING: &str = include_str!(r#"../hashed-raw-missing"#);' \
+    'const ESCAPED_MISSING: &str = include_str!("..\x2fescaped-missing");' \
+    '// include_str!("../line-comment-missing")' \
+    '/* outer /* include_str!("../nested-comment-missing") */ still comment */' \
+    'const EXAMPLE: &str = "include_str!(\\"../string-missing\\")";' \
+    >> "$scratch/launcher/vendor/pf-scene/src/lib.rs"
+cp "$scratch/launcher/vendor/pf-scene/src/lib.rs" "$scratch/runtime/crates/pf-scene/src/lib.rs"
+if output=$("$guard" "$scratch/launcher" "$scratch/runtime" pf-scene 2>&1); then
+    echo "FAIL: dangling raw-string includes passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:2: ../raw-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:3: ../hashed-raw-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:4: ../escaped-missing'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 3
+
+# Removing the two live macros leaves only non-code lookalikes, which must pass.
+sed -i '2,4d' "$scratch/launcher/vendor/pf-scene/src/lib.rs"
+cp "$scratch/launcher/vendor/pf-scene/src/lib.rs" "$scratch/runtime/crates/pf-scene/src/lib.rs"
+"$guard" "$scratch/launcher" "$scratch/runtime" pf-scene
+
 echo "PASS: launcher/runtime contract guard accepts identical trees, rejects drift, and distinguishes resolved from dangling references"
