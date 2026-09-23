@@ -816,6 +816,28 @@ UDEV_INPUT_EOF
 # --- WiFi + networking (bd: tsp-iuz.2.2) -------------------------------------
 echo "[customize] Installing WiFi + networking configuration..."
 
+# The mainline A133 image needs the XR829 vendor boot-ROM/firmware sequence
+# before the kernel H4 line discipline can expose hci0. This deliberately ships
+# only the source-built attach helper, not BlueZ/bluetoothd or a profile stack.
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    [ -x "${PF_BT_ATTACH_BIN}" ] \
+        || { echo "FATAL: source-built XR829 attach helper is missing: ${PF_BT_ATTACH_BIN}" >&2; exit 1; }
+    install -D -m 0755 "${PF_BT_ATTACH_BIN}" \
+        "${ROOTFS}/usr/libexec/pocketforge/xr829-hciattach"
+    install -D -m 0644 \
+        "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-xr829-hciattach.service" \
+        "${ROOTFS}/etc/systemd/system/pocketforge-xr829-hciattach.service"
+    install -D -m 0644 "/work/src/third_party/xradio-hciattach/SOURCE.md" \
+        "${ROOTFS}/usr/share/doc/xr829-hciattach/SOURCE.md"
+    install -D -m 0644 "/work/src/third_party/xradio-hciattach/COPYING" \
+        "${ROOTFS}/usr/share/doc/xr829-hciattach/COPYING"
+    install -d "${ROOTFS}/etc/bluetooth" \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+    ln -sf /etc/systemd/system/pocketforge-xr829-hciattach.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-xr829-hciattach.service"
+    echo "[customize] XR829 vendor attach helper installed and enabled on ttyS1"
+fi
+
 # WiFi templater script (reads /boot/wifi.txt -> wpa_supplicant conf)
 install -d "${ROOTFS}/usr/lib/pocketforge"
 install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/wifi-setup.sh" \
@@ -1520,6 +1542,24 @@ ANIMATOR_SRC_DIR="${SRC_DIR}/apps/pocketforge-boot-animator"
 PF_ANIMATOR_BIN="${WORK}/pocketforge-boot-animator"
 CROSS_CC="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-gcc"
 CROSS_STRIP="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-strip"
+
+# Build the minimal XR829 vendor attach helper from committed GPL source. It
+# links only libc and is installed only in the mainline/open A133 rootfs.
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    PF_BT_ATTACH_BIN="${WORK}/xr829-hciattach"
+    "${CROSS_CC}" -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+        -std=gnu11 -static-libgcc \
+        -I"${SRC_DIR}/third_party/xradio-hciattach" \
+        -o "${PF_BT_ATTACH_BIN}" \
+        "${SRC_DIR}/third_party/xradio-hciattach/main.c" \
+        "${SRC_DIR}/third_party/xradio-hciattach/hciattach_xradio.c"
+    "${CROSS_STRIP}" "${PF_BT_ATTACH_BIN}"
+    export PF_BT_ATTACH_BIN
+    echo "  XR829 attach helper: $(stat -c '%s bytes' "${PF_BT_ATTACH_BIN}")"
+else
+    PF_BT_ATTACH_BIN=""
+    export PF_BT_ATTACH_BIN
+fi
 if [ "${PF_HAS_DISPLAY}" = 1 ]; then
 echo "  Cross-compiling pocketforge-boot-animator (aarch64)..."
 "${CROSS_CC}" \
@@ -1642,6 +1682,9 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
 # Assert the signed Wi-Fi regulatory database is in the assembled filesystem,
 # and enforce the owner-approved XR829 image-embedding policy.
 "${SRC_DIR}/scripts/verify-rootfs-firmware.sh" "${ROOTFS_EXTRACTED}"
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    "${SRC_DIR}/scripts/verify-rootfs-bluetooth.sh" "${ROOTFS_EXTRACTED}"
+fi
 
 # Report rootfs size
 ROOTFS_DU="$(du -sm "${ROOTFS_EXTRACTED}" | cut -f1)"

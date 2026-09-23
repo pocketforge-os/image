@@ -1,0 +1,16 @@
+[Unit]
+Description=Attach the XR829 Bluetooth controller
+Documentation=file:/usr/share/doc/xr829-hciattach/SOURCE.md
+Wants=systemd-udev-settle.service systemd-rfkill.service
+After=systemd-udev-settle.service systemd-rfkill.service dev-ttyS1.device
+BindsTo=dev-ttyS1.device
+ConditionPathExists=/lib/firmware/fw_xr829_bt.bin
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/pocketforge/xr829-hciattach /dev/ttyS1
+Restart=no
+TimeoutStopSec=5s
+
+[Install]
+WantedBy=multi-user.target
