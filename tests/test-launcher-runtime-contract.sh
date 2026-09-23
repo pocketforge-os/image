@@ -24,7 +24,9 @@ trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT HUP INT TERM
 for crate in $crates; do
     mkdir -p "$scratch/launcher/vendor/$crate/src" "$scratch/runtime/crates/$crate/src"
     printf 'contract-%s\n' "$crate" > "$scratch/launcher/vendor/$crate/src/lib.rs"
+    printf '[package]\nname = "%s"\nversion = "0.0.0"\n' "$crate" > "$scratch/launcher/vendor/$crate/Cargo.toml"
     cp "$scratch/launcher/vendor/$crate/src/lib.rs" "$scratch/runtime/crates/$crate/src/lib.rs"
+    cp "$scratch/launcher/vendor/$crate/Cargo.toml" "$scratch/runtime/crates/$crate/Cargo.toml"
 done
 
 "$guard" "$scratch/launcher" "$scratch/runtime" $crates
@@ -36,4 +38,149 @@ if output=$("$guard" "$scratch/launcher" "$scratch/runtime" $crates 2>&1); then
 fi
 printf '%s\n' "$output" | grep -qx 'FATAL: launcher/runtime contract drift: pf-wire'
 
-echo "PASS: launcher/runtime contract guard accepts identical trees and rejects drift"
+# Exercise both reference outcomes in one guard invocation: one real file must
+# resolve while a missing file must fail with actionable source coordinates.
+cp "$scratch/runtime/crates/pf-wire/src/lib.rs" "$scratch/launcher/vendor/pf-wire/src/lib.rs"
+printf '%s\n' \
+    'const PRESENT: &str = include_str!("../tests/fixtures/present.txt");' \
+    'const MISSING: &[u8] = include_bytes!("../tests/fixtures/missing.bin");' \
+    >> "$scratch/launcher/vendor/pf-wire/src/lib.rs"
+cp "$scratch/launcher/vendor/pf-wire/src/lib.rs" "$scratch/runtime/crates/pf-wire/src/lib.rs"
+mkdir -p "$scratch/launcher/vendor/pf-wire/tests/fixtures"
+printf 'present\n' > "$scratch/launcher/vendor/pf-wire/tests/fixtures/present.txt"
+printf '%s\n' \
+    '[dependencies]' \
+    'present = { path = "../pf-scene" }' \
+    'missing = { path = "../missing-crate" }' \
+    >> "$scratch/launcher/vendor/pf-session-client/Cargo.toml"
+printf '%s\n' \
+    '[dependencies]' \
+    'present = { path = "../pf-scene" }' \
+    'missing = { path = "../../../outside" }' \
+    >> "$scratch/runtime/crates/pf-wire/Cargo.toml"
+if output=$(PF_CONTRACT_TRACE_REFERENCES=1 \
+    "$guard" "$scratch/launcher" "$scratch/runtime" $crates 2>&1); then
+    echo "FAIL: dangling include fixture passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-wire: pf-wire/src/lib.rs:2: ../tests/fixtures/present.txt'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-wire: pf-wire/src/lib.rs:3: ../tests/fixtures/missing.bin'
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-session-client: pf-session-client/Cargo.toml:5: ../pf-scene'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-session-client: pf-session-client/Cargo.toml:6: ../missing-crate'
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-wire: pf-wire/Cargo.toml:5: ../pf-scene'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-wire: pf-wire/Cargo.toml:6: ../../../outside'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 3
+
+# Raw Rust strings are live include syntax, while identical-looking text in line,
+# nested block comments, and strings is not. Exercise both verdicts together.
+printf '%s\n' \
+    'const RAW_MISSING: &str = include_str!(r"../raw-missing");' \
+    'const HASHED_RAW_MISSING: &str = include_str!(r#"../hashed-raw-missing"#);' \
+    'const ESCAPED_MISSING: &str = include_str!("..\x2fescaped-missing");' \
+    'const BRACE_MISSING: &str = include_str!{"../brace-missing"};' \
+    'const BRACKET_MISSING: &[u8] = include_bytes!["../bracket-missing"];' \
+    'const COMMA_MISSING: &str = include_str!("../comma-missing",);' \
+    'const MULTILINE_MISSING: &str = include_str!(' \
+    '  "../multiline-missing"' \
+    ');' \
+    '// include_str!("../line-comment-missing")' \
+    '/* outer /* include_str!("../nested-comment-missing") */ still comment */' \
+    'const EXAMPLE: &str = "include_str!(\\"../string-missing\\")";' \
+    >> "$scratch/launcher/vendor/pf-scene/src/lib.rs"
+cp "$scratch/launcher/vendor/pf-scene/src/lib.rs" "$scratch/runtime/crates/pf-scene/src/lib.rs"
+if output=$("$guard" "$scratch/launcher" "$scratch/runtime" pf-scene 2>&1); then
+    echo "FAIL: dangling raw-string includes passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:2: ../raw-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:3: ../hashed-raw-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:4: ../escaped-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:5: ../brace-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:6: ../bracket-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:7: ../comma-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:8: ../multiline-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'INFO: unrecognized vendored include forms: pf-scene: 0'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 7
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unverifiable vendored include form:')" -eq 0
+
+# Removing the seven live macros leaves only non-code lookalikes, which must pass.
+sed -i '2,10d' "$scratch/launcher/vendor/pf-scene/src/lib.rs"
+cp "$scratch/launcher/vendor/pf-scene/src/lib.rs" "$scratch/runtime/crates/pf-scene/src/lib.rs"
+"$guard" "$scratch/launcher" "$scratch/runtime" pf-scene
+
+# An otherwise clean generated include must fail on the true proposition that it
+# cannot be verified. A direct resolvable literal beside it remains independently
+# traced as resolved and must not contaminate the failure reason.
+printf '%s\n' \
+    'const GENERATED: &str = include_str!(concat!("../", "outside.txt"));' \
+    'const PRESENT: &str = include_str!("../present.txt");' \
+    >> "$scratch/launcher/vendor/pf-theme/src/lib.rs"
+cp "$scratch/launcher/vendor/pf-theme/src/lib.rs" "$scratch/runtime/crates/pf-theme/src/lib.rs"
+printf 'present\n' > "$scratch/launcher/vendor/pf-theme/present.txt"
+if output=$(PF_CONTRACT_TRACE_REFERENCES=1 \
+    "$guard" "$scratch/launcher" "$scratch/runtime" pf-theme 2>&1); then
+    echo "FAIL: unverifiable generated include passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unverifiable vendored include form: pf-theme: pf-theme/src/lib.rs:2'
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-theme: pf-theme/src/lib.rs:3: ../present.txt'
+printf '%s\n' "$output" | grep -Fqx \
+    'INFO: unrecognized vendored include forms: pf-theme: 1'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unverifiable vendored include form:')" -eq 1
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 0
+
+# Existing nodes are not sufficient: Rust includes require readable regular
+# files, while Cargo path dependencies require crate directories with manifests.
+printf '%s\n' \
+    'const DIRECTORY: &str = include_str!("../fixtures/directory.bin");' \
+    'const PRESENT: &str = include_str!("../fixtures/present.txt");' \
+    >> "$scratch/launcher/vendor/pf-prefs/src/lib.rs"
+cp "$scratch/launcher/vendor/pf-prefs/src/lib.rs" "$scratch/runtime/crates/pf-prefs/src/lib.rs"
+mkdir -p \
+    "$scratch/launcher/vendor/pf-prefs/fixtures/directory.bin" \
+    "$scratch/launcher/vendor/not-a-crate"
+printf 'present\n' > "$scratch/launcher/vendor/pf-prefs/fixtures/present.txt"
+printf 'not a crate\n' > "$scratch/launcher/vendor/path-is-file"
+printf '%s\n' \
+    '[dependencies]' \
+    'file = { path = "../path-is-file" }' \
+    'no_manifest = { path = "../not-a-crate" }' \
+    'present = { path = "../pf-scene" }' \
+    >> "$scratch/launcher/vendor/pf-prefs/Cargo.toml"
+cp "$scratch/launcher/vendor/pf-prefs/Cargo.toml" "$scratch/runtime/crates/pf-prefs/Cargo.toml"
+if output=$(PF_CONTRACT_TRACE_REFERENCES=1 \
+    "$guard" "$scratch/launcher" "$scratch/runtime" pf-prefs 2>&1); then
+    echo "FAIL: wrong-type vendored targets passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: invalid vendored include target: pf-prefs: pf-prefs/src/lib.rs:2: ../fixtures/directory.bin: resolves to a directory, not a readable file'
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-prefs: pf-prefs/src/lib.rs:3: ../fixtures/present.txt'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: invalid vendored Cargo path dependency: pf-prefs: pf-prefs/Cargo.toml:5: ../path-is-file: resolves to a file, not a crate directory'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: invalid vendored Cargo path dependency: pf-prefs: pf-prefs/Cargo.toml:6: ../not-a-crate: resolves to a directory with no Cargo.toml'
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-prefs: pf-prefs/Cargo.toml:7: ../pf-scene'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: invalid vendored include target:')" -eq 1
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: invalid vendored Cargo path dependency:')" -eq 2
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 0
+
+echo "PASS: launcher/runtime contract guard accepts identical trees, rejects drift, and distinguishes resolved from dangling references"
