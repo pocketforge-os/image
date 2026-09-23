@@ -145,4 +145,42 @@ printf '%s\n' "$output" | grep -Fqx \
 test "$(printf '%s\n' "$output" | grep -c '^FATAL: unverifiable vendored include form:')" -eq 1
 test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 0
 
+# Existing nodes are not sufficient: Rust includes require readable regular
+# files, while Cargo path dependencies require crate directories with manifests.
+printf '%s\n' \
+    'const DIRECTORY: &str = include_str!("../fixtures/directory.bin");' \
+    'const PRESENT: &str = include_str!("../fixtures/present.txt");' \
+    >> "$scratch/launcher/vendor/pf-prefs/src/lib.rs"
+cp "$scratch/launcher/vendor/pf-prefs/src/lib.rs" "$scratch/runtime/crates/pf-prefs/src/lib.rs"
+mkdir -p \
+    "$scratch/launcher/vendor/pf-prefs/fixtures/directory.bin" \
+    "$scratch/launcher/vendor/not-a-crate"
+printf 'present\n' > "$scratch/launcher/vendor/pf-prefs/fixtures/present.txt"
+printf 'not a crate\n' > "$scratch/launcher/vendor/path-is-file"
+printf '%s\n' \
+    '[dependencies]' \
+    'file = { path = "../path-is-file" }' \
+    'no_manifest = { path = "../not-a-crate" }' \
+    'present = { path = "../pf-scene" }' \
+    >> "$scratch/launcher/vendor/pf-prefs/Cargo.toml"
+cp "$scratch/launcher/vendor/pf-prefs/Cargo.toml" "$scratch/runtime/crates/pf-prefs/Cargo.toml"
+if output=$(PF_CONTRACT_TRACE_REFERENCES=1 \
+    "$guard" "$scratch/launcher" "$scratch/runtime" pf-prefs 2>&1); then
+    echo "FAIL: wrong-type vendored targets passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: invalid vendored include target: pf-prefs: pf-prefs/src/lib.rs:2: ../fixtures/directory.bin: resolves to a directory, not a readable file'
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-prefs: pf-prefs/src/lib.rs:3: ../fixtures/present.txt'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: invalid vendored Cargo path dependency: pf-prefs: pf-prefs/Cargo.toml:5: ../path-is-file: resolves to a file, not a crate directory'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: invalid vendored Cargo path dependency: pf-prefs: pf-prefs/Cargo.toml:6: ../not-a-crate: resolves to a directory with no Cargo.toml'
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-prefs: pf-prefs/Cargo.toml:7: ../pf-scene'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: invalid vendored include target:')" -eq 1
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: invalid vendored Cargo path dependency:')" -eq 2
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 0
+
 echo "PASS: launcher/runtime contract guard accepts identical trees, rejects drift, and distinguishes resolved from dangling references"

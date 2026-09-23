@@ -37,9 +37,9 @@ checked = set()
 unrecognized = set()
 
 
-def check(source: Path, line: int, target_text: str) -> None:
+def check(source: Path, line: int, target_text: str, target_kind: str) -> None:
     global failed
-    key = (source, line, target_text)
+    key = (source, line, target_text, target_kind)
     if key in checked:
         return
     checked.add(key)
@@ -51,7 +51,38 @@ def check(source: Path, line: int, target_text: str) -> None:
         inside_vendor = False
 
     source_name = source.relative_to(vendor)
-    if inside_vendor and target.exists():
+    problem = None
+    if not inside_vendor or not target.exists():
+        problem = (
+            f"FATAL: unresolved vendored reference: {crate}: "
+            f"{source_name}:{line}: {target_text}"
+        )
+    elif target_kind == "include" and not target.is_file():
+        problem = (
+            f"FATAL: invalid vendored include target: {crate}: "
+            f"{source_name}:{line}: {target_text}: "
+            "resolves to a directory, not a readable file"
+        )
+    elif target_kind == "include" and not os.access(target, os.R_OK):
+        problem = (
+            f"FATAL: invalid vendored include target: {crate}: "
+            f"{source_name}:{line}: {target_text}: "
+            "resolves to a regular file that is not readable"
+        )
+    elif target_kind == "cargo" and not target.is_dir():
+        problem = (
+            f"FATAL: invalid vendored Cargo path dependency: {crate}: "
+            f"{source_name}:{line}: {target_text}: "
+            "resolves to a file, not a crate directory"
+        )
+    elif target_kind == "cargo" and not (target / "Cargo.toml").is_file():
+        problem = (
+            f"FATAL: invalid vendored Cargo path dependency: {crate}: "
+            f"{source_name}:{line}: {target_text}: "
+            "resolves to a directory with no Cargo.toml"
+        )
+
+    if problem is None:
         if trace:
             print(
                 f"RESOLVED: {crate}: {source_name}:{line}: {target_text}",
@@ -59,11 +90,7 @@ def check(source: Path, line: int, target_text: str) -> None:
             )
         return
 
-    print(
-        f"FATAL: unresolved vendored reference: {crate}: "
-        f"{source_name}:{line}: {target_text}",
-        file=sys.stderr,
-    )
+    print(problem, file=sys.stderr)
     failed = True
 
 
@@ -329,7 +356,7 @@ for source_root in (crate_dir, runtime_crate_dir):
                     )
                     failed = True
             else:
-                check(source, line, target_text)
+                check(source, line, target_text, "include")
 
 print(
     f"INFO: unrecognized vendored include forms: {crate}: {len(unrecognized)}",
@@ -371,7 +398,7 @@ for source_root in (crate_dir, runtime_crate_dir):
             ),
             1,
         )
-        check(cargo_toml, line, target_text)
+        check(cargo_toml, line, target_text, "cargo")
 
 raise SystemExit(1 if failed else 0)
 PY
