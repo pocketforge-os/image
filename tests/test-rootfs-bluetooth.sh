@@ -22,6 +22,10 @@ grep -Fq 'Restart=no' "$unit"
 # This is intentionally a literal shell fragment in the builder.
 # shellcheck disable=SC2016
 grep -Fq '[ "${PF_GPU_MODEL}" = "open" ]' "$builder"
+# shellcheck disable=SC2016
+grep -Fq 'build/check-rootfs-abi.sh" "${ROOTFS}" "${PF_BT_ATTACH_BIN}"' "$builder"
+# shellcheck disable=SC2016
+grep -Fq 'PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN}' "$builder"
 grep -Fq 'scripts/verify-rootfs-bluetooth.sh' "$builder"
 
 mkdir -p "$fixture/root/usr/libexec/pocketforge" \

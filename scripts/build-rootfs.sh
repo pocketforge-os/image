@@ -425,6 +425,9 @@ fi
 "${SRC_DIR}/build/check-rootfs-abi.sh" "${ROOTFS}" \
     "${GPU_UM_MESA_DIR}" "${LIBSDL3_DIR}" "${WPA_DIR}" \
     "${RUNTIME_DIR}" "${LAUNCHER_DIR}" "${HWPROBE_DIR}" "${RECOVERY_DIR:-/work/recovery}"
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    "${SRC_DIR}/build/check-rootfs-abi.sh" "${ROOTFS}" "${PF_BT_ATTACH_BIN}"
+fi
 
 # --- Kernel modules install --------------------------------------------------
 echo "[customize] Installing kernel modules..."
@@ -1654,7 +1657,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-module} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-module} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-module} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-module} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
