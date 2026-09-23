@@ -14,6 +14,13 @@ trap 'find "$fixture" -mindepth 1 -delete; rmdir "$fixture"' EXIT
 	-I"$source_dir" -o "$fixture/xr829-hciattach" \
 	"$source_dir/main.c" "$source_dir/hciattach_xradio.c"
 "$fixture/xr829-hciattach" 2>&1 | grep -F 'usage:' >/dev/null || test "$?" -eq 2
+if "$fixture/xr829-hciattach" /dev/pocketforge-nonexistent-uart \
+	>"$fixture/missing-uart.log" 2>&1; then
+	echo 'FAIL: attach helper accepted a missing UART' >&2
+	exit 1
+fi
+grep -F 'cannot open /dev/pocketforge-nonexistent-uart:' \
+	"$fixture/missing-uart.log" >/dev/null
 
 grep -Fq 'ExecStart=/usr/libexec/pocketforge/xr829-hciattach /dev/ttyS1' "$unit"
 grep -Fq 'BindsTo=dev-ttyS1.device' "$unit"
