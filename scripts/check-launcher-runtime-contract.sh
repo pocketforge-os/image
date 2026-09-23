@@ -78,12 +78,6 @@ for source_root in (crate_dir, runtime_crate_dir):
             line = text.count("\n", 0, match.start()) + 1
             check(source, line, match.group(1))
 
-cargo_toml = crate_dir / "Cargo.toml"
-with cargo_toml.open("rb") as stream:
-    manifest = tomllib.load(stream)
-manifest_lines = cargo_toml.read_text(encoding="utf-8").splitlines()
-
-
 def dependencies(table: object):
     if not isinstance(table, dict):
         return
@@ -92,21 +86,34 @@ def dependencies(table: object):
             yield value["path"]
 
 
-path_values = list(dependencies(manifest.get("dependencies")))
-path_values += list(dependencies(manifest.get("dev-dependencies")))
-path_values += list(dependencies(manifest.get("build-dependencies")))
-for target_table in manifest.get("target", {}).values():
-    path_values += list(dependencies(target_table.get("dependencies")))
-    path_values += list(dependencies(target_table.get("dev-dependencies")))
-    path_values += list(dependencies(target_table.get("build-dependencies")))
+for source_root in (crate_dir, runtime_crate_dir):
+    original_cargo_toml = source_root / "Cargo.toml"
+    cargo_toml = crate_dir / "Cargo.toml"
+    with original_cargo_toml.open("rb") as stream:
+        manifest = tomllib.load(stream)
+    manifest_lines = original_cargo_toml.read_text(encoding="utf-8").splitlines()
 
-for target_text in path_values:
-    path_re = re.compile(r'\bpath\s*=\s*["\']' + re.escape(target_text) + r'["\']')
-    line = next(
-        (number for number, text in enumerate(manifest_lines, 1) if path_re.search(text)),
-        1,
-    )
-    check(cargo_toml, line, target_text)
+    path_values = list(dependencies(manifest.get("dependencies")))
+    path_values += list(dependencies(manifest.get("dev-dependencies")))
+    path_values += list(dependencies(manifest.get("build-dependencies")))
+    for target_table in manifest.get("target", {}).values():
+        path_values += list(dependencies(target_table.get("dependencies")))
+        path_values += list(dependencies(target_table.get("dev-dependencies")))
+        path_values += list(dependencies(target_table.get("build-dependencies")))
+
+    for target_text in path_values:
+        path_re = re.compile(
+            r'\bpath\s*=\s*["\']' + re.escape(target_text) + r'["\']'
+        )
+        line = next(
+            (
+                number
+                for number, text in enumerate(manifest_lines, 1)
+                if path_re.search(text)
+            ),
+            1,
+        )
+        check(cargo_toml, line, target_text)
 
 raise SystemExit(1 if failed else 0)
 PY

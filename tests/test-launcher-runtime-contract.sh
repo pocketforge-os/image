@@ -26,6 +26,7 @@ for crate in $crates; do
     printf 'contract-%s\n' "$crate" > "$scratch/launcher/vendor/$crate/src/lib.rs"
     printf '[package]\nname = "%s"\nversion = "0.0.0"\n' "$crate" > "$scratch/launcher/vendor/$crate/Cargo.toml"
     cp "$scratch/launcher/vendor/$crate/src/lib.rs" "$scratch/runtime/crates/$crate/src/lib.rs"
+    cp "$scratch/launcher/vendor/$crate/Cargo.toml" "$scratch/runtime/crates/$crate/Cargo.toml"
 done
 
 "$guard" "$scratch/launcher" "$scratch/runtime" $crates
@@ -51,7 +52,12 @@ printf '%s\n' \
     '[dependencies]' \
     'present = { path = "../pf-scene" }' \
     'missing = { path = "../missing-crate" }' \
-    >> "$scratch/launcher/vendor/pf-wire/Cargo.toml"
+    >> "$scratch/launcher/vendor/pf-session-client/Cargo.toml"
+printf '%s\n' \
+    '[dependencies]' \
+    'present = { path = "../pf-scene" }' \
+    'missing = { path = "../../../outside" }' \
+    >> "$scratch/runtime/crates/pf-wire/Cargo.toml"
 if output=$(PF_CONTRACT_TRACE_REFERENCES=1 \
     "$guard" "$scratch/launcher" "$scratch/runtime" $crates 2>&1); then
     echo "FAIL: dangling include fixture passed the launcher/runtime contract guard" >&2
@@ -62,9 +68,13 @@ printf '%s\n' "$output" | grep -Fqx \
 printf '%s\n' "$output" | grep -Fqx \
     'FATAL: unresolved vendored reference: pf-wire: pf-wire/src/lib.rs:3: ../tests/fixtures/missing.bin'
 printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-session-client: pf-session-client/Cargo.toml:5: ../pf-scene'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-session-client: pf-session-client/Cargo.toml:6: ../missing-crate'
+printf '%s\n' "$output" | grep -Fqx \
     'RESOLVED: pf-wire: pf-wire/Cargo.toml:5: ../pf-scene'
 printf '%s\n' "$output" | grep -Fqx \
-    'FATAL: unresolved vendored reference: pf-wire: pf-wire/Cargo.toml:6: ../missing-crate'
-test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 2
+    'FATAL: unresolved vendored reference: pf-wire: pf-wire/Cargo.toml:6: ../../../outside'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 3
 
 echo "PASS: launcher/runtime contract guard accepts identical trees, rejects drift, and distinguishes resolved from dangling references"
