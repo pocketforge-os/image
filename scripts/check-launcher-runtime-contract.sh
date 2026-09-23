@@ -19,7 +19,7 @@ for crate in "$@"; do
         status=1
     fi
 
-    if ! python3 - "${launcher_dir}/vendor" "$crate" <<'PY'
+    if ! python3 - "${launcher_dir}/vendor" "${runtime_dir}/crates" "$crate" <<'PY'
 import os
 import re
 import sys
@@ -27,14 +27,21 @@ import tomllib
 from pathlib import Path
 
 vendor = Path(sys.argv[1]).resolve()
-crate = sys.argv[2]
+runtime_crates = Path(sys.argv[2]).resolve()
+crate = sys.argv[3]
 crate_dir = vendor / crate
+runtime_crate_dir = runtime_crates / crate
 trace = os.environ.get("PF_CONTRACT_TRACE_REFERENCES") == "1"
 failed = False
+checked = set()
 
 
 def check(source: Path, line: int, target_text: str) -> None:
     global failed
+    key = (source, line, target_text)
+    if key in checked:
+        return
+    checked.add(key)
     target = (source.parent / target_text).resolve()
     try:
         target.relative_to(vendor)
@@ -60,11 +67,16 @@ def check(source: Path, line: int, target_text: str) -> None:
 
 
 include_re = re.compile(r'include_(?:bytes|str)!\s*\(\s*"([^"\\]*)"\s*\)')
-for source in sorted(crate_dir.rglob("*.rs")):
-    text = source.read_text(encoding="utf-8")
-    for match in include_re.finditer(text):
-        line = text.count("\n", 0, match.start()) + 1
-        check(source, line, match.group(1))
+# Check both the materialized vendor source and the canonical runtime source at
+# its corresponding vendor location. The latter proves that an include survives
+# vendoring without relying on a refresh-time path rewrite to hide an escape.
+for source_root in (crate_dir, runtime_crate_dir):
+    for original_source in sorted(source_root.rglob("*.rs")):
+        source = crate_dir / original_source.relative_to(source_root)
+        text = original_source.read_text(encoding="utf-8")
+        for match in include_re.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            check(source, line, match.group(1))
 
 cargo_toml = crate_dir / "Cargo.toml"
 with cargo_toml.open("rb") as stream:
