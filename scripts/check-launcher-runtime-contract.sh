@@ -206,10 +206,12 @@ def skip_trivia(text: str, start: int) -> int:
 #
 # Not recognised: paths constructed by concat!/env!/stringify!, include macros
 # reached through an alias or re-export, #[path] attributes, or other generated
-# syntax. Those direct include invocations are reported and counted as
-# unrecognised rather than silently treated as clean. Resolving them requires
-# macro expansion/a Rust compiler, which is not available at this pre-toolchain
-# build stage.
+# syntax. Those direct include invocations fail as unverifiable rather than being
+# silently treated as clean or falsely labelled unresolved. Resolving them
+# requires macro expansion/a Rust compiler, which is not available at this
+# pre-toolchain build stage. A legitimate generated include must therefore be
+# made directly resolvable or the scanner must be extended; the counter must not
+# be silenced.
 def balanced_group_end(text: str, opener: int):
     closers = {"(": ")", "[": "]", "{": "}"}
     stack = [closers[text[opener]]]
@@ -321,10 +323,11 @@ for source_root in (crate_dir, runtime_crate_dir):
                 if key not in unrecognized:
                     unrecognized.add(key)
                     print(
-                        f"UNRECOGNIZED: vendored include form: {crate}: "
+                        f"FATAL: unverifiable vendored include form: {crate}: "
                         f"{source.relative_to(vendor)}:{line}",
                         file=sys.stderr,
                     )
+                    failed = True
             else:
                 check(source, line, target_text)
 

@@ -89,7 +89,6 @@ printf '%s\n' \
     'const MULTILINE_MISSING: &str = include_str!(' \
     '  "../multiline-missing"' \
     ');' \
-    'const GENERATED: &str = include_str!(concat!("../", "generated"));' \
     '// include_str!("../line-comment-missing")' \
     '/* outer /* include_str!("../nested-comment-missing") */ still comment */' \
     'const EXAMPLE: &str = "include_str!(\\"../string-missing\\")";' \
@@ -114,15 +113,36 @@ printf '%s\n' "$output" | grep -Fqx \
 printf '%s\n' "$output" | grep -Fqx \
     'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:8: ../multiline-missing'
 printf '%s\n' "$output" | grep -Fqx \
-    'UNRECOGNIZED: vendored include form: pf-scene: pf-scene/src/lib.rs:11'
-printf '%s\n' "$output" | grep -Fqx \
-    'INFO: unrecognized vendored include forms: pf-scene: 1'
+    'INFO: unrecognized vendored include forms: pf-scene: 0'
 test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 7
-test "$(printf '%s\n' "$output" | grep -c '^UNRECOGNIZED: vendored include form:')" -eq 1
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unverifiable vendored include form:')" -eq 0
 
-# Removing the eight live macros leaves only non-code lookalikes, which must pass.
-sed -i '2,11d' "$scratch/launcher/vendor/pf-scene/src/lib.rs"
+# Removing the seven live macros leaves only non-code lookalikes, which must pass.
+sed -i '2,10d' "$scratch/launcher/vendor/pf-scene/src/lib.rs"
 cp "$scratch/launcher/vendor/pf-scene/src/lib.rs" "$scratch/runtime/crates/pf-scene/src/lib.rs"
 "$guard" "$scratch/launcher" "$scratch/runtime" pf-scene
+
+# An otherwise clean generated include must fail on the true proposition that it
+# cannot be verified. A direct resolvable literal beside it remains independently
+# traced as resolved and must not contaminate the failure reason.
+printf '%s\n' \
+    'const GENERATED: &str = include_str!(concat!("../", "outside.txt"));' \
+    'const PRESENT: &str = include_str!("../present.txt");' \
+    >> "$scratch/launcher/vendor/pf-theme/src/lib.rs"
+cp "$scratch/launcher/vendor/pf-theme/src/lib.rs" "$scratch/runtime/crates/pf-theme/src/lib.rs"
+printf 'present\n' > "$scratch/launcher/vendor/pf-theme/present.txt"
+if output=$(PF_CONTRACT_TRACE_REFERENCES=1 \
+    "$guard" "$scratch/launcher" "$scratch/runtime" pf-theme 2>&1); then
+    echo "FAIL: unverifiable generated include passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unverifiable vendored include form: pf-theme: pf-theme/src/lib.rs:2'
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-theme: pf-theme/src/lib.rs:3: ../present.txt'
+printf '%s\n' "$output" | grep -Fqx \
+    'INFO: unrecognized vendored include forms: pf-theme: 1'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unverifiable vendored include form:')" -eq 1
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 0
 
 echo "PASS: launcher/runtime contract guard accepts identical trees, rejects drift, and distinguishes resolved from dangling references"
