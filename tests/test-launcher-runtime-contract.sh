@@ -83,6 +83,8 @@ printf '%s\n' \
     'const RAW_MISSING: &str = include_str!(r"../raw-missing");' \
     'const HASHED_RAW_MISSING: &str = include_str!(r#"../hashed-raw-missing"#);' \
     'const ESCAPED_MISSING: &str = include_str!("..\x2fescaped-missing");' \
+    'const BRACE_MISSING: &str = include_str!{"../brace-missing"};' \
+    'const BRACKET_MISSING: &[u8] = include_bytes!["../bracket-missing"];' \
     '// include_str!("../line-comment-missing")' \
     '/* outer /* include_str!("../nested-comment-missing") */ still comment */' \
     'const EXAMPLE: &str = "include_str!(\\"../string-missing\\")";' \
@@ -98,10 +100,14 @@ printf '%s\n' "$output" | grep -Fqx \
     'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:3: ../hashed-raw-missing'
 printf '%s\n' "$output" | grep -Fqx \
     'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:4: ../escaped-missing'
-test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 3
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:5: ../brace-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:6: ../bracket-missing'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 5
 
-# Removing the two live macros leaves only non-code lookalikes, which must pass.
-sed -i '2,4d' "$scratch/launcher/vendor/pf-scene/src/lib.rs"
+# Removing the five live macros leaves only non-code lookalikes, which must pass.
+sed -i '2,6d' "$scratch/launcher/vendor/pf-scene/src/lib.rs"
 cp "$scratch/launcher/vendor/pf-scene/src/lib.rs" "$scratch/runtime/crates/pf-scene/src/lib.rs"
 "$guard" "$scratch/launcher" "$scratch/runtime" pf-scene
 

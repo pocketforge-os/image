@@ -191,6 +191,19 @@ def skip_trivia(text: str, start: int) -> int:
     return cursor
 
 
+# Recognised Rust syntax: direct include_bytes!/include_str! invocations using
+# (), [] or {} delimiters; ordinary strings (including escapes), raw strings
+# with any hash count, and their byte-string forms. The scanner excludes line
+# comments, nested block comments, string/byte-string and character/byte-
+# character literals; apostrophes that are not complete character literals are
+# treated as lifetimes. Direct literal includes inside macro_rules! bodies and
+# cfg-gated code are intentionally still checked because vendoring must preserve
+# every source reference, regardless of whether this build expands it.
+#
+# Not recognised: paths constructed by concat!/env!/stringify!, include macros
+# reached through an alias or re-export, #[path] attributes, or other generated
+# syntax. Resolving those requires macro expansion/a Rust compiler, which is not
+# available at this pre-toolchain build stage.
 def rust_includes(text: str):
     cursor = 0
     while cursor < len(text):
@@ -223,15 +236,19 @@ def rust_includes(text: str):
             if after_name >= len(text) or text[after_name] != "!":
                 continue
             after_bang = skip_trivia(text, after_name + 1)
-            if after_bang >= len(text) or text[after_bang] != "(":
+            if after_bang >= len(text) or text[after_bang] not in "([{":
                 continue
+            closer = {"(": ")", "[": "]", "{": "}"}[text[after_bang]]
             literal_start = skip_trivia(text, after_bang + 1)
             literal = raw_string_end(text, literal_start)
             if literal is None:
                 literal = normal_string_end(text, literal_start)
-            if literal is not None:
+            if literal is not None and (
+                (literal_end := skip_trivia(text, literal[0])) < len(text)
+                and text[literal_end] == closer
+            ):
                 yield identifier_start, literal[1]
-                cursor = literal[0]
+                cursor = literal_end + 1
             continue
 
         # Character literals can contain comment delimiters. A Rust lifetime
