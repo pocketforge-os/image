@@ -24,6 +24,7 @@ trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT HUP INT TERM
 for crate in $crates; do
     mkdir -p "$scratch/launcher/vendor/$crate/src" "$scratch/runtime/crates/$crate/src"
     printf 'contract-%s\n' "$crate" > "$scratch/launcher/vendor/$crate/src/lib.rs"
+    printf '[package]\nname = "%s"\nversion = "0.0.0"\n' "$crate" > "$scratch/launcher/vendor/$crate/Cargo.toml"
     cp "$scratch/launcher/vendor/$crate/src/lib.rs" "$scratch/runtime/crates/$crate/src/lib.rs"
 done
 
@@ -36,4 +37,34 @@ if output=$("$guard" "$scratch/launcher" "$scratch/runtime" $crates 2>&1); then
 fi
 printf '%s\n' "$output" | grep -qx 'FATAL: launcher/runtime contract drift: pf-wire'
 
-echo "PASS: launcher/runtime contract guard accepts identical trees and rejects drift"
+# Exercise both reference outcomes in one guard invocation: one real file must
+# resolve while a missing file must fail with actionable source coordinates.
+cp "$scratch/runtime/crates/pf-wire/src/lib.rs" "$scratch/launcher/vendor/pf-wire/src/lib.rs"
+printf '%s\n' \
+    'const PRESENT: &str = include_str!("../tests/fixtures/present.txt");' \
+    'const MISSING: &[u8] = include_bytes!("../tests/fixtures/missing.bin");' \
+    >> "$scratch/launcher/vendor/pf-wire/src/lib.rs"
+cp "$scratch/launcher/vendor/pf-wire/src/lib.rs" "$scratch/runtime/crates/pf-wire/src/lib.rs"
+mkdir -p "$scratch/launcher/vendor/pf-wire/tests/fixtures"
+printf 'present\n' > "$scratch/launcher/vendor/pf-wire/tests/fixtures/present.txt"
+printf '%s\n' \
+    '[dependencies]' \
+    'present = { path = "../pf-scene" }' \
+    'missing = { path = "../missing-crate" }' \
+    >> "$scratch/launcher/vendor/pf-wire/Cargo.toml"
+if output=$(PF_CONTRACT_TRACE_REFERENCES=1 \
+    "$guard" "$scratch/launcher" "$scratch/runtime" $crates 2>&1); then
+    echo "FAIL: dangling include fixture passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-wire: pf-wire/src/lib.rs:2: ../tests/fixtures/present.txt'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-wire: pf-wire/src/lib.rs:3: ../tests/fixtures/missing.bin'
+printf '%s\n' "$output" | grep -Fqx \
+    'RESOLVED: pf-wire: pf-wire/Cargo.toml:5: ../pf-scene'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-wire: pf-wire/Cargo.toml:6: ../missing-crate'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 2
+
+echo "PASS: launcher/runtime contract guard accepts identical trees, rejects drift, and distinguishes resolved from dangling references"
