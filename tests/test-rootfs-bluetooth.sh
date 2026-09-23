@@ -34,8 +34,33 @@ if sed -n '/XR829 vendor attach helper installed/,/fi/p' "$builder" |
 	echo 'FAIL: Bluetooth install is coupled to GPU policy' >&2
 	exit 1
 fi
+# The ABI guard follows the built artifact, not either device or GPU policy.
+abi_gate="$(sed -n '/Validate the optional attach helper/,/^fi$/p' "$builder")"
 # shellcheck disable=SC2016
-grep -Fq 'build/check-rootfs-abi.sh" "${ROOTFS}" "${PF_BT_ATTACH_BIN}"' "$builder"
+printf '%s\n' "$abi_gate" | grep -Fq 'if [ -n "${PF_BT_ATTACH_BIN:-}" ]; then'
+# shellcheck disable=SC2016
+printf '%s\n' "$abi_gate" | grep -Fq 'build/check-rootfs-abi.sh" "${ROOTFS}" "${PF_BT_ATTACH_BIN}"'
+if printf '%s\n' "$abi_gate" | grep -Eq 'PF_GPU_MODEL|PF_DEVICE_ID'; then
+	echo 'FAIL: Bluetooth ABI validation is coupled to profile policy' >&2
+	exit 1
+fi
+
+# Execute the extracted production guard. A built helper must be checked once;
+# an empty helper (the a133-open-shaped case) must not invoke the checker.
+mkdir -p "$fixture/src/build" "$fixture/abi-root"
+cat > "$fixture/src/build/check-rootfs-abi.sh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$PF_ABI_CALLS"
+EOF
+chmod +x "$fixture/src/build/check-rootfs-abi.sh"
+PF_ABI_CALLS="$fixture/abi-calls" SRC_DIR="$fixture/src" ROOTFS="$fixture/abi-root" \
+	PF_BT_ATTACH_BIN="$fixture/xr829-hciattach" sh -c "$abi_gate"
+test "$(wc -l < "$fixture/abi-calls")" -eq 1
+grep -Fq "$fixture/abi-root $fixture/xr829-hciattach" "$fixture/abi-calls"
+: > "$fixture/abi-calls"
+PF_ABI_CALLS="$fixture/abi-calls" SRC_DIR="$fixture/src" ROOTFS="$fixture/abi-root" \
+	PF_BT_ATTACH_BIN='' sh -c "$abi_gate"
+test ! -s "$fixture/abi-calls"
 # shellcheck disable=SC2016
 grep -Fq 'PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN}' "$builder"
 # shellcheck disable=SC2016

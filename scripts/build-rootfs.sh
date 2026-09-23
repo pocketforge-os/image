@@ -426,7 +426,8 @@ fi
 "${SRC_DIR}/build/check-rootfs-abi.sh" "${ROOTFS}" \
     "${GPU_UM_MESA_DIR}" "${LIBSDL3_DIR}" "${WPA_DIR}" \
     "${RUNTIME_DIR}" "${LAUNCHER_DIR}" "${HWPROBE_DIR}" "${RECOVERY_DIR:-/work/recovery}"
-if [ "${PF_GPU_MODEL}" = "open" ]; then
+# Validate the optional attach helper exactly when this build produced one.
+if [ -n "${PF_BT_ATTACH_BIN:-}" ]; then
     "${SRC_DIR}/build/check-rootfs-abi.sh" "${ROOTFS}" "${PF_BT_ATTACH_BIN}"
 fi
 
