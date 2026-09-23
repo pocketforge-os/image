@@ -34,6 +34,7 @@ runtime_crate_dir = runtime_crates / crate
 trace = os.environ.get("PF_CONTRACT_TRACE_REFERENCES") == "1"
 failed = False
 checked = set()
+unrecognized = set()
 
 
 def check(source: Path, line: int, target_text: str) -> None:
@@ -192,18 +193,57 @@ def skip_trivia(text: str, start: int) -> int:
 
 
 # Recognised Rust syntax: direct include_bytes!/include_str! invocations using
-# (), [] or {} delimiters; ordinary strings (including escapes), raw strings
-# with any hash count, and their byte-string forms. The scanner excludes line
-# comments, nested block comments, string/byte-string and character/byte-
-# character literals; apostrophes that are not complete character literals are
-# treated as lifetimes. Direct literal includes inside macro_rules! bodies and
-# cfg-gated code are intentionally still checked because vendoring must preserve
-# every source reference, regardless of whether this build expands it.
+# balanced (), [] or {} delimiters and exactly one ordinary or raw string literal,
+# optionally followed by one trailing comma. Ordinary strings include escapes;
+# raw strings allow any hash count; both forms may be byte strings. Whitespace,
+# comments, newlines and nested delimiter groups are handled while finding the
+# invocation boundary. The scanner excludes line comments, nested block comments,
+# string/byte-string and character/byte-character literals; apostrophes that are
+# not complete character literals are treated as lifetimes. Direct literal
+# includes inside macro_rules! bodies and cfg-gated code are intentionally still
+# checked because vendoring must preserve every source reference, regardless of
+# whether this build expands it.
 #
 # Not recognised: paths constructed by concat!/env!/stringify!, include macros
 # reached through an alias or re-export, #[path] attributes, or other generated
-# syntax. Resolving those requires macro expansion/a Rust compiler, which is not
-# available at this pre-toolchain build stage.
+# syntax. Those direct include invocations are reported and counted as
+# unrecognised rather than silently treated as clean. Resolving them requires
+# macro expansion/a Rust compiler, which is not available at this pre-toolchain
+# build stage.
+def balanced_group_end(text: str, opener: int):
+    closers = {"(": ")", "[": "]", "{": "}"}
+    stack = [closers[text[opener]]]
+    cursor = opener + 1
+    while cursor < len(text):
+        if text.startswith("//", cursor):
+            newline = text.find("\n", cursor + 2)
+            cursor = len(text) if newline < 0 else newline + 1
+            continue
+        if text.startswith("/*", cursor):
+            cursor = skip_block_comment(text, cursor)
+            continue
+        raw = raw_string_end(text, cursor)
+        if raw is not None:
+            cursor = raw[0]
+            continue
+        normal = normal_string_end(text, cursor)
+        if normal is not None:
+            cursor = normal[0]
+            continue
+        char_end = char_literal_end(text, cursor)
+        if char_end is not None:
+            cursor = char_end
+            continue
+        if text[cursor] in closers:
+            stack.append(closers[text[cursor]])
+        elif text[cursor] == stack[-1]:
+            stack.pop()
+            if not stack:
+                return cursor
+        cursor += 1
+    return None
+
+
 def rust_includes(text: str):
     cursor = 0
     while cursor < len(text):
@@ -238,17 +278,24 @@ def rust_includes(text: str):
             after_bang = skip_trivia(text, after_name + 1)
             if after_bang >= len(text) or text[after_bang] not in "([{":
                 continue
-            closer = {"(": ")", "[": "]", "{": "}"}[text[after_bang]]
+            group_end = balanced_group_end(text, after_bang)
+            if group_end is None:
+                yield identifier_start, None
+                cursor = after_bang + 1
+                continue
             literal_start = skip_trivia(text, after_bang + 1)
             literal = raw_string_end(text, literal_start)
             if literal is None:
                 literal = normal_string_end(text, literal_start)
-            if literal is not None and (
-                (literal_end := skip_trivia(text, literal[0])) < len(text)
-                and text[literal_end] == closer
-            ):
+            if literal is not None:
+                literal_end = skip_trivia(text, literal[0])
+                if literal_end < group_end and text[literal_end] == ",":
+                    literal_end = skip_trivia(text, literal_end + 1)
+            if literal is not None and literal_end == group_end:
                 yield identifier_start, literal[1]
-                cursor = literal_end + 1
+            else:
+                yield identifier_start, None
+            cursor = group_end + 1
             continue
 
         # Character literals can contain comment delimiters. A Rust lifetime
@@ -269,7 +316,22 @@ for source_root in (crate_dir, runtime_crate_dir):
         text = original_source.read_text(encoding="utf-8")
         for offset, target_text in rust_includes(text):
             line = text.count("\n", 0, offset) + 1
-            check(source, line, target_text)
+            if target_text is None:
+                key = (source, line)
+                if key not in unrecognized:
+                    unrecognized.add(key)
+                    print(
+                        f"UNRECOGNIZED: vendored include form: {crate}: "
+                        f"{source.relative_to(vendor)}:{line}",
+                        file=sys.stderr,
+                    )
+            else:
+                check(source, line, target_text)
+
+print(
+    f"INFO: unrecognized vendored include forms: {crate}: {len(unrecognized)}",
+    file=sys.stderr,
+)
 
 def dependencies(table: object):
     if not isinstance(table, dict):

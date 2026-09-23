@@ -85,6 +85,11 @@ printf '%s\n' \
     'const ESCAPED_MISSING: &str = include_str!("..\x2fescaped-missing");' \
     'const BRACE_MISSING: &str = include_str!{"../brace-missing"};' \
     'const BRACKET_MISSING: &[u8] = include_bytes!["../bracket-missing"];' \
+    'const COMMA_MISSING: &str = include_str!("../comma-missing",);' \
+    'const MULTILINE_MISSING: &str = include_str!(' \
+    '  "../multiline-missing"' \
+    ');' \
+    'const GENERATED: &str = include_str!(concat!("../", "generated"));' \
     '// include_str!("../line-comment-missing")' \
     '/* outer /* include_str!("../nested-comment-missing") */ still comment */' \
     'const EXAMPLE: &str = "include_str!(\\"../string-missing\\")";' \
@@ -104,10 +109,19 @@ printf '%s\n' "$output" | grep -Fqx \
     'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:5: ../brace-missing'
 printf '%s\n' "$output" | grep -Fqx \
     'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:6: ../bracket-missing'
-test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 5
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:7: ../comma-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: unresolved vendored reference: pf-scene: pf-scene/src/lib.rs:8: ../multiline-missing'
+printf '%s\n' "$output" | grep -Fqx \
+    'UNRECOGNIZED: vendored include form: pf-scene: pf-scene/src/lib.rs:11'
+printf '%s\n' "$output" | grep -Fqx \
+    'INFO: unrecognized vendored include forms: pf-scene: 1'
+test "$(printf '%s\n' "$output" | grep -c '^FATAL: unresolved vendored reference:')" -eq 7
+test "$(printf '%s\n' "$output" | grep -c '^UNRECOGNIZED: vendored include form:')" -eq 1
 
-# Removing the five live macros leaves only non-code lookalikes, which must pass.
-sed -i '2,6d' "$scratch/launcher/vendor/pf-scene/src/lib.rs"
+# Removing the eight live macros leaves only non-code lookalikes, which must pass.
+sed -i '2,11d' "$scratch/launcher/vendor/pf-scene/src/lib.rs"
 cp "$scratch/launcher/vendor/pf-scene/src/lib.rs" "$scratch/runtime/crates/pf-scene/src/lib.rs"
 "$guard" "$scratch/launcher" "$scratch/runtime" pf-scene
 
