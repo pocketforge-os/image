@@ -45,6 +45,49 @@ PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
 PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 declare -a KERNEL_REQUIRED_MODULE_LIST=()
 
+open_gpu_library_is_usable() {
+    local candidate=$1
+    local current=${candidate}
+    local target
+    local hops=0
+
+    # Debian's loader SONAME links are relative siblings of their versioned
+    # regular files.  Restrict resolution to that form: accepting absolute or
+    # path-bearing targets could accidentally resolve against the build host
+    # rather than the staged rootfs.
+    while [ -L "${current}" ]; do
+        target="$(readlink -- "${current}")" || return 1
+        case "${target}" in
+            ''|/*|*/*) return 1 ;;
+        esac
+        current="${current%/*}/${target}"
+        hops=$((hops + 1))
+        [ "${hops}" -le 16 ] || return 1
+    done
+
+    [ -f "${current}" ]
+}
+
+require_open_gpu_library() {
+    local rootfs=$1
+    local soname=$2
+    local candidate
+    local candidates
+
+    candidates="$(find "${rootfs}/usr/lib" -name "${soname}" -print)"
+    while IFS= read -r candidate; do
+        [ -n "${candidate}" ] || continue
+        if open_gpu_library_is_usable "${candidate}"; then
+            return 0
+        fi
+    done <<EOF
+${candidates}
+EOF
+
+    echo "FATAL: open GPU runtime closure is missing usable ${soname} (regular file or same-directory relative SONAME link)" >&2
+    return 1
+}
+
 verify_open_gpu_runtime_closure() {
     local rootfs=$1
     local relative
@@ -60,10 +103,8 @@ verify_open_gpu_runtime_closure() {
             || { echo "FATAL: open GPU runtime closure is missing /${relative}" >&2; return 1; }
     done
 
-    find "${rootfs}/usr/lib" -name 'libvulkan.so.1' -print -quit | grep -q . \
-        || { echo "FATAL: open GPU runtime closure is missing libvulkan.so.1" >&2; return 1; }
-    find "${rootfs}/usr/lib" -name 'libdrm.so.2' -print -quit | grep -q . \
-        || { echo "FATAL: open GPU runtime closure is missing libdrm.so.2" >&2; return 1; }
+    require_open_gpu_library "${rootfs}" libvulkan.so.1 || return 1
+    require_open_gpu_library "${rootfs}" libdrm.so.2 || return 1
     echo "[customize] open Mesa: EGL/GLES/GBM/Gallium/PowerVR Vulkan/libdrm closure verified"
 }
 

@@ -138,11 +138,12 @@ for shell_unit in "$selected_unit" "$foreground_unit"; do
     fi
 done
 
-# Exercise the production runtime-closure function, including its negative
-# path.  The exact Mesa build uses a Gallium/GBM module and does not install the
-# stale sun4i_drm DRI filename.
+# Exercise the production runtime-closure entry point, including its negative
+# paths.  The exact Mesa build uses a Gallium/GBM module and does not install
+# the stale sun4i_drm DRI filename.
 closure_root="$(mktemp -d)"
-trap 'find "${closure_root}" -mindepth 1 -delete; rmdir "${closure_root}"' EXIT
+host_library_dir="$(mktemp -d)"
+trap 'find "${closure_root}" -mindepth 1 -delete; rmdir "${closure_root}"; find "${host_library_dir}" -mindepth 1 -delete; rmdir "${host_library_dir}"' EXIT
 mkdir -p "${closure_root}/usr/local/lib/gbm" \
     "${closure_root}/usr/share/vulkan/icd.d" \
     "${closure_root}/usr/lib/aarch64-linux-gnu"
@@ -152,11 +153,62 @@ for artifact in libEGL.so.1.0.0 libGLESv2.so.2.0.0 libgbm.so.1.0.0 \
 done
 : >"${closure_root}/usr/local/lib/gbm/dri_gbm.so"
 : >"${closure_root}/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
-: >"${closure_root}/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
-: >"${closure_root}/usr/lib/aarch64-linux-gnu/libdrm.so.2"
-closure_function="$(sed -n '/^verify_open_gpu_runtime_closure()/,/^}/p' "${customize}")"
+: >"${closure_root}/usr/lib/aarch64-linux-gnu/libvulkan.so.1.3.239"
+: >"${closure_root}/usr/lib/aarch64-linux-gnu/libdrm.so.2.4.0"
+ln -s libvulkan.so.1.3.239 "${closure_root}/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
+ln -s libdrm.so.2.4.0 "${closure_root}/usr/lib/aarch64-linux-gnu/libdrm.so.2"
+closure_function="$(sed -n '/^open_gpu_library_is_usable()/,/^validate_open_module_contract()/p' "${customize}" | sed '$d')"
 eval "${closure_function}"
 verify_open_gpu_runtime_closure "${closure_root}" >/dev/null
+
+reset_loader_link() {
+    reset_soname=$1
+    reset_target=$2
+    reset_path="${closure_root}/usr/lib/aarch64-linux-gnu/${reset_soname}"
+
+    if [ -L "${reset_path}" ] || [ -f "${reset_path}" ]; then
+        rm "${reset_path}"
+    elif [ -d "${reset_path}" ]; then
+        rmdir "${reset_path}"
+    fi
+    ln -s "${reset_target}" "${reset_path}"
+}
+
+assert_loader_rejected() {
+    assert_soname=$1
+    assert_valid_target=$2
+    assert_invalid_kind=$3
+    assert_path="${closure_root}/usr/lib/aarch64-linux-gnu/${assert_soname}"
+
+    if [ -L "${assert_path}" ] || [ -f "${assert_path}" ]; then
+        rm "${assert_path}"
+    elif [ -d "${assert_path}" ]; then
+        rmdir "${assert_path}"
+    fi
+    case "${assert_invalid_kind}" in
+        missing) ;;
+        dangling) ln -s "missing-${assert_soname}" "${assert_path}" ;;
+        directory) mkdir "${assert_path}" ;;
+        absolute)
+            : >"${host_library_dir}/${assert_soname}"
+            ln -s "${host_library_dir}/${assert_soname}" "${assert_path}"
+            ;;
+        *) echo "unknown loader test case: ${assert_invalid_kind}" >&2; exit 1 ;;
+    esac
+
+    if verify_open_gpu_runtime_closure "${closure_root}" >/dev/null 2>&1; then
+        echo "open runtime closure accepted ${assert_invalid_kind} ${assert_soname}" >&2
+        exit 1
+    fi
+    reset_loader_link "${assert_soname}" "${assert_valid_target}"
+}
+
+for loader_case in missing dangling directory absolute; do
+    assert_loader_rejected libvulkan.so.1 libvulkan.so.1.3.239 "${loader_case}"
+    assert_loader_rejected libdrm.so.2 libdrm.so.2.4.0 "${loader_case}"
+done
+verify_open_gpu_runtime_closure "${closure_root}" >/dev/null
+
 rm "${closure_root}/usr/local/lib/libgallium_dri.so"
 : >"${closure_root}/usr/local/lib/sun4i-drm_dri.so"
 if verify_open_gpu_runtime_closure "${closure_root}" >/dev/null 2>&1; then
