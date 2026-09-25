@@ -138,15 +138,62 @@ for shell_unit in "$selected_unit" "$foreground_unit"; do
     fi
 done
 
+# Render the exact quoted production heredoc, syntax-check it, then extract and
+# execute its canonical helper chain.  This keeps the generated-hook call and
+# the tested definitions tied to the same source instead of an outer-shell copy.
+closure_tmp="$(mktemp -d)"
+trap 'find "${closure_tmp}" -mindepth 1 -delete; rmdir "${closure_tmp}"' EXIT
+rendered_customize="${closure_tmp}/customize-hook.sh"
+closure_helpers="${closure_tmp}/open-gpu-closure-helpers.sh"
+closure_root="${closure_tmp}/rootfs"
+host_library_dir="${closure_tmp}/host-libraries"
+customize_heredoc_marker="cat > \"\${CUSTOMIZE_SCRIPT}\" << 'CUSTOMIZE_EOF'"
+
+if [ "$(grep -Fxc "${customize_heredoc_marker}" "${customize}")" -ne 1 ]; then
+    echo 'expected exactly one production CUSTOMIZE_EOF heredoc' >&2
+    exit 1
+fi
+customize_start="$(grep -Fnx "${customize_heredoc_marker}" "${customize}" | cut -d: -f1)"
+customize_end="$(awk -v start="${customize_start}" 'NR > start && $0 == "CUSTOMIZE_EOF" { print NR; exit }' "${customize}")"
+[ -n "${customize_end}" ] || { echo 'production CUSTOMIZE_EOF terminator not found' >&2; exit 1; }
+sed -n "$((customize_start + 1)),$((customize_end - 1))p" "${customize}" >"${rendered_customize}"
+bash -n "${rendered_customize}"
+
+helper_start="$(grep -nFx 'open_gpu_library_is_usable() {' "${rendered_customize}" | cut -d: -f1)"
+helper_call="$(grep -nFx '    verify_open_gpu_runtime_closure "${ROOTFS}"' "${rendered_customize}" | cut -d: -f1)"
+[ -n "${helper_start}" ] && [ -n "${helper_call}" ] && [ "${helper_start}" -lt "${helper_call}" ] || {
+    echo 'production open GPU closure helper chain must precede its generated-hook call' >&2
+    exit 1
+}
+for helper in open_gpu_library_is_usable require_open_gpu_library verify_open_gpu_runtime_closure; do
+    if [ "$(grep -Fxc "${helper}() {" "${customize}")" -ne 1 ] \
+        || [ "$(grep -Fxc "${helper}() {" "${rendered_customize}")" -ne 1 ]; then
+        echo "${helper} must have one canonical definition in the production customize hook" >&2
+        exit 1
+    fi
+done
+if [ "$(grep -Fxc '    verify_open_gpu_runtime_closure "${ROOTFS}"' "${customize}")" -ne 1 ] \
+    || [ "$(grep -Fxc '    verify_open_gpu_runtime_closure "${ROOTFS}"' "${rendered_customize}")" -ne 1 ]; then
+    echo 'expected one production closure call in the generated customize hook' >&2
+    exit 1
+fi
+
+sed -n '/^open_gpu_library_is_usable() {$/,/^install_open_gpu_module_options() {$/p' \
+    "${rendered_customize}" | sed '$d' >"${closure_helpers}"
+bash -n "${closure_helpers}"
+grep -F 'if open_gpu_library_is_usable "${candidate}"; then' "${closure_helpers}" >/dev/null
+grep -F 'require_open_gpu_library "${rootfs}" libvulkan.so.1 || return 1' "${closure_helpers}" >/dev/null
+grep -F 'require_open_gpu_library "${rootfs}" libdrm.so.2 || return 1' "${closure_helpers}" >/dev/null
+# shellcheck source=/dev/null
+. "${closure_helpers}"
+
 # Exercise the production runtime-closure entry point, including its negative
 # paths.  The exact Mesa build uses a Gallium/GBM module and does not install
 # the stale sun4i_drm DRI filename.
-closure_root="$(mktemp -d)"
-host_library_dir="$(mktemp -d)"
-trap 'find "${closure_root}" -mindepth 1 -delete; rmdir "${closure_root}"; find "${host_library_dir}" -mindepth 1 -delete; rmdir "${host_library_dir}"' EXIT
 mkdir -p "${closure_root}/usr/local/lib/gbm" \
     "${closure_root}/usr/share/vulkan/icd.d" \
-    "${closure_root}/usr/lib/aarch64-linux-gnu"
+    "${closure_root}/usr/lib/aarch64-linux-gnu" \
+    "${host_library_dir}"
 for artifact in libEGL.so.1.0.0 libGLESv2.so.2.0.0 libgbm.so.1.0.0 \
     libgallium_dri.so libvulkan_powervr_mesa.so; do
     : >"${closure_root}/usr/local/lib/${artifact}"
@@ -157,8 +204,6 @@ done
 : >"${closure_root}/usr/lib/aarch64-linux-gnu/libdrm.so.2.4.0"
 ln -s libvulkan.so.1.3.239 "${closure_root}/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
 ln -s libdrm.so.2.4.0 "${closure_root}/usr/lib/aarch64-linux-gnu/libdrm.so.2"
-closure_function="$(sed -n '/^open_gpu_library_is_usable()/,/^validate_open_module_contract()/p' "${customize}" | sed '$d')"
-eval "${closure_function}"
 verify_open_gpu_runtime_closure "${closure_root}" >/dev/null
 
 reset_loader_link() {
@@ -215,7 +260,7 @@ if verify_open_gpu_runtime_closure "${closure_root}" >/dev/null 2>&1; then
     echo 'open runtime closure accepted stale sun4i-drm_dri.so without Gallium' >&2
     exit 1
 fi
-if printf '%s\n' "${closure_function}" | grep -F 'sun4i-drm_dri.so' >/dev/null; then
+if grep -F 'sun4i-drm_dri.so' "${closure_helpers}" >/dev/null; then
     echo 'open runtime closure incorrectly requires stale sun4i-drm_dri.so' >&2
     exit 1
 fi
