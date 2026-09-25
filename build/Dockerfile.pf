@@ -904,6 +904,8 @@ ARG SOURCE_DATE_EPOCH
 COPY --from=sdl-src . /work/src
 COPY --from=fetch /out /work/blobs
 COPY --from=gpu-um-mesa /out /work/gpu-um-mesa
+COPY --from=image-src build/prepare-sdl-kmsdrm-sysroot.sh /usr/local/bin/prepare-sdl-kmsdrm-sysroot
+COPY --from=image-src snapshot-date.txt /work/image-snapshot-date
 RUN <<'SDL'
 set -eux
 mkdir -p /out/lib /work/out
@@ -922,6 +924,14 @@ if [ "${PF_GPU_MODEL}" = "none" ]; then
     > /out/lib/.pf-sdl-provenance
   cat /out/lib/.pf-sdl-provenance
   exit 0
+fi
+# The digest-pinned r4 container already carries libdrm-dev:arm64 and frozen
+# amd64/arm64 Bookworm sources.  Dynamic KMSDRM additionally needs target GBM,
+# top-level DRM headers, and target-only pkg-config metadata.  Complete that
+# legacy sysroot only for the open model; closed DDK and none never apt-install
+# or materialize these dependencies.
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+  /usr/local/bin/prepare-sdl-kmsdrm-sysroot
 fi
 # Deterministic timestamp (image commit epoch, resolved from the pinned SHA — never wall-clock);
 # cmake/gcc honour SOURCE_DATE_EPOCH. Per-lib bit-for-bit repro is finished under B6 (tsp-1dl.6).

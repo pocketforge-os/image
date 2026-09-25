@@ -62,7 +62,7 @@ expected_open="${expected_release},$(sed '/^\s*#/d;/^\s*$/d' "$root/rootfs-packa
 test "$(resolve_packages release ddk fbdev)" = "$expected_release"
 test "$(resolve_packages dev ddk fbdev)" = "$expected_dev"
 test "$(resolve_packages release open fbdev)" = "$expected_open"
-expected_open_dev="${expected_dev},$(sed '/^\s*#/d;/^\s*$/d' "$root/rootfs-packages-mainline.txt" | paste -sd, -),libvulkan1"
+expected_open_dev="${expected_dev},$(sed '/^\s*#/d;/^\s*$/d' "$root/rootfs-packages-mainline.txt" | paste -sd, -),$(sed '/^\s*#/d;/^\s*$/d' "$root/rootfs-packages-mainline-dev.txt" | paste -sd, -),libvulkan1"
 test "$(resolve_packages dev open drm)" = "$expected_open_dev"
 
 for variant in release dev; do
