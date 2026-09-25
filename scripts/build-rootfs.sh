@@ -45,6 +45,28 @@ PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
 PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 declare -a KERNEL_REQUIRED_MODULE_LIST=()
 
+verify_open_gpu_runtime_closure() {
+    local rootfs=$1
+    local relative
+    for relative in \
+        usr/local/lib/libEGL.so.1.0.0 \
+        usr/local/lib/libGLESv2.so.2.0.0 \
+        usr/local/lib/libgbm.so.1.0.0 \
+        usr/local/lib/gbm/dri_gbm.so \
+        usr/local/lib/libgallium_dri.so \
+        usr/local/lib/libvulkan_powervr_mesa.so \
+        usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json; do
+        [ -e "${rootfs}/${relative}" ] \
+            || { echo "FATAL: open GPU runtime closure is missing /${relative}" >&2; return 1; }
+    done
+
+    find "${rootfs}/usr/lib" -name 'libvulkan.so.1' -print -quit | grep -q . \
+        || { echo "FATAL: open GPU runtime closure is missing libvulkan.so.1" >&2; return 1; }
+    find "${rootfs}/usr/lib" -name 'libdrm.so.2' -print -quit | grep -q . \
+        || { echo "FATAL: open GPU runtime closure is missing libdrm.so.2" >&2; return 1; }
+    echo "[customize] open Mesa: EGL/GLES/GBM/Gallium/PowerVR Vulkan/libdrm closure verified"
+}
+
 validate_open_module_contract() {
     [ -n "${PF_GPU_KM_MODEL}" ] \
         || { echo "FATAL: PF_GPU_KM_MODEL is required for gpu_model=open" >&2; return 1; }
@@ -182,6 +204,7 @@ echo "=== Step 1/4: Merge package list ==="
 PKG_FILE="${SRC_DIR}/rootfs-packages.txt"
 PKG_DEV_FILE="${SRC_DIR}/rootfs-packages-dev.txt"
 PKG_MAINLINE_FILE="${SRC_DIR}/rootfs-packages-mainline.txt"
+PKG_MAINLINE_DEV_FILE="${SRC_DIR}/rootfs-packages-mainline-dev.txt"
 
 [ -f "${PKG_FILE}" ] || { echo "FATAL: ${PKG_FILE} not found" >&2; exit 1; }
 
@@ -204,6 +227,14 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     MAINLINE_PKGS="$(grep -v '^\s*#' "${PKG_MAINLINE_FILE}" | grep -v '^\s*$' | tr '\n' ',' | sed 's/,$//')"
     PKG_LIST="${PKG_LIST},${MAINLINE_PKGS}"
     echo "  gpu_model=open: added mainline conformance packages (${MAINLINE_PKGS})"
+fi
+
+if [ "${PF_GPU_MODEL}" = "open" ] && [ "${VARIANT}" = "dev" ]; then
+    [ -f "${PKG_MAINLINE_DEV_FILE}" ] \
+        || { echo "FATAL: ${PKG_MAINLINE_DEV_FILE} not found" >&2; exit 1; }
+    MAINLINE_DEV_PKGS="$(grep -v '^\s*#' "${PKG_MAINLINE_DEV_FILE}" | grep -v '^\s*$' | tr '\n' ',' | sed 's/,$//')"
+    PKG_LIST="${PKG_LIST},${MAINLINE_DEV_PKGS}"
+    echo "  gpu_model=open variant=dev: added mainline diagnostics (${MAINLINE_DEV_PKGS})"
 fi
 
 # Zink needs the Khronos Vulkan loader, but the open GPU model is opt-in.
@@ -482,12 +513,7 @@ elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     install -m 0644 "${ICD_JSON}" "${ROOTFS}/usr/share/vulkan/icd.d/$(basename "${ICD_JSON}")"
     echo "[customize] open Mesa: ICD JSON also installed at /usr/share/vulkan/icd.d/$(basename "${ICD_JSON}") (loader default search path)"
 
-    VULKAN_LOADER="$(find "${ROOTFS}/usr/lib" -name 'libvulkan.so.1*' -type f | head -1)"
-    if [ -z "${VULKAN_LOADER}" ]; then
-        echo "FATAL: libvulkan.so.1 (Khronos Vulkan loader) not found in open-model rootfs — Zink cannot dispatch to the imagination ICD. Check the open-only libvulkan1 package append." >&2
-        exit 1
-    fi
-    echo "[customize] open Mesa: Vulkan loader present at ${VULKAN_LOADER#"${ROOTFS}"}"
+    verify_open_gpu_runtime_closure "${ROOTFS}"
 fi
 
 # Foreign-stage ABI tripwire.  Check the producer trees themselves so every ELF

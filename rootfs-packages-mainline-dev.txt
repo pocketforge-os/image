@@ -1,0 +1,6 @@
+# rootfs-packages-mainline-dev.txt — open/mainline dev diagnostics
+#
+# Layered only when PF_GPU_MODEL=open and VARIANT=dev.  Keep modeset tooling
+# out of both closed images and release images.
+
+libdrm-tests

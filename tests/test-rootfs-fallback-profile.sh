@@ -31,7 +31,7 @@ install -m 0755 "${repo_dir}/scripts/build-rootfs.sh" \
     "${fixture_src}/scripts/build-rootfs.sh"
 install -m 0644 "${repo_dir}/scripts/kernel-module-form.sh" \
     "${fixture_src}/scripts/kernel-module-form.sh"
-for input in rootfs-packages.txt rootfs-packages-dev.txt rootfs-packages-mainline.txt \
+for input in rootfs-packages.txt rootfs-packages-dev.txt rootfs-packages-mainline.txt rootfs-packages-mainline-dev.txt \
     snapshot-date.txt; do
     install -m 0644 "${repo_dir}/${input}" "${fixture_src}/${input}"
 done

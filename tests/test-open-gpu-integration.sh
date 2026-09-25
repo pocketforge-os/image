@@ -138,4 +138,34 @@ for shell_unit in "$selected_unit" "$foreground_unit"; do
     fi
 done
 
+# Exercise the production runtime-closure function, including its negative
+# path.  The exact Mesa build uses a Gallium/GBM module and does not install the
+# stale sun4i_drm DRI filename.
+closure_root="$(mktemp -d)"
+trap 'find "${closure_root}" -mindepth 1 -delete; rmdir "${closure_root}"' EXIT
+mkdir -p "${closure_root}/usr/local/lib/gbm" \
+    "${closure_root}/usr/share/vulkan/icd.d" \
+    "${closure_root}/usr/lib/aarch64-linux-gnu"
+for artifact in libEGL.so.1.0.0 libGLESv2.so.2.0.0 libgbm.so.1.0.0 \
+    libgallium_dri.so libvulkan_powervr_mesa.so; do
+    : >"${closure_root}/usr/local/lib/${artifact}"
+done
+: >"${closure_root}/usr/local/lib/gbm/dri_gbm.so"
+: >"${closure_root}/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+: >"${closure_root}/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
+: >"${closure_root}/usr/lib/aarch64-linux-gnu/libdrm.so.2"
+closure_function="$(sed -n '/^verify_open_gpu_runtime_closure()/,/^}/p' "${customize}")"
+eval "${closure_function}"
+verify_open_gpu_runtime_closure "${closure_root}" >/dev/null
+rm "${closure_root}/usr/local/lib/libgallium_dri.so"
+: >"${closure_root}/usr/local/lib/sun4i-drm_dri.so"
+if verify_open_gpu_runtime_closure "${closure_root}" >/dev/null 2>&1; then
+    echo 'open runtime closure accepted stale sun4i-drm_dri.so without Gallium' >&2
+    exit 1
+fi
+if printf '%s\n' "${closure_function}" | grep -F 'sun4i-drm_dri.so' >/dev/null; then
+    echo 'open runtime closure incorrectly requires stale sun4i-drm_dri.so' >&2
+    exit 1
+fi
+
 echo 'open-gpu-integration=PASS'

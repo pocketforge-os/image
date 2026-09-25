@@ -90,12 +90,31 @@ fails publication rather than a downstream kernel build.
 | `libpulse-dev:arm64` | bookworm | PulseAudio dev (SDL3 builds with both ALSA + Pulse) |
 | `libudev-dev:arm64` | bookworm | udev (joystick/input) |
 | `libdbus-1-dev:arm64` | bookworm | DBus IPC |
-| `libdrm-dev:arm64` | bookworm | DRM headers (we don't use KMS but SDL3's CMake checks for `drm.h`) |
+| `libdrm-dev:arm64` | bookworm | DRM/KMS headers and target libraries used by SDL's dynamic KMSDRM backend |
 
 These are migrated into the cross-toolchain's sysroot at container build time
-(see Dockerfile stage 2's "Migrate the arm64-multiarch artifacts" RUN step) so
-SDL3's CMake + pkg-config + find_package work without per-build
-`CMAKE_FIND_ROOT_PATH` overrides.
+(see Dockerfile stage 2's "Migrate the arm64-multiarch artifacts" RUN step).
+The legacy r4 image predates the open-GPU KMSDRM build and therefore lacks
+`libgbm-dev:arm64`, top-level `gbm.h`/`xf86drm*.h`, and usable target-only GBM
+metadata. For `PF_GPU_MODEL=open` only, the SDL image stage runs
+`build/prepare-sdl-kmsdrm-sysroot.sh`. That helper first proves the container's
+apt sources and marker match the committed `20260601T000000Z` snapshot, installs
+only `libgbm-dev:arm64` with `--no-install-recommends`, clears apt lists, then
+materializes the complete DRM/GBM target libraries and headers. It rewrites
+both Debian's literal `/usr/lib/aarch64-linux-gnu` metadata and variable-prefix
+forms to the toolchain sysroot, and rejects non-target pkg-config paths or a
+non-AArch64 `libgbm.so`.
+
+Closed/DDK and `none` SDL stages exit before this preparation and retain r4's
+existing dependency behavior. The stage-local completion deliberately does not
+create a global r5 image or change `container.pin`; r4 remains pinned at the
+digest recorded below. The canonical consumer is merged SDL commit
+`f5e73b52840129cdaaa288a71463cd548a91e2c5`, built against Mesa commit
+`0dc9d15a65481267b79d9123c7add84e7e03eda2`.
+
+Open development root filesystems additionally select `libdrm-tests` from
+`rootfs-packages-mainline-dev.txt`; release and closed/DDK package sets do not
+include those diagnostics.
 
 ### Baked-in initrd payload (arm64, NOT on the host PATH)
 
