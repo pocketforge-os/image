@@ -13,7 +13,8 @@ verifier="$root/scripts/verify-no-gpu-artifacts.sh"
 for stage in gpu-km gpu-fw gpu-um-mesa recovery launcher; do
     grep -F "AS ${stage}-none" "$dockerfile" >/dev/null
 done
-grep -F "gpu-km DEFERRED for device=%s (gpu_model=%s; in-tree open DRM KM)" "$dockerfile" >/dev/null
+grep -F 'if [ "${PF_GPU_MODEL}" = "open" ]; then' "$dockerfile" >/dev/null
+grep -F 'open gpu-km model must be in-tree-*' "$dockerfile" >/dev/null
 grep -F 'FROM gpu-um-mesa-${PF_GPU_MODEL} AS gpu-um-mesa' "$dockerfile" >/dev/null
 grep -F 'FROM recovery-${PF_GPU_MODEL} AS recovery' "$dockerfile" >/dev/null
 grep -F 'FROM launcher-${PF_GPU_MODEL} AS launcher' "$dockerfile" >/dev/null

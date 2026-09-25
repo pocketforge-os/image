@@ -9,6 +9,8 @@ for input in src blobs libsdl3 wpa runtime launcher hwprobe kernel gpu; do
     mkdir -p "${scratch}/${input}"
     printf '%s input\n' "${input}" > "${scratch}/${input}/payload"
 done
+mkdir -p "${scratch}/kernel/lib/modules/fixture-release"
+printf 'module tree input\n' > "${scratch}/kernel/lib/modules/fixture-release/modules.builtin"
 cp "${scratch}/kernel/payload" "${scratch}/kernel-payload.original"
 cp "${scratch}/hwprobe/payload" "${scratch}/hwprobe-payload.original"
 cp "${repo_dir}/scripts/generate-build-id.sh" "${scratch}/src/generate-build-id.sh"
@@ -23,6 +25,7 @@ set -euo pipefail
 [ "${PF_VARIANT}" = dev ]
 [ -n "${PF_HWPROBE_SHA}" ]
 [ -n "${PF_SIM_SHA}" ]
+[ "${KERNEL_MODULES_ROOT}" = "${KERNEL_TSP_DIR}/lib/modules" ]
 "${SRC_DIR}/generate-build-id.sh" > "${OUT_DIR}/build-id"
 printf 'hwprobe=%s\nsim=%s\n' "${PF_HWPROBE_SHA}" "${PF_SIM_SHA}" > "${OUT_DIR}/dev-inputs"
 printf 'rootfs\n' > "${OUT_DIR}/userdata.ext4"
@@ -91,6 +94,7 @@ set -euo pipefail
 [ "${PF_VARIANT}" = release ]
 [ -z "${PF_HWPROBE_SHA}" ]
 [ -z "${PF_SIM_SHA}" ]
+[ "${KERNEL_MODULES_ROOT}" = "${KERNEL_TSP_DIR}/lib/modules" ]
 "${SRC_DIR}/generate-build-id.sh" > "${OUT_DIR}/release-build-id"
 printf 'hwprobe=%s\nsim=%s\n' "${PF_HWPROBE_SHA}" "${PF_SIM_SHA}" > "${OUT_DIR}/release-inputs"
 EOF
@@ -128,10 +132,25 @@ grep -F "required input is absent: ${missing_hwprobe}" "${scratch}/dev-missing-h
     exit 1
 }
 
+if PF_DEVICE_ID='a133/open' \
+    bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release \
+    2>"${scratch}/invalid-device.err"; then
+    echo "FAIL: direct path accepted an invalid PF_DEVICE_ID" >&2
+    exit 1
+fi
+grep -F "invalid PF_DEVICE_ID 'a133/open'" "${scratch}/invalid-device.err" >/dev/null
+if PF_DEVICE_ID='' \
+    bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release \
+    2>"${scratch}/empty-device.err"; then
+    echo "FAIL: direct path treated an explicitly empty PF_DEVICE_ID as the legacy default" >&2
+    exit 1
+fi
+grep -F "invalid PF_DEVICE_ID ''" "${scratch}/empty-device.err" >/dev/null
+
 case "${first}" in
     'device=trimui-smart-pro-a133 build='????????????) ;;
     *) echo "FAIL: direct build-id is not a single cat-readable line: ${first}" >&2; exit 1 ;;
 esac
 
-printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-hwprobe=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\nPASS release-without-hwprobe\nPASS dev-requires-hwprobe\n' \
+printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-hwprobe=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\nPASS release-without-hwprobe\nPASS dev-requires-hwprobe\nPASS invalid-device-rejected\nPASS empty-device-rejected\n' \
     "${first}" "${different}" "${different_hwprobe}" "${different_uboot}" "${vendor}"

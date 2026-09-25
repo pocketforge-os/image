@@ -41,6 +41,9 @@ KERNEL_TSP_DIR=""
 GPU_KM_DIR=""
 VARIANT="dev"
 PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
+PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
+PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
+declare -a KERNEL_REQUIRED_MODULE_LIST=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -52,6 +55,8 @@ while [ $# -gt 0 ]; do
         --kernel-tsp-dir)  KERNEL_TSP_DIR="$2"; shift 2 ;;
         --gpu-km-dir)      GPU_KM_DIR="$2"; shift 2 ;;
         --gpu-model)       PF_GPU_MODEL="$2"; shift 2 ;;
+        --gpu-km-model)    PF_GPU_KM_MODEL="$2"; shift 2 ;;
+        --kernel-required-modules) PF_KERNEL_REQUIRED_MODULES="$2"; shift 2 ;;
         *) echo "build-initrd.sh: unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -60,6 +65,52 @@ case "${PF_GPU_MODEL}" in
     ddk|open|none) ;;
     *) echo "build-initrd.sh: --gpu-model must be ddk|open|none (got '${PF_GPU_MODEL}')" >&2; exit 2 ;;
 esac
+
+validate_open_module_contract() {
+    [ -n "${PF_GPU_KM_MODEL}" ] \
+        || { echo "FATAL: --gpu-km-model is required for gpu_model=open" >&2; return 1; }
+    case "${PF_GPU_KM_MODEL}" in
+        in-tree-?*) ;;
+        *) echo "FATAL: open --gpu-km-model must be in-tree-*, got '${PF_GPU_KM_MODEL}'" >&2; return 1 ;;
+    esac
+    [ -n "${PF_KERNEL_REQUIRED_MODULES}" ] \
+        || { echo "FATAL: --kernel-required-modules is required for gpu_model=open" >&2; return 1; }
+    read -r -a KERNEL_REQUIRED_MODULE_LIST <<< "${PF_KERNEL_REQUIRED_MODULES}"
+    [ "${#KERNEL_REQUIRED_MODULE_LIST[@]}" -gt 0 ] \
+        || { echo "FATAL: --kernel-required-modules did not contain a module" >&2; return 1; }
+
+    local seen=' '
+    local module
+    for module in "${KERNEL_REQUIRED_MODULE_LIST[@]}"; do
+        case "${module}" in
+            [A-Za-z0-9]*) ;;
+            *) echo "FATAL: invalid required kernel module '${module}'" >&2; return 1 ;;
+        esac
+        case "${module}" in
+            *[!A-Za-z0-9_-]*) echo "FATAL: invalid required kernel module '${module}'" >&2; return 1 ;;
+        esac
+        case "${seen}" in
+            *" ${module} "*) echo "FATAL: duplicate required kernel module '${module}'" >&2; return 1 ;;
+        esac
+        seen="${seen}${module} "
+    done
+    case "${seen}" in
+        *' powervr '*) ;;
+        *) echo "FATAL: open --kernel-required-modules must include powervr" >&2; return 1 ;;
+    esac
+}
+
+kernel_module_is_required() {
+    local module
+    for module in "${KERNEL_REQUIRED_MODULE_LIST[@]}"; do
+        [ "${module}" = "$1" ] && return 0
+    done
+    return 1
+}
+
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    validate_open_module_contract
+fi
 
 # shellcheck source=scripts/kernel-module-form.sh
 source "${SRC_DIR}/scripts/kernel-module-form.sh"
@@ -77,21 +128,27 @@ if [ "$SUBSTRATE" = "owned" ]; then
     # Phase 2: modules from kernel-tsp + gpu-km-tsp builds
     echo "  substrate: owned (kernel-tsp, gpu model: ${PF_GPU_MODEL})"
 
-    # videobuf2-dma-contig from kernel-tsp. The open model receives the
-    # modules_install tree, so resolve its single kernel-release directory.
+    # The open model receives the modules_install tree. Its initrd still packs
+    # no modules, but preserve the existing 6.x videobuf2 preflight exactly when
+    # the profile declares that requirement. The 7.x GPU profile does not.
     if [ "${PF_GPU_MODEL}" = "open" ]; then
         KERNEL_MODULES_ROOT="${KERNEL_TSP_DIR}/lib/modules"
-        KERNEL_RELEASE_DIR="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d | head -1)"
-        [ -n "${KERNEL_RELEASE_DIR}" ] || { echo "FATAL: no kernel release dir under ${KERNEL_MODULES_ROOT}" >&2; exit 1; }
-        IFS=$'\t' read -r KERNEL_VB2_FORM KERNEL_VB2 \
-            < <(kernel_module_form "${KERNEL_RELEASE_DIR}" videobuf2-dma-contig)
+        KERNEL_RELEASE_COUNT="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+        [ "${KERNEL_RELEASE_COUNT}" -eq 1 ] \
+            || { echo "FATAL: expected one kernel release dir under ${KERNEL_MODULES_ROOT}, found ${KERNEL_RELEASE_COUNT}" >&2; exit 1; }
+        KERNEL_RELEASE_DIR="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+        if kernel_module_is_required videobuf2-dma-contig; then
+            IFS=$'\t' read -r KERNEL_VB2_FORM KERNEL_VB2 \
+                < <(kernel_module_form "${KERNEL_RELEASE_DIR}" videobuf2-dma-contig)
+        fi
     elif [ "${PF_GPU_MODEL}" = "ddk" ]; then
         KERNEL_VB2="$(find "${KERNEL_TSP_DIR}" -name 'videobuf2-dma-contig.ko' -type f | head -1)"
         [ -n "${KERNEL_VB2}" ] || { echo "FATAL: videobuf2-dma-contig.ko not found in kernel-tsp build tree" >&2; exit 1; }
         KERNEL_VB2_FORM=module
     fi
 
-    if [ "${PF_GPU_MODEL}" != "none" ]; then
+    if [ "${PF_GPU_MODEL}" = "ddk" ] \
+        || { [ "${PF_GPU_MODEL}" = "open" ] && kernel_module_is_required videobuf2-dma-contig; }; then
         echo "  videobuf2 (${KERNEL_VB2_FORM}): ${KERNEL_VB2}"
     fi
     if [ "${PF_GPU_MODEL}" = "ddk" ]; then
@@ -114,14 +171,9 @@ fi
 # The initrd module set, in load order. NOTE: videobuf2-dma-contig.ko is
 # HYPHENATED on disk (runtime/lsmod name is underscored). Verified on blobs.
 if [ "${PF_GPU_MODEL}" = "open" ] || [ "${PF_GPU_MODEL}" = "none" ]; then
-    # The open GPU/camera stack (incl. videobuf2) is brought up AFTER switch_root
-    # by modprobe, which resolves the full mc->common->memops->dma-contig chain.
-    # The initrd ships NO vb2 module: mainline 6.16 split videobuf2 into
-    # mc/common/memops/dma-contig, so a lone videobuf2-dma-contig insmod fails on
-    # unresolved symbols (vb2_common_vm_ops, frame_vector_to_pfns, ...) and the
-    # fatal handler drops to a rescue shell before switch_root. The insmod is
-    # also vestigial pre-switch_root -- nothing between it and switch_root uses
-    # vb2 in the open initrd (tsp-hqm1p.17.12).
+    # Open GPU/camera modules are brought up AFTER switch_root by modprobe. The
+    # initrd has no module consumer, so it deliberately ships MODULES="" for
+    # both the existing 6.x contract and the new 7.x contract.
     MODULES=""
 else
     MODULES="videobuf2-dma-contig.ko pvrsrvkm.ko dc_sunxi.ko"

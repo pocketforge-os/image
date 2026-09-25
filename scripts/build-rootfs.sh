@@ -41,7 +41,54 @@ case "${PF_GPU_MODEL}" in
     ddk|open|none) ;;
     *) echo "FATAL: PF_GPU_MODEL must be ddk|open|none, got '${PF_GPU_MODEL}'" >&2; exit 2 ;;
 esac
+PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
+PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
+declare -a KERNEL_REQUIRED_MODULE_LIST=()
+
+validate_open_module_contract() {
+    [ -n "${PF_GPU_KM_MODEL}" ] \
+        || { echo "FATAL: PF_GPU_KM_MODEL is required for gpu_model=open" >&2; return 1; }
+    case "${PF_GPU_KM_MODEL}" in
+        in-tree-?*) ;;
+        *) echo "FATAL: open PF_GPU_KM_MODEL must be in-tree-*, got '${PF_GPU_KM_MODEL}'" >&2; return 1 ;;
+    esac
+    [ -n "${PF_KERNEL_REQUIRED_MODULES}" ] \
+        || { echo "FATAL: PF_KERNEL_REQUIRED_MODULES is required for gpu_model=open" >&2; return 1; }
+    read -r -a KERNEL_REQUIRED_MODULE_LIST <<< "${PF_KERNEL_REQUIRED_MODULES}"
+    [ "${#KERNEL_REQUIRED_MODULE_LIST[@]}" -gt 0 ] \
+        || { echo "FATAL: PF_KERNEL_REQUIRED_MODULES did not contain a module" >&2; return 1; }
+
+    local seen=' '
+    local module
+    for module in "${KERNEL_REQUIRED_MODULE_LIST[@]}"; do
+        case "${module}" in
+            [A-Za-z0-9]*) ;;
+            *) echo "FATAL: invalid required kernel module '${module}'" >&2; return 1 ;;
+        esac
+        case "${module}" in
+            *[!A-Za-z0-9_-]*) echo "FATAL: invalid required kernel module '${module}'" >&2; return 1 ;;
+        esac
+        case "${seen}" in
+            *" ${module} "*) echo "FATAL: duplicate required kernel module '${module}'" >&2; return 1 ;;
+        esac
+        seen="${seen}${module} "
+    done
+    case "${seen}" in
+        *' powervr '*) ;;
+        *) echo "FATAL: open PF_KERNEL_REQUIRED_MODULES must include powervr" >&2; return 1 ;;
+    esac
+}
+
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    validate_open_module_contract
+fi
 PF_DEVICE_ID="${PF_DEVICE_ID:?FATAL: PF_DEVICE_ID is required}"
+if [ "${PF_DEVICE_ID}" = "a133-open-7x-gpu" ]; then
+    if [ "${PF_GPU_MODEL}" != "open" ] || [ "${PF_GPU_KM_MODEL}" != "in-tree-7.x" ]; then
+        echo "FATAL: a133-open-7x-gpu requires gpu_model=open and gpu_km_model=in-tree-7.x" >&2
+        exit 2
+    fi
+fi
 PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:?FATAL: PF_DISPLAY_PIPELINE is required (fbdev|drm|none)}"
 case "${PF_DISPLAY_PIPELINE}" in
     fbdev|drm) PF_HAS_DISPLAY=1 ;;
@@ -75,6 +122,10 @@ done
 
 # Phase 2 owned-substrate paths (bind-mounted by the Makefile)
 KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
+# Canonical Docker rootfs stages mount the modules_install root directly at
+# KERNEL_TSP_DIR.  The direct SD fallback passes an explicit lib/modules subtree
+# while retaining its full kernel tree for Image/DTB assembly and provenance.
+KERNEL_MODULES_ROOT="${KERNEL_MODULES_ROOT:-${KERNEL_TSP_DIR}}"
 GPU_KM_TSP_DIR="${GPU_KM_TSP_DIR:-/work/gpu-km-tsp}"
 
 if [ "$VARIANT" != "dev" ] && [ "$VARIANT" != "release" ]; then
@@ -115,6 +166,7 @@ echo "  epoch:     ${SOURCE_DATE_EPOCH}"
 echo "  snapshot:  ${SNAPSHOT_URL}"
 echo "  blobs:     ${BLOBS_DIR}"
 echo "  kernel-tsp: ${KERNEL_TSP_DIR}"
+echo "  kernel modules root: ${KERNEL_MODULES_ROOT}"
 echo "  gpu-km-tsp: ${GPU_KM_TSP_DIR}"
 echo "  libsdl3:   ${LIBSDL3_DIR}"
 echo "  hwprobe:   ${HWPROBE_DIR}"
@@ -249,22 +301,27 @@ if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         exit 1
     fi
 elif [ "${PF_GPU_MODEL}" = "open" ]; then
-    KERNEL_RELEASE_DIR="$(find "${KERNEL_TSP_DIR}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
-    [ -n "${KERNEL_RELEASE_DIR}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
-    IFS=$'\t' read -r KERNEL_POWERVR_FORM KERNEL_POWERVR \
-        < <(kernel_module_form "${KERNEL_RELEASE_DIR}" powervr)
-    IFS=$'\t' read -r KERNEL_VB2_FORM KERNEL_VB2 \
-        < <(kernel_module_form "${KERNEL_RELEASE_DIR}" videobuf2-dma-contig)
-    IFS=$'\t' read -r KERNEL_CSI_FORM KERNEL_CSI \
-        < <(kernel_module_form "${KERNEL_RELEASE_DIR}" sun6i-csi)
-    # kernel-sunxi-6.x builds the upstream-shaped XR829 driver as one xradio.ko,
-    # unlike the closed 4.9 tree's xr829_mac/core/wlan triplet.
-    IFS=$'\t' read -r KERNEL_WIFI_FORM KERNEL_WIFI \
-        < <(kernel_module_form "${KERNEL_RELEASE_DIR}" xradio)
-    echo "  powervr.ko (in-tree, kernel-tsp): ${KERNEL_POWERVR} (${KERNEL_POWERVR_FORM})"
-    echo "  videobuf2-dma-contig (${KERNEL_VB2_FORM}, kernel-tsp): ${KERNEL_VB2}"
-    echo "  sun6i-csi (${KERNEL_CSI_FORM}, kernel-tsp): ${KERNEL_CSI}"
-    echo "  xradio (${KERNEL_WIFI_FORM}, kernel-tsp): ${KERNEL_WIFI}"
+    KERNEL_RELEASE_COUNT="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+    [ "${KERNEL_RELEASE_COUNT}" -eq 1 ] \
+        || { echo "FATAL: expected one kernel release dir under ${KERNEL_MODULES_ROOT} (open model), found ${KERNEL_RELEASE_COUNT}" >&2; exit 1; }
+    KERNEL_RELEASE_DIR="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+    KERNEL_POWERVR_FORM=absent
+    KERNEL_WIFI_FORM=absent
+    for REQUIRED_MODULE in "${KERNEL_REQUIRED_MODULE_LIST[@]}"; do
+        IFS=$'\t' read -r REQUIRED_MODULE_FORM REQUIRED_MODULE_EVIDENCE \
+            < <(kernel_module_form "${KERNEL_RELEASE_DIR}" "${REQUIRED_MODULE}")
+        case "${REQUIRED_MODULE}" in
+            powervr)
+                KERNEL_POWERVR_FORM="${REQUIRED_MODULE_FORM}"
+                KERNEL_POWERVR="${REQUIRED_MODULE_EVIDENCE}"
+                echo "  powervr.ko (in-tree, kernel-tsp): ${KERNEL_POWERVR} (${KERNEL_POWERVR_FORM})"
+                ;;
+            xradio)
+                KERNEL_WIFI_FORM="${REQUIRED_MODULE_FORM}"
+                ;;
+        esac
+        echo "  required kernel module ${REQUIRED_MODULE} (${REQUIRED_MODULE_FORM}): ${REQUIRED_MODULE_EVIDENCE}"
+    done
 fi
 # WiFi firmware still from blobs (same firmware regardless of module name)
 [ -f "${BLOBS_DIR}/sunxi/a133/wifi-firmware/fw_xr829.bin" ] || { echo "FATAL: WiFi firmware not found in blobs" >&2; exit 1; }
@@ -302,6 +359,19 @@ set -euo pipefail
 ROOTFS="$1"
 
 echo "[customize] Starting PocketForge rootfs customization..."
+
+install_open_gpu_module_options() {
+    if [ "${PF_DEVICE_ID}" != "a133-open-7x-gpu" ]; then
+        return 0
+    fi
+    [ "${PF_GPU_MODEL}" = "open" ] && [ "${PF_GPU_KM_MODEL}" = "in-tree-7.x" ] || {
+        echo "FATAL: refusing a133-open-7x-gpu PowerVR options without its exact open/in-tree-7.x contract" >&2
+        return 1
+    }
+    install -d "${ROOTFS}/etc/modprobe.d"
+    printf '%s\n' 'options powervr exp_hw_support=1' \
+        > "${ROOTFS}/etc/modprobe.d/powervr-a133-open-7x-gpu.conf"
+}
 
 # Debian gives its locally re-signed regulatory database a higher alternatives
 # priority than the kernel.org-signed copy.  The PocketForge kernel trusts the
@@ -446,11 +516,11 @@ echo "[customize] Installing kernel modules..."
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     KREL="4.9.191"
 elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
-    KREL="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
-    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
+    KREL="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
+    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under ${KERNEL_MODULES_ROOT} (open model)" >&2; exit 1; }
 else
-    KREL="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
-    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (none model)" >&2; exit 1; }
+    KREL="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
+    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under ${KERNEL_MODULES_ROOT} (none model)" >&2; exit 1; }
 fi
 install -d "${ROOTFS}/lib/modules/${KREL}"
 
@@ -479,7 +549,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     chroot "$ROOTFS" depmod "${KREL}"
     echo "[customize] Modules installed: $(ls "${ROOTFS}/lib/modules/${KREL}/"*.ko | wc -l) .ko files"
 elif [ "${PF_GPU_MODEL}" = "open" ]; then
-    cp -a "/work/kernel-tsp/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
+    cp -a "${KERNEL_MODULES_ROOT}/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
 
     DEPMOD_STDERR="$(mktemp)"
     if ! chroot "$ROOTFS" depmod "${KREL}" 2>"${DEPMOD_STDERR}"; then
@@ -497,7 +567,7 @@ elif [ "${PF_GPU_MODEL}" = "open" ]; then
     rm -f "${DEPMOD_STDERR}"
     echo "[customize] Modules installed: $(find "${ROOTFS}/lib/modules/${KREL}" -name '*.ko' -type f | wc -l) .ko files"
 else
-    cp -a "/work/kernel-tsp/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
+    cp -a "${KERNEL_MODULES_ROOT}/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
     chroot "$ROOTFS" depmod "${KREL}"
     echo "[customize] gpu_model=none: full ${KREL} kernel module tree installed"
 fi
@@ -507,6 +577,7 @@ if [ ! -s "${ROOTFS}/lib/modules/${KREL}/modules.dep" ]; then
     echo "FATAL: depmod ${KREL} produced empty modules.dep" >&2
     exit 1
 fi
+install_open_gpu_module_options
 
 # --- Firmware install --------------------------------------------------------
 echo "[customize] Installing firmware..."
@@ -1661,7 +1732,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_GPU_MODEL=${PF_GPU_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-module} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-module} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
