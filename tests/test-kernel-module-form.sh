@@ -43,6 +43,8 @@ if PF_GPU_MODEL=open BUSYBOX_ARM64="${scratch}/absent-busybox" \
         --src "${repo_dir}" \
         --kernel-tsp-dir "${assemble_kernel_dir}" \
         --gpu-km-dir "${scratch}/unused-gpu-km" \
+        --gpu-km-model in-tree-6.x \
+        --kernel-required-modules "powervr videobuf2-dma-contig sun6i-csi xradio" \
         --out "${scratch}/unused-initrd.gz" \
         >"${scratch}/assemble.out" 2>"${scratch}/assemble.err"; then
     echo 'FAIL: assemble-stage fixture unexpectedly built an initrd' >&2
@@ -52,5 +54,48 @@ grep -F "videobuf2 (builtin): ${assemble_release_dir}/modules.builtin" \
     "${scratch}/assemble.out" >/dev/null
 grep -F "FATAL: baked busybox not found at ${scratch}/absent-busybox" \
     "${scratch}/assemble.err" >/dev/null
+
+# The 7.x contract has no early module consumer. Its powervr-only inventory
+# must therefore bypass the vestigial videobuf2 check and reach the same empty
+# initrd-module path.
+assemble_7x_kernel_dir="${scratch}/assemble-7x-kernel"
+mkdir -p "${assemble_7x_kernel_dir}/lib/modules/7.0.0-pocketforge"
+: > "${assemble_7x_kernel_dir}/lib/modules/7.0.0-pocketforge/modules.builtin"
+if PF_GPU_MODEL=open BUSYBOX_ARM64="${scratch}/absent-busybox" \
+    bash "${repo_dir}/boards/tsp/initrd/build-initrd.sh" \
+        --src "${repo_dir}" \
+        --kernel-tsp-dir "${assemble_7x_kernel_dir}" \
+        --gpu-km-dir "${scratch}/unused-gpu-km" \
+        --gpu-km-model in-tree-7.x \
+        --kernel-required-modules powervr \
+        --out "${scratch}/unused-7x-initrd.gz" \
+        >"${scratch}/assemble-7x.out" 2>"${scratch}/assemble-7x.err"; then
+    echo 'FAIL: 7.x assemble-stage fixture unexpectedly built an initrd' >&2
+    exit 1
+fi
+if grep -F 'videobuf2 (' "${scratch}/assemble-7x.out" >/dev/null; then
+    echo 'FAIL: 7.x powervr-only contract ran the vestigial videobuf2 preflight' >&2
+    exit 1
+fi
+grep -F "FATAL: baked busybox not found at ${scratch}/absent-busybox" \
+    "${scratch}/assemble-7x.err" >/dev/null
+
+# The same 6.x contract must fail closed if its declared videobuf2 capability
+# is neither a module nor built in.
+: > "${assemble_release_dir}/modules.builtin"
+if PF_GPU_MODEL=open BUSYBOX_ARM64="${scratch}/absent-busybox" \
+    bash "${repo_dir}/boards/tsp/initrd/build-initrd.sh" \
+        --src "${repo_dir}" \
+        --kernel-tsp-dir "${assemble_kernel_dir}" \
+        --gpu-km-dir "${scratch}/unused-gpu-km" \
+        --gpu-km-model in-tree-6.x \
+        --kernel-required-modules "powervr videobuf2-dma-contig sun6i-csi xradio" \
+        --out "${scratch}/unused-missing-initrd.gz" \
+        >"${scratch}/assemble-missing.out" 2>"${scratch}/assemble-missing.err"; then
+    echo 'FAIL: missing declared 6.x videobuf2 capability was accepted' >&2
+    exit 1
+fi
+grep -F 'videobuf2-dma-contig.ko not found as a module' \
+    "${scratch}/assemble-missing.err" >/dev/null
 
 echo 'kernel-module-form=PASS'

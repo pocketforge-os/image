@@ -32,6 +32,8 @@ OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/${BOARD}"
 TOOLS_DIR="${SRC_DIR}/tools"
 PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
+PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
+PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 
 # Parse arguments
 M1B_MODE=0
@@ -60,6 +62,16 @@ case "${PF_GPU_MODEL}" in
     ddk|open|none) ;;
     *) echo "build-sd-image.sh: PF_GPU_MODEL must be ddk|open|none (got '${PF_GPU_MODEL}')" >&2; exit 2 ;;
 esac
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+    case "${PF_GPU_KM_MODEL}" in
+        in-tree-?*) ;;
+        *) echo "build-sd-image.sh: open PF_GPU_KM_MODEL must be in-tree-* (got '${PF_GPU_KM_MODEL}')" >&2; exit 2 ;;
+    esac
+    [ -n "${PF_KERNEL_REQUIRED_MODULES}" ] || {
+        echo "build-sd-image.sh: PF_KERNEL_REQUIRED_MODULES is required for gpu_model=open" >&2
+        exit 2
+    }
+fi
 case "${BOOT_CHAIN}" in
     vendor|owned-spl) ;;
     *) echo "build-sd-image.sh: --boot-chain must be vendor|owned-spl (got '${BOOT_CHAIN}')" >&2; exit 2 ;;
@@ -127,6 +139,8 @@ if [ "$M1B_MODE" = 1 ]; then
 fi
 INITRD_ARGS+=(--kernel-tsp-dir "${KERNEL_TSP_DIR}" --gpu-km-dir "${GPU_KM_TSP_DIR}")
 INITRD_ARGS+=(--gpu-model "${PF_GPU_MODEL}")
+INITRD_ARGS+=(--gpu-km-model "${PF_GPU_KM_MODEL}")
+INITRD_ARGS+=(--kernel-required-modules "${PF_KERNEL_REQUIRED_MODULES}")
 bash "${BOARD_DIR}/initrd/build-initrd.sh" "${INITRD_ARGS[@]}"
 if [ "${PF_GPU_MODEL}" = "none" ]; then
     if gzip -dc "${WORK}/initrd.gz" | cpio -t 2>/dev/null \

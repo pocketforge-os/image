@@ -254,8 +254,15 @@ FROM ${PF_CONTAINER} AS gpu-km-build
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
 ARG PF_GPU_MODEL
+ARG PF_GPU_KM_MODEL
+ARG PF_GPU_KM_REPO
+ARG PF_GPU_KM_REF
+ARG PF_GPU_KM_SHA
 ARG PF_GPU_SHA
 ARG PF_GPU_MODULES
+ARG PF_KERNEL_REPO
+ARG PF_KERNEL_REF
+ARG PF_KERNEL_SHA
 ARG PF_TOOLCHAIN_GCC_VERSION
 ARG PF_KERNEL_SOURCE_DATE_EPOCH
 ARG PF_ODYSSEY_CAPTURE=
@@ -265,6 +272,7 @@ ARG SOURCE_DATE_EPOCH
 # provenance carries the kernel vermagic we must match (MODVERSIONS=n → vermagic is the only gate).
 COPY --from=kernel /work/kernel /work/kernel
 COPY --from=kernel /out/build/.pf-kernel-provenance /work/kernel-provenance
+COPY --from=kernel /out/lib/modules /work/kernel-modules
 COPY --from=gpu-src . /work/gpu
 # The GPU driver's build-options (PVR_KM_CFLAGS + the Make-level SUPPORT_* gates) are OWNED BY and
 # ship WITH the driver source at gpu-km-tsp/build/pvr-buildopts.mk, which the DDK Makefile
@@ -276,15 +284,69 @@ COPY --from=gpu-src . /work/gpu
 RUN <<'GPUKM'
 set -eux
 mkdir -p /out/modules
-# The open model uses the in-tree, upstream-shaped powervr DRM module. It is
-# selected by the Odyssey DT's img,img-rogue compatible and consumes the Rogue
-# firmware produced below. Keep the closed DDK recipe unreachable for open.
-if [ "${PF_GPU_MODEL}" != "ddk" ]; then
-  printf 'gpu-km DEFERRED for device=%s (gpu_model=%s; in-tree open DRM KM)\n' \
-    "${PF_DEVICE_ID}" "${PF_GPU_MODEL}" > /out/modules/.pf-gpu-provenance
+# The open model consumes its declared in-tree-* KM from the exact kernel output
+# rather than treating every open profile as the original 6.x implementation.
+if [ "${PF_GPU_MODEL}" = "open" ]; then
+  : "${PF_GPU_KM_MODEL:?}" "${PF_GPU_KM_REPO:?}" "${PF_GPU_KM_REF:?}" \
+    "${PF_GPU_KM_SHA:?}" "${PF_GPU_MODULES:?}" "${PF_KERNEL_REPO:?}" \
+    "${PF_KERNEL_REF:?}" "${PF_KERNEL_SHA:?}"
+  case "${PF_GPU_KM_MODEL}" in
+    in-tree-?*) ;;
+    *) echo "GPU FAIL: open gpu-km model must be in-tree-*, got '${PF_GPU_KM_MODEL}'"; exit 1 ;;
+  esac
+  [ "${PF_GPU_KM_REPO}" = "${PF_KERNEL_REPO}" ] \
+    || { echo "GPU FAIL: in-tree repo ${PF_GPU_KM_REPO} != kernel repo ${PF_KERNEL_REPO}"; exit 1; }
+  [ "${PF_GPU_KM_REF}" = "${PF_KERNEL_REF}" ] \
+    || { echo "GPU FAIL: in-tree ref ${PF_GPU_KM_REF} != kernel ref ${PF_KERNEL_REF}"; exit 1; }
+  [ "${PF_GPU_KM_SHA}" = "${PF_KERNEL_SHA}" ] \
+    || { echo "GPU FAIL: in-tree SHA ${PF_GPU_KM_SHA} != kernel SHA ${PF_KERNEL_SHA}"; exit 1; }
+  set -f
+
+  KDIR=/work/kernel
+  kver="$(cat "${KDIR}/include/config/kernel.release")"
+  release_count="$(find /work/kernel-modules -mindepth 1 -maxdepth 1 -type d | wc -l)"
+  [ "${release_count}" -eq 1 ] \
+    || { echo "GPU FAIL: expected one exact kernel release directory, found ${release_count}"; exit 1; }
+  release_dir="$(find /work/kernel-modules -mindepth 1 -maxdepth 1 -type d -print -quit)"
+  [ "${release_dir##*/}" = "${kver}" ] \
+    || { echo "GPU FAIL: module release ${release_dir##*/} != kernel release ${kver}"; exit 1; }
+  provenance_kver="$(sed -n 's/^kernel.release=//p' /work/kernel-provenance)"
+  kvm="$(sed -n 's/^vermagic=//p' /work/kernel-provenance)"
+  [ "${provenance_kver}" = "${kver}" ] && [ -n "${kvm}" ] \
+    || { echo "GPU FAIL: kernel provenance release/vermagic mismatch"; exit 1; }
+
+  seen=' '
+  for m in ${PF_GPU_MODULES}; do
+    case "${m}" in
+      [A-Za-z0-9]*.ko) ;;
+      *) echo "GPU FAIL: invalid in-tree module name '${m}'"; exit 1 ;;
+    esac
+    case "${m}" in *[!A-Za-z0-9_.-]*) echo "GPU FAIL: invalid in-tree module name '${m}'"; exit 1 ;; esac
+    case "${seen}" in *" ${m} "*) echo "GPU FAIL: duplicate in-tree module '${m}'"; exit 1 ;; esac
+    seen="${seen}${m} "
+    module_count="$(find "${release_dir}" -type f -name "${m}" | wc -l)"
+    [ "${module_count}" -eq 1 ] \
+      || { echo "GPU FAIL: expected exactly one ${m} under ${release_dir}, found ${module_count}"; exit 1; }
+    ko="$(find "${release_dir}" -type f -name "${m}" -print -quit)"
+    vm="$(aarch64-none-linux-gnu-objcopy -O binary --only-section=.modinfo "${ko}" /dev/stdout | tr '\0' '\n' | sed -n 's/^vermagic=//p')"
+    [ "${vm}" = "${kvm}" ] \
+      || { echo "GPU FAIL: ${m} vermagic '${vm}' != kernel '${kvm}'"; exit 1; }
+    install -D -m0644 "${ko}" "/out/modules/${m}"
+  done
+  {
+    printf 'gpu-km %s %s@%s ref=%s device=%s\n' \
+      "${PF_GPU_KM_MODEL}" "${PF_GPU_KM_REPO}" "${PF_GPU_KM_SHA}" \
+      "${PF_GPU_KM_REF}" "${PF_DEVICE_ID}"
+    printf 'kernel.release=%s vermagic=%s\n' "${kver}" "${kvm}"
+    printf 'modules=[%s]\n' "${PF_GPU_MODULES}"
+    for m in ${PF_GPU_MODULES}; do printf '  %s sha256=%s\n' "${m}" "$(sha256sum "/out/modules/${m}" | cut -d' ' -f1)"; done
+  } > /out/modules/.pf-gpu-provenance
   cat /out/modules/.pf-gpu-provenance
   exit 0
 fi
+: "${PF_GPU_KM_MODEL:?}"
+[ "${PF_GPU_KM_MODEL}" = "out-of-tree-ddk" ] \
+  || { echo "GPU FAIL: ddk gpu-km model must be out-of-tree-ddk, got '${PF_GPU_KM_MODEL}'"; exit 1; }
 : "${PF_GPU_REPO:?}" "${PF_GPU_MODULES:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
 export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
 export ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu-
@@ -1353,6 +1415,8 @@ ARG PF_ARCH
 ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_GPU_MODEL
+ARG PF_GPU_KM_MODEL
+ARG PF_KERNEL_REQUIRED_MODULES
 ARG PF_DISPLAY_PIPELINE
 ARG PF_VARIANT=dev
 ARG PF_IMAGE_SHA
@@ -1416,6 +1480,8 @@ case "${PF_SOC}" in
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
+      PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL}" \
+      PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES}" \
       PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \
       PF_IMAGE_SHA="${PF_IMAGE_SHA}" PF_KERNEL_SHA="${PF_KERNEL_SHA}" \
       PF_GPU_SHA="${PF_GPU_SHA:-}" PF_LIBSDL3_SHA="${PF_LIBSDL3_SHA}" \
@@ -1481,6 +1547,8 @@ FROM rootfs AS assemble
 ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
 ARG PF_GPU_MODEL=ddk
+ARG PF_GPU_KM_MODEL
+ARG PF_KERNEL_REQUIRED_MODULES
 ARG PF_KERNEL_DTB
 ARG PF_IMAGE_NAME
 ARG PF_IMAGE_ASSEMBLER
@@ -1608,6 +1676,8 @@ case "${PF_BOOT_PROTO}" in
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs OUT_DIR=/out \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
+      PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL}" \
+      PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned \
         --boot-chain owned-spl --uboot-spl "${UBOOT_SPL}"
@@ -1625,6 +1695,8 @@ case "${PF_BOOT_PROTO}" in
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs OUT_DIR=/out \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
+      PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL}" \
+      PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned
     ;;
