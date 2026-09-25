@@ -9,6 +9,8 @@ for input in src blobs libsdl3 wpa runtime launcher hwprobe kernel gpu; do
     mkdir -p "${scratch}/${input}"
     printf '%s input\n' "${input}" > "${scratch}/${input}/payload"
 done
+mkdir -p "${scratch}/kernel/lib/modules/fixture-release"
+printf 'module tree input\n' > "${scratch}/kernel/lib/modules/fixture-release/modules.builtin"
 cp "${scratch}/kernel/payload" "${scratch}/kernel-payload.original"
 cp "${scratch}/hwprobe/payload" "${scratch}/hwprobe-payload.original"
 cp "${repo_dir}/scripts/generate-build-id.sh" "${scratch}/src/generate-build-id.sh"
@@ -23,6 +25,7 @@ set -euo pipefail
 [ "${PF_VARIANT}" = dev ]
 [ -n "${PF_HWPROBE_SHA}" ]
 [ -n "${PF_SIM_SHA}" ]
+[ "${KERNEL_MODULES_ROOT}" = "${KERNEL_TSP_DIR}/lib/modules" ]
 "${SRC_DIR}/generate-build-id.sh" > "${OUT_DIR}/build-id"
 printf 'hwprobe=%s\nsim=%s\n' "${PF_HWPROBE_SHA}" "${PF_SIM_SHA}" > "${OUT_DIR}/dev-inputs"
 printf 'rootfs\n' > "${OUT_DIR}/userdata.ext4"
@@ -91,6 +94,7 @@ set -euo pipefail
 [ "${PF_VARIANT}" = release ]
 [ -z "${PF_HWPROBE_SHA}" ]
 [ -z "${PF_SIM_SHA}" ]
+[ "${KERNEL_MODULES_ROOT}" = "${KERNEL_TSP_DIR}/lib/modules" ]
 "${SRC_DIR}/generate-build-id.sh" > "${OUT_DIR}/release-build-id"
 printf 'hwprobe=%s\nsim=%s\n' "${PF_HWPROBE_SHA}" "${PF_SIM_SHA}" > "${OUT_DIR}/release-inputs"
 EOF

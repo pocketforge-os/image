@@ -10,6 +10,11 @@ RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"
 LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
+# build-sd-image supplies a complete kernel tree because it also consumes Image
+# and the DTB.  Rootfs assembly consumes the modules_install subtree only.  Keep
+# both identities explicit instead of rewriting KERNEL_TSP_DIR for every other
+# SD-image consumer.
+KERNEL_MODULES_ROOT="${KERNEL_TSP_DIR}/lib/modules"
 GPU_KM_TSP_DIR="${GPU_KM_TSP_DIR:-/work/gpu-km-tsp}"
 ROOTFS_BUILDER="${ROOTFS_BUILDER:-${SRC_DIR}/scripts/build-rootfs.sh}"
 PF_DEVICE_ID="${PF_DEVICE_ID-trimui-smart-pro-a133}"
@@ -103,6 +108,6 @@ export PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA PF_GPU_SHA
 export PF_GPU_MODEL PF_GPU_KM_MODEL PF_KERNEL_REQUIRED_MODULES PF_DISPLAY_PIPELINE
 export PF_LIBSDL3_SHA PF_WPA_SHA PF_RUNTIME_SHA PF_LAUNCHER_SHA PF_HWPROBE_SHA PF_SIM_SHA PF_BLOBS_SHA
 export PF_VENDOR_MANIFEST_SHA PF_CAR_SHA256 PF_UBOOT_SHA PF_TFA_SHA
-export HWPROBE_DIR
+export HWPROBE_DIR KERNEL_MODULES_ROOT
 
 exec bash "${ROOTFS_BUILDER}" "${builder_args[@]}"

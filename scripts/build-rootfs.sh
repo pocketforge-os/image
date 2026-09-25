@@ -122,6 +122,10 @@ done
 
 # Phase 2 owned-substrate paths (bind-mounted by the Makefile)
 KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
+# Canonical Docker rootfs stages mount the modules_install root directly at
+# KERNEL_TSP_DIR.  The direct SD fallback passes an explicit lib/modules subtree
+# while retaining its full kernel tree for Image/DTB assembly and provenance.
+KERNEL_MODULES_ROOT="${KERNEL_MODULES_ROOT:-${KERNEL_TSP_DIR}}"
 GPU_KM_TSP_DIR="${GPU_KM_TSP_DIR:-/work/gpu-km-tsp}"
 
 if [ "$VARIANT" != "dev" ] && [ "$VARIANT" != "release" ]; then
@@ -162,6 +166,7 @@ echo "  epoch:     ${SOURCE_DATE_EPOCH}"
 echo "  snapshot:  ${SNAPSHOT_URL}"
 echo "  blobs:     ${BLOBS_DIR}"
 echo "  kernel-tsp: ${KERNEL_TSP_DIR}"
+echo "  kernel modules root: ${KERNEL_MODULES_ROOT}"
 echo "  gpu-km-tsp: ${GPU_KM_TSP_DIR}"
 echo "  libsdl3:   ${LIBSDL3_DIR}"
 echo "  hwprobe:   ${HWPROBE_DIR}"
@@ -296,10 +301,10 @@ if [ "${PF_GPU_MODEL}" = "ddk" ]; then
         exit 1
     fi
 elif [ "${PF_GPU_MODEL}" = "open" ]; then
-    KERNEL_RELEASE_COUNT="$(find "${KERNEL_TSP_DIR}" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+    KERNEL_RELEASE_COUNT="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d | wc -l)"
     [ "${KERNEL_RELEASE_COUNT}" -eq 1 ] \
-        || { echo "FATAL: expected one kernel release dir under kernel-tsp (open model), found ${KERNEL_RELEASE_COUNT}" >&2; exit 1; }
-    KERNEL_RELEASE_DIR="$(find "${KERNEL_TSP_DIR}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+        || { echo "FATAL: expected one kernel release dir under ${KERNEL_MODULES_ROOT} (open model), found ${KERNEL_RELEASE_COUNT}" >&2; exit 1; }
+    KERNEL_RELEASE_DIR="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
     KERNEL_POWERVR_FORM=absent
     KERNEL_WIFI_FORM=absent
     for REQUIRED_MODULE in "${KERNEL_REQUIRED_MODULE_LIST[@]}"; do
@@ -511,11 +516,11 @@ echo "[customize] Installing kernel modules..."
 if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     KREL="4.9.191"
 elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
-    KREL="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
-    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (open model)" >&2; exit 1; }
+    KREL="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
+    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under ${KERNEL_MODULES_ROOT} (open model)" >&2; exit 1; }
 else
-    KREL="$(find /work/kernel-tsp -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
-    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under kernel-tsp (none model)" >&2; exit 1; }
+    KREL="$(find "${KERNEL_MODULES_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1)"
+    [ -n "${KREL}" ] || { echo "FATAL: no kernel release dir under ${KERNEL_MODULES_ROOT} (none model)" >&2; exit 1; }
 fi
 install -d "${ROOTFS}/lib/modules/${KREL}"
 
@@ -544,7 +549,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     chroot "$ROOTFS" depmod "${KREL}"
     echo "[customize] Modules installed: $(ls "${ROOTFS}/lib/modules/${KREL}/"*.ko | wc -l) .ko files"
 elif [ "${PF_GPU_MODEL}" = "open" ]; then
-    cp -a "/work/kernel-tsp/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
+    cp -a "${KERNEL_MODULES_ROOT}/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
 
     DEPMOD_STDERR="$(mktemp)"
     if ! chroot "$ROOTFS" depmod "${KREL}" 2>"${DEPMOD_STDERR}"; then
@@ -562,7 +567,7 @@ elif [ "${PF_GPU_MODEL}" = "open" ]; then
     rm -f "${DEPMOD_STDERR}"
     echo "[customize] Modules installed: $(find "${ROOTFS}/lib/modules/${KREL}" -name '*.ko' -type f | wc -l) .ko files"
 else
-    cp -a "/work/kernel-tsp/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
+    cp -a "${KERNEL_MODULES_ROOT}/${KREL}/." "${ROOTFS}/lib/modules/${KREL}/"
     chroot "$ROOTFS" depmod "${KREL}"
     echo "[customize] gpu_model=none: full ${KREL} kernel module tree installed"
 fi
@@ -1727,7 +1732,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
