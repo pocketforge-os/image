@@ -326,12 +326,12 @@ grep -F 'PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:?FATAL: PF_DISPLAY_PIPELINE 
 grep -F 'fbdev|drm) PF_HAS_DISPLAY=1 ;;' "$rootfs" >/dev/null
 grep -F 'none) PF_HAS_DISPLAY=0 ;;' "$rootfs" >/dev/null
 grep -F 'if [ "${PF_HAS_DISPLAY}" = 1 ]; then' "$rootfs" >/dev/null
-if unset_error=$(env -u PF_DISPLAY_PIPELINE PF_GPU_MODEL=none bash "$rootfs" 2>&1); then
+if unset_error=$(env -u PF_DISPLAY_PIPELINE PF_DEVICE_ID=none-test PF_GPU_MODEL=none bash "$rootfs" 2>&1); then
     echo 'FAIL: rootfs builder accepted an unset display pipeline' >&2
     exit 1
 fi
 printf '%s\n' "$unset_error" | grep -F 'FATAL: PF_DISPLAY_PIPELINE is required (fbdev|drm|none)' >/dev/null
-if invalid_error=$(PF_DISPLAY_PIPELINE=bogus PF_GPU_MODEL=none bash "$rootfs" 2>&1); then
+if invalid_error=$(PF_DISPLAY_PIPELINE=bogus PF_DEVICE_ID=none-test PF_GPU_MODEL=none bash "$rootfs" 2>&1); then
     echo 'FAIL: rootfs builder accepted an invalid display pipeline' >&2
     exit 1
 fi
