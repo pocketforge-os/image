@@ -12,6 +12,19 @@ HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
 GPU_KM_TSP_DIR="${GPU_KM_TSP_DIR:-/work/gpu-km-tsp}"
 ROOTFS_BUILDER="${ROOTFS_BUILDER:-${SRC_DIR}/scripts/build-rootfs.sh}"
+PF_DEVICE_ID="${PF_DEVICE_ID-trimui-smart-pro-a133}"
+PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
+PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
+PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
+PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:-}"
+
+case "${PF_DEVICE_ID}" in
+    [a-z0-9]*) ;;
+    *) echo "build-rootfs-direct: invalid PF_DEVICE_ID '${PF_DEVICE_ID}'" >&2; exit 2 ;;
+esac
+case "${PF_DEVICE_ID}" in
+    *[!a-z0-9._-]*) echo "build-rootfs-direct: invalid PF_DEVICE_ID '${PF_DEVICE_ID}'" >&2; exit 2 ;;
+esac
 
 variant=dev
 uboot_spl=""
@@ -56,7 +69,6 @@ tree_identity() {
     ) | sha256sum | cut -d' ' -f1
 }
 
-PF_DEVICE_ID="trimui-smart-pro-a133"
 PF_VARIANT="${variant}"
 PF_IMAGE_SHA="$(tree_identity "${SRC_DIR}")"
 PF_KERNEL_SHA="$(tree_identity "${KERNEL_TSP_DIR}")"
@@ -88,6 +100,7 @@ else
 fi
 PF_TFA_SHA=""
 export PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA PF_GPU_SHA
+export PF_GPU_MODEL PF_GPU_KM_MODEL PF_KERNEL_REQUIRED_MODULES PF_DISPLAY_PIPELINE
 export PF_LIBSDL3_SHA PF_WPA_SHA PF_RUNTIME_SHA PF_LAUNCHER_SHA PF_HWPROBE_SHA PF_SIM_SHA PF_BLOBS_SHA
 export PF_VENDOR_MANIFEST_SHA PF_CAR_SHA256 PF_UBOOT_SHA PF_TFA_SHA
 export HWPROBE_DIR

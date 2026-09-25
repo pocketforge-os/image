@@ -128,10 +128,25 @@ grep -F "required input is absent: ${missing_hwprobe}" "${scratch}/dev-missing-h
     exit 1
 }
 
+if PF_DEVICE_ID='a133/open' \
+    bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release \
+    2>"${scratch}/invalid-device.err"; then
+    echo "FAIL: direct path accepted an invalid PF_DEVICE_ID" >&2
+    exit 1
+fi
+grep -F "invalid PF_DEVICE_ID 'a133/open'" "${scratch}/invalid-device.err" >/dev/null
+if PF_DEVICE_ID='' \
+    bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release \
+    2>"${scratch}/empty-device.err"; then
+    echo "FAIL: direct path treated an explicitly empty PF_DEVICE_ID as the legacy default" >&2
+    exit 1
+fi
+grep -F "invalid PF_DEVICE_ID ''" "${scratch}/empty-device.err" >/dev/null
+
 case "${first}" in
     'device=trimui-smart-pro-a133 build='????????????) ;;
     *) echo "FAIL: direct build-id is not a single cat-readable line: ${first}" >&2; exit 1 ;;
 esac
 
-printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-hwprobe=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\nPASS release-without-hwprobe\nPASS dev-requires-hwprobe\n' \
+printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-hwprobe=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\nPASS release-without-hwprobe\nPASS dev-requires-hwprobe\nPASS invalid-device-rejected\nPASS empty-device-rejected\n' \
     "${first}" "${different}" "${different_hwprobe}" "${different_uboot}" "${vendor}"

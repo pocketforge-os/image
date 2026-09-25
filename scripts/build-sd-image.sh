@@ -31,9 +31,11 @@ BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/${BOARD}"
 TOOLS_DIR="${SRC_DIR}/tools"
+PF_DEVICE_ID="${PF_DEVICE_ID-trimui-smart-pro-a133}"
 PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
 PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
+PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:-}"
 
 # Parse arguments
 M1B_MODE=0
@@ -391,6 +393,11 @@ else
         # caller's original uid:gid so build-rootfs.sh can chown output files.
         # CALLER_UID/CALLER_GID are set by the Makefile's docker run -e flags.
         ROOTFS_OWNER="${CALLER_UID:-$(id -u)}:${CALLER_GID:-$(id -g)}"
+        PF_DEVICE_ID="${PF_DEVICE_ID}" \
+        PF_GPU_MODEL="${PF_GPU_MODEL}" \
+        PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL}" \
+        PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES}" \
+        PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \
         bash "${SRC_DIR}/scripts/build-rootfs-direct.sh" \
             --variant "${VARIANT}" \
             --uboot-spl "${UBOOT_SPL}" \
