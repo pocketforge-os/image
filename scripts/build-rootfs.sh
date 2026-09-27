@@ -45,6 +45,13 @@ PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
 PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 declare -a KERNEL_REQUIRED_MODULE_LIST=()
 
+is_a133_open_7x_gpu_device() {
+    case "$1" in
+        a133-open-7x-gpu|a133-open-7x-gpu-noradio) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 validate_open_module_contract() {
     [ -n "${PF_GPU_KM_MODEL}" ] \
         || { echo "FATAL: PF_GPU_KM_MODEL is required for gpu_model=open" >&2; return 1; }
@@ -83,9 +90,9 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     validate_open_module_contract
 fi
 PF_DEVICE_ID="${PF_DEVICE_ID:?FATAL: PF_DEVICE_ID is required}"
-if [ "${PF_DEVICE_ID}" = "a133-open-7x-gpu" ]; then
+if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
     if [ "${PF_GPU_MODEL}" != "open" ] || [ "${PF_GPU_KM_MODEL}" != "in-tree-7.x" ]; then
-        echo "FATAL: a133-open-7x-gpu requires gpu_model=open and gpu_km_model=in-tree-7.x" >&2
+        echo "FATAL: ${PF_DEVICE_ID} requires gpu_model=open and gpu_km_model=in-tree-7.x" >&2
         exit 2
     fi
 fi
@@ -433,11 +440,11 @@ verify_open_gpu_runtime_closure() {
 }
 
 install_open_gpu_module_options() {
-    if [ "${PF_DEVICE_ID}" != "a133-open-7x-gpu" ]; then
+    if ! is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
         return 0
     fi
     [ "${PF_GPU_MODEL}" = "open" ] && [ "${PF_GPU_KM_MODEL}" = "in-tree-7.x" ] || {
-        echo "FATAL: refusing a133-open-7x-gpu PowerVR options without its exact open/in-tree-7.x contract" >&2
+        echo "FATAL: refusing ${PF_DEVICE_ID} PowerVR options without its exact open/in-tree-7.x contract" >&2
         return 1
     }
     install -d "${ROOTFS}/etc/modprobe.d"

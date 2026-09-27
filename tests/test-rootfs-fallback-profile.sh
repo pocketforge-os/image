@@ -125,6 +125,7 @@ done
 
 run_sd_fallback() {
     local label="$1"
+    local device_id="${2:-a133-open-7x-gpu}"
     local status
     find "${scratch}/out" -mindepth 1 -delete
     set +e
@@ -134,7 +135,7 @@ run_sd_fallback() {
     WPA_DIR="${scratch}/wpa" RUNTIME_DIR="${scratch}/runtime" \
     LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${scratch}/hwprobe" \
     KERNEL_TSP_DIR="${kernel_tree}" GPU_KM_TSP_DIR="${scratch}/gpu" \
-    SOURCE_DATE_EPOCH=1700000000 PF_DEVICE_ID=a133-open-7x-gpu \
+    SOURCE_DATE_EPOCH=1700000000 PF_DEVICE_ID="${device_id}" \
     PF_GPU_MODEL=open PF_GPU_KM_MODEL=in-tree-7.x \
     PF_KERNEL_REQUIRED_MODULES=powervr PF_DISPLAY_PIPELINE=fbdev \
     bash "${repo_dir}/scripts/build-sd-image.sh" --variant release \
@@ -160,6 +161,14 @@ grep -F "libsdl3: ${scratch}/libsdl3/libSDL3-pocketforge.so.0" \
     "${scratch}/modules-present.out" >/dev/null
 grep -F 'owned wpa_supplicant not found' "${scratch}/modules-present.err" >/dev/null
 
+# The diagnostic sibling must traverse the identical open/in-tree-7.x fallback
+# contract while retaining its exact device ID.
+run_sd_fallback modules-present-noradio a133-open-7x-gpu-noradio
+grep -F "required kernel module powervr (module): ${powervr_module}" \
+    "${scratch}/modules-present-noradio.out" >/dev/null
+grep -F 'owned wpa_supplicant not found' \
+    "${scratch}/modules-present-noradio.err" >/dev/null
+
 # Missing required modules must fail in that same real preflight, before its
 # later WPA sentinel.  This also prevents a fixture-only success path.
 mv "${powervr_module}" "${scratch}/powervr.ko.saved"
@@ -175,8 +184,10 @@ mv "${scratch}/powervr.ko.saved" "${powervr_module}"
 # Execute the real customize-hook module block.  Its source tree must be the
 # selected modules root, not either the full kernel tree or canonical hardcode.
 customize_modules="${scratch}/customize-modules.sh"
-sed -n '/^install_open_gpu_module_options() {$/,/^}$/p' \
+sed -n '/^is_a133_open_7x_gpu_device() {$/,/^}$/p' \
     "${fixture_src}/scripts/build-rootfs.sh" > "${customize_modules}"
+sed -n '/^install_open_gpu_module_options() {$/,/^}$/p' \
+    "${fixture_src}/scripts/build-rootfs.sh" >> "${customize_modules}"
 sed -n '/^# --- Kernel modules install/,/^# --- Firmware install/p' \
     "${fixture_src}/scripts/build-rootfs.sh" | sed '$d' >> "${customize_modules}"
 cat > "${fixture_bin}/chroot" <<'EOF'
@@ -201,6 +212,16 @@ test -f "${customize_root}/lib/modules/${kernel_release}/module-root-marker"
 test -f "${customize_root}/lib/modules/${kernel_release}/kernel/drivers/gpu/drm/imagination/powervr.ko"
 test -s "${customize_root}/lib/modules/${kernel_release}/modules.dep"
 [ "$(cat "${customize_root}/etc/modprobe.d/powervr-a133-open-7x-gpu.conf")" = \
+    'options powervr exp_hw_support=1' ]
+
+customize_noradio_root="${scratch}/customize-noradio-root"
+mkdir -p "${customize_noradio_root}"
+PATH="${fixture_bin}:${PATH}" ROOTFS="${customize_noradio_root}" \
+PF_DEVICE_ID=a133-open-7x-gpu-noradio PF_GPU_MODEL=open PF_GPU_KM_MODEL=in-tree-7.x \
+KERNEL_MODULES_ROOT="${kernel_modules_root}" \
+bash "${customize_modules}" > "${scratch}/customize-noradio.out" \
+    2> "${scratch}/customize-noradio.err"
+[ "$(cat "${customize_noradio_root}/etc/modprobe.d/powervr-a133-open-7x-gpu.conf")" = \
     'options powervr exp_hw_support=1' ]
 grep -F 'KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT}' \
     "${fixture_src}/scripts/build-rootfs.sh" >/dev/null
