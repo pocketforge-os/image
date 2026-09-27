@@ -2,12 +2,24 @@
 set -eu
 
 root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
+packages="$root/rootfs-packages.txt"
 source_dir="$root/third_party/xradio-hciattach"
 builder="$root/scripts/build-rootfs.sh"
 verifier="$root/scripts/verify-rootfs-bluetooth.sh"
 unit="$root/rootfs-overlay/etc/systemd/system/pocketforge-xr829-hciattach.service"
 fixture="$(mktemp -d)"
 trap 'find "$fixture" -mindepth 1 -delete; rmdir "$fixture"' EXIT
+
+# This is deliberately a package-manifest assertion, rather than a host-tool
+# probe: an extracted rootfs must get its management tools from BlueZ.
+grep -Fxq 'bluez' "$packages" || {
+	echo 'FAIL: rootfs package manifest omits bluez' >&2
+	exit 1
+}
+if [ "$(grep -Ec '^bluez($|[-])' "$packages")" -ne 1 ]; then
+	echo 'FAIL: rootfs package manifest must keep BlueZ to the one maintained bluez package' >&2
+	exit 1
+fi
 
 "${CC:-cc}" -O2 -std=gnu11 -Wall -Wextra \
 	-Wno-unused-parameter -Wno-unused-function \
@@ -66,13 +78,26 @@ grep -Fq 'PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN}' "$builder"
 # shellcheck disable=SC2016
 grep -Fq 'PF_DEVICE_ID=${PF_DEVICE_ID}' "$builder"
 grep -Fq 'scripts/verify-rootfs-bluetooth.sh' "$builder"
+grep -Fq 'third_party/xradio-hciattach/SOURCE.md' "$builder"
+grep -Fq 'third_party/xradio-hciattach/COPYING' "$builder"
 
 mkdir -p "$fixture/root/usr/libexec/pocketforge" \
 	"$fixture/root/etc/systemd/system/multi-user.target.wants" \
-	"$fixture/root/lib/firmware"
+	"$fixture/root/lib/firmware" \
+	"$fixture/root/usr/bin" \
+	"$fixture/root/usr/share/doc/xr829-hciattach"
 cp "$fixture/xr829-hciattach" "$fixture/root/usr/libexec/pocketforge/"
 cp "$unit" "$fixture/root/etc/systemd/system/"
-printf 'firmware\n' > "$fixture/root/lib/firmware/fw_xr829_bt.bin"
+for firmware in fw_xr829.bin boot_xr829.bin sdd_xr829.bin fw_xr829_bt.bin; do
+	printf 'firmware %s\n' "$firmware" > "$fixture/root/lib/firmware/$firmware"
+done
+for tool in bluetoothctl btmgmt; do
+	printf '#!/bin/sh\n' > "$fixture/root/usr/bin/$tool"
+	chmod +x "$fixture/root/usr/bin/$tool"
+done
+printf 'preserved from bluez-5.54-xradio\n' \
+	> "$fixture/root/usr/share/doc/xr829-hciattach/SOURCE.md"
+printf 'license\n' > "$fixture/root/usr/share/doc/xr829-hciattach/COPYING"
 ln -s /etc/systemd/system/pocketforge-xr829-hciattach.service \
 	"$fixture/root/etc/systemd/system/multi-user.target.wants/pocketforge-xr829-hciattach.service"
 "$verifier" "$fixture/root" >/dev/null
