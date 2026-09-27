@@ -195,10 +195,10 @@ if [ "${VARIANT}" = "dev" ] && [ -f "${PKG_DEV_FILE}" ]; then
     echo "  variant=dev: added dev-only packages (${DEV_PKGS})"
 fi
 
-# The open GPU model is the mainline-6.x A133 image variant.  Its conformance
-# suites need throughput and cpufreq inspection tools in both dev and release
-# images.  Keep these out of the shared list so the shipping closed-DDK rootfs
-# remains byte-for-byte unaffected by this package-layer change.
+# The open GPU model selects the mainline A133 image variants.  Their
+# conformance suites need throughput, cpufreq, I2C, and USB inspection tools in
+# both dev and release images.  Keep these out of the shared list so the
+# shipping closed-DDK rootfs remains unaffected by this package layer.
 if [ "${PF_GPU_MODEL}" = "open" ]; then
     [ -f "${PKG_MAINLINE_FILE}" ] \
         || { echo "FATAL: ${PKG_MAINLINE_FILE} not found" >&2; exit 1; }

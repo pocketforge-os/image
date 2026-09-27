@@ -12,7 +12,7 @@ packages() {
     grep -v '^\s*#' "$1" | grep -v '^\s*$'
 }
 
-for package in cpufrequtils iperf3; do
+for package in cpufrequtils i2c-tools iperf3 usbutils; do
     packages "${MAINLINE_PACKAGES}" | grep -Fxq "${package}"
     if packages "${SHARED_PACKAGES}" | grep -Fxq "${package}"; then
         echo "FAIL: ${package} leaked into the shipping rootfs package list" >&2
@@ -47,4 +47,4 @@ grep -Fq 'if [ "${PF_GPU_MODEL}" = "open" ] && [ "${VARIANT}" = "dev" ]; then' "
 # shellcheck disable=SC2016
 grep -Fq 'PKG_LIST="${PKG_LIST},${MAINLINE_DEV_PKGS}"' "${BUILDER}"
 
-echo "PASS: mainline packages are scoped correctly, including open+dev-only libdrm-tests"
+echo "PASS: open A133 packages are scoped correctly, including hardware probes and open+dev-only libdrm-tests"
