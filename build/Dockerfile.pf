@@ -145,11 +145,32 @@ ARG SOURCE_DATE_EPOCH
 COPY --from=kernel-src . /work/kernel
 RUN <<'KERNEL'
 set -eux
-: "${PF_KERNEL_DEFCONFIG:?}" "${PF_KERNEL_DTB:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
+: "${PF_KERNEL_SHA:?PF_KERNEL_SHA must be the lock-resolved full kernel revision}" \
+  "${PF_KERNEL_DEFCONFIG:?}" "${PF_KERNEL_DTB:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
 SOURCE_DATE_EPOCH="${PF_KERNEL_SOURCE_DATE_EPOCH:-${SOURCE_DATE_EPOCH:-}}"
 : "${SOURCE_DATE_EPOCH:?PF_KERNEL_SOURCE_DATE_EPOCH/SOURCE_DATE_EPOCH must be set (pinned kernel commit time)}"
 export SOURCE_DATE_EPOCH
 cd /work/kernel
+
+# PF_KERNEL_SHA is emitted from platform.lock and this receipt is written by
+# pf_stage_sources beside the exact git archive. Validate both before allowing
+# the revision to identify the live kernel; a caller cannot silently pair an
+# arbitrary valid-looking SHA with a different staged tree.
+case "${PF_KERNEL_SHA}" in
+  *[!0-9a-f]*|'') echo "GUARD FAIL: PF_KERNEL_SHA must be exactly 40 lowercase hex chars"; exit 1 ;;
+esac
+[ "${#PF_KERNEL_SHA}" -eq 40 ] \
+  || { echo "GUARD FAIL: PF_KERNEL_SHA must be exactly 40 lowercase hex chars"; exit 1; }
+staged_kernel_sha="$(cat .pf-source-revision 2>/dev/null || true)"
+[ "${staged_kernel_sha}" = "${PF_KERNEL_SHA}" ] \
+  || { echo "GUARD FAIL: PF_KERNEL_SHA does not match the staged kernel archive receipt"; exit 1; }
+rm -f .pf-source-revision
+
+# Linux places KBUILD_BUILD_VERSION only in UTS_VERSION (`uname -v`). Use the
+# first 12 lowercase hex characters of the authenticated full revision. Do not
+# put revision identity in KERNELRELEASE (`uname -r`): module paths and vermagic
+# must remain exactly the profile-selected release.
+export KBUILD_BUILD_VERSION="$(printf '%.12s' "${PF_KERNEL_SHA}")"
 
 # --- Toolchain + reproducible-build environment (KERNEL-SOURCE-STRATEGY.md §4) ---------
 # The pinned cross toolchain ships in the owned container at /opt/arm-<ver>/bin.
@@ -191,7 +212,7 @@ grep -Eq '^CONFIG_MODVERSIONS=y'       .config && { echo "GUARD FAIL: CONFIG_MOD
 # A `git archive` carries no .git; assert the tree is archive-clean (no scm, no submodules).
 [ -e .git ] && { echo "GUARD FAIL: .git present -> build input must be a git archive, not a clone"; rc=1; } || true
 [ -f .gitmodules ] && { echo "GUARD FAIL: submodules present -> archive omits them -> divergence"; rc=1; } || true
-for v in SOURCE_DATE_EPOCH KBUILD_BUILD_TIMESTAMP KBUILD_BUILD_USER KBUILD_BUILD_HOST; do
+for v in SOURCE_DATE_EPOCH KBUILD_BUILD_TIMESTAMP KBUILD_BUILD_USER KBUILD_BUILD_HOST KBUILD_BUILD_VERSION; do
   eval "val=\${$v:-}"; [ -n "$val" ] || { echo "GUARD FAIL: $v unset -> non-reproducible kernel build"; rc=1; }
 done
 [ "$rc" -eq 0 ] || { echo "kernel repro/vermagic guards FAILED"; exit 1; }
@@ -205,6 +226,8 @@ dts="$(find arch/arm64/boot/dts -name "${PF_KERNEL_DTB%.dtb}.dts" -print -quit)"
 [ -n "$dts" ] || { echo "DTB source ${PF_KERNEL_DTB%.dtb}.dts not found under arch/arm64/boot/dts"; exit 1; }
 dtb_target="${dts#arch/arm64/boot/dts/}"; dtb_target="${dtb_target%.dts}.dtb"
 make -j"$(nproc)" Image modules "${dtb_target}"
+grep -Fq "#${KBUILD_BUILD_VERSION} " include/generated/utsversion.h \
+  || { echo "kernel UTS identity FAIL: KBUILD_BUILD_VERSION missing from UTS_VERSION"; exit 1; }
 
 # --- Stage artifacts: Image + DTB + /lib/modules + Module.symvers ----------------------
 krel="$(cat include/config/kernel.release)"
@@ -236,6 +259,7 @@ ko="$(find /out/lib/modules -name '*.ko' -print -quit)"
 vermagic="$(aarch64-none-linux-gnu-objcopy -O binary --only-section=.modinfo "$ko" /dev/stdout | tr '\0' '\n' | sed -n 's/^vermagic=//p')"
 {
   printf 'kernel %s@%s\n' "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}"
+  printf 'build.version=%s\n' "${KBUILD_BUILD_VERSION}"
   printf 'kernel.release=%s\n' "${krel}"
   printf 'vermagic=%s\n' "${vermagic}"
   printf 'defconfig=%s dtb=%s\n' "${PF_KERNEL_DEFCONFIG}" "${PF_KERNEL_DTB}"

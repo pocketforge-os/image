@@ -54,12 +54,15 @@ generate-wifi-config:
 	fi
 
 # ---- hermetic build-file tests ----------------------------------------------
-.PHONY: test-dockerfile-pf-transforms
+.PHONY: test-dockerfile-pf-transforms test-kernel-build-identity
 test-dockerfile-pf-transforms:
 	@tests/test-dockerfile-pf-transforms.sh
 	@python3 tests/verify-gamepad-input-wiring.py
 	@python3 tests/verify-owned-spl-layout-gate.py
 	@tests/test-launcher-runtime-contract.sh
+
+test-kernel-build-identity:
+	@bash tests/test-kernel-build-identity.sh
 
 # ---- clean ------------------------------------------------------------------
 .PHONY: clean clean-all
@@ -80,6 +83,7 @@ help:
 	@echo "  Dev helpers:"
 	@echo "    generate-wifi-config  Stage boards/tsp/boot-resource/wifi.txt from PF_WIFI_PSK/keyring"
 	@echo "    test-dockerfile-pf-transforms  Test Dockerfile source transforms (no Docker/network)"
+	@echo "    test-kernel-build-identity    Test pinned kernel UTS identity (no Docker/network)"
 	@echo ""
 	@echo "  Cleanup:"
 	@echo "    clean / clean-all     Remove the work/ directory"
