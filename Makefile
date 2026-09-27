@@ -58,6 +58,7 @@ generate-wifi-config:
 test-dockerfile-pf-transforms:
 	@tests/test-dockerfile-pf-transforms.sh
 	@python3 tests/verify-gamepad-input-wiring.py
+	@python3 tests/verify-owned-spl-layout-gate.py
 	@tests/test-launcher-runtime-contract.sh
 
 # ---- clean ------------------------------------------------------------------

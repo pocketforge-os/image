@@ -874,6 +874,18 @@ grep -aq "U-Boot SPL ${rel}" u-boot-sunxi-with-spl.bin \
   || { echo "bootchain FAIL: SPL binary does not embed 'U-Boot SPL ${rel}'"; exit 1; }
 
 install -D -m0644 u-boot-sunxi-with-spl.bin /out/u-boot-sunxi-with-spl.bin
+# TG5040 boots from the compiled default environment when no uboot.env is
+# present.  Export both the exact generated config and its source-owned layout
+# checker so the assemble stage validates the payloads against the same
+# authority that produced this U-Boot binary.
+case "${PF_UBOOT_DEFCONFIG}" in
+  tg5040*_defconfig)
+    [ -f tools/check_tg5040_boot_layout.py ] \
+      || { echo "bootchain FAIL: TG5040 layout checker is missing"; exit 1; }
+    install -D -m0755 tools/check_tg5040_boot_layout.py /out/check-tg5040-boot-layout.py
+    install -D -m0644 .config /out/uboot.config
+    ;;
+esac
 {
   printf 'bootchain uboot=%s@%s tfa=%s@%s\n' "${PF_UBOOT_REPO}" "${PF_UBOOT_SHA}" "${PF_TFA_REPO}" "${PF_TFA_SHA}"
   printf 'uboot.release=%s defconfig=%s\n' "${rel}" "${PF_UBOOT_DEFCONFIG}"
@@ -1676,7 +1688,11 @@ case "${PF_BOOT_PROTO}" in
     # + owned SPL swap + FAT-p4 boot payload). Selected only by the a133-owned opt-in profile;
     # the shipped `a133` default keeps boot_proto=boot_package_fex (the *) branch), UNCHANGED.
     UBOOT_SPL=/work/bootchain/u-boot-sunxi-with-spl.bin
+    UBOOT_LAYOUT_CHECK=/work/bootchain/check-tg5040-boot-layout.py
+    UBOOT_CONFIG=/work/bootchain/uboot.config
     [ -f "${UBOOT_SPL}" ] || { echo "assemble FAIL: boot_proto=sunxi-spl-booti but ${UBOOT_SPL} is missing — the bootchain stage must build it (needs [bootchain] model=sunxi-spl-uboot)"; exit 1; }
+    [ -f "${UBOOT_LAYOUT_CHECK}" ] || { echo "assemble FAIL: TG5040 boot-layout checker is missing from the bootchain output"; exit 1; }
+    [ -f "${UBOOT_CONFIG}" ] || { echo "assemble FAIL: generated TG5040 U-Boot config is missing from the bootchain output"; exit 1; }
     # Same kernel-tsp build-tree shim as the vendor a133 path (build-sd-image.sh reads Image + dtb
     # from KERNEL_TSP_DIR); build-sd-image.sh also stages that Image/dtb + the initrd onto FAT p4.
     mkdir -p /work/kernel-tsp/arch/arm64/boot/dts/sunxi
@@ -1690,7 +1706,8 @@ case "${PF_BOOT_PROTO}" in
       PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned \
-        --boot-chain owned-spl --uboot-spl "${UBOOT_SPL}"
+        --boot-chain owned-spl --uboot-spl "${UBOOT_SPL}" \
+        --uboot-layout-check "${UBOOT_LAYOUT_CHECK}" --uboot-config "${UBOOT_CONFIG}"
     ;;
   *)            # a133: vendor boot0 -> boot_package.fex (dragonsecboot) -> abootimg -> genimage GPT
     # Shim the owned kernel-tsp build-tree layout build-sd-image.sh expects (arch/arm64/boot/{Image,
