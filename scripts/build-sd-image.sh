@@ -49,6 +49,8 @@ SUBSTRATE="owned"
 # u-boot's `booti` from mmc 0:4. Same GPT layout either way (boot-resource stays p4).
 BOOT_CHAIN="vendor"
 UBOOT_SPL=""
+UBOOT_LAYOUT_CHECK=""
+UBOOT_CONFIG=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --m1b-mode)    M1B_MODE=1; shift ;;
@@ -57,6 +59,8 @@ while [ $# -gt 0 ]; do
         --substrate)   SUBSTRATE="$2"; shift 2 ;;
         --boot-chain)  BOOT_CHAIN="$2"; shift 2 ;;
         --uboot-spl)   UBOOT_SPL="$2"; shift 2 ;;
+        --uboot-layout-check) UBOOT_LAYOUT_CHECK="$2"; shift 2 ;;
+        --uboot-config) UBOOT_CONFIG="$2"; shift 2 ;;
         *) echo "build-sd-image.sh: unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -79,9 +83,18 @@ case "${BOOT_CHAIN}" in
     *) echo "build-sd-image.sh: --boot-chain must be vendor|owned-spl (got '${BOOT_CHAIN}')" >&2; exit 2 ;;
 esac
 if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
-    [ -n "${UBOOT_SPL}" ] && [ -f "${UBOOT_SPL}" ] || {
+    if [ -z "${UBOOT_SPL}" ] || [ ! -f "${UBOOT_SPL}" ]; then
         echo "FATAL: --boot-chain owned-spl requires --uboot-spl <u-boot-sunxi-with-spl.bin> (got '${UBOOT_SPL}')" >&2
-        exit 1; }
+        exit 1
+    fi
+    if [ -z "${UBOOT_LAYOUT_CHECK}" ] || [ ! -f "${UBOOT_LAYOUT_CHECK}" ]; then
+        echo "FATAL: --boot-chain owned-spl requires --uboot-layout-check <checker> (got '${UBOOT_LAYOUT_CHECK}')" >&2
+        exit 1
+    fi
+    if [ -z "${UBOOT_CONFIG}" ] || [ ! -f "${UBOOT_CONFIG}" ]; then
+        echo "FATAL: --boot-chain owned-spl requires --uboot-config <generated-.config> (got '${UBOOT_CONFIG}')" >&2
+        exit 1
+    fi
 fi
 
 # Owned-substrate paths (bind-mounted by the build container)
@@ -342,6 +355,13 @@ if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
     [ -f "${KERNEL_IMAGE}" ] || { echo "FATAL: owned-spl: kernel Image not found at ${KERNEL_IMAGE}" >&2; exit 1; }
     [ -f "${DTB_FILE}" ]     || { echo "FATAL: owned-spl: dtb not found at ${DTB_FILE}" >&2; exit 1; }
     [ -f "${WORK}/initrd.gz" ] || { echo "FATAL: owned-spl: initrd not found at ${WORK}/initrd.gz" >&2; exit 1; }
+    # Fail before any payload is staged if the arm64 Image extent is unsafe for
+    # the addresses in the generated config used to build this exact U-Boot.
+    python3 "${UBOOT_LAYOUT_CHECK}" \
+        --config "${UBOOT_CONFIG}" \
+        --image "${KERNEL_IMAGE}" \
+        --fdt "${DTB_FILE}" \
+        --initrd "${WORK}/initrd.gz"
     mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${KERNEL_IMAGE}"   "::/Image"
     mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${DTB_FILE}"       "::/dtb.bin"
     mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${WORK}/initrd.gz" "::/initrd.gz"
