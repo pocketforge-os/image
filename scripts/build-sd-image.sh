@@ -83,15 +83,18 @@ case "${BOOT_CHAIN}" in
     *) echo "build-sd-image.sh: --boot-chain must be vendor|owned-spl (got '${BOOT_CHAIN}')" >&2; exit 2 ;;
 esac
 if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
-    [ -n "${UBOOT_SPL}" ] && [ -f "${UBOOT_SPL}" ] || {
+    if [ -z "${UBOOT_SPL}" ] || [ ! -f "${UBOOT_SPL}" ]; then
         echo "FATAL: --boot-chain owned-spl requires --uboot-spl <u-boot-sunxi-with-spl.bin> (got '${UBOOT_SPL}')" >&2
-        exit 1; }
-    [ -n "${UBOOT_LAYOUT_CHECK}" ] && [ -f "${UBOOT_LAYOUT_CHECK}" ] || {
+        exit 1
+    fi
+    if [ -z "${UBOOT_LAYOUT_CHECK}" ] || [ ! -f "${UBOOT_LAYOUT_CHECK}" ]; then
         echo "FATAL: --boot-chain owned-spl requires --uboot-layout-check <checker> (got '${UBOOT_LAYOUT_CHECK}')" >&2
-        exit 1; }
-    [ -n "${UBOOT_CONFIG}" ] && [ -f "${UBOOT_CONFIG}" ] || {
+        exit 1
+    fi
+    if [ -z "${UBOOT_CONFIG}" ] || [ ! -f "${UBOOT_CONFIG}" ]; then
         echo "FATAL: --boot-chain owned-spl requires --uboot-config <generated-.config> (got '${UBOOT_CONFIG}')" >&2
-        exit 1; }
+        exit 1
+    fi
 fi
 
 # Owned-substrate paths (bind-mounted by the build container)
