@@ -17,7 +17,7 @@
 # content-addressed SHA is byte-identical regardless of transport, and is air-gap-safe):
 #   --build-context image-src=<archive>  kernel-src=<archive>  gpu-src=<archive>
 #                    sdl-src=<archive>    blobs-src=<archive>   wpa-src=<archive>
-#                    runtime-src=<archive> launcher-src=<archive>
+#                    runtime-src=<archive> launcher-src=<archive> poolsuite-src=<archive>
 #                    uboot-src=<archive>  tfa-src=<archive>    (a523 bootchain; EMPTY dirs
 #                                                               for a device with no source
 #                                                               bootchain, e.g. a133)
@@ -62,9 +62,9 @@ ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.
 ARG PF_GPU_MODEL=ddk
 ARG PF_DISPLAY_PIPELINE
 
-# The image variant is declared globally so the hwprobe selector cannot drift from
-# the variant passed to the rootfs and assemble stages. Release selects an empty
-# producer; dev selects the real diagnostic producer.
+# The image variant is declared globally so the dev-only producer selectors cannot
+# drift from the variant passed to the rootfs and assemble stages. Release selects
+# empty producers; dev selects the real diagnostic/application producers.
 ARG PF_VARIANT=dev
 
 # =============================================================================
@@ -1279,6 +1279,154 @@ RUN mkdir -p /out
 FROM hwprobe-${PF_VARIANT} AS hwprobe
 
 # =============================================================================
+# poolsuite — source-built dev-only application.
+#
+# Poolsuite requires Rust 1.91, newer than PF_CONTAINER's deliberately pinned
+# Rust 1.88 runtime toolchain. Keep this application toolchain isolated on the
+# exact Debian base Poolsuite CI owns. The fetch vertex is the only Cargo vertex
+# with network access; poolsuite-dev copies its locked cache and builds with
+# --offline --frozen under RUN --network=none.
+# =============================================================================
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS poolsuite-toolchain
+ARG RUST_VERSION=1.91.0
+ARG RUSTUP_VERSION=1.28.2
+ARG RUSTUP_INIT_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
+ENV DEBIAN_FRONTEND=noninteractive \
+    CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH=/usr/local/cargo/bin:${PATH}
+RUN <<'POOLSUITETOOLCHAIN'
+set -eux
+apt-get update
+apt-get install -y --no-install-recommends \
+  binutils-aarch64-linux-gnu \
+  build-essential \
+  ca-certificates \
+  cmake \
+  curl \
+  g++-aarch64-linux-gnu \
+  gcc-aarch64-linux-gnu \
+  git \
+  libc6-dev-arm64-cross \
+  ninja-build \
+  pkg-config
+curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+  "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init" \
+  --output /tmp/rustup-init
+printf '%s  %s\n' "${RUSTUP_INIT_SHA256}" /tmp/rustup-init | sha256sum --check --strict -
+chmod 0755 /tmp/rustup-init
+/tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}"
+rustup target add aarch64-unknown-linux-gnu
+rustc -V | grep -F "rustc ${RUST_VERSION}"
+cargo -V
+aarch64-linux-gnu-gcc --version
+dpkg-query -W > /toolchain-packages.txt
+rm -f /tmp/rustup-init
+rm -rf /var/lib/apt/lists/*
+POOLSUITETOOLCHAIN
+
+FROM poolsuite-toolchain AS poolsuite-fetch
+ARG PF_POOLSUITE_SHA
+ENV CARGO_HOME=/opt/poolsuite-cargo-home
+COPY --from=poolsuite-src . /work/poolsuite
+WORKDIR /work/poolsuite
+RUN <<'POOLSUITEFETCH'
+set -eux
+: "${PF_POOLSUITE_SHA:?FATAL: PF_POOLSUITE_SHA is required for a dev Poolsuite build}"
+[ -x ci/device-fetch.sh ] || {
+  echo 'FATAL: poolsuite-src is empty or lacks ci/device-fetch.sh; dev builds require the staged PF_POOLSUITE_SHA' >&2
+  exit 1
+}
+if ! ./ci/device-fetch.sh; then
+  echo 'FATAL: Poolsuite locked dependency fetch failed; a pinned git dependency may be unreachable and there is no fallback' >&2
+  exit 1
+fi
+# Canonical digest of the complete fetched Cargo source/cache closure. Normalize
+# tar metadata so the digest records names+bytes rather than fetch timestamps.
+FETCHED_SOURCE_SHA256="$(
+  bash -o pipefail -c \
+    'cd "${CARGO_HOME}"; tar --sort=name --mtime="@0" --owner=0 --group=0 --numeric-owner -cf - . | sha256sum | cut -d" " -f1'
+)"
+printf '%s\n' "${FETCHED_SOURCE_SHA256}" > /poolsuite-fetched-source.sha256
+echo "poolsuite fetched source sha256=${FETCHED_SOURCE_SHA256}"
+POOLSUITEFETCH
+
+FROM poolsuite-toolchain AS poolsuite-dev
+ARG PF_POOLSUITE_SHA
+ARG SOURCE_DATE_EPOCH
+ENV CARGO_HOME=/opt/poolsuite-cargo-home \
+    CARGO_INCREMENTAL=0
+COPY --from=poolsuite-src . /work/poolsuite
+COPY --from=poolsuite-fetch /opt/poolsuite-cargo-home /opt/poolsuite-cargo-home
+COPY --from=poolsuite-fetch /poolsuite-fetched-source.sha256 /poolsuite-fetched-source.sha256
+WORKDIR /work/poolsuite
+RUN --network=none <<'POOLSUITEDEV'
+set -eux
+: "${PF_POOLSUITE_SHA:?FATAL: PF_POOLSUITE_SHA is required for a dev Poolsuite build}"
+[ -x ci/device-build.sh ] || {
+  echo 'FATAL: poolsuite-src is empty or lacks ci/device-build.sh; dev builds require the staged PF_POOLSUITE_SHA' >&2
+  exit 1
+}
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+./ci/device-build.sh --offline
+APP=target/aarch64-unknown-linux-gnu/release/ps-app
+test -f "${APP}"
+E_MACHINE="$(od -An -tx1 -j18 -N2 "${APP}" | tr -d ' ')"
+[ "${E_MACHINE}" = b700 ] || {
+  echo "FATAL: ps-app is not aarch64 (e_machine=${E_MACHINE}, want b700)" >&2
+  exit 1
+}
+DEPS="$(aarch64-linux-gnu-readelf -d "${APP}")" || {
+  echo 'FATAL: readelf could not inspect ps-app dynamic dependencies' >&2
+  exit 1
+}
+if printf '%s\n' "${DEPS}" | grep -q 'NEEDED.*libSDL3'; then
+  echo 'FATAL: ps-app unexpectedly has DT_NEEDED libSDL3' >&2
+  exit 1
+fi
+VERSIONS="$(aarch64-linux-gnu-readelf -V "${APP}")" || {
+  echo 'FATAL: readelf could not inspect ps-app symbol versions' >&2
+  exit 1
+}
+MAX_GLIBC="$(printf '%s\n' "${VERSIONS}" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1)"
+[ -n "${MAX_GLIBC}" ] || {
+  echo 'FATAL: ps-app exposes no GLIBC symbol-version evidence' >&2
+  exit 1
+}
+[ "$(printf '%s\n' "${MAX_GLIBC}" GLIBC_2.36 | sort -V | tail -1)" = GLIBC_2.36 ] || {
+  echo "FATAL: ps-app glibc symbol-version max ${MAX_GLIBC} exceeds GLIBC_2.36" >&2
+  exit 1
+}
+LOCK_SHA256="$(sha256sum Cargo.lock | cut -d' ' -f1)"
+FETCHED_SOURCE_SHA256="$(cat /poolsuite-fetched-source.sha256)"
+APP_SHA256="$(sha256sum "${APP}" | cut -d' ' -f1)"
+install -D -m 0755 "${APP}" /out/app/ps-app
+install -m 0644 app.toml /out/app/app.toml
+install -m 0755 launch /out/app/launch
+install -d /out/app/themes /out/app/oci
+cp -a themes/. /out/app/themes/
+install -m 0644 oci/slice.conf /out/app/oci/slice.conf
+install -m 0644 /toolchain-packages.txt /out/toolchain-packages.txt
+{
+  printf 'poolsuite@%s\n' "${PF_POOLSUITE_SHA}"
+  printf 'cargo_lock_sha256=%s\n' "${LOCK_SHA256}"
+  printf 'fetched_source_sha256=%s\n' "${FETCHED_SOURCE_SHA256}"
+  printf 'ps_app_sha256=%s\n' "${APP_SHA256}"
+  printf 'e_machine=aarch64\n'
+  printf 'glibc_max=%s\n' "${MAX_GLIBC}"
+} > /out/.pf-poolsuite-provenance
+cat /out/.pf-poolsuite-provenance
+printf '%s\n' "${DEPS}" | awk '/NEEDED/{print}'
+POOLSUITEDEV
+
+# Release builds select this source-free empty producer. BuildKit therefore
+# prunes poolsuite-toolchain, poolsuite-fetch, poolsuite-dev and poolsuite-src.
+FROM ${PF_CONTAINER} AS poolsuite-release
+RUN mkdir -p /out
+
+FROM poolsuite-${PF_VARIANT} AS poolsuite
+
+# =============================================================================
 # recovery — launcher-independent recovery surface (product-010 F16 authoring)
 # Built from the exact recovery-src archive selected by platform.lock.  The
 # image-owned executable is deliberately only an fbdev/persistence adapter; all
@@ -1472,6 +1620,7 @@ ARG PF_LIBSDL3_SHA
 ARG PF_WPA_SHA
 ARG PF_RUNTIME_SHA
 ARG PF_HWPROBE_SHA
+ARG PF_POOLSUITE_SHA=
 ARG PF_SIM_SHA
 ARG PF_RECOVERY_SHA=443a84e47c96d83de967948844d8e5eaa41d7413
 ARG PF_LAUNCHER_SHA=
@@ -1504,6 +1653,7 @@ COPY --from=sdl    /out/lib         /work/libsdl3
 COPY --from=wpa    /out             /work/wpa
 COPY --from=runtime /out            /work/runtime
 COPY --from=hwprobe /out            /work/hwprobe
+COPY --from=poolsuite /out           /work/poolsuite
 COPY --from=recovery /out           /work/recovery
 COPY --from=launcher /out           /work/launcher
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
@@ -1523,6 +1673,7 @@ case "${PF_SOC}" in
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
       GPU_UM_MESA_DIR=/work/gpu-um-mesa OUT_DIR=/out \
       RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher HWPROBE_DIR=/work/hwprobe \
+      POOLSUITE_DIR=/work/poolsuite \
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
