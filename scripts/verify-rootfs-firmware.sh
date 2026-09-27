@@ -57,9 +57,11 @@ done
 # embeds vendor firmware from the preserved XR829 group. vendor-manifest's
 # redistributable flag governs public byte custody in that repository and its
 # gateway; image embedding is a separate policy question.
-if ! require_rootfs_file "lib/firmware/fw_xr829_bt.bin"; then
-    echo "FATAL: rootfs firmware: /lib/firmware/fw_xr829_bt.bin is missing" >&2
-    exit 1
-fi
+for artifact in fw_xr829.bin boot_xr829.bin sdd_xr829.bin fw_xr829_bt.bin; do
+    if ! require_rootfs_file "lib/firmware/${artifact}"; then
+        echo "FATAL: rootfs firmware: /lib/firmware/${artifact} is missing" >&2
+        exit 1
+    fi
+done
 
-echo 'rootfs-firmware=PASS regulatory.db=wireless-regdb_2026.02.04-1~deb12u1-upstream xr829_bt=EMBEDDED'
+echo 'rootfs-firmware=PASS regulatory.db=wireless-regdb_2026.02.04-1~deb12u1-upstream xr829=EMBEDDED:fw_xr829.bin,boot_xr829.bin,sdd_xr829.bin,fw_xr829_bt.bin'

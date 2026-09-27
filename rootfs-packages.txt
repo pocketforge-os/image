@@ -10,6 +10,8 @@
 
 alsa-utils
 busybox
+# Debian bookworm's maintained BlueZ host tools: bluetoothctl and btmgmt.
+bluez
 ca-certificates
 curl
 dbus
