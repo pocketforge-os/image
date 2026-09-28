@@ -1,0 +1,31 @@
+[Unit]
+Description=PocketForge default application %i
+Requires=pocketforge-foreground.target
+After=local-fs.target pocketforge-foreground.target
+Conflicts=shutdown.target
+Before=shutdown.target
+ConditionPathExists=/dev/fb0
+
+[Service]
+Type=simple
+User=gamer
+Group=gamer
+SupplementaryGroups=audio input video
+WorkingDirectory=/opt/pocketforge/apps/%i
+Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
+Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
+ExecStart=/usr/bin/pf-app-launch %i
+StateDirectory=pocketforge/apps/%i
+StateDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ReadOnlyPaths=/opt/pocketforge/apps/%i
+ReadWritePaths=/var/lib/pocketforge/apps/%i
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=2s
+Restart=no
+MemoryMax=256M
+Nice=-5

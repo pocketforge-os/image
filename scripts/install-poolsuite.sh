@@ -5,14 +5,14 @@
 set -euo pipefail
 
 if [ "$#" -ne 4 ]; then
-    echo "usage: install-poolsuite.sh <dev|release> <rootfs> <stage> <unit>" >&2
+    echo "usage: install-poolsuite.sh <dev|release> <gpu-model> <rootfs> <stage>" >&2
     exit 2
 fi
 
 variant="$1"
-rootfs="$2"
-stage="$3"
-unit="$4"
+gpu_model="$2"
+rootfs="$3"
+stage="$4"
 
 case "${variant}" in
     release)
@@ -25,6 +25,17 @@ case "${variant}" in
         exit 2
         ;;
 esac
+
+if [ "${gpu_model}" != open ]; then
+    for forbidden in "${stage}/app" "${stage}/.pf-poolsuite-provenance"; do
+        [ ! -e "${forbidden}" ] || {
+            echo "FATAL: Poolsuite payload reached non-open dev profile: ${forbidden}" >&2
+            exit 1
+        }
+    done
+    echo "[customize] Poolsuite NOT-SHIPPED for gpu_model=${gpu_model} dev"
+    exit 0
+fi
 
 app_stage="${stage}/app"
 app_root="${rootfs}/opt/pocketforge/apps/org.pocketforge.poolsuite"
@@ -47,11 +58,6 @@ done
     echo "FATAL: Poolsuite dev stage lacks toolchain package inventory" >&2
     exit 1
 }
-[ -f "${unit}" ] || {
-    echo "FATAL: Poolsuite systemd unit is missing: ${unit}" >&2
-    exit 1
-}
-
 install -d "${app_root}/themes" "${app_root}/oci"
 install -m 0755 "${app_stage}/ps-app" "${app_root}/ps-app"
 install -m 0644 "${app_stage}/app.toml" "${app_root}/app.toml"
@@ -62,7 +68,5 @@ install -D -m 0644 "${stage}/.pf-poolsuite-provenance" \
     "${rootfs}/usr/share/pocketforge/poolsuite-provenance"
 install -D -m 0644 "${stage}/toolchain-packages.txt" \
     "${rootfs}/usr/share/pocketforge/poolsuite-toolchain-packages.txt"
-install -D -m 0644 "${unit}" \
-    "${rootfs}/etc/systemd/system/pocketforge-poolsuite.service"
 
-echo "[customize] Poolsuite installed for dev (service installed disabled)"
+echo "[customize] Poolsuite installed for A133-open dev"

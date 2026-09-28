@@ -733,9 +733,9 @@ fi
 # release rootfs contents cannot acquire an app, unit, or provenance marker.
 /work/src/scripts/install-poolsuite.sh \
     "${POCKETFORGE_VARIANT:-dev}" \
+    "${PF_GPU_MODEL}" \
     "${ROOTFS}" \
-    /work/poolsuite \
-    /work/src/rootfs-overlay/etc/systemd/system/pocketforge-poolsuite.service
+    /work/poolsuite
 
 # --- Owned wpa_supplicant install (tsp-myp1.8.2; pattern from tsp-urq.7) -------
 # Overwrite the stock Debian /sbin/wpa_supplicant with the owned
@@ -1184,6 +1184,16 @@ if [ -f "${RUNTIME_BIN}" ]; then
 else
     echo "[customize] runtime NOT-SHIPPED for this device (no ${RUNTIME_BIN}) — skipping pf-input-decode install"
 fi
+
+# The generic default-app mechanism is an A133-open-only atomic set. Its helper
+# enforces both directions: all five staged inputs must exist for open, while no
+# helper/platform/authority/shell artifact may reach a non-open profile.
+/work/src/scripts/install-default-app-support.sh \
+    "${PF_GPU_MODEL:-ddk}" \
+    "${ROOTFS}" \
+    "${RUNTIME_DIR}" \
+    "${LAUNCHER_DIR}" \
+    /work/src/rootfs-overlay/etc/systemd/system/pf-app@.service
 
 # --- F13 shell owner + independent F07 session authority (tsp-op5a.78) -------
 SHELL_BIN="${LAUNCHER_DIR}/bin/pf-shell"

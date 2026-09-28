@@ -1116,13 +1116,19 @@ ARG PF_SOC
 ARG PF_GPU_REPO
 ARG PF_RUNTIME_SHA
 ARG PF_GPU_MODEL
+ARG PF_APP_RUNTIME_FAMILY=
+ARG PF_APP_RUNTIME_ABI=
+ARG PF_APP_PLATFORM_VERSION=
+ARG PF_APP_CAPABILITIES=
 ARG SOURCE_DATE_EPOCH
 ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 COPY --from=runtime-src . /work/runtime
+COPY --from=image-src scripts/render-platform-capabilities.py /usr/local/bin/render-platform-capabilities
+COPY --from=image-src build/pf-app-validate.rs /work/runtime/crates/pf-app-manifest/examples/pf-app-validate.rs
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "a2f149caef326215ce0bff7d0d076bac292595d4" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "0589fcfa959dca9150563ef0ed18d7d44b420dc5" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 cd /work/runtime
 # Build the SDK for every device: hwprobe is a separate build-graph input even
@@ -1132,6 +1138,15 @@ RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
 cargo build --offline --locked --release --target aarch64-unknown-linux-gnu -p libpocketforge
 install -D -m 0644 include/pocketforge.h /out/sdk/include/pocketforge.h
 install -D -m 0644 target/aarch64-unknown-linux-gnu/release/libpocketforge.a /out/sdk/lib/libpocketforge.a
+# The four platform-owned inputs exist only for A133-open. The renderer rejects
+# missing, malformed, unknown, duplicated, or unsorted values; rejects any
+# PF_APP_* value on every other profile; and parses its own schema-v1 output
+# back to the exact input tuple before the file can enter /out.
+render-platform-capabilities \
+  --soc "${PF_SOC}" \
+  --gpu-model "${PF_GPU_MODEL:-ddk}" \
+  --runtime-source /work/runtime \
+  --output /out/share/platform-capabilities.toml
 # Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
 # proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). pf-input-decode
 # decodes the A133 pad MCU's ttyS3/ttyS4 frames — a133-only, unrelated to the GPU
@@ -1181,24 +1196,42 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   CARGO_NET_LOCKED=1 \
   RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-prefsd --bin pf-prefsd
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-app-launch --bin pf-app-launch
   AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
   PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
+  APP_LAUNCH_BIN="target/${PF_RUNTIME_TARGET}/release/pf-app-launch"
   [ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
   [ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-prefsd not built at ${PREFSD_BIN}"; exit 1; }
+  [ -f "${APP_LAUNCH_BIN}" ] || { echo "FATAL: pf-app-launch not built at ${APP_LAUNCH_BIN}"; exit 1; }
   AUTHORITY_EM="$(od -An -tx1 -j18 -N2 "${AUTHORITY_BIN}" | tr -d ' ')"
   [ "${AUTHORITY_EM}" = "b700" ] || { echo "FATAL: pf-session-authorityd is not aarch64 (e_machine=${AUTHORITY_EM}, want b700)"; exit 1; }
   if grep -qa 'ld-musl\|ld-linux' "${AUTHORITY_BIN}"; then echo "FATAL: pf-session-authorityd is dynamically linked (expected static musl)"; exit 1; fi
   PREFSD_EM="$(od -An -tx1 -j18 -N2 "${PREFSD_BIN}" | tr -d ' ')"
   [ "${PREFSD_EM}" = "b700" ] || { echo "FATAL: pf-prefsd is not aarch64 (e_machine=${PREFSD_EM}, want b700)"; exit 1; }
   if grep -qa 'ld-musl\|ld-linux' "${PREFSD_BIN}"; then echo "FATAL: pf-prefsd is dynamically linked (expected static musl)"; exit 1; fi
+  APP_LAUNCH_EM="$(od -An -tx1 -j18 -N2 "${APP_LAUNCH_BIN}" | tr -d ' ')"
+  [ "${APP_LAUNCH_EM}" = "b700" ] || { echo "FATAL: pf-app-launch is not aarch64 (e_machine=${APP_LAUNCH_EM}, want b700)"; exit 1; }
+  if grep -qa 'ld-musl\|ld-linux' "${APP_LAUNCH_BIN}"; then echo "FATAL: pf-app-launch is dynamically linked (expected static musl)"; exit 1; fi
   install -D -m 0755 "${AUTHORITY_BIN}" /out/bin/pf-session-authorityd
   install -D -m 0755 "${PREFSD_BIN}" /out/bin/pf-prefsd
+  install -D -m 0755 "${APP_LAUNCH_BIN}" /out/bin/pf-app-launch
   install -D -m 0644 systemd/pf-session-authorityd.service /out/systemd/pf-session-authorityd.service
   install -D -m 0644 systemd/pf-prefsd.service /out/systemd/pf-prefsd.service
   install -D -m 0644 systemd/pocketforge.conf /out/tmpfiles.d/pocketforge.conf
+  # Build-time-only wrapper around the same pf-app-manifest Resolver used by
+  # authority and pf-app-launch. Poolsuite consumes it before installation; it
+  # is deliberately staged outside /out/bin and never reaches the rootfs.
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --offline --locked --release -p pf-app-manifest --example pf-app-validate
+  install -D -m 0755 target/release/examples/pf-app-validate \
+    /out/build-tools/pf-app-validate
   {
     printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
     printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
+    printf '  pf-app-launch sha256=%s\n' "$(sha256sum /out/bin/pf-app-launch | cut -d' ' -f1)"
   } >> /out/.pf-runtime-provenance
 fi
 cat /out/.pf-runtime-provenance
@@ -1364,6 +1397,8 @@ ENV CARGO_HOME=/opt/poolsuite-cargo-home \
     CARGO_INCREMENTAL=0
 COPY --from=poolsuite-src . /work/poolsuite
 COPY --from=poolsuite-fetch /poolsuite-fetched-source.sha256 /poolsuite-fetched-source.sha256
+COPY --from=runtime /out/build-tools/pf-app-validate /usr/local/bin/pf-app-validate
+COPY --from=runtime /out/share/platform-capabilities.toml /work/platform-capabilities.toml
 WORKDIR /work/poolsuite
 RUN --network=none \
     --mount=type=bind,from=poolsuite-fetch,source=/opt/poolsuite-cargo-home,target=/opt/poolsuite-cargo-home,rw \
@@ -1414,6 +1449,13 @@ install -d /out/app/themes /out/app/oci
 cp -a themes/. /out/app/themes/
 install -m 0644 oci/slice.conf /out/app/oci/slice.conf
 install -m 0644 /toolchain-packages.txt /out/toolchain-packages.txt
+# Validate the exact completed output tree with runtime's shared, path-confined
+# resolver before it can be copied into a rootfs. Moving the tree avoids a
+# second copy whose metadata could differ from the validated payload.
+install -d /tmp/default-app-root
+mv /out/app /tmp/default-app-root/org.pocketforge.poolsuite
+pf-app-validate /tmp/default-app-root /work/platform-capabilities.toml org.pocketforge.poolsuite
+mv /tmp/default-app-root/org.pocketforge.poolsuite /out/app
 {
   printf 'poolsuite@%s\n' "${PF_POOLSUITE_SHA}"
   printf 'cargo_lock_sha256=%s\n' "${LOCK_SHA256}"
@@ -1428,20 +1470,28 @@ POOLSUITEDEV
 
 # Generic source-free NOT-SHIPPED producer. BuildKit prunes poolsuite-toolchain,
 # poolsuite-fetch, poolsuite-dev and poolsuite-src whenever this stage is selected.
-FROM ${PF_CONTAINER} AS poolsuite-release
+FROM ${PF_CONTAINER} AS poolsuite-not-shipped
 RUN mkdir -p /out
 
-# Track A targets the base TrimUI Smart Pro (A133/sun50iw10p1) only. A523
-# (sun55iw3) dev builds deliberately select the same empty stub as release; do
-# not build or silently drop a Poolsuite artifact on an unsupported device.
-FROM poolsuite-dev AS poolsuite-sun50iw10p1-dev
-FROM poolsuite-release AS poolsuite-sun50iw10p1-release
-FROM poolsuite-release AS poolsuite-sun55iw3-dev
-FROM poolsuite-release AS poolsuite-sun55iw3-release
-FROM poolsuite-release AS poolsuite-not-shipped-dev
-FROM poolsuite-release AS poolsuite-not-shipped-release
+# The only real producer is A133 + open + dev. Every release, A523, and
+# A133 vendor/default (ddk) profile resolves directly to the source-free stub,
+# before any Poolsuite source, fetch, toolchain, or compile vertex is reached.
+FROM poolsuite-dev AS poolsuite-sun50iw10p1-open-dev
+FROM poolsuite-not-shipped AS poolsuite-sun50iw10p1-open-release
+FROM poolsuite-not-shipped AS poolsuite-sun50iw10p1-ddk-dev
+FROM poolsuite-not-shipped AS poolsuite-sun50iw10p1-ddk-release
+FROM poolsuite-not-shipped AS poolsuite-sun50iw10p1-none-dev
+FROM poolsuite-not-shipped AS poolsuite-sun50iw10p1-none-release
+FROM poolsuite-not-shipped AS poolsuite-sun55iw3-open-dev
+FROM poolsuite-not-shipped AS poolsuite-sun55iw3-open-release
+FROM poolsuite-not-shipped AS poolsuite-sun55iw3-ddk-dev
+FROM poolsuite-not-shipped AS poolsuite-sun55iw3-ddk-release
+FROM poolsuite-not-shipped AS poolsuite-sun55iw3-none-dev
+FROM poolsuite-not-shipped AS poolsuite-sun55iw3-none-release
+FROM poolsuite-not-shipped AS poolsuite-not-shipped-ddk-dev
+FROM poolsuite-not-shipped AS poolsuite-not-shipped-ddk-release
 
-FROM poolsuite-${PF_SOC}-${PF_VARIANT} AS poolsuite
+FROM poolsuite-${PF_SOC}-${PF_GPU_MODEL}-${PF_VARIANT} AS poolsuite
 
 # =============================================================================
 # recovery — launcher-independent recovery surface (product-010 F16 authoring)
@@ -1579,12 +1629,12 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "bb8c9bc8c9ea15238d08cfee5376049bf67cf855" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
-# pf-shell vendors these twelve runtime crates. Compare every source tree, not
+[ "${PF_LAUNCHER_SHA}" = "2c8f819193a42385c9edc3e5cd90c3bd3b59f170" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+# pf-shell vendors these thirteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
 check-launcher-runtime-contract /work/launcher /work/runtime-contract \
-  pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme \
+  pf-app-manifest pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme \
   pf-input-map pf-prefs pf-prefs-port pf-session-client \
   pf-session-authority pf-wire
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
@@ -1596,7 +1646,8 @@ if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
 cd /work/launcher
 RUSTFLAGS="--remap-path-prefix=/work/launcher=." \
-  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-shell
+  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" \
+    --no-default-features -p pf-shell
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-shell"
 [ -f "${BIN}" ] || { echo "FATAL: pf-shell not built at ${BIN}"; exit 1; }
 E_MACHINE="$(od -An -tx1 -j18 -N2 "${BIN}" | tr -d ' ')"

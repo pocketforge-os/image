@@ -34,8 +34,8 @@ runtime_guard = re.findall(
     dockerfile,
     flags=re.MULTILINE,
 )
-assert runtime_guard == ["a2f149caef326215ce0bff7d0d076bac292595d4"], (
-    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime a2f149ca, "
+assert runtime_guard == ["0589fcfa959dca9150563ef0ed18d7d44b420dc5"], (
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 0589fcfa, "
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
@@ -45,6 +45,7 @@ assert "systemd/pf-prefsd.service /out/systemd/pf-prefsd.service" in dockerfile
 assert "systemd/pf-session-authorityd.service /out/systemd/pf-session-authorityd.service" in dockerfile
 assert "systemd/pocketforge.conf /out/tmpfiles.d/pocketforge.conf" in dockerfile
 for crate in (
+    "pf-app-manifest",
     "pf-scene",
     "pf-ports",
     "pf-render",
