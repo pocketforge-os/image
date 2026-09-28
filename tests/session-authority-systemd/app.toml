@@ -1,0 +1,13 @@
+[app]
+id = "org.pocketforge.fixture"
+name = "Session authority systemd fixture"
+use = []
+
+[runtime]
+family = "pocketforge/a133-powervr"
+abi = "1"
+platform-version = "20"
+
+[launch]
+exec = "fixture"
+takes_display = true

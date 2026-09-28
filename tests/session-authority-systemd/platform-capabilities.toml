@@ -1,0 +1,5 @@
+schema_version = 1
+runtime_family = "pocketforge/a133-powervr"
+runtime_abi = "1"
+platform_version = "20"
+supported_capabilities = []

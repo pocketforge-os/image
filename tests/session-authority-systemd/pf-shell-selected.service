@@ -1,0 +1,12 @@
+[Unit]
+Description=PocketForge selected owner integration fixture
+
+[Service]
+Type=simple
+User=gamer
+Group=gamer
+ExecStart=/bin/sleep infinity
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
