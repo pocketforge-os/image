@@ -1289,7 +1289,7 @@ FROM hwprobe-${PF_VARIANT} AS hwprobe
 # Poolsuite requires Rust 1.91, newer than PF_CONTAINER's deliberately pinned
 # Rust 1.88 runtime toolchain. Keep this application toolchain isolated on the
 # exact Debian base Poolsuite CI owns. The fetch vertex is the only Cargo vertex
-# with network access; poolsuite-dev copies its locked cache and builds with
+# with network access; poolsuite-dev bind-mounts its locked cache and builds with
 # --offline --frozen under RUN --network=none.
 # =============================================================================
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS poolsuite-toolchain
@@ -1363,10 +1363,11 @@ ARG SOURCE_DATE_EPOCH
 ENV CARGO_HOME=/opt/poolsuite-cargo-home \
     CARGO_INCREMENTAL=0
 COPY --from=poolsuite-src . /work/poolsuite
-COPY --from=poolsuite-fetch /opt/poolsuite-cargo-home /opt/poolsuite-cargo-home
 COPY --from=poolsuite-fetch /poolsuite-fetched-source.sha256 /poolsuite-fetched-source.sha256
 WORKDIR /work/poolsuite
-RUN --network=none <<'POOLSUITEDEV'
+RUN --network=none \
+    --mount=type=bind,from=poolsuite-fetch,source=/opt/poolsuite-cargo-home,target=/opt/poolsuite-cargo-home,rw \
+    <<'POOLSUITEDEV'
 set -eux
 : "${PF_POOLSUITE_SHA:?FATAL: PF_POOLSUITE_SHA is required for a dev Poolsuite build}"
 [ -x ci/device-build.sh ] || {
