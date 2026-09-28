@@ -67,6 +67,61 @@ log() {
     fi
 }
 
+# The kernel auto-arms the hardware watchdog before /init. Keep it armed across
+# every read-only self-flash decision; only the committed flash path may magic-
+# close it. A blocked pre-flash I/O then stops receiving pings and is recovered
+# by the watchdog instead of hanging the board forever.
+WATCHDOG_DEV="${WATCHDOG_DEV:-/dev/watchdog}"
+watchdog_present() {
+    [ -c "$WATCHDOG_DEV" ]
+}
+
+watchdog_ping() {
+    if watchdog_present; then
+        printf '\0' > "$WATCHDOG_DEV"
+    fi
+}
+
+watchdog_disarm_for_selfflash() {
+    if watchdog_present; then
+        printf 'V' > "$WATCHDOG_DEV"
+        log "STAGE: self-flash recovery — watchdog disabled immediately before first SD write"
+    fi
+}
+
+# Run one LABEL lookup for exactly one second. A normally absent label therefore
+# consumes one bounded enumeration tick. If findfs wedges in interruptible I/O,
+# kill/reap it; if kernel I/O is uninterruptible, wait also wedges and the still-
+# armed watchdog resets the board because no further ping can occur.
+sf_findfs_bounded() {
+    sff_dir="${SF_FIND_TMP:-/}"
+    sff_out="${sff_dir%/}/sf-findfs.$$"
+    : > "$sff_out"
+    findfs "$1" > "$sff_out" 2>/dev/null &
+    sff_pid=$!
+    sleep 1
+    if kill -0 "$sff_pid" 2>/dev/null; then
+        kill -9 "$sff_pid" 2>/dev/null || true
+    fi
+    wait "$sff_pid" 2>/dev/null || true
+    cat "$sff_out"
+    rm -f "$sff_out"
+}
+
+sf_wait_for_root() {
+    SF_ROOTPART=""
+    SF_WAIT=0
+    while [ "$SF_WAIT" -lt 20 ]; do
+        SF_ROOTPART="$(sf_findfs_bounded LABEL=POCKETFORGE_DATA)"
+        SF_WAIT=$((SF_WAIT + 1))
+        watchdog_ping
+        [ -n "$SF_ROOTPART" ] && [ -b "$SF_ROOTPART" ] && return 0
+        SF_ROOTPART=""
+    done
+    log "STAGE: self-flash gate — SD not found after 20s — normal boot"
+    return 1
+}
+
 # fail <msg>: log, then drop to an interactive busybox shell on the console so a
 # failed boot is debuggable rather than a silent hang. sync first so the SD log
 # captures the failure reason. The cmdline carries console=ttyS0,115200.
@@ -171,16 +226,24 @@ selfflash_recover() {
 
     if [ "$tries" -ge 3 ]; then
         log "selfflash: tries=$tries >= 3 — giving up; clearing flag, normal boot"
+        # This is fail-closed cleanup, not a flash attempt, so keep the watchdog
+        # armed. An interrupted cleanup either leaves the flag for another safe
+        # cleanup pass or removes it and makes the next boot take the no-flag path.
+        watchdog_ping
         mount -o remount,rw "$MNT" 2>/dev/null
         rm -f "$MNT/var/tmp/pf-selfflash.flag" "$SRC"; sync
+        watchdog_ping
         return 1
     fi
 
     # Copy the staged .xz into RAM (ramfs) so the SD can be FULLY unmounted before
     # the destructive flash. 93 MB .xz + streaming unxz fits in the A133's 1 GB.
     log "selfflash: copying staged .xz into RAM..."
+    watchdog_ping
     cp "$SRC" /sf-staged.xz 2>/dev/null || { log "selfflash: cp staged .xz failed — normal boot"; rm -f /sf-staged.xz; return 1; }
+    watchdog_ping
     got_xz="$(sha256sum /sf-staged.xz 2>/dev/null | cut -d' ' -f1)"
+    watchdog_ping
     if [ "$got_xz" != "$xz_sha" ]; then
         log "selfflash: RAM .xz SHA mismatch (got $got_xz want $xz_sha) — normal boot"
         rm -f /sf-staged.xz; return 1
@@ -205,8 +268,11 @@ selfflash_recover() {
             && log "selfflash: captured live boot-resource wifi.txt for restore"
     fi
     [ -f /sf-wifi.txt ] || log "selfflash: no wifi.txt to preserve (device may boot WiFi-less)"
+    watchdog_ping
 
     # Cap crash-loops: bump tries in the on-SD flag FILE BEFORE the destructive dd.
+    # This rw remount is the first persistent mutation on a validated flash path.
+    watchdog_disarm_for_selfflash
     mount -o remount,rw "$MNT" 2>/dev/null
     printf '%s\n' "$FLAGTXT" | sed "s/^tries=.*/tries=$((tries+1))/" > "$MNT/var/tmp/pf-selfflash.flag" 2>/dev/null
     sync
@@ -303,28 +369,14 @@ selfflash_recover() {
 # racing enumeration (the original rootfs mount below only wins that race because
 # the GPU insmods burn enough time first).
 if [ -f /etc/pocketforge-selfflash ]; then
-    # The self-flash gate's read retries and (if armed) the multi-minute whole-image
-    # flash both run FAR longer than the sunxi watchdog's 16 s auto-boot timeout —
-    # which would reboot us mid-gate (bootloop) or mid-flash (corrupt SD). Disable
-    # the watchdog for this dev-only path (magic-close 'V', works because
-    # CONFIG_WATCHDOG_NOWAYOUT is not set); systemd re-arms its own watchdog after
-    # switch_root on a normal boot.
-    if [ -c /dev/watchdog ]; then
-        printf 'V' > /dev/watchdog
-        log "STAGE: self-flash gate — watchdog disabled (long gate/flash safe)"
-    fi
+    # Keep the watchdog armed while the gate performs bounded enumeration and the
+    # single file-based flag decision. Only a validated flash path disarms it,
+    # immediately before selfflash_recover's first persistent SD write.
+    watchdog_ping
     log "STAGE: self-flash gate — waiting for SD enumeration"
-    SF_ROOTPART=""
-    SF_WAIT=0
-    while [ "$SF_WAIT" -lt 20 ]; do
-        SF_ROOTPART="$(findfs LABEL=POCKETFORGE_DATA 2>/dev/null)"
-        [ -n "$SF_ROOTPART" ] && [ -b "$SF_ROOTPART" ] && break
-        SF_ROOTPART=""
-        sleep 1
-        SF_WAIT=$((SF_WAIT + 1))
-    done
-    if [ -n "$SF_ROOTPART" ]; then
+    if sf_wait_for_root; then
         log "STAGE: self-flash gate — SD ready after ${SF_WAIT}s ($SF_ROOTPART)"
+        watchdog_ping
         SF_SD="$(echo "$SF_ROOTPART" | sed 's/p[0-9]*$//')"   # /dev/mmcblk0p5 -> /dev/mmcblk0
         # FILE-BASED flag (tsp-bcx.17): mount the rootfs (p5) READ-ONLY and look for
         # the flag FILE. The initramfs provably mounts p5 every boot, so this never
@@ -332,10 +384,15 @@ if [ -f /etc/pocketforge-selfflash ]; then
         # armed flag for all 15 retries on a bad boot). selfflash_recover copies the
         # staged .xz into RAM, unmounts, and flashes [0,img).
         mkdir -p /sfp5
+        watchdog_ping
         if mount -t ext4 -o ro "$SF_ROOTPART" /sfp5 2>/dev/null; then
+            watchdog_ping
             if [ -f /sfp5/var/tmp/pf-selfflash.flag ]; then
+                watchdog_ping
                 SF_FLAGTXT="$(cat /sfp5/var/tmp/pf-selfflash.flag 2>/dev/null)"
+                watchdog_ping
                 log "STAGE: self-flash flag FILE present on ${SF_ROOTPART}"
+                watchdog_ping
                 selfflash_recover "$SF_SD" "/sfp5" "$SF_FLAGTXT" \
                     && log "selfflash: recovery returned without reboot — continuing normal boot" \
                     || log "selfflash: not flashing — continuing normal boot"
