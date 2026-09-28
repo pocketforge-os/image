@@ -9,11 +9,13 @@ run_id="gha-${GITHUB_RUN_ID:-missing}-${GITHUB_RUN_ATTEMPT:-missing}-probe"
 run_id="$(printf '%s' "${run_id}" | tr -c 'A-Za-z0-9_.-' '-')"
 run_label="${label_key}=${run_id}"
 probe_image="tsp-f3fm-211-systemd-probe:${run_id}"
-work="$(mktemp -d /tmp/tsp-f3fm-211-probe.XXXXXX)"
-cache_before="${work}/cache-before"
-cache_current="${work}/cache-current"
-cache_created="${work}/cache-created"
+work=
+cache_before=
+cache_current=
+cache_created=
+cache_baseline_ready=0
 probe_status=1
+failure_reason=UNEXPECTED_EXIT
 docker_root=unknown
 docker_root_probe=/
 docker_root_free_before_bytes=unknown
@@ -60,6 +62,7 @@ require_disk_floor() {
     local phase="$1" available
     available="$(measure_free)"
     if [ "${available}" -lt "${disk_floor_bytes}" ]; then
+        failure_reason=DISK_FLOOR_ABORT
         echo "systemd-docker-probe: DISK_FLOOR_ABORT phase=${phase} docker_root=${docker_root} available_bytes=${available} floor_bytes=${disk_floor_bytes}" >&2
         exit 1
     fi
@@ -77,7 +80,7 @@ cleanup() {
     [ "${#ids[@]}" -eq 0 ] || docker rm --force "${ids[@]}" >/dev/null 2>&1
     docker image rm --force "${probe_image}" >/dev/null 2>&1
 
-    if capture_cache_ids "${cache_current}"; then
+    if [ "${cache_baseline_ready}" -eq 1 ] && capture_cache_ids "${cache_current}"; then
         comm -13 "${cache_before}" "${cache_current}" >"${cache_created}"
         cache_records_removed="$(awk 'NF { count++ } END { print count + 0 }' "${cache_created}")"
         while IFS= read -r cache_id; do
@@ -87,7 +90,7 @@ cleanup() {
         capture_cache_ids "${cache_current}.after" || status=1
         comm -13 "${cache_before}" "${cache_current}.after" >"${work}/cache-remaining"
         [ ! -s "${work}/cache-remaining" ] || status=1
-    else
+    elif [ "${cache_baseline_ready}" -eq 1 ]; then
         status=1
     fi
 
@@ -99,15 +102,17 @@ cleanup() {
     docker_root_df_after="$(capture_root_df 2>/dev/null)" || status=1
     docker_system_df_after="$(capture_system_df)" || status=1
 
-    find "${work}" -mindepth 1 -delete >/dev/null 2>&1
-    rmdir "${work}" >/dev/null 2>&1 || status=1
+    if [ -n "${work}" ] && [ -d "${work}" ]; then
+        find "${work}" -mindepth 1 -delete >/dev/null 2>&1
+        rmdir "${work}" >/dev/null 2>&1 || status=1
+    fi
     if [ "${status}" -eq 0 ] && [ "${probe_status}" -eq 0 ]; then
         result=PASS
     else
         result=FAIL
         status=1
     fi
-    echo "systemd-docker-probe: ${result} run_id=${run_id} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_free_after_bytes=${docker_root_free_after_bytes} docker_root_df_before=${docker_root_df_before} docker_root_df_after=${docker_root_df_after} docker_system_df_before=${docker_system_df_before} docker_system_df_after=${docker_system_df_after} build_cache_records_removed=${cache_records_removed} least_allowed=${least_allowed} forbidden_cap_sys_admin=${forbidden_result} cleanup_asserted=true"
+    echo "systemd-docker-probe: ${result} receipt_reason=${failure_reason} run_id=${run_id} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_free_after_bytes=${docker_root_free_after_bytes} docker_root_df_before=${docker_root_df_before} docker_root_df_after=${docker_root_df_after} docker_system_df_before=${docker_system_df_before} docker_system_df_after=${docker_system_df_after} build_cache_records_removed=${cache_records_removed} least_allowed=${least_allowed} forbidden_cap_sys_admin=${forbidden_result} cleanup_asserted=true"
     exit "${status}"
 }
 
@@ -135,16 +140,22 @@ while [ ! -e "${docker_root_probe}" ]; do
     [ "${parent}" != "${docker_root_probe}" ] || exit 1
     docker_root_probe="${parent}"
 done
+work="$(mktemp -d /tmp/tsp-f3fm-211-probe.XXXXXX)"
+cache_before="${work}/cache-before"
+cache_current="${work}/cache-current"
+cache_created="${work}/cache-created"
+trap cleanup EXIT INT TERM
 docker_root_free_before_bytes="$(measure_free)"
+docker_root_df_before="$(capture_root_df)"
+docker_system_df_before="$(capture_system_df)"
 [ "${docker_root_free_before_bytes}" -ge "${disk_preflight_bytes}" ] || {
+    failure_reason=INSUFFICIENT_DISK
     echo "systemd-docker-probe: INSUFFICIENT_DISK docker_root=${docker_root} available_bytes=${docker_root_free_before_bytes} required_bytes=${disk_preflight_bytes}" >&2
     exit 1
 }
-docker_root_df_before="$(capture_root_df)"
-docker_system_df_before="$(capture_system_df)"
 kernel="$(uname -r)"
 capture_cache_ids "${cache_before}"
-trap cleanup EXIT INT TERM
+cache_baseline_ready=1
 
 echo "systemd-docker-probe: environment docker_version=${docker_version} cgroup=${cgroup_version} cgroup_driver=${cgroup_driver} kernel=${kernel} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_df_before=${docker_root_df_before} docker_system_df_before=${docker_system_df_before}"
 
@@ -278,5 +289,9 @@ probe_candidate e no forbidden-cap-sys-admin-measurement direct \
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
     printf 'least_allowed=%s\n' "${least_allowed}" >>"${GITHUB_OUTPUT}"
 fi
-[ "${least_allowed}" != none ] || exit 1
+[ "${least_allowed}" != none ] || {
+    failure_reason=NO_ALLOWED_SYSTEMD_CONFIGURATION
+    exit 1
+}
+failure_reason=completed
 probe_status=0
