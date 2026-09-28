@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# INCIDENT tsp-f3fm.210: this privileged systemd container exposed the host
+# virtual consoles, allowing its getty to take the owner's active graphical VT
+# and tear down the desktop session; keep the harness disabled until
+# tsp-f3fm.211 redesigns its isolation.
+echo 'session-authority real-systemd: DISABLED reason=HOST_VT_INCIDENT bead=tsp-f3fm.210' >&2
+exit 1
+
 # Docker is intentional here: a privileged container with a private cgroup
 # namespace exercises systemd as the actual PID 1 through the same Docker
 # interface available to image CI. systemd-nspawn would add a host-only tool
