@@ -33,7 +33,11 @@ grep -F 'there is no fallback' <<<"${fetch_body}" >/dev/null
 
 # shellcheck disable=SC2016 # sed matches literal Dockerfile ARG interpolation.
 dev_body="$(sed -n '/^FROM poolsuite-toolchain AS poolsuite-dev$/,/^FROM ${PF_CONTAINER} AS poolsuite-release$/p' "${dockerfile}")"
-grep -F 'COPY --from=poolsuite-fetch /opt/poolsuite-cargo-home /opt/poolsuite-cargo-home' <<<"${dev_body}" >/dev/null
+grep -F -- '--mount=type=bind,from=poolsuite-fetch,source=/opt/poolsuite-cargo-home,target=/opt/poolsuite-cargo-home,rw' <<<"${dev_body}" >/dev/null
+if grep -F 'COPY --from=poolsuite-fetch /opt/poolsuite-cargo-home' <<<"${dev_body}"; then
+    echo 'poolsuite dev stage unexpectedly copies the fetched Cargo closure' >&2
+    exit 1
+fi
 grep -F 'RUN --network=none' <<<"${dev_body}" >/dev/null
 grep -F './ci/device-build.sh --offline' <<<"${dev_body}" >/dev/null
 grep -F 'NEEDED.*libSDL3' <<<"${dev_body}" >/dev/null
