@@ -8,6 +8,7 @@ import socket
 import struct
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -25,6 +26,12 @@ CLIENT_ID = "image-real-systemd"
 
 class TestFailure(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class SessionEventScope:
+    session_id: str
+    after_sequence: int
 
 
 def require(condition: bool, message: str) -> None:
@@ -101,13 +108,27 @@ def events() -> list[tuple[int, dict[str, Any]]]:
     return [(int(sequence), event) for sequence, event in response["events"]]
 
 
+def last_sequence(all_events: list[tuple[int, dict[str, Any]]]) -> int:
+    return max((sequence for sequence, _ in all_events), default=0)
+
+
 def session_events(
-    all_events: list[tuple[int, dict[str, Any]]], session_id: str, event_name: str
+    all_events: list[tuple[int, dict[str, Any]]],
+    scope: SessionEventScope,
+    event_name: str,
 ) -> list[tuple[int, dict[str, Any]]]:
+    """Return events belonging to one launch's durable sequence window.
+
+    Starting and running wire events do not carry a session id, so the sequence
+    floor captured immediately before launch scopes them. Terminal events also
+    carry a session id and must match it explicitly.
+    """
     return [
         (sequence, event)
         for sequence, event in all_events
-        if event.get("event") == event_name and event.get("session_id") == session_id
+        if sequence > scope.after_sequence
+        and event.get("event") == event_name
+        and event.get("session_id", scope.session_id) == scope.session_id
     ]
 
 
@@ -119,6 +140,29 @@ def history_entry(session_id: str) -> dict[str, Any]:
     return matches[0]
 
 
+def authority_state() -> dict[str, Any]:
+    return json.loads(
+        Path("/var/lib/pocketforge/session-authority/authority.json").read_text()
+    )
+
+
+def require_session_phase(
+    scope: SessionEventScope, phase_name: str, rung: str | None = None
+) -> dict[str, Any]:
+    phase = authority_state()["phase"]
+    payload = phase.get(phase_name, {})
+    require(
+        payload.get("session_id") == scope.session_id,
+        f"authority phase is not {phase_name} for {scope.session_id}: {phase}",
+    )
+    if rung is not None:
+        require(
+            payload.get("rung") == rung,
+            f"authority phase is not {rung} for {scope.session_id}: {phase}",
+        )
+    return payload
+
+
 def authority_is_responding() -> bool:
     try:
         return rpc({"method": "history"}).get("result") == "history"
@@ -126,62 +170,106 @@ def authority_is_responding() -> bool:
         return False
 
 
-def launch() -> str:
+def launch() -> SessionEventScope:
+    before_launch = events()
     response = rpc({"method": "launch", "item_id": APP_ID})
     require(response.get("result") == "accepted", f"launch was not accepted: {response}")
-    return str(response["session_id"])
+    return SessionEventScope(
+        session_id=str(response["session_id"]),
+        after_sequence=last_sequence(before_launch),
+    )
 
 
-def assert_no_terminal_before_presentation(session_id: str) -> None:
+def assert_no_terminal_before_presentation(scope: SessionEventScope) -> None:
+    require_session_phase(scope, "Restoring", "PresentationAcknowledged")
     current = events()
     require(
-        not session_events(current, session_id, "returned")
-        and not session_events(current, session_id, "crash"),
-        f"terminal receipt published before presentation acknowledgement for {session_id}",
+        not session_events(current, scope, "returned")
+        and not session_events(current, scope, "crash"),
+        f"terminal receipt published before presentation acknowledgement for {scope.session_id}",
     )
     require(
-        history_entry(session_id)["receipt"] is None,
-        f"history became terminal before presentation acknowledgement for {session_id}",
+        history_entry(scope.session_id)["receipt"] is None,
+        f"history became terminal before presentation acknowledgement for {scope.session_id}",
     )
 
 
-def wait_for_app_exit(expected_state: str) -> None:
+def wait_for_app_exit(scope: SessionEventScope, expected_state: str) -> None:
     wait_for(
         lambda: property_value(APP_UNIT, "ActiveState") == expected_state,
-        f"{APP_UNIT} to become {expected_state}",
+        f"{APP_UNIT} for {scope.session_id} to become {expected_state}",
     )
-    wait_for(lambda: not unit_is_active(TARGET_UNIT), f"{TARGET_UNIT} to release")
-    wait_for(lambda: unit_is_active(OWNER_UNIT), f"{OWNER_UNIT} to become active again")
+    wait_for(
+        lambda: not unit_is_active(TARGET_UNIT),
+        f"{TARGET_UNIT} to release for {scope.session_id}",
+    )
+    wait_for(
+        lambda: unit_is_active(OWNER_UNIT),
+        f"{OWNER_UNIT} to become active again for {scope.session_id}",
+    )
+    events()
+    require_session_phase(scope, "Restoring", "PresentationAcknowledged")
 
 
-def assert_start_and_exit(exit_code: int, expected_state: str) -> tuple[str, int]:
+def assert_start_and_exit(
+    exit_code: int, expected_state: str
+) -> tuple[SessionEventScope, int]:
     MODE.write_text(f"{exit_code}\n")
     before_invocations = invocation_count()
     previous_owner_pid = owner_pid()
     require(previous_owner_pid > 0, "selected owner did not start before launch")
 
-    session_id = launch()
+    scope = launch()
     wait_for(
         lambda: invocation_count() == before_invocations + 1,
-        f"fixture invocation for {session_id}",
+        f"fixture invocation for {scope.session_id}",
     )
     require(unit_is_active(APP_UNIT), f"{APP_UNIT} never reached active")
-    require(not unit_is_active(OWNER_UNIT), "selected owner stayed active while app owned the slot")
 
     running_events = events()
     require(
-        any(event.get("event") == "running" for _, event in running_events),
-        f"authority did not observe {session_id} running",
+        len(session_events(running_events, scope, "starting")) == 1,
+        f"authority did not publish one Starting for {scope.session_id}",
+    )
+    require(
+        len(session_events(running_events, scope, "running")) == 1,
+        f"authority did not publish one Running for {scope.session_id}",
+    )
+    require_session_phase(scope, "Running")
+    require(
+        not unit_is_active(OWNER_UNIT),
+        f"selected owner stayed active while {scope.session_id} owned the slot",
     )
 
-    wait_for_app_exit(expected_state)
+    wait_for_app_exit(scope, expected_state)
     restored_owner_pid = owner_pid()
-    require(restored_owner_pid > 0, "selected owner has no process after restoration")
+    require(
+        restored_owner_pid > 0,
+        f"selected owner has no process after restoring {scope.session_id}",
+    )
     require(
         restored_owner_pid != previous_owner_pid,
-        "selected owner was not stopped and newly activated around app ownership",
+        f"selected owner was not newly activated after {scope.session_id}",
     )
-    return session_id, restored_owner_pid
+    return scope, restored_owner_pid
+
+
+def assert_crash_scope_empty_before_launch() -> SessionEventScope:
+    durable = events()
+    require(
+        any(event.get("event") == "running" for _, event in durable),
+        "negative control requires a durable Running event from the clean session",
+    )
+    expected_crash_scope = SessionEventScope(
+        session_id=f"session-{authority_state()['next_session']}",
+        after_sequence=last_sequence(durable),
+    )
+    for event_name in ("starting", "running", "returned", "crash"):
+        require(
+            not session_events(durable, expected_crash_scope, event_name),
+            f"{expected_crash_scope.session_id} leaked stale {event_name} before launch",
+        )
+    return expected_crash_scope
 
 
 def assert_refusals_never_reach_systemd() -> None:
@@ -208,75 +296,84 @@ def assert_refusals_never_reach_systemd() -> None:
 
 
 def assert_clean_exit_with_restart() -> str:
-    session_id, _ = assert_start_and_exit(0, "inactive")
+    scope, _ = assert_start_and_exit(0, "inactive")
     require(property_value(APP_UNIT, "Result") == "success", "clean fixture did not exit successfully")
 
-    assert_no_terminal_before_presentation(session_id)
-    state = json.loads(
-        Path("/var/lib/pocketforge/session-authority/authority.json").read_text()
-    )
-    restoring = state["phase"].get("Restoring", {})
-    require(
-        restoring.get("rung") == "PresentationAcknowledged",
-        f"authority was not paused immediately before presentation: {state['phase']}",
-    )
+    assert_no_terminal_before_presentation(scope)
 
     command("systemctl", "restart", AUTHORITY_UNIT)
     wait_for(
         lambda: unit_is_active(AUTHORITY_UNIT) and authority_is_responding(),
         "authority restart",
     )
-    assert_no_terminal_before_presentation(session_id)
+    require_session_phase(scope, "Restoring", "PresentationAcknowledged")
+    assert_no_terminal_before_presentation(scope)
 
+    require_session_phase(scope, "Restoring", "PresentationAcknowledged")
     observed = rpc(
         {"method": "observe", "observation": {"kind": "presentation_acknowledged"}}
     )
     require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
 
     final_events = events()
-    returned = session_events(final_events, session_id, "returned")
-    require(len(returned) == 1, f"Returned publication count for {session_id}: {returned}")
-    require(not session_events(final_events, session_id, "crash"), "clean exit reported Crash")
-    require(history_entry(session_id)["receipt"] == "Returned", "clean receipt was not durable")
+    returned = session_events(final_events, scope, "returned")
+    require(len(returned) == 1, f"Returned publication count for {scope.session_id}: {returned}")
+    require(not session_events(final_events, scope, "crash"), "clean exit reported Crash")
+    require(
+        history_entry(scope.session_id)["receipt"] == "Returned",
+        f"clean receipt was not durable for {scope.session_id}",
+    )
 
     replayed_events = events()
     require(
-        session_events(replayed_events, session_id, "returned") == returned,
-        "authority restart or replay changed the single durable Returned publication",
+        session_events(replayed_events, scope, "returned") == returned,
+        f"restart or replay changed the Returned publication for {scope.session_id}",
     )
-    require(unit_is_active(OWNER_UNIT), "selected owner inactive after clean receipt")
-    return session_id
+    require(
+        unit_is_active(OWNER_UNIT),
+        f"selected owner inactive after clean receipt for {scope.session_id}",
+    )
+    return scope.session_id
 
 
 def assert_crash_exit() -> str:
-    session_id, _ = assert_start_and_exit(23, "failed")
+    expected_scope = assert_crash_scope_empty_before_launch()
+    scope, _ = assert_start_and_exit(23, "failed")
+    require(
+        scope == expected_scope,
+        f"crash launch scope changed from {expected_scope} to {scope}",
+    )
     require(property_value(APP_UNIT, "Result") == "exit-code", "crash fixture result was not exit-code")
-    assert_no_terminal_before_presentation(session_id)
+    assert_no_terminal_before_presentation(scope)
 
+    require_session_phase(scope, "Restoring", "PresentationAcknowledged")
     observed = rpc(
         {"method": "observe", "observation": {"kind": "presentation_acknowledged"}}
     )
     require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
 
     final_events = events()
-    crashes = session_events(final_events, session_id, "crash")
-    require(len(crashes) == 1, f"Crash publication count for {session_id}: {crashes}")
+    crashes = session_events(final_events, scope, "crash")
+    require(len(crashes) == 1, f"Crash publication count for {scope.session_id}: {crashes}")
     require(
         "systemd result: exit-code" in crashes[0][1].get("summary", ""),
         f"Crash summary did not preserve systemd result: {crashes}",
     )
     require(
-        not session_events(final_events, session_id, "returned"),
-        "crashed session published Returned",
+        not session_events(final_events, scope, "returned"),
+        f"crashed session {scope.session_id} published Returned",
     )
-    receipt = history_entry(session_id)["receipt"]
+    receipt = history_entry(scope.session_id)["receipt"]
     require(
         isinstance(receipt, dict)
         and receipt.get("Crash", {}).get("summary") == "systemd result: exit-code",
         f"crash receipt was not durable: {receipt}",
     )
-    require(unit_is_active(OWNER_UNIT), "selected owner inactive after crash receipt")
-    return session_id
+    require(
+        unit_is_active(OWNER_UNIT),
+        f"selected owner inactive after crash receipt for {scope.session_id}",
+    )
+    return scope.session_id
 
 
 def main() -> None:
@@ -297,7 +394,7 @@ def main() -> None:
         "evidence: "
         f"clean_session={clean_session} returned=1 restart_mid_ladder=ok "
         f"crash_session={crash_session} crash=1 returned=0 "
-        "refused_systemctl_starts=0 owner_restore=ok"
+        "session_scoping_negative_control=ok refused_systemctl_starts=0 owner_restore=ok"
     )
 
 
