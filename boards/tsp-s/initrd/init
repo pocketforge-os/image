@@ -44,6 +44,61 @@ log() {
     fi
 }
 
+# The kernel auto-arms the hardware watchdog before /init. Keep it armed across
+# every read-only self-flash decision; only the committed flash path may magic-
+# close it. A blocked pre-flash I/O then stops receiving pings and is recovered
+# by the watchdog instead of hanging the board forever.
+WATCHDOG_DEV="${WATCHDOG_DEV:-/dev/watchdog}"
+watchdog_present() {
+    [ -c "$WATCHDOG_DEV" ]
+}
+
+watchdog_ping() {
+    if watchdog_present; then
+        printf '\0' > "$WATCHDOG_DEV"
+    fi
+}
+
+watchdog_disarm_for_selfflash() {
+    if watchdog_present; then
+        printf 'V' > "$WATCHDOG_DEV"
+        log "STAGE: self-flash recovery — watchdog disabled immediately before first SD write"
+    fi
+}
+
+# Run one LABEL lookup for exactly one second. A normally absent label therefore
+# consumes one bounded enumeration tick. If findfs wedges in interruptible I/O,
+# kill/reap it; if kernel I/O is uninterruptible, wait also wedges and the still-
+# armed watchdog resets the board because no further ping can occur.
+sf_findfs_bounded() {
+    sff_dir="${SF_FIND_TMP:-/}"
+    sff_out="${sff_dir%/}/sf-findfs.$$"
+    : > "$sff_out"
+    findfs "$1" > "$sff_out" 2>/dev/null &
+    sff_pid=$!
+    sleep 1
+    if kill -0 "$sff_pid" 2>/dev/null; then
+        kill -9 "$sff_pid" 2>/dev/null || true
+    fi
+    wait "$sff_pid" 2>/dev/null || true
+    cat "$sff_out"
+    rm -f "$sff_out"
+}
+
+sf_wait_for_root() {
+    SF_ROOTPART=""
+    SF_WAIT=0
+    while [ "$SF_WAIT" -lt 20 ]; do
+        SF_ROOTPART="$(sf_findfs_bounded LABEL=POCKETFORGE_DATA)"
+        SF_WAIT=$((SF_WAIT + 1))
+        watchdog_ping
+        [ -n "$SF_ROOTPART" ] && [ -b "$SF_ROOTPART" ] && return 0
+        SF_ROOTPART=""
+    done
+    log "STAGE: self-flash gate — SD not found after 20s — normal boot"
+    return 1
+}
+
 fail() {
     log "FAILURE: $*"
     log "dropping to busybox shell (console=ttyAS0,115200)"
@@ -86,6 +141,7 @@ SF_ALIGN_SECT=8192     # 4 MiB in 512-byte sectors (stage_lba alignment)
 selfflash_write_flag() {
     sf_st="$1"; sf_tr="$2"; sf_sl="$3"; sf_xb="$4"; sf_xs="$5"
     sf_ib="$6"; sf_is="$7"; sf_cs="$8"; sf_sd="$9"; sf_fl="${10}"
+    sf_disarm="${11:-0}"
     {
         printf 'PF_FLAG=1\n'; printf 'ver=1\n'
         printf 'state=%s\n'        "$sf_st"
@@ -99,6 +155,9 @@ selfflash_write_flag() {
     } > /sf-flag.txt
     dd if=/dev/zero of=/sf-flag.bin bs=512 count=1 2>/dev/null
     dd if=/sf-flag.txt of=/sf-flag.bin conv=notrunc 2>/dev/null
+    # The optional committed-flash mode disarms only after the sector has been
+    # built in RAM, literally adjacent to its first persistent SD mutation.
+    [ "$sf_disarm" = 1 ] && watchdog_disarm_for_selfflash
     dd if=/sf-flag.bin of="$sf_sd" bs=512 seek="$sf_fl" count=1 2>/dev/null
     sync
 }
@@ -135,11 +194,16 @@ selfflash_recover() {
 
     if [ "$tries" -ge 3 ]; then
         log "selfflash: tries=$tries >= 3 — giving up; marking failed, normal boot"
+        # This one-sector state downgrade is fail-closed cleanup, not an image
+        # flash, so keep the watchdog armed. An interrupted sector write is either
+        # still armed (and repeats this branch) or invalid/failed (and never flashes).
+        watchdog_ping
         selfflash_write_flag failed "$tries" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
+        watchdog_ping
         return 1
     fi
-    selfflash_write_flag armed "$((tries+1))" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA"
 
+    watchdog_ping
     if [ -n "$PFLOG" ]; then sync; umount /pflog 2>/dev/null; PFLOG=""; fi
     if mount | grep -q mmcblk; then
         log "selfflash: FATAL — mmcblk still mounted, refusing to flash:"
@@ -149,12 +213,20 @@ selfflash_recover() {
     log "selfflash: SD unmounted; verified no mmcblk mounts"
 
     log "selfflash: verifying staged .img.xz sha256..."
+    watchdog_ping
     got_xz="$(dd if="$SD" bs="$SF_BS" skip="$skip4m" 2>/dev/null | head -c "$xz_bytes" | sha256sum | cut -d' ' -f1)"
+    watchdog_ping
     if [ "$got_xz" != "$xz_sha" ]; then
         log "selfflash: staged .xz SHA MISMATCH (got $got_xz want $xz_sha) — abort, retry next boot"
         return 1
     fi
     log "selfflash: staged .xz verified OK"
+
+    # Persist the incremented attempt as the first SD mutation on this validated
+    # flash path. Committed-flash mode magic-closes the watchdog inside the helper,
+    # immediately before its raw SD dd; it remains disabled through whole-image
+    # write and verification so it can never reset the board mid-flash.
+    selfflash_write_flag armed "$((tries+1))" "$stage_lba" "$xz_bytes" "$xz_sha" "$img_bytes" "$img_sha" "$NSECT" "$SD" "$FLAG_LBA" 1
 
     log "selfflash: flashing — dd skip=$skip4m | unxz | dd of=$SD ..."
     if ! dd if="$SD" bs="$SF_BS" skip="$skip4m" 2>/dev/null | head -c "$xz_bytes" | unxz | dd of="$SD" bs="$SF_BS" 2>/dev/null; then
@@ -177,15 +249,13 @@ selfflash_recover() {
 
 # --- self-flash gate (dev images only) ----------------------------------------
 if [ -f /etc/pocketforge-selfflash ]; then
+    # Keep the watchdog armed through enumeration and the A523 raw flag decision.
+    # Only a validated flash path disarms immediately before its first SD write.
+    watchdog_ping
     log "STAGE: self-flash gate — waiting for SD enumeration"
-    SF_ROOTPART=""; SF_WAIT=0
-    while [ "$SF_WAIT" -lt 20 ]; do
-        SF_ROOTPART="$(findfs LABEL=POCKETFORGE_DATA 2>/dev/null)"
-        [ -n "$SF_ROOTPART" ] && [ -b "$SF_ROOTPART" ] && break
-        SF_ROOTPART=""; sleep 1; SF_WAIT=$((SF_WAIT + 1))
-    done
-    if [ -n "$SF_ROOTPART" ]; then
+    if sf_wait_for_root; then
         log "STAGE: self-flash gate — SD ready after ${SF_WAIT}s ($SF_ROOTPART)"
+        watchdog_ping
         # The two mmc controllers (SD sdc0@4020000 + eMMC sdc2@4022000) can still
         # be settling their mmcblkN numbering / final capacity this early in boot
         # (the very-eager "after 0s" probe raced: the flag was armed but read as
@@ -194,7 +264,8 @@ if [ -f /etc/pocketforge-selfflash ]; then
         # flag appears. Non-destructive, so retrying is safe. Logs each probe.
         SF_FOUND=0; SF_TRY=0
         while [ "$SF_TRY" -lt 3 ]; do
-            SF_ROOTPART="$(findfs LABEL=POCKETFORGE_DATA 2>/dev/null)"
+            SF_ROOTPART="$(sf_findfs_bounded LABEL=POCKETFORGE_DATA)"
+            watchdog_ping
             SF_SD="$(echo "$SF_ROOTPART" | sed 's/p[0-9]*$//')"   # /dev/mmcblk0p2 -> /dev/mmcblk0
             SF_DISK="$(basename "$SF_SD")"
             SF_PART="$(basename "$SF_ROOTPART")"                   # mmcblk0p2
@@ -207,22 +278,26 @@ if [ -f /etc/pocketforge-selfflash ]; then
             # from the partition table: align_up(part_end + 1 MiB, 4 MiB).
             SF_PSTART="$(cat "/sys/class/block/${SF_PART}/start" 2>/dev/null)"
             SF_PSIZE="$(cat "/sys/class/block/${SF_PART}/size" 2>/dev/null)"
+            watchdog_ping
             if [ -n "$SF_PSTART" ] && [ -n "$SF_PSIZE" ] && [ -n "$SF_NSECT" ] && [ "$SF_NSECT" -gt 4096 ]; then
                 SF_PEND=$(( SF_PSTART + SF_PSIZE ))
                 SF_FLAG_LBA=$(( (SF_PEND + 2048 + 8191) / 8192 * 8192 ))
+                watchdog_ping
                 SF_FLAGTXT="$(dd if="$SF_SD" bs=512 skip="$SF_FLAG_LBA" count=1 2>/dev/null | tr -d '\000' | tr -cd '[:print:]\n')"
+                watchdog_ping
                 SF_HDR="$(printf '%s' "$SF_FLAGTXT" | head -c 11)"
                 log "STAGE: self-flash flag probe try=${SF_TRY} sd=${SF_SD} pend=${SF_PEND} flag_lba=${SF_FLAG_LBA} hdr=[${SF_HDR}]"
                 if printf '%s\n' "$SF_FLAGTXT" | grep -q '^PF_FLAG=1'; then
                     SF_FOUND=1
                     log "STAGE: self-flash flag present on ${SF_SD} (sector ${SF_FLAG_LBA})"
+                    watchdog_ping
                     selfflash_recover "$SF_SD" "$SF_NSECT" "$SF_FLAG_LBA" "$SF_FLAGTXT" \
                         && log "selfflash: recovery returned without reboot — continuing normal boot" \
                         || log "selfflash: not flashing — continuing normal boot"
                     break
                 fi
             fi
-            SF_TRY=$((SF_TRY + 1)); sleep 2
+            SF_TRY=$((SF_TRY + 1)); watchdog_ping; sleep 2; watchdog_ping
         done
         [ "$SF_FOUND" = 1 ] || log "STAGE: self-flash gate — no armed flag after settle (${SF_TRY} probes) — normal boot"
     fi
