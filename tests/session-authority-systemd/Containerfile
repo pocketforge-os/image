@@ -1,0 +1,63 @@
+FROM debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+
+ENV container=podman
+
+RUN apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        passwd \
+        python3 \
+        systemd \
+        systemd-sysv \
+    && rm -rf /var/lib/apt/lists/* \
+    && for group_name in gamer audio input video; do \
+        getent group "${group_name}" >/dev/null || groupadd --system "${group_name}"; \
+    done \
+    && { getent passwd gamer >/dev/null \
+        || useradd --system --gid gamer --no-create-home gamer; } \
+    && usermod -a -G audio,input,video gamer
+
+RUN install -d -m 0755 \
+        /etc/systemd/system/pocketforge-foreground.target.d \
+        /opt/pocketforge/apps/org.pocketforge.fixture \
+        /usr/lib/tmpfiles.d \
+        /usr/local/libexec \
+        /usr/share/pocketforge \
+    && ln -sf /dev/null /etc/systemd/system/getty@.service \
+    && ln -sf /dev/null /etc/systemd/system/getty.target \
+    && ln -sf /dev/null /etc/systemd/system/console-getty.service \
+    && ln -sf /dev/null /etc/systemd/system/serial-getty@.service \
+    && ln -sf /dev/null /etc/systemd/system/autovt@.service
+
+COPY pf-session-authorityd /usr/bin/pf-session-authorityd
+COPY pf-app-launch /usr/bin/pf-app-launch
+COPY pf-session-authorityd.service /etc/systemd/system/pf-session-authorityd.service
+COPY pocketforge.conf /usr/lib/tmpfiles.d/pocketforge.conf
+COPY pf-app@.service /etc/systemd/system/pf-app@.service
+COPY pocketforge-foreground.target /etc/systemd/system/pocketforge-foreground.target
+COPY 10-owner-shell.conf /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf
+COPY pf-shell-selected.service /etc/systemd/system/pf-shell-selected.service
+COPY session-authority-test.target /etc/systemd/system/session-authority-test.target
+COPY app.toml /opt/pocketforge/apps/org.pocketforge.fixture/app.toml
+COPY fixture /opt/pocketforge/apps/org.pocketforge.fixture/fixture
+COPY platform-capabilities.toml /usr/share/pocketforge/platform-capabilities.toml
+COPY drive.py /usr/local/libexec/drive.py
+
+RUN chmod 0755 \
+        /usr/bin/pf-session-authorityd \
+        /usr/bin/pf-app-launch \
+        /opt/pocketforge/apps/org.pocketforge.fixture/fixture \
+        /usr/local/libexec/drive.py \
+    && chmod 0644 \
+        /etc/systemd/system/pf-session-authorityd.service \
+        /etc/systemd/system/pf-app@.service \
+        /etc/systemd/system/pocketforge-foreground.target \
+        /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf \
+        /etc/systemd/system/pf-shell-selected.service \
+        /etc/systemd/system/session-authority-test.target \
+        /usr/lib/tmpfiles.d/pocketforge.conf \
+        /usr/share/pocketforge/platform-capabilities.toml \
+        /opt/pocketforge/apps/org.pocketforge.fixture/app.toml \
+    && ln -sf session-authority-test.target /etc/systemd/system/default.target
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
