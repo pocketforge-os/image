@@ -451,11 +451,13 @@ grep -Fq 'systemctl --failed --no-legend' "${probe}" || exit 1
 grep -Fq 'docker logs --tail 40' "${probe}" || exit 1
 grep -Fq 'cgroup_mount_options=' "${probe}" || exit 1
 grep -Fq 'private-cgroupns-rw-cgroup-bind-systempaths-unconfined' "${probe}" || exit 1
+grep -Fq 'cgroup-remount-security-unconfined-without-cap' "${probe}" || exit 1
 grep -Fq 'docker buildx prune --force --all' "${probe}" || exit 1
 grep -Fq 'allow_full_cache_prune=1' "${harness}" || exit 1
 ! grep -Fq 'reason="boot_failed_$(docker logs' "${probe}" || exit 1
 grep -Fq "grep -E '^(systemd-docker-probe:|probe_)'" "${workflow}" || exit 1
 grep -Fqx 'STOPSIGNAL SIGRTMIN+3' "${probe_recipe}" || exit 1
 grep -Fqx 'CMD ["/sbin/init"]' "${probe_recipe}" || exit 1
+grep -Fq 'mount -o remount,rw /sys/fs/cgroup' "${probe_recipe}" || exit 1
 
 echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=static probe_matrix=static getty_masks=5 runtime=fake-docker'

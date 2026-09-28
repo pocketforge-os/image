@@ -527,11 +527,15 @@ probe_candidate d-unconfined yes nested-user-pid-namespace-security-unconfined i
     --security-opt seccomp=unconfined \
     --security-opt apparmor=unconfined \
     -- /usr/local/libexec/nested-systemd
-probe_candidate e no forbidden-cap-sys-admin-on-rw-cgroup-measurement direct \
-    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup \
-    --security-opt systempaths=unconfined \
+probe_candidate c-remount yes cgroup-remount-security-unconfined-without-cap direct \
+    --security-opt seccomp=unconfined \
+    --security-opt apparmor=unconfined \
+    -- /usr/local/libexec/remount-cgroup-systemd
+probe_candidate e no forbidden-cap-sys-admin-cgroup-remount-measurement direct \
+    --security-opt seccomp=unconfined \
+    --security-opt apparmor=unconfined \
     --cap-add=SYS_ADMIN \
-    -- /sbin/init
+    -- /usr/local/libexec/remount-cgroup-systemd
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
     printf 'least_allowed=%s\n' "${least_allowed}" >>"${GITHUB_OUTPUT}"
