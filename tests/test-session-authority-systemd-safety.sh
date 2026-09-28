@@ -348,6 +348,7 @@ expect_rejected admin-capability "${safe_run[@]}" --cap-add=CAP_SYS_ADMIN "${aud
 expect_rejected host-network "${safe_run[@]}" --network host "${audit_image}"
 expect_rejected host-cgroup "${safe_run[@]}" --cgroupns host "${audit_image}"
 expect_rejected device-mount "${safe_run[@]}" --mount type=bind,source=/dev/console,target=/console "${audit_image}"
+expect_rejected unscoped-full-cache-prune buildx prune --force --all
 
 reset_logs
 run_fake --audit-lifecycle-argv "${audit_id}" >"${stdout_log}" 2>"${stderr_log}"
@@ -438,6 +439,8 @@ grep -Fq 'docker_root_df_before=' "${probe}" || exit 1
 grep -Fq 'docker_root_df_after=' "${probe}" || exit 1
 grep -Fq 'docker_system_df_before=' "${probe}" || exit 1
 grep -Fq 'docker_system_df_after=' "${probe}" || exit 1
+grep -Fq 'build_cache_df_before=' "${probe}" || exit 1
+grep -Fq 'build_cache_df_after=' "${probe}" || exit 1
 grep -Fq 'probe_positive_control=${result}' "${probe}" || exit 1
 grep -Fq -- '--entrypoint /bin/sleep' "${probe}" || exit 1
 grep -Fq "'{{.State.Status}} {{.State.ExitCode}} {{.State.Error}} {{.State.Pid}}'" \
@@ -447,6 +450,9 @@ grep -Fq 'timeout --signal=TERM 90s' "${probe}" || exit 1
 grep -Fq 'systemctl --failed --no-legend' "${probe}" || exit 1
 grep -Fq 'docker logs --tail 40' "${probe}" || exit 1
 grep -Fq 'cgroup_mount_options=' "${probe}" || exit 1
+grep -Fq 'private-cgroupns-rw-cgroup-bind-systempaths-unconfined' "${probe}" || exit 1
+grep -Fq 'docker buildx prune --force --all' "${probe}" || exit 1
+grep -Fq 'allow_full_cache_prune=1' "${harness}" || exit 1
 ! grep -Fq 'reason="boot_failed_$(docker logs' "${probe}" || exit 1
 grep -Fq "grep -E '^(systemd-docker-probe:|probe_)'" "${workflow}" || exit 1
 grep -Fqx 'STOPSIGNAL SIGRTMIN+3' "${probe_recipe}" || exit 1

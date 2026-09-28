@@ -31,8 +31,11 @@ docker_root_df_before=
 docker_root_df_after=
 docker_system_df_before=
 docker_system_df_after=
+build_cache_df_before=
+build_cache_df_after=
 run_scope_peak_bytes=0
 build_cache_records_removed=0
+allow_full_cache_prune=0
 run_scope=
 docker_root=
 docker_root_probe=
@@ -387,8 +390,17 @@ audit_docker_argv() {
                 done
                 case "${value}" in
                     id=*) ;;
-                    *) fail 'UNSCOPED_CONTAINER_ARGV: build-cache prune lacks record id' ;;
+                    *)
+                        if [ "${allow_full_cache_prune}" -eq 1 ] \
+                            && argv_has --all "${argv[@]}"; then
+                            :
+                        else
+                            fail 'UNSCOPED_CONTAINER_ARGV: build-cache prune lacks record id'
+                        fi
+                        ;;
                 esac
+                argv_has --force "${argv[@]}" \
+                    || fail 'UNSCOPED_CONTAINER_ARGV: build-cache prune is interactive'
             fi
             ;;
     esac
@@ -449,6 +461,14 @@ capture_docker_system_df() {
         | paste -sd, -
 }
 
+extract_build_cache_df() {
+    local value="$1"
+    case "${value}" in
+        *Build_Cache=*) printf 'Build_Cache=%s\n' "${value##*Build_Cache=}" ;;
+        *) return 1 ;;
+    esac
+}
+
 load_docker_info() {
     local info fields
     info="$(docker_checked info --format '{{json .}}' 2>/dev/null)" \
@@ -469,7 +489,7 @@ print("\t".join(str(info[key]) for key in (
 cleanup() {
     local status=$? receipt_result receipt_reason scope_removed=false
     local container_status image_status labeled_containers labeled_images
-    local cache_current cache_created cache_remaining cache_id
+    local cache_current cache_created cache_remaining cache_id attempt
     trap - EXIT INT TERM
     cleanup_active=1
     set +e
@@ -512,6 +532,14 @@ cleanup() {
                     docker_checked buildx prune --force --filter "id=${cache_id}" \
                         >/dev/null 2>&1 || cleanup_failed=1
                 done <"${cache_created}"
+                if [ ! -s "${run_scope}/build-cache-before" ] \
+                    && [ "${build_cache_df_before}" = \
+                        'Build_Cache=total:0,active:0,size:0B,reclaimable:0B' ]; then
+                    allow_full_cache_prune=1
+                    docker_checked buildx prune --force --all \
+                        >/dev/null 2>&1 || cleanup_failed=1
+                    allow_full_cache_prune=0
+                fi
                 if capture_build_cache_ids "${cache_current}.after"; then
                     comm -13 "${run_scope}/build-cache-before" \
                         "${cache_current}.after" >"${cache_remaining}"
@@ -535,8 +563,18 @@ cleanup() {
             || cleanup_failed=1
         docker_root_df_after="$(capture_docker_root_df)" \
             || cleanup_failed=1
-        docker_system_df_after="$(capture_docker_system_df)" \
-            || cleanup_failed=1
+        for ((attempt = 1; attempt <= 10; attempt++)); do
+            docker_system_df_after="$(capture_docker_system_df)" \
+                || cleanup_failed=1
+            build_cache_df_after="$(extract_build_cache_df \
+                "${docker_system_df_after}")" || cleanup_failed=1
+            [ "${build_cache_df_after}" != "${build_cache_df_before}" ] || break
+            sleep 0.2
+        done
+        if [ "${build_cache_df_after}" != "${build_cache_df_before}" ]; then
+            cleanup_failed=1
+            failure_reason='BUILD_CACHE_USAGE_DRIFT'
+        fi
     fi
 
     if [ "${scope_initialized}" -eq 1 ] && [ -d "${run_scope}" ]; then
@@ -562,9 +600,9 @@ cleanup() {
     fi
 
     if [ "${receipt_result}" = PASS ]; then
-        echo "session-authority real-systemd: PASS ${pass_fields} run_id=${run_id} docker_root=${docker_root:-unknown} docker_root_free_before_bytes=${docker_root_free_before_bytes:-unknown} docker_root_free_after_bytes=${docker_root_free_after_bytes:-unknown} docker_root_df_before=${docker_root_df_before:-unknown} docker_root_df_after=${docker_root_df_after:-unknown} docker_system_df_before=${docker_system_df_before:-unknown} docker_system_df_after=${docker_system_df_after:-unknown} build_cache_records_removed=${build_cache_records_removed} run_scope_peak_bytes=${run_scope_peak_bytes} docker_root_min_free_bytes=${docker_root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}"
+        echo "session-authority real-systemd: PASS ${pass_fields} run_id=${run_id} docker_root=${docker_root:-unknown} docker_root_free_before_bytes=${docker_root_free_before_bytes:-unknown} docker_root_free_after_bytes=${docker_root_free_after_bytes:-unknown} docker_root_df_before=${docker_root_df_before:-unknown} docker_root_df_after=${docker_root_df_after:-unknown} docker_system_df_before=${docker_system_df_before:-unknown} docker_system_df_after=${docker_system_df_after:-unknown} build_cache_df_before=${build_cache_df_before:-unknown} build_cache_df_after=${build_cache_df_after:-unknown} build_cache_records_removed=${build_cache_records_removed} run_scope_peak_bytes=${run_scope_peak_bytes} docker_root_min_free_bytes=${docker_root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}"
     else
-        echo "session-authority real-systemd: FAIL receipt_reason=${receipt_reason} run_id=${run_id:-unknown} docker_root=${docker_root:-unknown} docker_root_free_before_bytes=${docker_root_free_before_bytes:-unknown} docker_root_free_after_bytes=${docker_root_free_after_bytes:-unknown} docker_root_df_before=${docker_root_df_before:-unknown} docker_root_df_after=${docker_root_df_after:-unknown} docker_system_df_before=${docker_system_df_before:-unknown} docker_system_df_after=${docker_system_df_after:-unknown} build_cache_records_removed=${build_cache_records_removed} run_scope_peak_bytes=${run_scope_peak_bytes} docker_root_min_free_bytes=${docker_root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}" >&2
+        echo "session-authority real-systemd: FAIL receipt_reason=${receipt_reason} run_id=${run_id:-unknown} docker_root=${docker_root:-unknown} docker_root_free_before_bytes=${docker_root_free_before_bytes:-unknown} docker_root_free_after_bytes=${docker_root_free_after_bytes:-unknown} docker_root_df_before=${docker_root_df_before:-unknown} docker_root_df_after=${docker_root_df_after:-unknown} docker_system_df_before=${docker_system_df_before:-unknown} docker_system_df_after=${docker_system_df_after:-unknown} build_cache_df_before=${build_cache_df_before:-unknown} build_cache_df_after=${build_cache_df_after:-unknown} build_cache_records_removed=${build_cache_records_removed} run_scope_peak_bytes=${run_scope_peak_bytes} docker_root_min_free_bytes=${docker_root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}" >&2
     fi
     exit "${status}"
 }
@@ -641,6 +679,9 @@ case "${1:-}" in
             || fail 'DISK_PROBE_FAILED: before-probe Docker data-root df'
         docker_system_df_before="$(capture_docker_system_df)" \
             || fail_recorded_or 'DOCKER_DISK_USAGE_UNAVAILABLE: docker system df failed'
+        build_cache_df_before="$(extract_build_cache_df \
+            "${docker_system_df_before}")" \
+            || fail 'DOCKER_DISK_USAGE_UNREADABLE: build-cache total missing'
         run_started=1
         probe_version="$(docker_checked version --format '{{.Server.Version}}')" \
             || fail_recorded_or 'DOCKER_UNAVAILABLE: version query failed'
@@ -691,6 +732,8 @@ docker_root_df_before="$(capture_docker_root_df)" \
     || fail 'DISK_PROBE_FAILED: before-run Docker data-root df'
 docker_system_df_before="$(capture_docker_system_df)" \
     || fail_recorded_or 'DOCKER_DISK_USAGE_UNAVAILABLE: docker system df failed'
+build_cache_df_before="$(extract_build_cache_df "${docker_system_df_before}")" \
+    || fail 'DOCKER_DISK_USAGE_UNREADABLE: build-cache total missing'
 run_started=1
 
 capture_build_cache_ids "${run_scope}/build-cache-before" \

@@ -24,6 +24,8 @@ docker_root_df_before=unknown
 docker_root_df_after=unknown
 docker_system_df_before=unknown
 docker_system_df_after=unknown
+build_cache_df_before=unknown
+build_cache_df_after=unknown
 cache_records_removed=0
 least_allowed=none
 forbidden_result=not_run
@@ -43,6 +45,14 @@ capture_system_df() {
         2>/dev/null \
         | tr ' ' '_' \
         | paste -sd, -
+}
+
+extract_build_cache_df() {
+    local value="$1"
+    case "${value}" in
+        *Build_Cache=*) printf 'Build_Cache=%s\n' "${value##*Build_Cache=}" ;;
+        *) return 1 ;;
+    esac
 }
 
 capture_root_df() {
@@ -69,7 +79,7 @@ require_disk_floor() {
 }
 
 cleanup() {
-    local status=$? cache_id
+    local status=$? cache_id attempt
     local -a ids=()
     trap - EXIT INT TERM
     set +e
@@ -87,6 +97,11 @@ cleanup() {
             [ -n "${cache_id}" ] || continue
             docker buildx prune --force --filter "id=${cache_id}" >/dev/null 2>&1 || status=1
         done <"${cache_created}"
+        if [ ! -s "${cache_before}" ] \
+            && [ "${build_cache_df_before}" = \
+                'Build_Cache=total:0,active:0,size:0B,reclaimable:0B' ]; then
+            docker buildx prune --force --all >/dev/null 2>&1 || status=1
+        fi
         capture_cache_ids "${cache_current}.after" || status=1
         comm -13 "${cache_before}" "${cache_current}.after" >"${work}/cache-remaining"
         [ ! -s "${work}/cache-remaining" ] || status=1
@@ -100,7 +115,17 @@ cleanup() {
         || status=1
     docker_root_free_after_bytes="$(measure_free 2>/dev/null)" || status=1
     docker_root_df_after="$(capture_root_df 2>/dev/null)" || status=1
-    docker_system_df_after="$(capture_system_df)" || status=1
+    for ((attempt = 1; attempt <= 10; attempt++)); do
+        docker_system_df_after="$(capture_system_df)" || status=1
+        build_cache_df_after="$(extract_build_cache_df "${docker_system_df_after}")" \
+            || status=1
+        [ "${build_cache_df_after}" != "${build_cache_df_before}" ] || break
+        sleep 0.2
+    done
+    if [ "${build_cache_df_after}" != "${build_cache_df_before}" ]; then
+        status=1
+        failure_reason=BUILD_CACHE_USAGE_DRIFT
+    fi
 
     if [ -n "${work}" ] && [ -d "${work}" ]; then
         find "${work}" -mindepth 1 -delete >/dev/null 2>&1
@@ -112,7 +137,7 @@ cleanup() {
         result=FAIL
         status=1
     fi
-    echo "systemd-docker-probe: ${result} receipt_reason=${failure_reason} run_id=${run_id} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_free_after_bytes=${docker_root_free_after_bytes} docker_root_df_before=${docker_root_df_before} docker_root_df_after=${docker_root_df_after} docker_system_df_before=${docker_system_df_before} docker_system_df_after=${docker_system_df_after} build_cache_records_removed=${cache_records_removed} least_allowed=${least_allowed} forbidden_cap_sys_admin=${forbidden_result} cleanup_asserted=true"
+    echo "systemd-docker-probe: ${result} receipt_reason=${failure_reason} run_id=${run_id} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_free_after_bytes=${docker_root_free_after_bytes} docker_root_df_before=${docker_root_df_before} docker_root_df_after=${docker_root_df_after} docker_system_df_before=${docker_system_df_before} docker_system_df_after=${docker_system_df_after} build_cache_df_before=${build_cache_df_before} build_cache_df_after=${build_cache_df_after} build_cache_records_removed=${cache_records_removed} least_allowed=${least_allowed} forbidden_cap_sys_admin=${forbidden_result} cleanup_asserted=true"
     exit "${status}"
 }
 
@@ -148,6 +173,7 @@ trap cleanup EXIT INT TERM
 docker_root_free_before_bytes="$(measure_free)"
 docker_root_df_before="$(capture_root_df)"
 docker_system_df_before="$(capture_system_df)"
+build_cache_df_before="$(extract_build_cache_df "${docker_system_df_before}")"
 [ "${docker_root_free_before_bytes}" -ge "${disk_preflight_bytes}" ] || {
     failure_reason=INSUFFICIENT_DISK
     echo "systemd-docker-probe: INSUFFICIENT_DISK docker_root=${docker_root} available_bytes=${docker_root_free_before_bytes} required_bytes=${disk_preflight_bytes}" >&2
@@ -473,6 +499,10 @@ probe_candidate a yes private-cgroupns-tmpfs-pty direct \
 probe_candidate b yes private-cgroupns-rw-cgroup-bind direct \
     --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup \
     -- /sbin/init
+probe_candidate b-systempaths yes private-cgroupns-rw-cgroup-bind-systempaths-unconfined direct \
+    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup \
+    --security-opt systempaths=unconfined \
+    -- /sbin/init
 probe_candidate c-seccomp yes private-cgroupns-seccomp-unconfined direct \
     --security-opt seccomp=unconfined \
     -- /sbin/init
@@ -497,7 +527,9 @@ probe_candidate d-unconfined yes nested-user-pid-namespace-security-unconfined i
     --security-opt seccomp=unconfined \
     --security-opt apparmor=unconfined \
     -- /usr/local/libexec/nested-systemd
-probe_candidate e no forbidden-cap-sys-admin-measurement direct \
+probe_candidate e no forbidden-cap-sys-admin-on-rw-cgroup-measurement direct \
+    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup \
+    --security-opt systempaths=unconfined \
     --cap-add=SYS_ADMIN \
     -- /sbin/init
 
