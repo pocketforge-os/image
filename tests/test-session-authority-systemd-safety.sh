@@ -451,7 +451,7 @@ grep -Fq 'systemctl --failed --no-legend' "${probe}" || exit 1
 grep -Fq 'docker logs --tail 40' "${probe}" || exit 1
 grep -Fq 'cgroup_mount_options=' "${probe}" || exit 1
 grep -Fq 'private-cgroupns-rw-cgroup-bind-systempaths-unconfined' "${probe}" || exit 1
-grep -Fq 'cgroup-remount-security-unconfined-without-cap' "${probe}" || exit 1
+grep -Fq 'cgroup-remount-apparmor-unconfined-without-cap' "${probe}" || exit 1
 grep -Fq 'docker buildx prune --force --all' "${probe}" || exit 1
 grep -Fq 'allow_full_cache_prune=1' "${harness}" || exit 1
 ! grep -Fq 'reason="boot_failed_$(docker logs' "${probe}" || exit 1

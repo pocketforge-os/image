@@ -527,12 +527,10 @@ probe_candidate d-unconfined yes nested-user-pid-namespace-security-unconfined i
     --security-opt seccomp=unconfined \
     --security-opt apparmor=unconfined \
     -- /usr/local/libexec/nested-systemd
-probe_candidate c-remount yes cgroup-remount-security-unconfined-without-cap direct \
-    --security-opt seccomp=unconfined \
+probe_candidate c-remount yes cgroup-remount-apparmor-unconfined-without-cap direct \
     --security-opt apparmor=unconfined \
     -- /usr/local/libexec/remount-cgroup-systemd
 probe_candidate e no forbidden-cap-sys-admin-cgroup-remount-measurement direct \
-    --security-opt seccomp=unconfined \
     --security-opt apparmor=unconfined \
     --cap-add=SYS_ADMIN \
     -- /usr/local/libexec/remount-cgroup-systemd
