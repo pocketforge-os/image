@@ -118,7 +118,7 @@ cleanup() {
 
 # This executes only guard logic; it cannot contact Docker.
 "${harness}" --check-host-guard /
-for command_name in docker python3 sha256sum; do
+for command_name in docker python3 sha256sum timeout; do
     command -v "${command_name}" >/dev/null 2>&1 \
         || { echo "systemd-docker-probe: missing ${command_name}" >&2; exit 1; }
 done
@@ -166,12 +166,132 @@ docker build \
     "$(dirname "${probe_recipe}")"
 require_disk_floor after-probe-build
 
+one_line() {
+    tr '\r\n\t ' '____'
+}
+
+emit_lines() {
+    local prefix="$1" value="$2" line
+    if [ -z "${value}" ]; then
+        echo "${prefix}<empty>"
+        return
+    fi
+    while IFS= read -r line; do
+        echo "${prefix}${line}"
+    done <<<"${value}"
+}
+
+inspect_container_state() {
+    local name="$1" state_json parsed
+    local -a parsed_fields=()
+
+    observed_inspect=unavailable
+    observed_inspect_rc=125
+    observed_status=unknown
+    observed_exit_code=unknown
+    observed_error=unknown
+    observed_pid=unknown
+    observed_pid1_comm=unknown
+    observed_pid1_rc=125
+    observed_logs=
+    observed_logs_rc=125
+    observed_last_log=none
+
+    if observed_inspect="$(docker inspect -f \
+        '{{.State.Status}} {{.State.ExitCode}} {{.State.Error}} {{.State.Pid}}' \
+        "${name}" 2>&1)"; then
+        observed_inspect_rc=0
+    else
+        observed_inspect_rc=$?
+    fi
+    if [ "${observed_inspect_rc}" -eq 0 ] \
+        && state_json="$(docker inspect --format '{{json .State}}' "${name}" 2>&1)" \
+        && parsed="$(python3 -c '
+import json, sys
+state = json.load(sys.stdin)
+for key in ("Status", "ExitCode", "Error", "Pid"):
+    print(str(state.get(key, "unknown")).replace("\n", "\\n"))
+' <<<"${state_json}")"; then
+        readarray -t parsed_fields <<<"${parsed}"
+        observed_status="${parsed_fields[0]:-unknown}"
+        observed_exit_code="${parsed_fields[1]:-unknown}"
+        observed_error="${parsed_fields[2]:-unknown}"
+        observed_pid="${parsed_fields[3]:-unknown}"
+    fi
+    if observed_pid1_comm="$(docker exec "${name}" cat /proc/1/comm 2>&1)"; then
+        observed_pid1_rc=0
+        observed_pid1_comm="${observed_pid1_comm//$'\n'/}"
+    else
+        observed_pid1_rc=$?
+    fi
+    if observed_logs="$(docker logs --tail 40 "${name}" 2>&1)"; then
+        observed_logs_rc=0
+    else
+        observed_logs_rc=$?
+    fi
+    observed_last_log="$(awk 'NF { line=$0 } END { print line }' <<<"${observed_logs}")"
+    observed_last_log="${observed_last_log:-none}"
+}
+
+positive_control() {
+    local name="tsp-f3fm-211-probe-${run_id}-positive" result=fail reason=none
+    local output inspect_quoted
+
+    docker rm --force "${name}" >/dev/null 2>&1 || true
+    if ! output="$(docker run --detach --tty \
+        --name "${name}" \
+        --label "${run_label}" \
+        --cgroupns=private \
+        --network none \
+        --tmpfs /run:rw,nosuid,nodev,mode=755 \
+        --tmpfs /run/lock:rw,nosuid,nodev,mode=755 \
+        --entrypoint /bin/sleep \
+        "${probe_image}" infinity 2>&1)"; then
+        reason="run_failed_$(one_line <<<"${output}")"
+    else
+        inspect_container_state "${name}"
+        if [ "${observed_inspect_rc}" -ne 0 ]; then
+            reason="inspect_failed_rc_${observed_inspect_rc}"
+        elif [ "${observed_status}" != running ]; then
+            reason="state_${observed_status}_exit_${observed_exit_code}"
+        elif ! [[ "${observed_pid}" =~ ^[1-9][0-9]*$ ]]; then
+            reason="invalid_pid_${observed_pid}"
+        elif [ "${observed_pid1_rc}" -ne 0 ] \
+            || [ "${observed_pid1_comm}" != sleep ]; then
+            reason="pid1_inspection_failed_rc_${observed_pid1_rc}_comm_${observed_pid1_comm}"
+        else
+            result=pass
+            reason=ok
+        fi
+    fi
+
+    printf -v inspect_quoted '%q' "${observed_inspect:-unavailable}"
+    echo "probe_positive_control=${result} docker_pid1=${observed_pid:-unknown} pid1_comm=${observed_pid1_comm:-unknown} state=${observed_status:-unknown} inspect_rc=${observed_inspect_rc:-125} inspect=${inspect_quoted} logs_rc=${observed_logs_rc:-125} reason=${reason}"
+    emit_lines 'probe_positive_control_log=' "${observed_logs:-}"
+    docker rm --force "${name}" >/dev/null 2>&1 || true
+    require_disk_floor after-positive-control
+    if [ "${result}" != pass ]; then
+        failure_reason=INSPECTOR_POSITIVE_CONTROL_FAILED
+        exit 1
+    fi
+}
+
 probe_candidate() {
     local key="$1" adoptable="$2" description="$3" pid1_mode="$4"
     shift 4
     local name="tsp-f3fm-211-probe-${run_id}-${key}"
-    local state=unreachable transient_start=not_run transient_stop=not_run
-    local reason=none output transient_output status=1 pid1_comm=unknown
+    local state=unknown transient_start=not_run transient_stop=not_run
+    local reason=none output status=1 result=fail run_rc=0
+    local systemctl_wait_output=not_run systemctl_wait_rc=125
+    local failed_units_output=not_run failed_units_rc=125
+    local cgroup_mount_options=not_run cgroup_mount_rc=125
+    local transient_output=not_run transient_start_rc=125
+    local transient_active_output=not_run transient_active_rc=125
+    local transient_stop_output=not_run transient_stop_rc=125
+    local transient_still_active_rc=125
+    local initial_inspect initial_inspect_rc initial_status initial_exit_code
+    local initial_error initial_pid initial_pid1_comm initial_pid1_rc
+    local inspect_quoted initial_inspect_quoted last_log_flat
     local -a extra=() command=()
 
     while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
@@ -184,7 +304,7 @@ probe_candidate() {
     fi
 
     docker rm --force "${name}" >/dev/null 2>&1 || true
-    if ! output="$(docker run --detach --tty \
+    if output="$(docker run --detach --tty \
         --name "${name}" \
         --label "${run_label}" \
         --cgroupns=private \
@@ -194,83 +314,177 @@ probe_candidate() {
         "${extra[@]}" \
         "${probe_image}" \
         "${command[@]}" 2>&1)"; then
-        reason="run_failed_$(tr '\n ' '__' <<<"${output}" | cut -c1-240)"
+        run_rc=0
     else
-        for _ in $(seq 1 100); do
-            state="$(docker exec "${name}" systemctl is-system-running 2>/dev/null || true)"
-            case "${state}" in
-                running|degraded) status=0; break ;;
-            esac
-            [ "$(docker inspect --format '{{.State.Running}}' "${name}" 2>/dev/null)" = true ] \
-                || break
-            sleep 0.1
-        done
-        pid1_comm="$(docker exec "${name}" cat /proc/1/comm 2>/dev/null || true)"
-        if [ "${pid1_mode}" = direct ] && [ "${pid1_comm}" != systemd ]; then
-            status=1
-            reason="docker_pid1_is_${pid1_comm:-missing}"
+        run_rc=$?
+    fi
+
+    inspect_container_state "${name}"
+    initial_inspect="${observed_inspect}"
+    initial_inspect_rc="${observed_inspect_rc}"
+    initial_status="${observed_status}"
+    initial_exit_code="${observed_exit_code}"
+    initial_error="${observed_error}"
+    initial_pid="${observed_pid}"
+    initial_pid1_comm="${observed_pid1_comm}"
+    initial_pid1_rc="${observed_pid1_rc}"
+
+    if [ "${run_rc}" -eq 0 ]; then
+        if systemctl_wait_output="$(timeout --signal=TERM 90s \
+            docker exec "${name}" systemctl is-system-running --wait 2>&1)"; then
+            systemctl_wait_rc=0
+        else
+            systemctl_wait_rc=$?
         fi
-        if [ "${status}" -eq 0 ]; then
-            if transient_output="$(docker exec "${name}" systemd-run --quiet \
+        state="$(awk '/^(running|degraded|maintenance|initializing|starting|stopping|offline|unknown)$/ { value=$0 } END { print value }' \
+            <<<"${systemctl_wait_output}")"
+        state="${state:-unknown}"
+
+        if failed_units_output="$(docker exec "${name}" \
+            systemctl --failed --no-legend 2>&1)"; then
+            failed_units_rc=0
+        else
+            failed_units_rc=$?
+        fi
+        if cgroup_mount_options="$(docker exec "${name}" /bin/sh -c \
+            'awk '\''$2 == "/sys/fs/cgroup" { print $4; found=1 } END { if (!found) exit 1 }'\'' /proc/mounts' \
+            2>&1)"; then
+            cgroup_mount_rc=0
+        else
+            cgroup_mount_rc=$?
+        fi
+    else
+        reason="run_failed_rc_${run_rc}_$(one_line <<<"${output}")"
+    fi
+
+    inspect_container_state "${name}"
+    last_log_flat="$(one_line <<<"${observed_last_log}")"
+    if [ "${run_rc}" -eq 0 ]; then
+        if [ "${observed_inspect_rc}" -ne 0 ]; then
+            reason="inspect_failed_rc_${observed_inspect_rc}"
+        elif [ "${observed_status}" != running ]; then
+            reason="container_${observed_status}_exit_${observed_exit_code}_error_$(one_line <<<"${observed_error}")_last_log_${last_log_flat}"
+        elif [ "${pid1_mode}" = direct ] \
+            && { [ "${observed_pid1_rc}" -ne 0 ] \
+                || [ "${observed_pid1_comm}" != systemd ]; }; then
+            reason="pid1_mismatch_rc_${observed_pid1_rc}_comm_$(one_line <<<"${observed_pid1_comm}")"
+        elif [ "${systemctl_wait_rc}" -eq 124 ]; then
+            reason="systemctl_wait_timeout_state_${state}"
+        elif [ "${state}" != running ] && [ "${state}" != degraded ]; then
+            reason="systemctl_wait_failed_rc_${systemctl_wait_rc}_output_$(one_line <<<"${systemctl_wait_output}")"
+        else
+            status=0
+            reason=none
+        fi
+    fi
+
+    if [ "${status}" -eq 0 ]; then
+        if transient_output="$(docker exec "${name}" systemd-run --quiet \
                 --unit=pf-probe-transient.service \
                 --property=Type=oneshot \
                 --property=RemainAfterExit=yes \
                 --property=PrivateTmp=yes \
                 --property=ProtectSystem=strict \
                 --property=ReadOnlyPaths=/usr \
-                /bin/true 2>&1)" \
-                && docker exec "${name}" systemctl is-active --quiet \
-                    pf-probe-transient.service; then
-                transient_start=pass
-                if docker exec "${name}" systemctl stop pf-probe-transient.service \
-                    >/dev/null 2>&1 \
-                    && ! docker exec "${name}" systemctl is-active --quiet \
-                        pf-probe-transient.service; then
-                    transient_stop=pass
-                else
-                    transient_stop=fail
-                    status=1
-                    reason="transient_stop_failed_$(docker exec "${name}" systemctl status --no-pager pf-probe-transient.service 2>&1 | tail -n 8 | tr '\n ' '__' | cut -c1-240)"
-                fi
+                /bin/true 2>&1)"; then
+            transient_start_rc=0
+        else
+            transient_start_rc=$?
+        fi
+        if transient_active_output="$(docker exec "${name}" systemctl is-active \
+            pf-probe-transient.service 2>&1)"; then
+            transient_active_rc=0
+        else
+            transient_active_rc=$?
+        fi
+        if [ "${transient_start_rc}" -eq 0 ] \
+            && [ "${transient_active_rc}" -eq 0 ]; then
+            transient_start=pass
+            if transient_stop_output="$(docker exec "${name}" systemctl stop \
+                pf-probe-transient.service 2>&1)"; then
+                transient_stop_rc=0
             else
-                transient_start=fail
+                transient_stop_rc=$?
+            fi
+            if docker exec "${name}" systemctl is-active --quiet \
+                pf-probe-transient.service >/dev/null 2>&1; then
+                transient_still_active_rc=0
+            else
+                transient_still_active_rc=$?
+            fi
+            if [ "${transient_stop_rc}" -eq 0 ] \
+                && [ "${transient_still_active_rc}" -ne 0 ]; then
+                transient_stop=pass
+            else
+                transient_stop=fail
                 status=1
-                reason="transient_start_failed_$(printf '%s' "${transient_output}" | tr '\n ' '__' | cut -c1-240)"
+                reason="transient_stop_failed_rc_${transient_stop_rc}_active_rc_${transient_still_active_rc}_output_$(one_line <<<"${transient_stop_output}")"
             fi
         else
-            reason="boot_failed_$(docker logs "${name}" 2>&1 | tail -n 12 \
-                | tr '\n ' '__' | cut -c1-240)"
+            transient_start=fail
+            status=1
+            reason="transient_start_failed_run_rc_${transient_start_rc}_active_rc_${transient_active_rc}_run_output_$(one_line <<<"${transient_output}")_active_output_$(one_line <<<"${transient_active_output}")"
         fi
     fi
-    docker rm --force "${name}" >/dev/null 2>&1 || true
-    require_disk_floor "after-candidate-${key}"
+
+    if [ "${run_rc}" -eq 0 ]; then
+        if failed_units_output="$(docker exec "${name}" \
+            systemctl --failed --no-legend 2>&1)"; then
+            failed_units_rc=0
+        else
+            failed_units_rc=$?
+        fi
+        if cgroup_mount_options="$(docker exec "${name}" /bin/sh -c \
+            'awk '\''$2 == "/sys/fs/cgroup" { print $4; found=1 } END { if (!found) exit 1 }'\'' /proc/mounts' \
+            2>&1)"; then
+            cgroup_mount_rc=0
+        else
+            cgroup_mount_rc=$?
+        fi
+    fi
+    inspect_container_state "${name}"
+
+    if [ "${status}" -eq 0 ] && [ "${observed_status}" != running ]; then
+        status=1
+        reason="container_${observed_status}_after_transient_exit_${observed_exit_code}_last_log_$(one_line <<<"${observed_last_log}")"
+    fi
 
     if [ "${status}" -eq 0 ]; then
         result=pass
         if [ "${adoptable}" = yes ] && [ "${least_allowed}" = none ]; then
             least_allowed="${key}"
         fi
-    else
-        result=fail
     fi
     if [ "${adoptable}" = no ]; then
         forbidden_result="${result}"
     fi
-    echo "probe_candidate=${key} adoptable=${adoptable} description=${description} docker_pid1=${pid1_comm:-unknown} systemd_scope=${pid1_mode} result=${result} system_state=${state:-unknown} transient_sandbox=private-tmp-protect-system transient_start=${transient_start} transient_stop=${transient_stop} reason=${reason}"
+    printf -v initial_inspect_quoted '%q' "${initial_inspect}"
+    printf -v inspect_quoted '%q' "${observed_inspect}"
+    echo "probe_candidate=${key} adoptable=${adoptable} description=${description} result=${result} systemd_scope=${pid1_mode} run_rc=${run_rc} docker_pid1=${observed_pid} pid1_comm=$(one_line <<<"${observed_pid1_comm}") pid1_comm_rc=${observed_pid1_rc} docker_state=${observed_status} docker_exit_code=${observed_exit_code} docker_error=$(one_line <<<"${observed_error}") inspect_initial_rc=${initial_inspect_rc} inspect_initial=${initial_inspect_quoted} initial_state=${initial_status} initial_exit_code=${initial_exit_code} initial_error=$(one_line <<<"${initial_error}") initial_docker_pid1=${initial_pid} initial_pid1_comm=$(one_line <<<"${initial_pid1_comm}") initial_pid1_comm_rc=${initial_pid1_rc} inspect_final_rc=${observed_inspect_rc} inspect_final=${inspect_quoted} logs_rc=${observed_logs_rc} system_state=${state} systemctl_wait_rc=${systemctl_wait_rc} systemctl_wait_output=$(one_line <<<"${systemctl_wait_output}") failed_units_rc=${failed_units_rc} failed_units=$(one_line <<<"${failed_units_output}") cgroup_mount_rc=${cgroup_mount_rc} cgroup_mount_options=$(one_line <<<"${cgroup_mount_options}") transient_sandbox=private-tmp-protect-system transient_start=${transient_start} transient_start_rc=${transient_start_rc} transient_active_rc=${transient_active_rc} transient_stop=${transient_stop} transient_stop_rc=${transient_stop_rc} reason=${reason}"
+    emit_lines "probe_candidate_log=${key} " "${observed_logs}"
+    docker rm --force "${name}" >/dev/null 2>&1 || true
+    require_disk_floor "after-candidate-${key}"
 }
 
 # Least privilege first. Candidate e is evidence only and can never be selected.
-probe_candidate a yes private-cgroupns-tmpfs-pty direct
+positive_control
+probe_candidate a yes private-cgroupns-tmpfs-pty direct \
+    -- /sbin/init
 probe_candidate b yes private-cgroupns-rw-cgroup-bind direct \
-    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup
+    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup \
+    -- /sbin/init
 probe_candidate c-seccomp yes private-cgroupns-seccomp-unconfined direct \
-    --security-opt seccomp=unconfined
+    --security-opt seccomp=unconfined \
+    -- /sbin/init
 probe_candidate c-apparmor yes private-cgroupns-apparmor-unconfined direct \
-    --security-opt apparmor=unconfined
+    --security-opt apparmor=unconfined \
+    -- /sbin/init
 probe_candidate c-systempaths yes private-cgroupns-systempaths-unconfined direct \
-    --security-opt systempaths=unconfined
+    --security-opt systempaths=unconfined \
+    -- /sbin/init
 probe_candidate c-userns yes private-cgroupns-userns-host direct \
-    --userns=host
+    --userns=host \
+    -- /sbin/init
 probe_candidate d yes nested-user-pid-namespace-systemd inner \
     -- /usr/local/libexec/nested-systemd
 probe_candidate d-seccomp yes nested-user-pid-namespace-seccomp-unconfined inner \
@@ -284,7 +498,8 @@ probe_candidate d-unconfined yes nested-user-pid-namespace-security-unconfined i
     --security-opt apparmor=unconfined \
     -- /usr/local/libexec/nested-systemd
 probe_candidate e no forbidden-cap-sys-admin-measurement direct \
-    --cap-add=SYS_ADMIN
+    --cap-add=SYS_ADMIN \
+    -- /sbin/init
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
     printf 'least_allowed=%s\n' "${least_allowed}" >>"${GITHUB_OUTPUT}"

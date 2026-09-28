@@ -6,6 +6,7 @@ harness="${root}/tests/test-session-authority-systemd.sh"
 driver="${root}/tests/session-authority-systemd/drive.py"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
+probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
 workflow="${root}/.github/workflows/session-authority-systemd.yml"
 precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditions.py"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
@@ -437,5 +438,18 @@ grep -Fq 'docker_root_df_before=' "${probe}" || exit 1
 grep -Fq 'docker_root_df_after=' "${probe}" || exit 1
 grep -Fq 'docker_system_df_before=' "${probe}" || exit 1
 grep -Fq 'docker_system_df_after=' "${probe}" || exit 1
+grep -Fq 'probe_positive_control=${result}' "${probe}" || exit 1
+grep -Fq -- '--entrypoint /bin/sleep' "${probe}" || exit 1
+grep -Fq "'{{.State.Status}} {{.State.ExitCode}} {{.State.Error}} {{.State.Pid}}'" \
+    "${probe}" || exit 1
+grep -Fq 'systemctl is-system-running --wait' "${probe}" || exit 1
+grep -Fq 'timeout --signal=TERM 90s' "${probe}" || exit 1
+grep -Fq 'systemctl --failed --no-legend' "${probe}" || exit 1
+grep -Fq 'docker logs --tail 40' "${probe}" || exit 1
+grep -Fq 'cgroup_mount_options=' "${probe}" || exit 1
+! grep -Fq 'reason="boot_failed_$(docker logs' "${probe}" || exit 1
+grep -Fq "grep -E '^(systemd-docker-probe:|probe_)'" "${workflow}" || exit 1
+grep -Fqx 'STOPSIGNAL SIGRTMIN+3' "${probe_recipe}" || exit 1
+grep -Fqx 'CMD ["/sbin/init"]' "${probe_recipe}" || exit 1
 
-echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_matrix=static getty_masks=5 runtime=fake-docker'
+echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=static probe_matrix=static getty_masks=5 runtime=fake-docker'
