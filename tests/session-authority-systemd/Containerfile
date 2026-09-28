@@ -1,5 +1,21 @@
+FROM docker.io/library/rust:1.85-bookworm@sha256:e51d0265072d2d9d5d320f6a44dde6b9ef13653b035098febd68cce8fa7c0bc4 AS runtime-builder
+
+ARG PF_RUNTIME_SHA
+WORKDIR /src/runtime
+COPY runtime/ ./
+RUN bash scripts/check-vendor.sh \
+    && cargo fetch --locked --offline
+RUN cargo build --release --locked --offline \
+        -p pf-session-authority \
+        -p pf-app-launch \
+    && install -D -m 0755 target/release/pf-session-authorityd /out/pf-session-authorityd \
+    && install -D -m 0755 target/release/pf-app-launch /out/pf-app-launch
+
 FROM debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 
+ARG PF_RUNTIME_SHA
+LABEL org.opencontainers.image.source="https://github.com/pocketforge-os/runtime" \
+      org.opencontainers.image.revision="${PF_RUNTIME_SHA}"
 ENV container=podman
 
 RUN apt-get update -qq \
@@ -28,10 +44,10 @@ RUN install -d -m 0755 \
     && ln -sf /dev/null /etc/systemd/system/serial-getty@.service \
     && ln -sf /dev/null /etc/systemd/system/autovt@.service
 
-COPY pf-session-authorityd /usr/bin/pf-session-authorityd
-COPY pf-app-launch /usr/bin/pf-app-launch
-COPY pf-session-authorityd.service /etc/systemd/system/pf-session-authorityd.service
-COPY pocketforge.conf /usr/lib/tmpfiles.d/pocketforge.conf
+COPY --from=runtime-builder /out/pf-session-authorityd /usr/bin/pf-session-authorityd
+COPY --from=runtime-builder /out/pf-app-launch /usr/bin/pf-app-launch
+COPY runtime/systemd/pf-session-authorityd.service /etc/systemd/system/pf-session-authorityd.service
+COPY runtime/systemd/pocketforge.conf /usr/lib/tmpfiles.d/pocketforge.conf
 COPY pf-app@.service /etc/systemd/system/pf-app@.service
 COPY pocketforge-foreground.target /etc/systemd/system/pocketforge-foreground.target
 COPY 10-owner-shell.conf /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf
