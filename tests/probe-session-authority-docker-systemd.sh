@@ -29,7 +29,9 @@ build_cache_df_after=unknown
 build_cache_df_expected_after=unknown
 cache_records_removed=0
 least_allowed=none
-forbidden_result=not_run
+candidate_e_result=not_run
+adopted=none
+owner_exception=none
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
 disk_floor_bytes=$((4 * gib))
@@ -138,7 +140,7 @@ cleanup() {
         result=FAIL
         status=1
     fi
-    echo "systemd-docker-probe: ${result} receipt_reason=${failure_reason} run_id=${run_id} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_free_after_bytes=${docker_root_free_after_bytes} docker_root_df_before=${docker_root_df_before} docker_root_df_after=${docker_root_df_after} docker_system_df_before=${docker_system_df_before} docker_system_df_after=${docker_system_df_after} build_cache_df_before=${build_cache_df_before} build_cache_df_expected_after=${build_cache_df_expected_after} build_cache_df_after=${build_cache_df_after} build_cache_records_removed=${cache_records_removed} least_allowed=${least_allowed} forbidden_cap_sys_admin=${forbidden_result} cleanup_asserted=true"
+    echo "systemd-docker-probe: ${result} receipt_reason=${failure_reason} run_id=${run_id} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_free_after_bytes=${docker_root_free_after_bytes} docker_root_df_before=${docker_root_df_before} docker_root_df_after=${docker_root_df_after} docker_system_df_before=${docker_system_df_before} docker_system_df_after=${docker_system_df_after} build_cache_df_before=${build_cache_df_before} build_cache_df_expected_after=${build_cache_df_expected_after} build_cache_df_after=${build_cache_df_after} build_cache_records_removed=${cache_records_removed} least_allowed=${least_allowed} candidate_e=${candidate_e_result} adopted=${adopted} owner_exception=${owner_exception} cleanup_asserted=true"
     exit "${status}"
 }
 
@@ -191,7 +193,7 @@ docker build \
     --label "${run_label}" \
     --tag "${probe_image}" \
     --file "${probe_recipe}" \
-    "$(dirname "${probe_recipe}")"
+    "$(dirname "$(dirname "${probe_recipe}")")"
 require_disk_floor after-probe-build
 
 one_line() {
@@ -484,7 +486,7 @@ probe_candidate() {
         fi
     fi
     if [ "${adoptable}" = no ]; then
-        forbidden_result="${result}"
+        candidate_e_result="${result}"
     fi
     printf -v initial_inspect_quoted '%q' "${initial_inspect}"
     printf -v inspect_quoted '%q' "${observed_inspect}"
@@ -494,7 +496,8 @@ probe_candidate() {
     require_disk_floor "after-candidate-${key}"
 }
 
-# Least privilege first. Candidate e is evidence only and can never be selected.
+# Least privilege first. Candidate e is the owner-approved exception only on an
+# admitted one-job ephemeral Actions runner; it remains forbidden everywhere else.
 positive_control
 probe_candidate a yes private-cgroupns-tmpfs-pty direct \
     -- /sbin/init
@@ -532,17 +535,24 @@ probe_candidate d-unconfined yes nested-user-pid-namespace-security-unconfined i
 probe_candidate c-remount yes cgroup-remount-apparmor-unconfined-without-cap direct \
     --security-opt apparmor=unconfined \
     -- /usr/local/libexec/remount-cgroup-systemd
-probe_candidate e no forbidden-cap-sys-admin-cgroup-remount-measurement direct \
+probe_candidate e no owner-exception-ephemeral-only-cap-sys-admin-cgroup-remount direct \
     --security-opt apparmor=unconfined \
     --cap-add=SYS_ADMIN \
     -- /usr/local/libexec/remount-cgroup-systemd
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
     printf 'least_allowed=%s\n' "${least_allowed}" >>"${GITHUB_OUTPUT}"
+    printf 'candidate_e=%s\n' "${candidate_e_result}" >>"${GITHUB_OUTPUT}"
 fi
-[ "${least_allowed}" != none ] || {
-    failure_reason=NO_ALLOWED_SYSTEMD_CONFIGURATION
+[ "${candidate_e_result}" = pass ] || {
+    failure_reason=OWNER_EXCEPTION_CANDIDATE_E_FAILED
     exit 1
 }
+adopted=e
+owner_exception=ephemeral-only
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    printf 'adopted=%s\n' "${adopted}" >>"${GITHUB_OUTPUT}"
+    printf 'owner_exception=%s\n' "${owner_exception}" >>"${GITHUB_OUTPUT}"
+fi
 failure_reason=completed
 probe_status=0

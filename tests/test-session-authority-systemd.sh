@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# OWNER DECISION (2026-09-28): candidate e is permitted only after both the
+# unchanged INTERACTIVE_WORKSTATION guard and the one-job ephemeral Actions
+# admission succeed. These runners already have docker-group (root-equivalent)
+# access and are disposable VMs with no display or VT. The workstation incident
+# rules remain fail-closed everywhere else, with no override.
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixtures="${root}/tests/session-authority-systemd"
 app_unit="${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
@@ -23,6 +29,7 @@ docker_disk_configured=0
 run_started=0
 run_completed=0
 cleanup_failed=0
+ephemeral_admitted=0
 failure_reason=
 docker_root_min_free_bytes=
 docker_root_free_before_bytes=
@@ -131,6 +138,7 @@ assert_ephemeral_slot() {
         || fail 'UNAPPROVED_HOST: GITHUB_ACTIONS=true is required'
     [ -f "${marker}" ] \
         || fail "UNAPPROVED_HOST: ephemeral runner marker missing path=${marker}"
+    ephemeral_admitted=1
 }
 
 configure_run_identity() {
@@ -217,11 +225,14 @@ sample_disk() {
     fi
 }
 
-reject_device_volume() {
+reject_host_bind() {
     local value="$1"
     local source_path="${value%%:*}"
     case "${source_path}" in
         /dev|/dev/*) fail "UNSAFE_CONTAINER_ARGV: host device bind=${value}" ;;
+        /sys/fs/cgroup|/sys/fs/cgroup/*)
+            fail "UNSAFE_CONTAINER_ARGV: host cgroup bind=${value}"
+            ;;
     esac
 }
 
@@ -257,12 +268,14 @@ audit_docker_argv() {
     local mount_option="${dashdash}mount"
     local device_option="${dashdash}device"
     local capability_option="${dashdash}cap-add"
+    local security_option="${dashdash}security-opt"
     local pid_option="${dashdash}pid"
     local network_option="${dashdash}network"
     local network_alias="${dashdash}net"
     local cgroupns_option="${dashdash}cgroupns"
     local short_volume=-v
-    local arg value index command_name="${argv[0]-}"
+    local arg value index last_index command_name="${argv[0]-}"
+    local capability_count=0 apparmor_unconfined_count=0
 
     [ -n "${command_name}" ] || fail 'UNSCOPED_CONTAINER_ARGV: empty Docker argv'
     for ((index = 0; index < ${#argv[@]}; index++)); do
@@ -274,8 +287,29 @@ audit_docker_argv() {
             "${device_option}"|"${device_option}="*)
                 fail 'UNSAFE_CONTAINER_ARGV: host device option'
                 ;;
-            "${capability_option}"|"${capability_option}="*)
-                fail 'UNSAFE_CONTAINER_ARGV: added capability'
+            "${capability_option}")
+                value="${argv[index + 1]-}"
+                [ "${value}" = SYS_ADMIN ] \
+                    || fail "UNSAFE_CONTAINER_ARGV: added capability=${value:-missing}"
+                capability_count=$((capability_count + 1))
+                ;;
+            "${capability_option}="*)
+                value="${arg#*=}"
+                [ "${value}" = SYS_ADMIN ] \
+                    || fail "UNSAFE_CONTAINER_ARGV: added capability=${value:-missing}"
+                capability_count=$((capability_count + 1))
+                ;;
+            "${security_option}")
+                value="${argv[index + 1]-}"
+                [ "${value}" = apparmor=unconfined ] \
+                    || fail "UNSAFE_CONTAINER_ARGV: security option=${value:-missing}"
+                apparmor_unconfined_count=$((apparmor_unconfined_count + 1))
+                ;;
+            "${security_option}="*)
+                value="${arg#*=}"
+                [ "${value}" = apparmor=unconfined ] \
+                    || fail "UNSAFE_CONTAINER_ARGV: security option=${value:-missing}"
+                apparmor_unconfined_count=$((apparmor_unconfined_count + 1))
                 ;;
             "${pid_option}")
                 value="${argv[index + 1]-}"
@@ -302,19 +336,22 @@ audit_docker_argv() {
                 [ "${value}" != host ] || fail 'UNSAFE_CONTAINER_ARGV: host cgroup namespace'
                 ;;
             "${volume_option}"|"${short_volume}")
-                reject_device_volume "${argv[index + 1]-}"
+                reject_host_bind "${argv[index + 1]-}"
                 ;;
             "${volume_option}="*)
-                reject_device_volume "${arg#*=}"
+                reject_host_bind "${arg#*=}"
                 ;;
             "${short_volume}"?*)
-                reject_device_volume "${arg#"${short_volume}"}"
+                reject_host_bind "${arg#"${short_volume}"}"
                 ;;
             "${mount_option}")
                 value="${argv[index + 1]-}"
                 case ",${value}," in
                     *,source=/dev,*|*,source=/dev/*,*|*,src=/dev,*|*,src=/dev/*,*)
                         fail 'UNSAFE_CONTAINER_ARGV: host device mount'
+                        ;;
+                    *,source=/sys/fs/cgroup,*|*,source=/sys/fs/cgroup/*,*|*,src=/sys/fs/cgroup,*|*,src=/sys/fs/cgroup/*,*)
+                        fail 'UNSAFE_CONTAINER_ARGV: host cgroup mount'
                         ;;
                 esac
                 ;;
@@ -324,10 +361,24 @@ audit_docker_argv() {
                     *,source=/dev,*|*,source=/dev/*,*|*,src=/dev,*|*,src=/dev/*,*)
                         fail 'UNSAFE_CONTAINER_ARGV: host device mount'
                         ;;
+                    *,source=/sys/fs/cgroup,*|*,source=/sys/fs/cgroup/*,*|*,src=/sys/fs/cgroup,*|*,src=/sys/fs/cgroup/*,*)
+                        fail 'UNSAFE_CONTAINER_ARGV: host cgroup mount'
+                        ;;
                 esac
                 ;;
         esac
     done
+
+    if [ "${capability_count}" -ne 0 ] \
+        || [ "${apparmor_unconfined_count}" -ne 0 ]; then
+        [ "${ephemeral_admitted}" -eq 1 ] \
+            || fail 'UNSAFE_CONTAINER_ARGV: owner exception requires verified ephemeral admission'
+        [ "${command_name}" = run ] \
+            || fail 'UNSAFE_CONTAINER_ARGV: owner exception is valid only for Docker run'
+        [ "${capability_count}" -eq 1 ] \
+            && [ "${apparmor_unconfined_count}" -eq 1 ] \
+            || fail 'UNSAFE_CONTAINER_ARGV: incomplete or duplicate owner exception'
+    fi
 
     case "${command_name}" in
         build)
@@ -351,6 +402,16 @@ audit_docker_argv() {
                 || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks /run/lock tmpfs'
             argv_has --tty "${argv[@]}" || argv_has -t "${argv[@]}" \
                 || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks PTY'
+            [ "${ephemeral_admitted}" -eq 1 ] \
+                || fail 'UNSAFE_CONTAINER_ARGV: Docker run lacks verified ephemeral admission'
+            [ "${capability_count}" -eq 1 ] \
+                && [ "${apparmor_unconfined_count}" -eq 1 ] \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks exact owner exception'
+            last_index=$((${#argv[@]} - 1))
+            [ "${last_index}" -ge 1 ] \
+                && [ "${argv[last_index - 1]}" = "${test_image}" ] \
+                && [ "${argv[last_index]}" = /usr/local/libexec/remount-cgroup-systemd ] \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks exact cgroup-remount command'
             ;;
         exec|logs|rm)
             argv_has "${systemd_container}" "${argv[@]}" \
@@ -435,8 +496,10 @@ make_systemd_argv() {
         --tmpfs '/run/lock:rw,nosuid,nodev,mode=755'
         --pids-limit=512
         --env=container=docker
+        --security-opt apparmor=unconfined
+        --cap-add SYS_ADMIN
         "${image_name}"
-        /sbin/init
+        /usr/local/libexec/remount-cgroup-systemd
     )
 }
 
@@ -609,24 +672,30 @@ cleanup() {
 
 case "${1:-}" in
     --audit-argv)
-        [ "$#" -ge 3 ] || fail 'USAGE: --audit-argv RUN_ID ARGV...'
-        configure_run_identity "$2"
-        shift 2
+        [ "$#" -ge 4 ] || fail 'USAGE: --audit-argv FIXTURE_ROOT RUN_ID ARGV...'
+        assert_safe_host "$2"
+        assert_ephemeral_slot "$2"
+        configure_run_identity "$3"
+        shift 3
         audit_docker_argv "$@"
         echo 'session-authority docker-argv-audit: PASS'
         exit 0
         ;;
     --audit-systemd-spec)
-        [ "$#" -eq 2 ] || fail 'USAGE: --audit-systemd-spec RUN_ID'
-        configure_run_identity "$2"
+        [ "$#" -eq 3 ] || fail 'USAGE: --audit-systemd-spec FIXTURE_ROOT RUN_ID'
+        assert_safe_host "$2"
+        assert_ephemeral_slot "$2"
+        configure_run_identity "$3"
         make_systemd_argv "${test_image}" "${systemd_container}"
         audit_docker_argv "${systemd_argv[@]}"
         print_argv "${systemd_argv[@]}"
         exit 0
         ;;
     --audit-lifecycle-argv)
-        [ "$#" -eq 2 ] || fail 'USAGE: --audit-lifecycle-argv RUN_ID'
-        configure_run_identity "$2"
+        [ "$#" -eq 3 ] || fail 'USAGE: --audit-lifecycle-argv FIXTURE_ROOT RUN_ID'
+        assert_safe_host "$2"
+        assert_ephemeral_slot "$2"
+        configure_run_identity "$3"
         lifecycle_commands=(
             'info --format {{json .}}'
             'version --format {{.Server.Version}}'
@@ -692,7 +761,7 @@ case "${1:-}" in
     '')
         ;;
     *)
-        fail "USAGE: $0 [--audit-argv RUN_ID ARGV...|--audit-systemd-spec RUN_ID|--audit-lifecycle-argv RUN_ID|--check-host-guard FIXTURE_ROOT|--check-docker-probe FIXTURE_ROOT]"
+        fail "USAGE: $0 [--audit-argv FIXTURE_ROOT RUN_ID ARGV...|--audit-systemd-spec FIXTURE_ROOT RUN_ID|--audit-lifecycle-argv FIXTURE_ROOT RUN_ID|--check-host-guard FIXTURE_ROOT|--check-docker-probe FIXTURE_ROOT]"
         ;;
 esac
 
@@ -787,6 +856,8 @@ install -m 0755 "${fixtures}/fixture" "${context}/fixture"
 install -m 0644 "${fixtures}/platform-capabilities.toml" \
     "${context}/platform-capabilities.toml"
 install -m 0755 "${fixtures}/drive.py" "${context}/drive.py"
+install -m 0755 "${fixtures}/remount-cgroup-systemd" \
+    "${context}/remount-cgroup-systemd"
 sample_disk build_context
 
 docker_checked build \
@@ -802,7 +873,7 @@ test_image_digest="$(<"${image_id_file}")"
 make_systemd_argv "${test_image}" "${systemd_container}"
 audit_docker_argv "${systemd_argv[@]}"
 docker_checked "${systemd_argv[@]}" >/dev/null \
-    || fail_recorded_or 'SYSTEMD_PID1_UNAVAILABLE: unprivileged Docker run failed'
+    || fail_recorded_or 'SYSTEMD_PID1_UNAVAILABLE: ephemeral owner-exception Docker run failed'
 
 systemd_ready=0
 for _ in $(seq 1 120); do
@@ -823,7 +894,7 @@ if [ "${systemd_ready}" -ne 1 ]; then
         "${systemd_container}" >&2 || true
     docker_checked exec "${systemd_container}" cat /proc/mounts >&2 || true
     docker_checked logs "${systemd_container}" >&2 || true
-    fail 'SYSTEMD_PID1_UNAVAILABLE: unprivileged Docker did not boot a usable systemd PID 1'
+    fail 'SYSTEMD_PID1_UNAVAILABLE: ephemeral owner-exception Docker did not boot a usable systemd PID 1'
 fi
 
 cgroup_mount_options="$(
@@ -879,6 +950,22 @@ container_isolation="$(
 [ "${container_isolation}" = 'true none private' ] \
     || fail "CONTAINER_ISOLATION_DRIFT: ${container_isolation}"
 
+owner_exception_json="$(
+    docker_checked container inspect \
+        --format '{{json .HostConfig.CapAdd}}|{{json .HostConfig.SecurityOpt}}|{{json .Config.Cmd}}' \
+        "${systemd_container}"
+)" || fail_recorded_or 'OWNER_EXCEPTION_PROBE_FAILED'
+python3 -c '
+import json, sys
+cap_add, security_opt, command = sys.stdin.read().strip().split("|", 2)
+if json.loads(cap_add) not in (["SYS_ADMIN"], ["CAP_SYS_ADMIN"]):
+    raise SystemExit("unexpected capability set")
+if json.loads(security_opt) != ["apparmor=unconfined"]:
+    raise SystemExit("unexpected security option set")
+if json.loads(command) != ["/usr/local/libexec/remount-cgroup-systemd"]:
+    raise SystemExit("unexpected container command")
+' <<<"${owner_exception_json}" || fail 'OWNER_EXCEPTION_DRIFT'
+
 tmpfs_json="$(
     docker_checked container inspect --format '{{json .HostConfig.Tmpfs}}' \
         "${systemd_container}"
@@ -906,5 +993,5 @@ if ! test_output="$(
 fi
 echo "${test_output}"
 sample_disk integration_complete
-pass_fields="runtime_sha=${runtime_sha} container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true"
+pass_fields="runtime_sha=${runtime_sha} container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true adopted=e owner_exception=ephemeral-only cap_add=SYS_ADMIN apparmor=unconfined cgroup_remount=rw"
 run_completed=1

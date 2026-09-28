@@ -30,6 +30,9 @@ jobs:
     timeout-minutes: 30
     outputs:
       least_allowed: ${{ steps.probe.outputs.least_allowed }}
+      candidate_e: ${{ steps.probe.outputs.candidate_e }}
+      adopted: ${{ steps.probe.outputs.adopted }}
+      owner_exception: ${{ steps.probe.outputs.owner_exception }}
     env:
       PF_SYSTEMD_TEST_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}-probe
     steps:
@@ -39,7 +42,7 @@ jobs:
       - name: Run hermetic safety checks
         run: tests/test-session-authority-systemd-safety.sh
 
-      - name: Probe unprivileged Docker systemd
+      - name: Probe Docker systemd configurations
         id: probe
         run: |
           set -o pipefail
@@ -50,7 +53,7 @@ jobs:
         if: always()
         run: |
           {
-            echo '## Unprivileged Docker systemd probe'
+            echo '## Docker systemd configuration probe'
             echo '```text'
             grep -E '^(systemd-docker-probe:|probe_)' \
               "$RUNNER_TEMP/session-authority-systemd-probe.log" 2>/dev/null ||
@@ -62,7 +65,9 @@ jobs:
     needs: probe
     if: >-
       needs.probe.result == 'success' &&
-      needs.probe.outputs.least_allowed == 'a' &&
+      needs.probe.outputs.candidate_e == 'pass' &&
+      needs.probe.outputs.adopted == 'e' &&
+      needs.probe.outputs.owner_exception == 'ephemeral-only' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, pf-builder-vm]

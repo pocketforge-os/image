@@ -7,6 +7,7 @@ driver="${root}/tests/session-authority-systemd/drive.py"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
+remount_helper="${root}/tests/session-authority-systemd/remount-cgroup-systemd"
 workflow="${root}/.github/workflows/session-authority-systemd.yml"
 precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditions.py"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
@@ -289,8 +290,36 @@ audit_container="tsp-f3fm-211-systemd-${audit_id}"
 audit_image="tsp-f3fm-211-systemd:0589fcfa959d-${audit_id}"
 dashdash=--
 privileged_flag="${dashdash}privileged"
+
 reset_logs
-run_fake --audit-systemd-spec "${audit_id}" >"${stdout_log}" 2>"${stderr_log}"
+FAKE_GRAPHICAL=1
+if run_fake --audit-systemd-spec "${fake_root}" "${audit_id}" \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: graphical host reached owner exception audit' >&2
+    exit 1
+fi
+FAKE_GRAPHICAL=0
+grep -Fq 'INTERACTIVE_WORKSTATION:' "${stderr_log}" || exit 1
+[ ! -s "${call_log}" ] || {
+    echo 'session-authority systemd-safety: FAIL: graphical owner exception audit reached Docker' >&2
+    exit 1
+}
+
+reset_logs
+if run_fake --audit-systemd-spec "${fake_unapproved_root}" "${audit_id}" \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: non-ephemeral host accepted owner exception' >&2
+    exit 1
+fi
+grep -Fq 'UNAPPROVED_HOST: ephemeral runner marker missing' "${stderr_log}" || exit 1
+[ ! -s "${call_log}" ] || {
+    echo 'session-authority systemd-safety: FAIL: non-ephemeral owner exception audit reached Docker' >&2
+    exit 1
+}
+
+reset_logs
+run_fake --audit-systemd-spec "${fake_root}" "${audit_id}" \
+    >"${stdout_log}" 2>"${stderr_log}"
 safe_spec="$(cat "${stdout_log}")"
 for required in \
     'docker run' \
@@ -300,13 +329,16 @@ for required in \
     '--cgroupns=private' \
     '--network=none' \
     '--tmpfs /run:rw,nosuid,nodev,mode=755' \
-    '--tmpfs /run/lock:rw,nosuid,nodev,mode=755'; do
+    '--tmpfs /run/lock:rw,nosuid,nodev,mode=755' \
+    '--security-opt apparmor=unconfined' \
+    '--cap-add SYS_ADMIN' \
+    '/usr/local/libexec/remount-cgroup-systemd'; do
     grep -Fq -- "${required}" "${stdout_log}" || {
         echo "session-authority systemd-safety: FAIL: safe spec missing ${required}" >&2
         exit 1
     }
 done
-forbidden_spec_regex="${privileged_flag}|--network([ =])host|--pid([ =])host|--cap-add|--device|(-v|--volume)(=| )[[:space:]]*/dev"
+forbidden_spec_regex="${privileged_flag}|--network([ =])host|--pid([ =])host|--cgroupns([ =])host|--device|(-v|--volume)(=| )[[:space:]]*/(dev|sys/fs/cgroup)"
 if grep -Eq -- "${forbidden_spec_regex}" \
     <<<"${safe_spec}"; then
     echo 'session-authority systemd-safety: FAIL: safe Docker spec contains forbidden option' >&2
@@ -316,7 +348,8 @@ fi
 expect_rejected() {
     local label="$1"
     shift
-    if run_fake --audit-argv "${audit_id}" "$@" >"${stdout_log}" 2>"${stderr_log}"; then
+    if run_fake --audit-argv "${fake_root}" "${audit_id}" "$@" \
+        >"${stdout_log}" 2>"${stderr_log}"; then
         echo "session-authority systemd-safety: FAIL: unsafe argv passed label=${label}" >&2
         exit 1
     fi
@@ -327,7 +360,7 @@ expect_rejected() {
     }
 }
 
-safe_run=(
+safe_run_base=(
     run --detach --tty
     --name "${audit_container}"
     --label "${audit_label}"
@@ -336,22 +369,55 @@ safe_run=(
     --tmpfs '/run:rw,nosuid,nodev,mode=755'
     --tmpfs '/run/lock:rw,nosuid,nodev,mode=755'
 )
+safe_run=(
+    "${safe_run_base[@]}"
+    --security-opt apparmor=unconfined
+    --cap-add SYS_ADMIN
+)
 expect_rejected unscoped-run run --detach --tty image
 expect_rejected unscoped-build build --tag "${audit_image}" /scope
-expect_rejected privilege "${safe_run[@]}" "${privileged_flag}" "${audit_image}"
-expect_rejected device-tree "${safe_run[@]}" -v /dev:/dev "${audit_image}"
-expect_rejected console-bind "${safe_run[@]}" --volume=/dev/console:/dev/console "${audit_image}"
-expect_rejected tty-device "${safe_run[@]}" --device /dev/tty2 "${audit_image}"
-expect_rejected host-pids "${safe_run[@]}" --pid=host "${audit_image}"
-expect_rejected tty-capability "${safe_run[@]}" --cap-add CAP_SYS_TTY_CONFIG "${audit_image}"
-expect_rejected admin-capability "${safe_run[@]}" --cap-add=CAP_SYS_ADMIN "${audit_image}"
-expect_rejected host-network "${safe_run[@]}" --network host "${audit_image}"
-expect_rejected host-cgroup "${safe_run[@]}" --cgroupns host "${audit_image}"
-expect_rejected device-mount "${safe_run[@]}" --mount type=bind,source=/dev/console,target=/console "${audit_image}"
+expect_rejected missing-apparmor "${safe_run_base[@]}" --cap-add SYS_ADMIN \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected missing-capability "${safe_run_base[@]}" \
+    --security-opt apparmor=unconfined \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected duplicate-admin "${safe_run[@]}" --cap-add SYS_ADMIN \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected other-capability "${safe_run[@]}" --cap-add NET_ADMIN \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected tty-capability "${safe_run[@]}" --cap-add SYS_TTY_CONFIG \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected other-security-option "${safe_run[@]}" --security-opt seccomp=unconfined \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected wrong-entrypoint "${safe_run[@]}" "${audit_image}" /sbin/init
+expect_rejected privilege "${safe_run[@]}" "${privileged_flag}" \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected device-tree "${safe_run[@]}" -v /dev:/dev \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected console-bind "${safe_run[@]}" --volume=/dev/console:/dev/console \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected tty-device "${safe_run[@]}" --device /dev/tty2 \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected host-pids "${safe_run[@]}" --pid=host \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected host-network "${safe_run[@]}" --network host \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected host-cgroup-namespace "${safe_run[@]}" --cgroupns host \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected host-cgroup-volume "${safe_run[@]}" \
+    -v /sys/fs/cgroup:/sys/fs/cgroup \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected host-cgroup-mount "${safe_run[@]}" \
+    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected device-mount "${safe_run[@]}" \
+    --mount type=bind,source=/dev/console,target=/console \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
 expect_rejected unscoped-full-cache-prune buildx prune --force --all
 
 reset_logs
-run_fake --audit-lifecycle-argv "${audit_id}" >"${stdout_log}" 2>"${stderr_log}"
+run_fake --audit-lifecycle-argv "${fake_root}" "${audit_id}" \
+    >"${stdout_log}" 2>"${stderr_log}"
 for command_pattern in \
     'docker run ' \
     'docker info ' \
@@ -384,6 +450,12 @@ for unit in getty@.service getty.target console-getty.service serial-getty@.serv
     grep -Fq "/etc/systemd/system/${unit}" "${recipe}" || exit 1
 done
 grep -Fq 'ln -sf /dev/null' "${recipe}" || exit 1
+grep -Fq 'COPY remount-cgroup-systemd /usr/local/libexec/remount-cgroup-systemd' \
+    "${recipe}" || exit 1
+grep -Fq 'COPY remount-cgroup-systemd /usr/local/libexec/remount-cgroup-systemd' \
+    "${probe_recipe}" || exit 1
+grep -Fqx 'mount -o remount,rw /sys/fs/cgroup' "${remount_helper}" || exit 1
+grep -Fqx 'exec /sbin/init' "${remount_helper}" || exit 1
 
 if grep -Eq '\bmknod\b|^[[:space:]]*[cb][+!]?[[:space:]]+/dev/fb0([[:space:]]|$)' \
     "${recipe}" "${root}/tests/session-authority-systemd/session-authority-test-tmpfiles.conf"; then
@@ -416,6 +488,9 @@ done
 ! grep -Eq 'owned_build_lock|HOST_BUSY|Runner[.]Worker' "${harness}" || exit 1
 grep -Fq 'GITHUB_ACTIONS:-' "${harness}" || exit 1
 grep -Fq '/etc/pocketforge/ephemeral-runner.conf' "${harness}" || exit 1
+grep -Fq 'OWNER DECISION (2026-09-28)' "${harness}" || exit 1
+[ "$(grep -Fc -- '--cap-add SYS_ADMIN' "${harness}")" -eq 1 ] || exit 1
+[ "$(grep -Fc -- '--security-opt apparmor=unconfined' "${harness}")" -eq 1 ] || exit 1
 grep -Fq "runs-on: [self-hosted, pf-builder-vm]" "${workflow}" || exit 1
 grep -Fq 'workflow_dispatch:' "${workflow}" || exit 1
 grep -Fq 'pull_request:' "${workflow}" || exit 1
@@ -456,8 +531,12 @@ grep -Fq 'docker buildx prune --force --all' "${probe}" || exit 1
 grep -Fq 'allow_full_cache_prune=1' "${harness}" || exit 1
 ! grep -Fq 'reason="boot_failed_$(docker logs' "${probe}" || exit 1
 grep -Fq "grep -E '^(systemd-docker-probe:|probe_)'" "${workflow}" || exit 1
+grep -Fq "needs.probe.outputs.candidate_e == 'pass'" "${workflow}" || exit 1
+grep -Fq "needs.probe.outputs.adopted == 'e'" "${workflow}" || exit 1
+grep -Fq "needs.probe.outputs.owner_exception == 'ephemeral-only'" "${workflow}" || exit 1
 grep -Fqx 'STOPSIGNAL SIGRTMIN+3' "${probe_recipe}" || exit 1
 grep -Fqx 'CMD ["/sbin/init"]' "${probe_recipe}" || exit 1
-grep -Fq 'mount -o remount,rw /sys/fs/cgroup' "${probe_recipe}" || exit 1
+grep -Fq 'candidate_e=${candidate_e_result} adopted=${adopted} owner_exception=${owner_exception}' \
+    "${probe}" || exit 1
 
-echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=static probe_matrix=static getty_masks=5 runtime=fake-docker'
+echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=static probe_matrix=static getty_masks=5 runtime=fake-docker'

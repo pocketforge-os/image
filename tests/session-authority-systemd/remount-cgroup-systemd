@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+mount -o remount,rw /sys/fs/cgroup
+exec /sbin/init
