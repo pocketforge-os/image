@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+exit_code="$(cat /run/pocketforge/fixture-exit-code)"
+printf '%s\n' "${exit_code}" >> "${XDG_STATE_HOME}/invocations"
+sleep 2
+exit "${exit_code}"
