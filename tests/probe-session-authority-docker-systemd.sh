@@ -27,7 +27,6 @@ docker_system_df_after=unknown
 build_cache_df_before=unknown
 build_cache_df_after=unknown
 build_cache_df_expected_after=unknown
-stale_cache_cleanup=not_needed
 cache_records_removed=0
 least_allowed=none
 forbidden_result=not_run
@@ -99,10 +98,9 @@ cleanup() {
             [ -n "${cache_id}" ] || continue
             docker buildx prune --force --filter "id=${cache_id}" >/dev/null 2>&1 || status=1
         done <"${cache_created}"
-        if { [ ! -s "${cache_before}" ] \
-                && [ "${build_cache_df_before}" = \
-                    'Build_Cache=total:0,active:0,size:0B,reclaimable:0B' ]; } \
-            || [ "${stale_cache_cleanup}" = source_run_36496912787 ]; then
+        if [ ! -s "${cache_before}" ] \
+            && [ "${build_cache_df_before}" = \
+                'Build_Cache=total:0,active:0,size:0B,reclaimable:0B' ]; then
             docker buildx prune --force --all >/dev/null 2>&1 || status=1
         fi
         capture_cache_ids "${cache_current}.after" || status=1
@@ -140,7 +138,7 @@ cleanup() {
         result=FAIL
         status=1
     fi
-    echo "systemd-docker-probe: ${result} receipt_reason=${failure_reason} run_id=${run_id} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_free_after_bytes=${docker_root_free_after_bytes} docker_root_df_before=${docker_root_df_before} docker_root_df_after=${docker_root_df_after} docker_system_df_before=${docker_system_df_before} docker_system_df_after=${docker_system_df_after} build_cache_df_before=${build_cache_df_before} build_cache_df_expected_after=${build_cache_df_expected_after} build_cache_df_after=${build_cache_df_after} build_cache_records_removed=${cache_records_removed} stale_cache_cleanup=${stale_cache_cleanup} least_allowed=${least_allowed} forbidden_cap_sys_admin=${forbidden_result} cleanup_asserted=true"
+    echo "systemd-docker-probe: ${result} receipt_reason=${failure_reason} run_id=${run_id} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_free_after_bytes=${docker_root_free_after_bytes} docker_root_df_before=${docker_root_df_before} docker_root_df_after=${docker_root_df_after} docker_system_df_before=${docker_system_df_before} docker_system_df_after=${docker_system_df_after} build_cache_df_before=${build_cache_df_before} build_cache_df_expected_after=${build_cache_df_expected_after} build_cache_df_after=${build_cache_df_after} build_cache_records_removed=${cache_records_removed} least_allowed=${least_allowed} forbidden_cap_sys_admin=${forbidden_result} cleanup_asserted=true"
     exit "${status}"
 }
 
@@ -178,13 +176,6 @@ docker_root_df_before="$(capture_root_df)"
 docker_system_df_before="$(capture_system_df)"
 build_cache_df_before="$(extract_build_cache_df "${docker_system_df_before}")"
 build_cache_df_expected_after="${build_cache_df_before}"
-if [ "${build_cache_df_before}" = \
-    'Build_Cache=total:1,active:0,size:113.5MB,reclaimable:113.5MB' ]; then
-    # Run 36496912787 started at zero and first exposed this exact hidden cache
-    # record after its build. Later probe receipts preserved the same baseline.
-    stale_cache_cleanup=source_run_36496912787
-    build_cache_df_expected_after='Build_Cache=total:0,active:0,size:0B,reclaimable:0B'
-fi
 [ "${docker_root_free_before_bytes}" -ge "${disk_preflight_bytes}" ] || {
     failure_reason=INSUFFICIENT_DISK
     echo "systemd-docker-probe: INSUFFICIENT_DISK docker_root=${docker_root} available_bytes=${docker_root_free_before_bytes} required_bytes=${disk_preflight_bytes}" >&2
