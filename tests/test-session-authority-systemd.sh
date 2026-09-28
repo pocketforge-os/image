@@ -644,6 +644,8 @@ install -m 0644 "${fixtures}/pf-shell-selected.service" \
     "${context}/pf-shell-selected.service"
 install -m 0644 "${fixtures}/session-authority-test.target" \
     "${context}/session-authority-test.target"
+install -m 0644 "${fixtures}/session-authority-test-tmpfiles.conf" \
+    "${context}/session-authority-test-tmpfiles.conf"
 install -m 0644 "${fixtures}/app.toml" "${context}/app.toml"
 install -m 0755 "${fixtures}/fixture" "${context}/fixture"
 install -m 0644 "${fixtures}/platform-capabilities.toml" \

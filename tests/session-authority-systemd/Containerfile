@@ -48,6 +48,7 @@ COPY --from=runtime-builder /out/pf-session-authorityd /usr/bin/pf-session-autho
 COPY --from=runtime-builder /out/pf-app-launch /usr/bin/pf-app-launch
 COPY runtime/systemd/pf-session-authorityd.service /etc/systemd/system/pf-session-authorityd.service
 COPY runtime/systemd/pocketforge.conf /usr/lib/tmpfiles.d/pocketforge.conf
+COPY session-authority-test-tmpfiles.conf /usr/lib/tmpfiles.d/session-authority-test.conf
 COPY pf-app@.service /etc/systemd/system/pf-app@.service
 COPY pocketforge-foreground.target /etc/systemd/system/pocketforge-foreground.target
 COPY 10-owner-shell.conf /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf
@@ -71,6 +72,7 @@ RUN chmod 0755 \
         /etc/systemd/system/pf-shell-selected.service \
         /etc/systemd/system/session-authority-test.target \
         /usr/lib/tmpfiles.d/pocketforge.conf \
+        /usr/lib/tmpfiles.d/session-authority-test.conf \
         /usr/share/pocketforge/platform-capabilities.toml \
         /opt/pocketforge/apps/org.pocketforge.fixture/app.toml \
     && ln -sf session-authority-test.target /etc/systemd/system/default.target

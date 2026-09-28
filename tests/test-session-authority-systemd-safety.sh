@@ -4,6 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 harness="${root}/tests/test-session-authority-systemd.sh"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
+driver="${root}/tests/session-authority-systemd/drive.py"
+precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditions.py"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
 fake_bin="${tmp}/bin"
 fake_root="${tmp}/host"
@@ -220,7 +222,7 @@ case "${1:-}" in
                 ;;
             *'getty@.service'*) echo 5 ;;
             *'/usr/local/libexec/drive.py'*)
-                echo 'evidence: clean_session=session-1 returned=1 restart_mid_ladder=ok crash_session=session-2 crash=1 returned=0 session_scoping_negative_control=ok refused_systemctl_starts=0 owner_restore=ok'
+                echo 'evidence: clean_session=session-1 returned=1 restart_mid_ladder=ok crash_session=session-2 crash=1 returned=0 clean_invocations=1 crash_invocations=1 fb0=empty-regular-file session_scoping_negative_control=ok refused_systemctl_starts=0 owner_restore=ok'
                 ;;
             *) ;;
         esac
@@ -465,6 +467,45 @@ done
 grep -Fq 'ln -sf /dev/null' "${recipe}" || exit 1
 grep -Fq 'session-authority-test.target /etc/systemd/system/session-authority-test.target' \
     "${recipe}" || exit 1
+if grep -Eq '\bmknod\b|^[[:space:]]*[cb][+!]?[[:space:]]+/dev/fb0([[:space:]]|$)' \
+    "${recipe}" "${root}/tests/session-authority-systemd/session-authority-test-tmpfiles.conf"; then
+    echo 'session-authority systemd-safety: FAIL: framebuffer placeholder is a device node' >&2
+    exit 1
+fi
+precondition_output="$(python3 "${precondition_verifier}")"
+grep -Fqx \
+    'session-authority path-preconditions: PASS conditions=1 providers=1 fb0=regular units=5' \
+    <<<"${precondition_output}" || {
+    echo 'session-authority systemd-safety: FAIL: path precondition audit did not pass' >&2
+    echo "${precondition_output}" >&2
+    exit 1
+}
+unprovided_unit="${tmp}/unprovided.service"
+printf '[Unit]\nConditionPathExists=/unprovided-test-path\n' >"${unprovided_unit}"
+if python3 "${precondition_verifier}" --unit "${unprovided_unit}" \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: unprovided path condition passed audit' >&2
+    exit 1
+fi
+grep -Fq 'unprovided ConditionPathExists=/unprovided-test-path' "${stderr_log}" || {
+    echo 'session-authority systemd-safety: FAIL: unprovided path refusal reason missing' >&2
+    cat "${stderr_log}" >&2
+    exit 1
+}
+if grep -Fq 'Path("/dev/fb0").touch()' "${driver}"; then
+    echo 'session-authority systemd-safety: FAIL: driver creates its own framebuffer prerequisite' >&2
+    exit 1
+fi
+grep -Fq 'framebuffer.is_file() and framebuffer.stat().st_size == 0' "${driver}" || {
+    echo 'session-authority systemd-safety: FAIL: driver does not require an empty regular framebuffer file' >&2
+    exit 1
+}
+for invocation_field in clean_invocations crash_invocations; do
+    grep -Fq "${invocation_field}=" "${driver}" || {
+        echo "session-authority systemd-safety: FAIL: live evidence lacks ${invocation_field}" >&2
+        exit 1
+    }
+done
 if grep -Eq 'for command_name in .*\b(cargo|rustup|file)\b' "${harness}"; then
     echo 'session-authority systemd-safety: FAIL: host Rust/file prerequisite returned' >&2
     exit 1
@@ -544,4 +585,4 @@ grep -Fq 'root_min_free_bytes=3221225472' "${stderr_log}" || exit 1
 grep -Fq 'run_scope_removed=true' "${stderr_log}" || exit 1
 [ ! -e "${fake_home}/.local/share/containers" ] || exit 1
 
-echo 'session-authority systemd-safety: PASS graphical_refusal=ok headless_guard=ok display_manager_refusal=ok runner_busy_refusal=ok runner_unit_job_refusal=ok held_build_lock_refusal=ok build_lock_lifetime=ok disk_preflight=ok disk_floor_abort=ok scoped_storage=ok default_storage_untouched=ok argv_audit=ok builder_stage=ok getty_masks=5 podman=fake'
+echo 'session-authority systemd-safety: PASS graphical_refusal=ok headless_guard=ok display_manager_refusal=ok runner_busy_refusal=ok runner_unit_job_refusal=ok held_build_lock_refusal=ok build_lock_lifetime=ok disk_preflight=ok disk_floor_abort=ok scoped_storage=ok default_storage_untouched=ok argv_audit=ok builder_stage=ok path_preconditions=1 fb0=regular getty_masks=5 podman=fake'
