@@ -242,15 +242,21 @@ restoration alone is insufficient. **Inference:** because the launch publishes a
 `Starting` event and no production path currently advances the observation ladder, the
 restarted launcher would replay that state without a truthful terminal receipt.
 
-### 7. Branding gate and application scope: confirmed
+### 7. Branding gate and application scope: explicit migration required
 
-The generic mechanism is independent of Poolsuite. Per the coordinator's corrected scope, the
-mechanism ships only on A133-open dev and release profiles. Poolsuite remains A133-open dev
-only; A133-open release, A133 vendor/default, and A523 select no Poolsuite payload. Moving it
-to A133-open release after written permission remains a selector change and is not part of
-this work.
-[image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
-`build/Dockerfile.pf:1429-1444`; platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
+The current Track A selector is keyed only by SoC and variant, not `PF_GPU_MODEL`, and the
+rootfs path invokes `install-poolsuite.sh` unconditionally. An A133 vendor/default dev image
+therefore currently receives the Poolsuite tree and dedicated service. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
+`build/Dockerfile.pf:1429-1444`; image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
+`scripts/build-rootfs.sh:731-738`]
+
+**Coordinator ruling (accepted):** the generic mechanism ships only on A133-open dev and
+release profiles, and Poolsuite ships only on A133-open dev. Narrowing Poolsuite is an explicit,
+tested migration: A133 vendor/default dev loses the Poolsuite tree and dedicated service and
+selects the source-free `NOT-SHIPPED` producer, removing its Poolsuite fetch/compile cost. A133
+vendor/default release and every A523 profile remain byte-identical. Moving Poolsuite to
+A133-open release after written permission remains a selector change and is not part of this
+work. Platform already gates the launcher source to open profiles. [platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
 `core/profile.py:427-450`]
 
 ## Fixed interfaces
@@ -425,9 +431,10 @@ PF_APP_CAPABILITIES
 ```
 
 No new repository or BuildKit context is introduced. Non-open profiles emit none of these
-arguments and keep their current image inputs and rootfs bytes. This uses platform's existing
-profile and build-argument seam, which already emits runtime, launcher, Poolsuite, and image
-identities.
+arguments, so the generic mechanism adds no non-open rootfs bytes. The separate A133
+vendor/default dev Poolsuite-removal migration is fixed in section 7; byte identity remains the
+gate for A133 vendor/default release and all A523 profiles. This uses platform's existing profile
+and build-argument seam, which already emits runtime, launcher, Poolsuite, and image identities.
 [platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
 `core/profile.py:392-470`; platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
 `core/pf-build.sh:520-547`]
@@ -503,10 +510,14 @@ image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
    runtime and launcher heads; update `verify-w2c-prefsd-wiring.py`,
    `test-launcher-runtime-contract.sh`, and the vendored-crate equality list. In A133-open
    stages only, build/install `pf-app-launch`, render/install the platform file, add
-   `pf-app@.service`, and remove the dedicated Poolsuite service. Add unit/rootfs/profile tests
-   that prove A133 vendor/default and A523 outputs remain byte-identical and contain none of
-   those files. Merge it. The old platform lock still selects image `e765ba2c`, so no fleet
-   build sees the new guards yet.
+   `pf-app@.service`, and remove the dedicated Poolsuite service. Make the Poolsuite producer
+   selector require `PF_GPU_MODEL=open` as well as A133/dev, and assert an A133 vendor/default
+   dev fixture selects the source-free `NOT-SHIPPED` stub before any Poolsuite fetch or compile.
+   Add unit/rootfs/profile tests that prove A133 vendor/default release and all A523 outputs
+   remain byte-identical and contain none of the default-app files. The A133 vendor/default dev
+   fixture instead proves the intentional removal migration: no Poolsuite tree, dedicated
+   service, provenance, fetch, or compile. Merge it. The old platform lock still selects image
+   `e765ba2c`, so no fleet build sees the new guards yet.
 6. **One atomic platform lock PR owned by gpu-14.** Move `image`, `runtime`, and `launcher`
    together to the merged steps 3-5 heads, and move `poolsuite` to the merged step 2 head. Do not
    split these pin changes. The same PR refreshes derived ABI/build evidence required by
@@ -546,12 +557,15 @@ The image PR adds or updates these fatal preconditions:
 6. On A133-open, `pf-app-launch` exists, is AArch64, and satisfies the same static-musl check as
    the other runtime helpers.
 7. On A133-open, `pf-shell`, `pf-session-authorityd`, `pf-app-launch`, `pf-app@.service`, and the
-   platform TOML are all present or the build fails. A133 vendor/default and A523 install none of
-   the default-app helper, template, or platform file and must remain byte-identical to their
-   corresponding pre-feature outputs.
-8. An A133-open dev Poolsuite tree must pass the shared descriptor validator before
-   installation; A133-open release and every non-open profile remain exact no-ops for the app
-   tree.
+   platform TOML are all present or the build fails. Every non-open profile installs none of the
+   default-app helper, template, or platform file. A133 vendor/default release and all A523
+   profiles must remain byte-identical to their corresponding pre-feature outputs; A133
+   vendor/default dev is the explicit Poolsuite-removal migration in item 8.
+8. The Poolsuite producer selects the real tree only for A133 + `PF_GPU_MODEL=open` + dev, and
+   that tree must pass the shared descriptor validator before installation. A133 vendor/default
+   dev must select the source-free `NOT-SHIPPED` stub and contain no Poolsuite tree, dedicated
+   service, or provenance marker; A133-open release, A133 vendor/default release, and all A523
+   profiles remain exact no-ops for the app tree.
 
 The recovery literal remains a co-pin even though this design does not change it; current image
 checks it in both the recovery build stage and rootfs script. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
@@ -562,18 +576,19 @@ checks it in both the recovery build stage and rootfs script. [image@`e765ba2cd5
 
 The corrected coordinator scope follows the existing launcher/session-authority deployment
 boundary: the complete default-app mechanism ships only on A133-open dev and release. A133
-vendor/default and A523 receive no helper, template, platform file, or Poolsuite payload and
-remain byte-identical.
+vendor/default and A523 receive no helper, template, or platform file. A133 vendor/default dev
+is the explicit Poolsuite-removal migration; byte identity remains required for A133
+vendor/default release and every A523 profile.
 
-| Change | A133 open (dev/release) | A133 vendor/default and owned (dev/release) | A523 (dev/release) |
-|---|---|---|---|
-| Platform support declaration/build args | emitted; A133 family/ABI/version/caps | not emitted; byte-identical | not emitted; byte-identical |
-| `pf-app-manifest` source | compiled into authority/helper; vendored into shell | no image integration; byte-identical | no image integration; byte-identical |
-| `pf-app-launch`, `pf-app@.service`, platform TOML | installed; template dormant until launch | absent; byte-identical | absent; byte-identical |
-| `pf-session-authorityd` change | installed/enabled on open profiles | remains absent | remains absent |
-| launcher change | installed on open profiles | remains absent and no launcher source is staged | remains absent and no launcher source is staged |
-| Poolsuite payload | dev only; release absent | always absent; byte-identical | always absent; byte-identical |
-| dedicated Poolsuite service | removed from the open dev path it formerly served | no change; byte-identical | no change; byte-identical |
+| Change | A133 open (dev/release) | A133 vendor/default DEV | A133 vendor/default RELEASE | A523 (dev/release) |
+|---|---|---|---|---|
+| Platform support declaration/build args | emitted; A133 family/ABI/version/caps | not emitted; no generic files added | not emitted; byte-identical | not emitted; byte-identical |
+| `pf-app-manifest` source | compiled into authority/helper; vendored into shell | no image integration | no image integration; byte-identical | no image integration; byte-identical |
+| `pf-app-launch`, `pf-app@.service`, platform TOML | installed; template dormant until launch | absent | absent; byte-identical | absent; byte-identical |
+| `pf-session-authorityd` change | installed/enabled on open profiles | remains absent | remains absent; byte-identical | remains absent; byte-identical |
+| launcher change | installed on open profiles | remains absent and no launcher source is staged | remains absent; byte-identical | remains absent and no launcher source is staged; byte-identical |
+| Poolsuite payload | dev only; release absent | **migration: payload removed; `NOT-SHIPPED` stub selected** | absent; byte-identical | absent; byte-identical |
+| dedicated Poolsuite service | removed from the open dev path it formerly served | **migration: service removed** | absent; byte-identical | absent; byte-identical |
 
 The current image explicitly gates session authority and launcher on `PF_GPU_MODEL=open`, and
 platform emits launcher identity only for open profiles. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
@@ -583,8 +598,10 @@ platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
 
 The earlier “mechanism ships in all images” wording was coordinator wording, not the owner's
 decision. The owner's decision is that Poolsuite becomes a default app. This corrected scope is
-load-bearing: the image and platform tests must fail if any default-app file or selector reaches
-an A133 vendor/default or A523 output.
+load-bearing: tests must fail if any generic default-app file reaches a non-open output, or if a
+real Poolsuite producer reaches any profile except A133-open dev. A133 vendor/default dev is not
+a byte-identity case; its required delta is exactly removal of the existing Poolsuite payload,
+service, provenance, and build cost.
 
 ## Failure modes and hermetic tests
 
@@ -610,8 +627,9 @@ an A133 vendor/default or A523 output.
 | Dedicated Poolsuite bypass survives | Image: assert no `pocketforge-poolsuite.service` in source or installed tree and installer has no unit argument/install. |
 | Capability file/build args drift | Platform + image: every A133-open profile emits the expected deterministic tuple and generated TOML round-trips; non-open profiles emit no tuple or file; unknown/missing open input is fatal. |
 | Runtime/launcher/image lock split | Image + platform: negative fixtures move each SHA alone and prove the old/new image guard refuses; positive fixture moves image/runtime/launcher together. |
-| Non-open default-app scope expands accidentally | Platform + image: A133 vendor/default and A523 emit no launcher or `PF_APP_*` identity, stage no launcher context, contain none of the three default-app files, and match the pre-feature byte fixtures. |
-| Branding leaks to release or non-open profiles | Image + platform: selectors and rootfs fixtures prove Poolsuite exists only in A133-open dev; the generic mechanism exists only in A133-open dev/release. |
+| A133 vendor/default dev migration regresses | Image + platform: the selector fixture proves A133 + non-open + dev resolves the source-free `NOT-SHIPPED` producer before any Poolsuite fetch/compile; its rootfs fixture contains no Poolsuite tree, dedicated service, or provenance marker. |
+| Non-open default-app scope expands accidentally | Platform + image: every non-open profile emits no launcher or `PF_APP_*` identity, stages no launcher context, and contains none of the three generic default-app files. A133 vendor/default release and all A523 profiles also match their pre-feature byte fixtures. |
+| Branding leaks to release or non-open profiles | Image + platform: the selector matrix proves the real Poolsuite producer is selected only for A133 + open + dev; A133 vendor/default dev exercises the migration, and every release/A523 case selects `NOT-SHIPPED`. The generic mechanism exists only in A133-open dev/release. |
 
 ## Device acceptance boundary
 
@@ -627,7 +645,8 @@ claims established by the reviewed repositories.
 This work does not add downloadable installation, per-app minisign/cosign verification,
 third-party broker sandbox enforcement, a production network-control adapter, verified boot,
 an A133-open release selector for Poolsuite, or any default-app integration or rootfs byte change
-for A133 vendor/default or A523. The existing descriptor documents those future signing and
-packaging siblings, while the owner decision for this bead limits the first mechanism to
-image-shipped default apps on A133-open. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
+for A133 vendor/default release or A523. A133 vendor/default dev is the sole non-open migration:
+it removes the existing Poolsuite payload and service. The existing descriptor documents those
+future signing and packaging siblings, while the owner decision for this bead limits the first
+mechanism to image-shipped default apps on A133-open. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
 `docs/APP-DESCRIPTOR.md:10-36`, `docs/APP-DESCRIPTOR.md:38-59`]
