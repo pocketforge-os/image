@@ -60,6 +60,8 @@ test-dockerfile-pf-transforms:
 	@tests/test-initrd-selfflash-watchdog.sh
 	@tests/test-poolsuite-variant-stage.sh
 	@tests/test-poolsuite-rootfs-install.sh
+	@tests/test-default-app-platform.sh
+	@tests/test-default-app-rootfs.sh
 	@python3 tests/verify-gamepad-input-wiring.py
 	@python3 tests/verify-owned-spl-layout-gate.py
 	@tests/test-launcher-runtime-contract.sh

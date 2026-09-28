@@ -4,7 +4,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 guard="${repo_root}/scripts/check-launcher-runtime-contract.sh"
 dockerfile="${repo_root}/build/Dockerfile.pf"
-crates="pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme pf-input-map pf-prefs pf-prefs-port pf-session-client pf-session-authority pf-wire"
+crates="pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme pf-input-map pf-prefs pf-prefs-port pf-session-client pf-session-authority pf-wire"
 
 guard_call=$(sed -n \
     '/^check-launcher-runtime-contract \/work\/launcher \/work\/runtime-contract/,/pf-session-authority pf-wire$/p' \
@@ -15,8 +15,37 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-grep -F '[ "${PF_LAUNCHER_SHA}" = "bb8c9bc8c9ea15238d08cfee5376049bf67cf855" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }' "$dockerfile" >/dev/null
-grep -F '[ "${PF_RUNTIME_SHA}" = "a2f149caef326215ce0bff7d0d076bac292595d4" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }' "$dockerfile" >/dev/null
+expected_runtime=0589fcfa959dca9150563ef0ed18d7d44b420dc5
+expected_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
+old_runtime=a2f149caef326215ce0bff7d0d076bac292595d4
+old_launcher=bb8c9bc8c9ea15238d08cfee5376049bf67cf855
+
+runtime_guard=$(sed -n 's/^\[ "${PF_RUNTIME_SHA}" = "\([0-9a-f]\{40\}\)" \].*/\1/p' "$dockerfile")
+launcher_guard=$(sed -n 's/^\[ "${PF_LAUNCHER_SHA}" = "\([0-9a-f]\{40\}\)" \].*/\1/p' "$dockerfile")
+test "$runtime_guard" = "$expected_runtime"
+test "$launcher_guard" = "$expected_launcher"
+
+new_guard_accepts() {
+    test "$1" = "$runtime_guard" && test "$2" = "$launcher_guard"
+}
+old_guard_accepts() {
+    test "$1" = "$old_runtime" && test "$2" = "$old_launcher"
+}
+
+# Moving either co-pin alone is refused by both the old and new image guards.
+# The positive fixture advances the runtime and launcher together.
+new_guard_accepts "$expected_runtime" "$expected_launcher"
+! new_guard_accepts "$old_runtime" "$expected_launcher"
+! new_guard_accepts "$expected_runtime" "$old_launcher"
+old_guard_accepts "$old_runtime" "$old_launcher"
+! old_guard_accepts "$expected_runtime" "$old_launcher"
+! old_guard_accepts "$old_runtime" "$expected_launcher"
+
+grep -F -- '--no-default-features -p pf-shell' "$dockerfile" >/dev/null
+if grep -E 'cargo build .*--features[ =][^#]*(desktop-sim)' "$dockerfile"; then
+    echo 'FAIL: production launcher build enables the test-only desktop-sim feature' >&2
+    exit 1
+fi
 
 scratch=$(mktemp -d)
 trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT HUP INT TERM
@@ -30,6 +59,22 @@ for crate in $crates; do
 done
 
 "$guard" "$scratch/launcher" "$scratch/runtime" $crates
+
+# A missing vendored crate must fail cleanly at the shell boundary. In
+# particular, do not enter the reference scanner with absent Cargo/source paths
+# and leak a Python traceback before the remaining crates are audited.
+mv "$scratch/launcher/vendor/pf-app-launch" "$scratch/pf-app-launch-missing"
+if output=$("$guard" "$scratch/launcher" "$scratch/runtime" $crates 2>&1); then
+    echo "FAIL: missing vendored crate passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: launcher/runtime contract drift: pf-app-launch'
+if printf '%s\n' "$output" | grep -Fq 'Traceback'; then
+    echo "FAIL: missing vendored crate leaked a Python traceback" >&2
+    exit 1
+fi
+mv "$scratch/pf-app-launch-missing" "$scratch/launcher/vendor/pf-app-launch"
 
 printf 'drift\n' >> "$scratch/launcher/vendor/pf-wire/src/lib.rs"
 if output=$("$guard" "$scratch/launcher" "$scratch/runtime" $crates 2>&1); then
