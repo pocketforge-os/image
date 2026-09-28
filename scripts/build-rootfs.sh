@@ -111,6 +111,7 @@ WPA_DIR="${WPA_DIR:-/work/wpa}"
 RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-decode) from the runtime stage (tsp-e1b.11)
 LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
+POOLSUITE_DIR="${POOLSUITE_DIR:-/work/poolsuite}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/tsp"
 
@@ -177,6 +178,7 @@ echo "  kernel modules root: ${KERNEL_MODULES_ROOT}"
 echo "  gpu-km-tsp: ${GPU_KM_TSP_DIR}"
 echo "  libsdl3:   ${LIBSDL3_DIR}"
 echo "  hwprobe:   ${HWPROBE_DIR}"
+echo "  poolsuite: ${POOLSUITE_DIR}"
 echo "  out:       ${OUT_DIR}"
 echo "========================================================================"
 
@@ -569,7 +571,8 @@ fi
 # variant.  The ceilings are read from this just-created rootfs, never hardcoded.
 "${SRC_DIR}/build/check-rootfs-abi.sh" "${ROOTFS}" \
     "${GPU_UM_MESA_DIR}" "${LIBSDL3_DIR}" "${WPA_DIR}" \
-    "${RUNTIME_DIR}" "${LAUNCHER_DIR}" "${HWPROBE_DIR}" "${RECOVERY_DIR:-/work/recovery}"
+    "${RUNTIME_DIR}" "${LAUNCHER_DIR}" "${HWPROBE_DIR}" "${POOLSUITE_DIR}" \
+    "${RECOVERY_DIR:-/work/recovery}"
 # Validate the optional attach helper exactly when this build produced one.
 if [ -n "${PF_BT_ATTACH_BIN:-}" ]; then
     "${SRC_DIR}/build/check-rootfs-abi.sh" "${ROOTFS}" "${PF_BT_ATTACH_BIN}"
@@ -724,6 +727,15 @@ if [ "${POCKETFORGE_VARIANT:-dev}" = dev ]; then
     fi
     echo "[customize] pf-hwprobe installed to /opt/pocketforge/bin (dev variant)"
 fi
+
+# Poolsuite is a staged sibling application in dev images only. Its release
+# producer and this install helper's release branch are both empty/no-op, so
+# release rootfs contents cannot acquire an app, unit, or provenance marker.
+/work/src/scripts/install-poolsuite.sh \
+    "${POCKETFORGE_VARIANT:-dev}" \
+    "${ROOTFS}" \
+    /work/poolsuite \
+    /work/src/rootfs-overlay/etc/systemd/system/pocketforge-poolsuite.service
 
 # --- Owned wpa_supplicant install (tsp-myp1.8.2; pattern from tsp-urq.7) -------
 # Overwrite the stock Debian /sbin/wpa_supplicant with the owned
@@ -1806,7 +1818,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \

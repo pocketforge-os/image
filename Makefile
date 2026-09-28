@@ -57,6 +57,8 @@ generate-wifi-config:
 .PHONY: test-dockerfile-pf-transforms test-kernel-build-identity
 test-dockerfile-pf-transforms:
 	@tests/test-dockerfile-pf-transforms.sh
+	@tests/test-poolsuite-variant-stage.sh
+	@tests/test-poolsuite-rootfs-install.sh
 	@python3 tests/verify-gamepad-input-wiring.py
 	@python3 tests/verify-owned-spl-layout-gate.py
 	@tests/test-launcher-runtime-contract.sh
