@@ -1,0 +1,92 @@
+name: session-authority real systemd
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - .github/workflows/session-authority-systemd.yml
+      - tests/test-session-authority-systemd.sh
+      - tests/test-session-authority-systemd-safety.sh
+      - tests/probe-session-authority-docker-systemd.sh
+      - tests/verify-session-authority-systemd-preconditions.py
+      - tests/session-authority-systemd/**
+      - rootfs-overlay/etc/systemd/system/pf-app@.service
+      - rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf
+
+permissions:
+  contents: read
+
+concurrency:
+  group: session-authority-systemd-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, pf-builder-vm]
+    timeout-minutes: 20
+    outputs:
+      least_allowed: ${{ steps.probe.outputs.least_allowed }}
+    env:
+      PF_SYSTEMD_TEST_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}-probe
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Run hermetic safety checks
+        run: tests/test-session-authority-systemd-safety.sh
+
+      - name: Probe unprivileged Docker systemd
+        id: probe
+        run: |
+          set -o pipefail
+          tests/probe-session-authority-docker-systemd.sh 2>&1 |
+            tee "$RUNNER_TEMP/session-authority-systemd-probe.log"
+
+      - name: Publish probe matrix
+        if: always()
+        run: |
+          {
+            echo '## Unprivileged Docker systemd probe'
+            echo '```text'
+            grep -E '^(systemd-docker-probe:|probe_candidate=)' \
+              "$RUNNER_TEMP/session-authority-systemd-probe.log" 2>/dev/null ||
+              echo 'probe produced no matrix'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  live:
+    needs: probe
+    if: >-
+      needs.probe.result == 'success' &&
+      needs.probe.outputs.least_allowed == 'a' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, pf-builder-vm]
+    timeout-minutes: 30
+    env:
+      PF_SYSTEMD_TEST_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}-live
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Run real lifecycle harness
+        run: |
+          set -o pipefail
+          tests/test-session-authority-systemd.sh 2>&1 |
+            tee "$RUNNER_TEMP/session-authority-systemd-live.log"
+
+      - name: Publish live evidence
+        if: always()
+        run: |
+          {
+            echo '## Session-authority real-systemd evidence'
+            echo '```text'
+            grep -E '^(evidence:|session-authority real-systemd: (PASS|FAIL))' \
+              "$RUNNER_TEMP/session-authority-systemd-live.log" 2>/dev/null ||
+              echo 'live harness produced no receipt'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

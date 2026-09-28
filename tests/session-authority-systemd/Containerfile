@@ -16,7 +16,7 @@ FROM debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4
 ARG PF_RUNTIME_SHA
 LABEL org.opencontainers.image.source="https://github.com/pocketforge-os/runtime" \
       org.opencontainers.image.revision="${PF_RUNTIME_SHA}"
-ENV container=podman
+ENV container=docker
 
 RUN apt-get update -qq \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \

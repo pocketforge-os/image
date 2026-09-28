@@ -6,8 +6,8 @@ fixtures="${root}/tests/session-authority-systemd"
 app_unit="${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
 owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf"
 containerfile="${fixtures}/Containerfile"
-approved_host=mm-build-vm
-owned_build_lock="${HOME}/image/work/out"
+ephemeral_marker=/etc/pocketforge/ephemeral-runner.conf
+run_label_key=org.pocketforge.session-authority-run
 
 runtime_sha=0589fcfa959dca9150563ef0ed18d7d44b420dc5
 runtime_repository=https://github.com/pocketforge-os/runtime.git
@@ -18,17 +18,26 @@ disk_floor_bytes=$((4 * gib))
 
 scope_initialized=0
 cleanup_active=0
-cleanup_podman_resources=0
+cleanup_docker_resources=0
+docker_disk_configured=0
 run_started=0
 run_completed=0
 cleanup_failed=0
 failure_reason=
-root_min_free_bytes=
+docker_root_min_free_bytes=
+docker_root_free_before_bytes=
+docker_root_free_after_bytes=
+docker_root_df_before=
+docker_root_df_after=
+docker_system_df_before=
+docker_system_df_after=
 run_scope_peak_bytes=0
-build_lock_fd=
+build_cache_records_removed=0
 run_scope=
-podman_storage_root=
-podman_runroot=
+docker_root=
+docker_root_probe=
+run_id=
+run_label=
 systemd_container=
 test_image=
 pass_fields=
@@ -111,68 +120,58 @@ assert_safe_host() {
     done
 }
 
-assert_approved_host() {
-    [ "${guard_hostname}" = "${approved_host}" ] \
-        || fail "UNAPPROVED_HOST: expected=${approved_host} actual=${guard_hostname}"
+assert_ephemeral_slot() {
+    local fixture_root="${1:-/}"
+    local marker="${fixture_root%/}${ephemeral_marker}"
+
+    [ "${GITHUB_ACTIONS:-}" = true ] \
+        || fail 'UNAPPROVED_HOST: GITHUB_ACTIONS=true is required'
+    [ -f "${marker}" ] \
+        || fail "UNAPPROVED_HOST: ephemeral runner marker missing path=${marker}"
 }
 
-assert_host_idle() {
-    local runner_units unit job_state status
+configure_run_identity() {
+    local requested="$1"
 
-    if pgrep -x Runner.Worker >/dev/null 2>&1; then
-        fail 'HOST_BUSY: GitHub Actions Runner.Worker is active'
-    else
-        status=$?
-        [ "${status}" -eq 1 ] \
-            || fail "HOST_GUARD_UNAVAILABLE: pgrep Runner.Worker status=${status}"
-    fi
-
-    if ! runner_units="$(
-        systemctl list-units 'actions.runner.*' --all --no-legend --no-pager --plain 2>/dev/null
-    )"; then
-        fail 'HOST_GUARD_UNAVAILABLE: actions runner unit query'
-    fi
-    while read -r unit _; do
-        [ -n "${unit}" ] || continue
-        job_state="$(systemctl show "${unit}" --property=Job --value 2>/dev/null)" \
-            || fail "HOST_GUARD_UNAVAILABLE: actions runner job query unit=${unit}"
-        case "${job_state}" in
-            ''|0|'0 /'|'[0, /]') ;;
-            *) fail "HOST_BUSY: actions runner systemd job unit=${unit} job=${job_state}" ;;
-        esac
-    done <<<"${runner_units}"
-
-    if pgrep -f '(^|/)(build-owned-image[.]sh|pf-build[.]sh)( |$)|(^| )pf build( |$)' \
-        >/dev/null 2>&1; then
-        fail 'HOST_BUSY: PocketForge owned build process is active'
-    else
-        status=$?
-        [ "${status}" -eq 1 ] \
-            || fail "HOST_GUARD_UNAVAILABLE: pgrep owned build status=${status}"
-    fi
+    run_id="$(printf '%s' "${requested}" | tr -c 'A-Za-z0-9_.-' '-')"
+    [ -n "${run_id}" ] || fail 'INVALID_RUN_ID: empty'
+    run_label="${run_label_key}=${run_id}"
+    systemd_container="tsp-f3fm-211-systemd-${run_id}"
+    test_image="tsp-f3fm-211-systemd:${runtime_sha:0:12}-${run_id}"
 }
 
-acquire_owned_build_lock() {
-    local resolved
+configure_docker_root() {
+    local candidate="$1" parent
 
-    [ -d "${owned_build_lock}" ] && [ ! -L "${owned_build_lock}" ] \
-        || fail "BUILD_LOCK_UNAVAILABLE: expected directory=${owned_build_lock}"
-    resolved="$(readlink -f -- "${owned_build_lock}")" \
-        || fail "BUILD_LOCK_UNAVAILABLE: cannot resolve ${owned_build_lock}"
-    [ "${resolved}" = "${owned_build_lock}" ] \
-        || fail "BUILD_LOCK_UNAVAILABLE: non-canonical path=${owned_build_lock} resolved=${resolved}"
-    exec {build_lock_fd}<"${owned_build_lock}" \
-        || fail "BUILD_LOCK_UNAVAILABLE: cannot open ${owned_build_lock}"
-    flock -n "${build_lock_fd}" \
-        || fail "HOST_BUSY: owned build lock held path=${owned_build_lock}"
+    case "${candidate}" in
+        /*) ;;
+        *) fail "DOCKER_INFO_UNREADABLE: non-absolute DockerRootDir=${candidate}" ;;
+    esac
+    docker_root="${candidate%/}"
+    docker_root_probe="${docker_root}"
+    while [ ! -e "${docker_root_probe}" ]; do
+        parent="$(dirname -- "${docker_root_probe}")"
+        [ "${parent}" != "${docker_root_probe}" ] \
+            || fail "DOCKER_DATA_ROOT_UNAVAILABLE: path=${docker_root}"
+        docker_root_probe="${parent}"
+    done
+    docker_disk_configured=1
 }
 
-measure_root_free_bytes() {
+measure_docker_root_free_bytes() {
     local value
-    value="$(LC_ALL=C df -B1 --output=avail / 2>/dev/null | awk 'NR == 2 { print $1; exit }')" \
-        || return 1
+    value="$(LC_ALL=C df -B1 --output=avail "${docker_root_probe}" 2>/dev/null \
+        | awk 'NR == 2 { print $1; exit }')" || return 1
     [[ "${value}" =~ ^[0-9]+$ ]] || return 1
     printf '%s\n' "${value}"
+}
+
+capture_docker_root_df() {
+    LC_ALL=C df -B1 --output=source,size,used,avail,pcent,target "${docker_root_probe}" \
+        | awk 'NR == 2 {
+            printf "filesystem:%s,size_bytes:%s,used_bytes:%s,available_bytes:%s,use_percent:%s,mount:%s\n", \
+                $1, $2, $3, $4, $5, $6
+        }'
 }
 
 measure_run_scope_bytes() {
@@ -188,16 +187,18 @@ measure_run_scope_bytes() {
 sample_disk() {
     local phase="$1" free_bytes scope_bytes
 
-    if ! free_bytes="$(measure_root_free_bytes)" \
+    [ "${docker_disk_configured}" -eq 1 ] || return 0
+    if ! free_bytes="$(measure_docker_root_free_bytes)" \
         || ! scope_bytes="$(measure_run_scope_bytes)"; then
         if [ "${cleanup_active}" -eq 1 ]; then
             cleanup_failed=1
             return 1
         fi
-        fail "DISK_PROBE_FAILED: phase=${phase}"
+        fail "DISK_PROBE_FAILED: phase=${phase} docker_root=${docker_root}"
     fi
-    if [ -z "${root_min_free_bytes}" ] || [ "${free_bytes}" -lt "${root_min_free_bytes}" ]; then
-        root_min_free_bytes="${free_bytes}"
+    if [ -z "${docker_root_min_free_bytes}" ] \
+        || [ "${free_bytes}" -lt "${docker_root_min_free_bytes}" ]; then
+        docker_root_min_free_bytes="${free_bytes}"
     fi
     if [ "${scope_bytes}" -gt "${run_scope_peak_bytes}" ]; then
         run_scope_peak_bytes="${scope_bytes}"
@@ -206,17 +207,11 @@ sample_disk() {
     [ "${cleanup_active}" -eq 0 ] || return 0
     if [ "${run_started}" -eq 0 ]; then
         [ "${free_bytes}" -ge "${disk_preflight_bytes}" ] \
-            || fail "INSUFFICIENT_DISK: available_bytes=${free_bytes} required_bytes=${disk_preflight_bytes}"
+            || fail "INSUFFICIENT_DISK: docker_root=${docker_root} available_bytes=${free_bytes} required_bytes=${disk_preflight_bytes}"
     else
         [ "${free_bytes}" -ge "${disk_floor_bytes}" ] \
-            || fail "DISK_FLOOR_ABORT: phase=${phase} available_bytes=${free_bytes} floor_bytes=${disk_floor_bytes}"
+            || fail "DISK_FLOOR_ABORT: phase=${phase} docker_root=${docker_root} available_bytes=${free_bytes} floor_bytes=${disk_floor_bytes}"
     fi
-}
-
-configure_podman_scope() {
-    run_scope="$1"
-    podman_storage_root="${run_scope}/storage"
-    podman_runroot="${run_scope}/runroot"
 }
 
 reject_device_volume() {
@@ -227,11 +222,33 @@ reject_device_volume() {
     esac
 }
 
-audit_container_argv() {
+argv_has() {
+    local expected="$1"
+    shift
+    local item
+    for item in "$@"; do
+        [ "${item}" != "${expected}" ] || return 0
+    done
+    return 1
+}
+
+argv_has_option_value() {
+    local option="$1" expected="$2"
+    shift 2
+    local -a argv=("$@")
+    local index
+    for ((index = 0; index < ${#argv[@]}; index++)); do
+        case "${argv[index]}" in
+            "${option}") [ "${argv[index + 1]-}" = "${expected}" ] && return 0 ;;
+            "${option}=${expected}") return 0 ;;
+        esac
+    done
+    return 1
+}
+
+audit_docker_argv() {
     local -a argv=("$@")
     local dashdash=--
-    local root_option="${dashdash}root"
-    local runroot_option="${dashdash}runroot"
     local privileged_option="${dashdash}privileged"
     local volume_option="${dashdash}volume"
     local mount_option="${dashdash}mount"
@@ -240,39 +257,14 @@ audit_container_argv() {
     local pid_option="${dashdash}pid"
     local network_option="${dashdash}network"
     local network_alias="${dashdash}net"
+    local cgroupns_option="${dashdash}cgroupns"
     local short_volume=-v
-    local arg value index root_count=0 runroot_count=0
+    local arg value index command_name="${argv[0]-}"
 
-    [ -n "${podman_storage_root}" ] && [ -n "${podman_runroot}" ] \
-        || fail 'UNSCOPED_CONTAINER_ARGV: storage paths are not configured'
-
+    [ -n "${command_name}" ] || fail 'UNSCOPED_CONTAINER_ARGV: empty Docker argv'
     for ((index = 0; index < ${#argv[@]}; index++)); do
         arg="${argv[index]}"
         case "${arg}" in
-            "${root_option}")
-                value="${argv[index + 1]-}"
-                root_count=$((root_count + 1))
-                [ "${value}" = "${podman_storage_root}" ] \
-                    || fail "UNSCOPED_CONTAINER_ARGV: root=${value:-missing}"
-                ;;
-            "${root_option}="*)
-                value="${arg#*=}"
-                root_count=$((root_count + 1))
-                [ "${value}" = "${podman_storage_root}" ] \
-                    || fail "UNSCOPED_CONTAINER_ARGV: root=${value:-missing}"
-                ;;
-            "${runroot_option}")
-                value="${argv[index + 1]-}"
-                runroot_count=$((runroot_count + 1))
-                [ "${value}" = "${podman_runroot}" ] \
-                    || fail "UNSCOPED_CONTAINER_ARGV: runroot=${value:-missing}"
-                ;;
-            "${runroot_option}="*)
-                value="${arg#*=}"
-                runroot_count=$((runroot_count + 1))
-                [ "${value}" = "${podman_runroot}" ] \
-                    || fail "UNSCOPED_CONTAINER_ARGV: runroot=${value:-missing}"
-                ;;
             "${privileged_option}"|"${privileged_option}="*)
                 fail "UNSAFE_CONTAINER_ARGV: ${arg}"
                 ;;
@@ -297,6 +289,14 @@ audit_container_argv() {
             "${network_option}="*|"${network_alias}="*)
                 value="${arg#*=}"
                 [ "${value}" != host ] || fail 'UNSAFE_CONTAINER_ARGV: host network namespace'
+                ;;
+            "${cgroupns_option}")
+                value="${argv[index + 1]-}"
+                [ "${value}" != host ] || fail 'UNSAFE_CONTAINER_ARGV: host cgroup namespace'
+                ;;
+            "${cgroupns_option}="*)
+                value="${arg#*=}"
+                [ "${value}" != host ] || fail 'UNSAFE_CONTAINER_ARGV: host cgroup namespace'
                 ;;
             "${volume_option}"|"${short_volume}")
                 reject_device_volume "${argv[index + 1]-}"
@@ -326,31 +326,84 @@ audit_container_argv() {
         esac
     done
 
-    [ "${root_count}" -eq 1 ] \
-        || fail "UNSCOPED_CONTAINER_ARGV: root_count=${root_count}"
-    [ "${runroot_count}" -eq 1 ] \
-        || fail "UNSCOPED_CONTAINER_ARGV: runroot_count=${runroot_count}"
+    case "${command_name}" in
+        build)
+            argv_has_option_value --label "${run_label}" "${argv[@]}" \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker build lacks run label'
+            argv_has_option_value --tag "${test_image}" "${argv[@]}" \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker build lacks run image tag'
+            ;;
+        run)
+            argv_has_option_value --label "${run_label}" "${argv[@]}" \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks run label'
+            argv_has_option_value --name "${systemd_container}" "${argv[@]}" \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks run container name'
+            argv_has_option_value --cgroupns private "${argv[@]}" \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks private cgroup namespace'
+            argv_has_option_value --network none "${argv[@]}" \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks isolated network'
+            argv_has_option_value --tmpfs '/run:rw,nosuid,nodev,mode=755' "${argv[@]}" \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks /run tmpfs'
+            argv_has_option_value --tmpfs '/run/lock:rw,nosuid,nodev,mode=755' "${argv[@]}" \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks /run/lock tmpfs'
+            argv_has --tty "${argv[@]}" || argv_has -t "${argv[@]}" \
+                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks PTY'
+            ;;
+        exec|logs|rm)
+            argv_has "${systemd_container}" "${argv[@]}" \
+                || fail "UNSCOPED_CONTAINER_ARGV: ${command_name} target is not run container"
+            ;;
+        container)
+            case "${argv[1]-}" in
+                inspect)
+                    argv_has "${systemd_container}" "${argv[@]}" \
+                        || fail 'UNSCOPED_CONTAINER_ARGV: container inspect target mismatch'
+                    ;;
+                ls)
+                    argv_has_option_value --filter "label=${run_label}" "${argv[@]}" \
+                        || fail 'UNSCOPED_CONTAINER_ARGV: container list lacks run label filter'
+                    ;;
+            esac
+            ;;
+        image)
+            case "${argv[1]-}" in
+                rm|inspect)
+                    argv_has "${test_image}" "${argv[@]}" \
+                        || fail "UNSCOPED_CONTAINER_ARGV: image ${argv[1]} target mismatch"
+                    ;;
+                ls)
+                    argv_has_option_value --filter "label=${run_label}" "${argv[@]}" \
+                        || fail 'UNSCOPED_CONTAINER_ARGV: image list lacks run label filter'
+                    ;;
+            esac
+            ;;
+        buildx)
+            if [ "${argv[1]-}" = prune ]; then
+                value=
+                for ((index = 0; index < ${#argv[@]}; index++)); do
+                    if [ "${argv[index]}" = --filter ]; then
+                        value="${argv[index + 1]-}"
+                    fi
+                done
+                case "${value}" in
+                    id=*) ;;
+                    *) fail 'UNSCOPED_CONTAINER_ARGV: build-cache prune lacks record id' ;;
+                esac
+            fi
+            ;;
+    esac
 }
 
-scoped_podman_argv() {
-    scoped_argv=(
-        --root "${podman_storage_root}"
-        --runroot "${podman_runroot}"
-        "$@"
-    )
-}
-
-podman_checked() {
+docker_checked() {
     local status
-    scoped_podman_argv "$@"
-    audit_container_argv "${scoped_argv[@]}"
-    sample_disk "before-podman-${1:-unknown}"
-    if (exec {build_lock_fd}>&-; command podman "${scoped_argv[@]}"); then
+    audit_docker_argv "$@"
+    sample_disk "before-docker-${1:-unknown}"
+    if command docker "$@"; then
         status=0
     else
         status=$?
     fi
-    sample_disk "after-podman-${1:-unknown}"
+    sample_disk "after-docker-${1:-unknown}"
     return "${status}"
 }
 
@@ -362,27 +415,61 @@ make_systemd_argv() {
         --detach
         --tty
         --name "${container_name}"
+        --label "${run_label}"
         --hostname tsp-f3fm-211-systemd
-        --systemd=always
         --cgroupns=private
         --network=none
-        --security-opt=no-new-privileges
+        --tmpfs '/run:rw,nosuid,nodev,mode=755'
+        --tmpfs '/run/lock:rw,nosuid,nodev,mode=755'
         --pids-limit=512
-        --env=container=podman
+        --env=container=docker
         "${image_name}"
         /sbin/init
     )
 }
 
 print_argv() {
-    printf 'podman'
-    printf ' %q' "$@"
+    printf 'docker'
+    printf ' %s' "$@"
     printf '\n'
+}
+
+capture_build_cache_ids() {
+    local destination="$1"
+    docker_checked buildx du --format '{{.ID}}' 2>/dev/null \
+        | awk 'NF { sub(/[*]$/, "", $1); print $1 }' \
+        | sort -u >"${destination}"
+}
+
+capture_docker_system_df() {
+    docker_checked system df \
+        --format '{{.Type}}=total:{{.TotalCount}},active:{{.Active}},size:{{.Size}},reclaimable:{{.Reclaimable}}' \
+        2>/dev/null \
+        | tr ' ' '_' \
+        | paste -sd, -
+}
+
+load_docker_info() {
+    local info fields
+    info="$(docker_checked info --format '{{json .}}' 2>/dev/null)" \
+        || fail_recorded_or 'DOCKER_UNAVAILABLE: Docker info failed'
+    fields="$(python3 -c '
+import json, sys
+info = json.load(sys.stdin)
+print("\t".join(str(info[key]) for key in (
+    "DockerRootDir", "CgroupVersion", "CgroupDriver", "Architecture", "ServerVersion"
+)))
+' <<<"${info}")" \
+        || fail 'DOCKER_INFO_UNREADABLE: missing data-root/cgroup/architecture/version fields'
+    IFS=$'\t' read -r docker_root_value docker_cgroup docker_cgroup_driver \
+        docker_arch docker_version <<<"${fields}"
+    configure_docker_root "${docker_root_value}"
 }
 
 cleanup() {
     local status=$? receipt_result receipt_reason scope_removed=false
-    local container_exists_status image_exists_status
+    local container_status image_status labeled_containers labeled_images
+    local cache_current cache_created cache_remaining cache_id
     trap - EXIT INT TERM
     cleanup_active=1
     set +e
@@ -391,23 +478,66 @@ cleanup() {
         failure_reason="$(<"${run_scope}/failure-reason")"
     fi
     sample_disk cleanup_begin >/dev/null 2>&1 || true
-    if [ "${cleanup_podman_resources}" -eq 1 ] \
-        && command -v podman >/dev/null 2>&1; then
-        podman_checked rm --force "${systemd_container}" >/dev/null 2>&1
-        podman_checked image rm --force "${test_image}" >/dev/null 2>&1
-        podman_checked container exists "${systemd_container}" >/dev/null 2>&1
-        container_exists_status=$?
-        podman_checked image exists "${test_image}" >/dev/null 2>&1
-        image_exists_status=$?
-        if [ "${container_exists_status}" -eq 0 ] || [ "${image_exists_status}" -eq 0 ]; then
+    if [ "${cleanup_docker_resources}" -eq 1 ] \
+        && command -v docker >/dev/null 2>&1; then
+        docker_checked rm --force "${systemd_container}" >/dev/null 2>&1
+        docker_checked image rm --force "${test_image}" >/dev/null 2>&1
+
+        docker_checked container inspect "${systemd_container}" >/dev/null 2>&1
+        container_status=$?
+        docker_checked image inspect "${test_image}" >/dev/null 2>&1
+        image_status=$?
+        labeled_containers="$(docker_checked container ls --all --quiet \
+            --filter "label=${run_label}" 2>/dev/null)"
+        labeled_images="$(docker_checked image ls --quiet \
+            --filter "label=${run_label}" 2>/dev/null)"
+        if [ "${container_status}" -eq 0 ] || [ "${image_status}" -eq 0 ] \
+            || [ -n "${labeled_containers}" ] || [ -n "${labeled_images}" ]; then
             cleanup_failed=1
             failure_reason='RESOURCE_CLEANUP_FAILED'
-        elif [ "${container_exists_status}" -ne 1 ] || [ "${image_exists_status}" -ne 1 ]; then
+        elif [ "${container_status}" -ne 1 ] || [ "${image_status}" -ne 1 ]; then
             cleanup_failed=1
             failure_reason='RESOURCE_CLEANUP_AUDIT_FAILED'
         fi
+
+        cache_current="${run_scope}/build-cache-current"
+        cache_created="${run_scope}/build-cache-created"
+        cache_remaining="${run_scope}/build-cache-remaining"
+        if [ -s "${run_scope}/build-cache-before" ] || [ -f "${run_scope}/build-cache-before" ]; then
+            if capture_build_cache_ids "${cache_current}"; then
+                comm -13 "${run_scope}/build-cache-before" "${cache_current}" >"${cache_created}"
+                build_cache_records_removed="$(awk 'NF { count++ } END { print count + 0 }' "${cache_created}")"
+                while IFS= read -r cache_id; do
+                    [ -n "${cache_id}" ] || continue
+                    docker_checked buildx prune --force --filter "id=${cache_id}" \
+                        >/dev/null 2>&1 || cleanup_failed=1
+                done <"${cache_created}"
+                if capture_build_cache_ids "${cache_current}.after"; then
+                    comm -13 "${run_scope}/build-cache-before" \
+                        "${cache_current}.after" >"${cache_remaining}"
+                    if [ -s "${cache_remaining}" ]; then
+                        cleanup_failed=1
+                        failure_reason='BUILD_CACHE_CLEANUP_FAILED'
+                    fi
+                else
+                    cleanup_failed=1
+                    failure_reason='BUILD_CACHE_AUDIT_FAILED'
+                fi
+            else
+                cleanup_failed=1
+                failure_reason='BUILD_CACHE_AUDIT_FAILED'
+            fi
+        fi
     fi
     sample_disk cleanup_end >/dev/null 2>&1 || true
+    if [ "${docker_disk_configured}" -eq 1 ]; then
+        docker_root_free_after_bytes="$(measure_docker_root_free_bytes)" \
+            || cleanup_failed=1
+        docker_root_df_after="$(capture_docker_root_df)" \
+            || cleanup_failed=1
+        docker_system_df_after="$(capture_docker_system_df)" \
+            || cleanup_failed=1
+    fi
 
     if [ "${scope_initialized}" -eq 1 ] && [ -d "${run_scope}" ]; then
         find "${run_scope}" -mindepth 1 -delete >/dev/null 2>&1
@@ -420,12 +550,8 @@ cleanup() {
         failure_reason='RUN_SCOPE_CLEANUP_FAILED'
     fi
 
-    if [ -n "${build_lock_fd}" ]; then
-        flock -u "${build_lock_fd}" >/dev/null 2>&1 || cleanup_failed=1
-        exec {build_lock_fd}>&-
-    fi
-
-    if [ "${status}" -eq 0 ] && [ "${run_completed}" -eq 1 ] && [ "${cleanup_failed}" -eq 0 ]; then
+    if [ "${status}" -eq 0 ] && [ "${run_completed}" -eq 1 ] \
+        && [ "${cleanup_failed}" -eq 0 ]; then
         receipt_result=PASS
         receipt_reason=completed
     else
@@ -436,173 +562,140 @@ cleanup() {
     fi
 
     if [ "${receipt_result}" = PASS ]; then
-        echo "session-authority real-systemd: PASS ${pass_fields} run_scope_peak_bytes=${run_scope_peak_bytes} root_min_free_bytes=${root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}"
+        echo "session-authority real-systemd: PASS ${pass_fields} run_id=${run_id} docker_root=${docker_root:-unknown} docker_root_free_before_bytes=${docker_root_free_before_bytes:-unknown} docker_root_free_after_bytes=${docker_root_free_after_bytes:-unknown} docker_root_df_before=${docker_root_df_before:-unknown} docker_root_df_after=${docker_root_df_after:-unknown} docker_system_df_before=${docker_system_df_before:-unknown} docker_system_df_after=${docker_system_df_after:-unknown} build_cache_records_removed=${build_cache_records_removed} run_scope_peak_bytes=${run_scope_peak_bytes} docker_root_min_free_bytes=${docker_root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}"
     else
-        echo "session-authority real-systemd: FAIL receipt_reason=${receipt_reason} run_scope_peak_bytes=${run_scope_peak_bytes} root_min_free_bytes=${root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}" >&2
+        echo "session-authority real-systemd: FAIL receipt_reason=${receipt_reason} run_id=${run_id:-unknown} docker_root=${docker_root:-unknown} docker_root_free_before_bytes=${docker_root_free_before_bytes:-unknown} docker_root_free_after_bytes=${docker_root_free_after_bytes:-unknown} docker_root_df_before=${docker_root_df_before:-unknown} docker_root_df_after=${docker_root_df_after:-unknown} docker_system_df_before=${docker_system_df_before:-unknown} docker_system_df_after=${docker_system_df_after:-unknown} build_cache_records_removed=${build_cache_records_removed} run_scope_peak_bytes=${run_scope_peak_bytes} docker_root_min_free_bytes=${docker_root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}" >&2
     fi
     exit "${status}"
 }
 
 case "${1:-}" in
     --audit-argv)
-        [ "$#" -ge 3 ] || fail 'USAGE: --audit-argv RUN_SCOPE ARGV...'
-        configure_podman_scope "$2"
+        [ "$#" -ge 3 ] || fail 'USAGE: --audit-argv RUN_ID ARGV...'
+        configure_run_identity "$2"
         shift 2
-        audit_container_argv "$@"
-        echo 'session-authority container-argv-audit: PASS'
+        audit_docker_argv "$@"
+        echo 'session-authority docker-argv-audit: PASS'
         exit 0
         ;;
     --audit-systemd-spec)
-        [ "$#" -eq 2 ] || fail 'USAGE: --audit-systemd-spec RUN_SCOPE'
-        configure_podman_scope "$2"
-        make_systemd_argv test-image:fixture test-systemd-fixture
-        scoped_podman_argv "${systemd_argv[@]}"
-        audit_container_argv "${scoped_argv[@]}"
-        print_argv "${scoped_argv[@]}"
+        [ "$#" -eq 2 ] || fail 'USAGE: --audit-systemd-spec RUN_ID'
+        configure_run_identity "$2"
+        make_systemd_argv "${test_image}" "${systemd_container}"
+        audit_docker_argv "${systemd_argv[@]}"
+        print_argv "${systemd_argv[@]}"
         exit 0
         ;;
     --audit-lifecycle-argv)
-        [ "$#" -eq 2 ] || fail 'USAGE: --audit-lifecycle-argv RUN_SCOPE'
-        configure_podman_scope "$2"
-        systemd_container=test-systemd-fixture
-        test_image=test-image:fixture
+        [ "$#" -eq 2 ] || fail 'USAGE: --audit-lifecycle-argv RUN_ID'
+        configure_run_identity "$2"
         lifecycle_commands=(
-            'info --format json'
-            '--version'
-            'build --iidfile /scope/image-id --tag test-image:fixture --file /scope/Containerfile /scope'
-            'exec test-systemd-fixture /bin/true'
-            'logs test-systemd-fixture'
-            'container inspect test-systemd-fixture'
-            'rm --force test-systemd-fixture'
-            'image rm --force test-image:fixture'
-            'container exists test-systemd-fixture'
-            'image exists test-image:fixture'
+            'info --format {{json .}}'
+            'version --format {{.Server.Version}}'
+            "build --label ${run_label} --iidfile /scope/image-id --tag ${test_image} --file /scope/Containerfile /scope"
+            "exec ${systemd_container} /bin/true"
+            "logs ${systemd_container}"
+            "container inspect ${systemd_container}"
+            "container ls --all --quiet --filter label=${run_label}"
+            "rm --force ${systemd_container}"
+            "image inspect ${test_image}"
+            "image ls --quiet --filter label=${run_label}"
+            "image rm --force ${test_image}"
+            'buildx du --format {{.ID}}'
+            'buildx prune --force --filter id=fixture-cache-id'
         )
         make_systemd_argv "${test_image}" "${systemd_container}"
-        scoped_podman_argv "${systemd_argv[@]}"
-        audit_container_argv "${scoped_argv[@]}"
-        print_argv "${scoped_argv[@]}"
+        audit_docker_argv "${systemd_argv[@]}"
+        print_argv "${systemd_argv[@]}"
         for command_line in "${lifecycle_commands[@]}"; do
             read -r -a command_argv <<<"${command_line}"
-            scoped_podman_argv "${command_argv[@]}"
-            audit_container_argv "${scoped_argv[@]}"
-            print_argv "${scoped_argv[@]}"
+            audit_docker_argv "${command_argv[@]}"
+            print_argv "${command_argv[@]}"
         done
         exit 0
         ;;
     --check-host-guard)
         [ "$#" -eq 2 ] || fail 'USAGE: --check-host-guard FIXTURE_ROOT'
         assert_safe_host "$2"
-        assert_approved_host
-        echo "session-authority host-guard: PASS host=${guard_hostname}"
+        assert_ephemeral_slot "$2"
+        echo "session-authority host-guard: PASS host=${guard_hostname} ephemeral_slot=true"
         exit 0
         ;;
-    --check-admission)
-        [ "$#" -eq 2 ] || fail 'USAGE: --check-admission FIXTURE_ROOT'
+    --check-docker-probe)
+        [ "$#" -eq 2 ] || fail 'USAGE: --check-docker-probe FIXTURE_ROOT'
         assert_safe_host "$2"
-        assert_approved_host
-        assert_host_idle
-        command -v flock >/dev/null 2>&1 || fail 'HOST_GUARD_UNAVAILABLE: flock'
-        acquire_owned_build_lock
-        assert_host_idle
-        admission_free_bytes="$(measure_root_free_bytes)" \
-            || fail 'DISK_PROBE_FAILED: admission'
-        [ "${admission_free_bytes}" -ge "${disk_preflight_bytes}" ] \
-            || fail "INSUFFICIENT_DISK: available_bytes=${admission_free_bytes} required_bytes=${disk_preflight_bytes}"
-        if flock -n "${owned_build_lock}" true >/dev/null 2>&1; then
-            fail 'BUILD_LOCK_NOT_HELD: second claimant acquired the owned build lock'
-        fi
-        echo "session-authority admission: PASS host=${guard_hostname} build_lock=${owned_build_lock} lock_held=true available_bytes=${admission_free_bytes}"
-        flock -u "${build_lock_fd}"
-        exec {build_lock_fd}>&-
-        exit 0
-        ;;
-    --check-scoped-probe)
-        [ "$#" -eq 2 ] || fail 'USAGE: --check-scoped-probe FIXTURE_ROOT'
-        assert_safe_host "$2"
-        assert_approved_host
-        assert_host_idle
-        for command_name in flock podman; do
+        assert_ephemeral_slot "$2"
+        for command_name in docker python3; do
             command -v "${command_name}" >/dev/null 2>&1 \
                 || fail "MISSING_PREREQUISITE: ${command_name}"
         done
-        acquire_owned_build_lock
-        assert_host_idle
+        configure_run_identity fixture-probe
         run_scope="$(mktemp -d /tmp/tsp-f3fm-211.XXXXXX)"
-        configure_podman_scope "${run_scope}"
-        mkdir -p "${podman_storage_root}" "${podman_runroot}"
         scope_initialized=1
         trap cleanup EXIT INT TERM
+        load_docker_info
         sample_disk preflight
+        docker_root_free_before_bytes="$(measure_docker_root_free_bytes)" \
+            || fail 'DISK_PROBE_FAILED: before-probe Docker data-root free bytes'
+        docker_root_df_before="$(capture_docker_root_df)" \
+            || fail 'DISK_PROBE_FAILED: before-probe Docker data-root df'
+        docker_system_df_before="$(capture_docker_system_df)" \
+            || fail_recorded_or 'DOCKER_DISK_USAGE_UNAVAILABLE: docker system df failed'
         run_started=1
-        probe_version="$(podman_checked --version)" \
-            || fail_recorded_or 'PODMAN_UNAVAILABLE: version query failed'
-        pass_fields="probe=podman-version podman_version=${probe_version##* } build_lock=${owned_build_lock}"
+        probe_version="$(docker_checked version --format '{{.Server.Version}}')" \
+            || fail_recorded_or 'DOCKER_UNAVAILABLE: version query failed'
+        pass_fields="probe=docker-version docker_version=${probe_version} ephemeral_slot=true"
         run_completed=1
         exit 0
         ;;
     '')
         ;;
     *)
-        fail "USAGE: $0 [--audit-argv RUN_SCOPE ARGV...|--audit-systemd-spec RUN_SCOPE|--audit-lifecycle-argv RUN_SCOPE|--check-host-guard FIXTURE_ROOT|--check-admission FIXTURE_ROOT|--check-scoped-probe FIXTURE_ROOT]"
+        fail "USAGE: $0 [--audit-argv RUN_ID ARGV...|--audit-systemd-spec RUN_ID|--audit-lifecycle-argv RUN_ID|--check-host-guard FIXTURE_ROOT|--check-docker-probe FIXTURE_ROOT]"
         ;;
 esac
 
-# These guards stay ahead of every Podman probe. A refused workstation, active
-# runner, active owned build, held build lock, or short disk never reaches Podman.
+# The interactive guard is deliberately first. Nothing may query Docker until
+# the host is both non-graphical and a one-job ephemeral Actions runner.
 assert_safe_host /
-assert_approved_host
-assert_host_idle
+assert_ephemeral_slot /
 
-for command_name in flock git podman python3 sha256sum; do
+for command_name in docker git python3 sha256sum; do
     command -v "${command_name}" >/dev/null 2>&1 \
         || fail "MISSING_PREREQUISITE: ${command_name}"
 done
-[ "$(id -u)" -ne 0 ] || fail 'ROOTLESS_PODMAN_REQUIRED: do not run as root'
 [ "$(uname -m)" = x86_64 ] || fail "AMD64_REQUIRED: host architecture is $(uname -m)"
 
-acquire_owned_build_lock
-assert_host_idle
-
+default_run_id="gha-${GITHUB_RUN_ID:-missing}-${GITHUB_RUN_ATTEMPT:-missing}-${GITHUB_JOB:-job}-$$"
+configure_run_identity "${PF_SYSTEMD_TEST_RUN_ID:-${default_run_id}}"
 run_scope="$(mktemp -d /tmp/tsp-f3fm-211.XXXXXX)"
-configure_podman_scope "${run_scope}"
 runtime="${run_scope}/runtime"
 context="${run_scope}/context"
 image_id_file="${run_scope}/image-id"
-systemd_container="tsp-f3fm-211-systemd-$$"
-test_image="tsp-f3fm-211-systemd:${runtime_sha:0:12}-$$"
-mkdir -p "${podman_storage_root}" "${podman_runroot}"
 scope_initialized=1
 trap cleanup EXIT INT TERM
 
+load_docker_info
+case "${docker_cgroup}" in
+    2|v2) ;;
+    *) fail "CGROUP_V2_REQUIRED: got ${docker_cgroup}" ;;
+esac
+case "${docker_arch}" in
+    amd64|x86_64) ;;
+    *) fail "AMD64_REQUIRED: Docker architecture is ${docker_arch}" ;;
+esac
 sample_disk preflight
+docker_root_free_before_bytes="$(measure_docker_root_free_bytes)" \
+    || fail 'DISK_PROBE_FAILED: before-run Docker data-root free bytes'
+docker_root_df_before="$(capture_docker_root_df)" \
+    || fail 'DISK_PROBE_FAILED: before-run Docker data-root df'
+docker_system_df_before="$(capture_docker_system_df)" \
+    || fail_recorded_or 'DOCKER_DISK_USAGE_UNAVAILABLE: docker system df failed'
 run_started=1
 
-podman_info="$(podman_checked info --format json 2>/dev/null)" \
-    || fail_recorded_or 'PODMAN_UNAVAILABLE: rootless Podman is not usable'
-podman_fields="$(
-    python3 -c '
-import json, sys
-host = json.load(sys.stdin)["host"]
-print(
-    str(host["security"]["rootless"]).lower(),
-    host["cgroupVersion"],
-    host["cgroupManager"],
-    host["arch"],
-)
-' <<<"${podman_info}"
-)" || fail 'PODMAN_INFO_UNREADABLE: missing rootless/cgroup/architecture fields'
-read -r podman_rootless podman_cgroup podman_cgroup_manager podman_arch <<<"${podman_fields}"
-[ "${podman_rootless}" = true ] || fail 'ROOTLESS_PODMAN_REQUIRED: Podman reports rootless=false'
-[ "${podman_cgroup}" = v2 ] || fail "CGROUP_V2_REQUIRED: got ${podman_cgroup}"
-[ "${podman_cgroup_manager}" = systemd ] \
-    || fail "SYSTEMD_CGROUP_MANAGER_REQUIRED: got ${podman_cgroup_manager}"
-case "${podman_arch}" in
-    amd64|x86_64) ;;
-    *) fail "AMD64_REQUIRED: Podman architecture is ${podman_arch}" ;;
-esac
-podman_version="$(podman_checked --version | awk '{print $3}')" \
-    || fail_recorded_or 'PODMAN_UNAVAILABLE: version query failed'
+capture_build_cache_ids "${run_scope}/build-cache-before" \
+    || fail_recorded_or 'BUILD_CACHE_AUDIT_UNAVAILABLE: docker buildx du failed'
+cleanup_docker_resources=1
 
 actual_unit_sha256="$(sha256sum "${app_unit}" | awk '{print $1}')"
 [ "${actual_unit_sha256}" = "${app_unit_sha256}" ] \
@@ -653,25 +746,24 @@ install -m 0644 "${fixtures}/platform-capabilities.toml" \
 install -m 0755 "${fixtures}/drive.py" "${context}/drive.py"
 sample_disk build_context
 
-cleanup_podman_resources=1
-podman_checked build \
+docker_checked build \
     --build-arg "PF_RUNTIME_SHA=${runtime_sha}" \
+    --label "${run_label}" \
     --iidfile "${image_id_file}" \
     --tag "${test_image}" \
     --file "${context}/Containerfile" \
     "${context}" \
-    || fail_recorded_or 'IMAGE_BUILD_FAILED: rootless Podman build failed'
+    || fail_recorded_or 'IMAGE_BUILD_FAILED: Docker build failed'
 test_image_digest="$(<"${image_id_file}")"
 
 make_systemd_argv "${test_image}" "${systemd_container}"
-scoped_podman_argv "${systemd_argv[@]}"
-audit_container_argv "${scoped_argv[@]}"
-podman_checked "${systemd_argv[@]}" >/dev/null \
-    || fail_recorded_or 'SYSTEMD_PID1_UNAVAILABLE: rootless Podman run failed'
+audit_docker_argv "${systemd_argv[@]}"
+docker_checked "${systemd_argv[@]}" >/dev/null \
+    || fail_recorded_or 'SYSTEMD_PID1_UNAVAILABLE: unprivileged Docker run failed'
 
 systemd_ready=0
 for _ in $(seq 1 120); do
-    if podman_checked exec "${systemd_container}" /bin/sh -c '
+    if docker_checked exec "${systemd_container}" /bin/sh -c '
         [ "$(cat /proc/1/comm)" = systemd ] \
             && [ "$(systemctl get-default)" = session-authority-test.target ] \
             && systemctl is-active --quiet pf-session-authorityd.service \
@@ -684,19 +776,31 @@ for _ in $(seq 1 120); do
     sleep 0.1
 done
 if [ "${systemd_ready}" -ne 1 ]; then
-    podman_checked logs "${systemd_container}" >&2 || true
-    fail 'SYSTEMD_PID1_UNAVAILABLE: rootless Podman did not boot a usable systemd PID 1'
+    docker_checked container inspect --format '{{json .State}}' \
+        "${systemd_container}" >&2 || true
+    docker_checked exec "${systemd_container}" cat /proc/mounts >&2 || true
+    docker_checked logs "${systemd_container}" >&2 || true
+    fail 'SYSTEMD_PID1_UNAVAILABLE: unprivileged Docker did not boot a usable systemd PID 1'
 fi
 
+cgroup_mount_options="$(
+    docker_checked exec "${systemd_container}" /bin/sh -ceu \
+        'awk '\''$2 == "/sys/fs/cgroup" { print $4; exit }'\'' /proc/mounts'
+)" || fail_recorded_or 'CGROUP_MOUNT_PROBE_FAILED'
+case ",${cgroup_mount_options}," in
+    *,rw,*) ;;
+    *) fail "SYSTEMD_CGROUP_READ_ONLY: mount_options=${cgroup_mount_options:-missing}" ;;
+esac
+
 container_unit_sha256="$(
-    podman_checked exec "${systemd_container}" \
+    docker_checked exec "${systemd_container}" \
         sha256sum /etc/systemd/system/pf-app@.service | awk '{print $1}'
 )" || fail_recorded_or 'CONTAINER_APP_UNIT_HASH_FAILED'
 [ "${container_unit_sha256}" = "${app_unit_sha256}" ] \
     || fail "CONTAINER_APP_UNIT_DRIFT: got ${container_unit_sha256}"
 
 host_vt_devices="$(
-    podman_checked exec "${systemd_container}" /bin/sh -ceu '
+    docker_checked exec "${systemd_container}" /bin/sh -ceu '
         for path in /dev/tty[0-9]*; do
             [ -e "${path}" ] || continue
             printf "%s\n" "${path}"
@@ -707,7 +811,7 @@ host_vt_devices="$(
     || fail "HOST_VT_EXPOSED: ${host_vt_devices//$'\n'/,}"
 
 getty_units_masked="$(
-    podman_checked exec "${systemd_container}" /bin/sh -ceu '
+    docker_checked exec "${systemd_container}" /bin/sh -ceu '
         count=0
         for unit in \
             getty@.service \
@@ -725,19 +829,32 @@ getty_units_masked="$(
     || fail "GETTY_MASK_INCOMPLETE: count=${getty_units_masked}"
 
 container_isolation="$(
-    podman_checked container inspect \
-        --format '{{.Config.Tty}} {{.HostConfig.NetworkMode}}' \
+    docker_checked container inspect \
+        --format '{{.Config.Tty}} {{.HostConfig.NetworkMode}} {{.HostConfig.CgroupnsMode}}' \
         "${systemd_container}"
 )" || fail_recorded_or 'CONTAINER_ISOLATION_PROBE_FAILED'
-[ "${container_isolation}" = 'true none' ] \
+[ "${container_isolation}" = 'true none private' ] \
     || fail "CONTAINER_ISOLATION_DRIFT: ${container_isolation}"
 
+tmpfs_json="$(
+    docker_checked container inspect --format '{{json .HostConfig.Tmpfs}}' \
+        "${systemd_container}"
+)" || fail_recorded_or 'CONTAINER_TMPFS_PROBE_FAILED'
+python3 -c '
+import json, sys
+mounts = json.load(sys.stdin)
+required = {"/run", "/run/lock"}
+missing = required.difference(mounts)
+if missing:
+    raise SystemExit(f"missing tmpfs mounts: {sorted(missing)}")
+' <<<"${tmpfs_json}" || fail 'CONTAINER_TMPFS_DRIFT'
+
 if ! test_output="$(
-    podman_checked exec "${systemd_container}" /usr/local/libexec/drive.py 2>&1
+    docker_checked exec "${systemd_container}" /usr/local/libexec/drive.py 2>&1
 )"; then
     [ ! -s "${run_scope}/failure-reason" ] || fail_recorded_or 'DISK_FLOOR_ABORT'
     echo "${test_output}" >&2
-    podman_checked exec "${systemd_container}" \
+    docker_checked exec "${systemd_container}" \
         journalctl --no-pager --output short-monotonic --lines 200 \
         --unit pf-session-authorityd.service \
         --unit pf-app@org.pocketforge.fixture.service \
@@ -746,5 +863,5 @@ if ! test_output="$(
 fi
 echo "${test_output}"
 sample_disk integration_complete
-pass_fields="runtime_sha=${runtime_sha} container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE podman_version=${podman_version} rootless=${podman_rootless} cgroup=${podman_cgroup} cgroup_manager=${podman_cgroup_manager} tty=true network=none host_vt_devices=none getty_units_masked=${getty_units_masked} build_lock=${owned_build_lock}"
+pass_fields="runtime_sha=${runtime_sha} container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true"
 run_completed=1
