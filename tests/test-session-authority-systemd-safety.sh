@@ -111,6 +111,19 @@ grep -Fqx 'session-authority host-guard: PASS host=mm-build-vm' "${stdout_log}" 
 }
 
 if PATH="${fake_bin}:${PATH}" PODMAN_CALL_LOG="${call_log}" \
+    FAKE_HOSTNAME=mm-build-vm FAKE_GRAPHICAL=0 FAKE_DISPLAY_MANAGER=1 \
+    bash "${harness}" --check-host-guard "${fake_root}" \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: display manager passed guard' >&2
+    exit 1
+fi
+grep -Fq 'INTERACTIVE_WORKSTATION: active display-manager.service' "${stderr_log}" || {
+    echo 'session-authority systemd-safety: FAIL: display-manager refusal reason missing' >&2
+    cat "${stderr_log}" >&2
+    exit 1
+}
+
+if PATH="${fake_bin}:${PATH}" PODMAN_CALL_LOG="${call_log}" \
     FAKE_HOSTNAME=matt-laptop FAKE_GRAPHICAL=0 \
     bash "${harness}" --check-host-guard "${fake_root}" \
     >"${stdout_log}" 2>"${stderr_log}"; then
@@ -212,4 +225,4 @@ grep -Fq 'session-authority-test.target /etc/systemd/system/session-authority-te
     exit 1
 }
 
-echo 'session-authority systemd-safety: PASS graphical_refusal=ok headless_guard=ok owner_host_refusal=ok argv_audit=ok getty_masks=5 podman_calls=0'
+echo 'session-authority systemd-safety: PASS graphical_refusal=ok headless_guard=ok display_manager_refusal=ok owner_host_refusal=ok argv_audit=ok getty_masks=5 podman_calls=0'

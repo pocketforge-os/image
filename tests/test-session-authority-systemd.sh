@@ -48,6 +48,12 @@ assert_safe_host() {
 
     if systemctl is-active --quiet display-manager.service 2>/dev/null; then
         fail 'INTERACTIVE_WORKSTATION: active display-manager.service'
+    else
+        status=$?
+        case "${status}" in
+            3|4) ;;
+            *) fail "HOST_GUARD_UNAVAILABLE: display-manager query status=${status}" ;;
+        esac
     fi
     for display_manager in gdm gdm3 sddm lightdm xdm; do
         if pgrep -x "${display_manager}" >/dev/null 2>&1; then
@@ -219,15 +225,23 @@ done
 
 podman_info="$(command podman info --format json 2>/dev/null)" \
     || fail 'PODMAN_UNAVAILABLE: rootless Podman is not usable'
-read -r podman_rootless podman_cgroup podman_arch < <(
+podman_fields="$(
     python3 -c '
 import json, sys
 host = json.load(sys.stdin)["host"]
-print(str(host["security"]["rootless"]).lower(), host["cgroupVersion"], host["arch"])
-' <<<"${podman_info}"
+print(
+    str(host["security"]["rootless"]).lower(),
+    host["cgroupVersion"],
+    host["cgroupManager"],
+    host["arch"],
 )
+' <<<"${podman_info}"
+)" || fail 'PODMAN_INFO_UNREADABLE: missing rootless/cgroup/architecture fields'
+read -r podman_rootless podman_cgroup podman_cgroup_manager podman_arch <<<"${podman_fields}"
 [ "${podman_rootless}" = true ] || fail 'ROOTLESS_PODMAN_REQUIRED: Podman reports rootless=false'
 [ "${podman_cgroup}" = v2 ] || fail "CGROUP_V2_REQUIRED: got ${podman_cgroup}"
+[ "${podman_cgroup_manager}" = systemd ] \
+    || fail "SYSTEMD_CGROUP_MANAGER_REQUIRED: got ${podman_cgroup_manager}"
 case "${podman_arch}" in
     amd64|x86_64) ;;
     *) fail "AMD64_REQUIRED: Podman architecture is ${podman_arch}" ;;
@@ -395,4 +409,4 @@ if ! test_output="$(
     fail 'INTEGRATION_ASSERTION_FAILED'
 fi
 echo "${test_output}"
-echo "session-authority real-systemd: PASS runtime_sha=${runtime_sha} container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE podman_version=${podman_version} rootless=${podman_rootless} cgroup=${podman_cgroup} tty=true network=none host_vt_devices=none getty_units_masked=${getty_units_masked}"
+echo "session-authority real-systemd: PASS runtime_sha=${runtime_sha} container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE podman_version=${podman_version} rootless=${podman_rootless} cgroup=${podman_cgroup} cgroup_manager=${podman_cgroup_manager} tty=true network=none host_vt_devices=none getty_units_masked=${getty_units_masked}"
