@@ -47,10 +47,10 @@ The central spike findings are confirmed:
    `build/Dockerfile.pf:1429-1444`; image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
    `scripts/install-poolsuite.sh:17-30`, `scripts/install-poolsuite.sh:55-68`]
 
-The proposed direction is sound only after the false premises below are resolved. They are
-called out rather than silently redesigned.
+The proposed direction is sound with the coordinator rulings recorded below. The false
+premises remain called out rather than silently redesigned.
 
-## Premise confirmation and required rulings
+## Premise confirmation and coordinator rulings
 
 ### 1. Trust model: refuted on current images
 
@@ -69,8 +69,10 @@ explicit read-only app path to the unit. Do not claim resistance to a privileged
 rootfs modification. Per-app signing and broker-enforced third-party sandboxing remain out
 of scope; verified/read-only rootfs work is a separate platform security change.
 
-**COORDINATOR RULING NEEDED:** accept that narrower, honest trust statement, or expand the
-epic to deliver verified read-only rootfs. The latter is not a minimal default-app change.
+**Coordinator ruling (accepted):** the narrower statement above is the trust model for this
+epic. Default-app trust does not resist privileged runtime modification of the current writable
+rootfs. A verified/read-only rootfs is a separate platform security change, not part of this
+epic.
 
 ### 2. Launch identity: confirmed, with a stricter shared parser required
 
@@ -86,11 +88,11 @@ catalog permit repeated dots, and the catalog parser is private to `pf-catalog`.
 `abi/app.schema.json:17-34`; launcher@`bb8c9bc8c9ea15238d08cfee5376049bf67cf855`
 `crates/pf-catalog/src/lib.rs:150-190`, `crates/pf-catalog/src/lib.rs:549-571`]
 
-**Decision:** runtime adds a small `pf-app-manifest` crate. It owns the descriptor structs,
-TOML parsing, id validation, platform-support-file parsing, and fixed-root resolution.
-`pf-catalog`, `pf-session-authority`, and `pf-app-launch` all use this crate. Launcher vendors
-that exact runtime crate and adds it to the existing source-equality guard, preserving the
-current launcher/runtime vendoring model. [launcher@`bb8c9bc8c9ea15238d08cfee5376049bf67cf855`
+**Coordinator ruling (accepted):** runtime adds a small `pf-app-manifest` crate. It owns the
+descriptor structs, TOML parsing, id validation, platform-support-file parsing, and fixed-root
+resolution. `pf-catalog`, `pf-session-authority`, and `pf-app-launch` all use this crate.
+Launcher vendors that exact runtime crate and adds it to the existing source-equality guard,
+preserving the current launcher/runtime vendoring model. [launcher@`bb8c9bc8c9ea15238d08cfee5376049bf67cf855`
 `Cargo.toml:26-38`; image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
 `build/Dockerfile.pf:1576-1589`; image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
 `tests/test-launcher-runtime-contract.sh:4-19`]
@@ -145,9 +147,10 @@ capabilities. Platform already owns the canonical A133/A523 family ids and platf
 `abi/families.toml:32-42`, `abi/families.toml:101-111`; platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
 `core/abi_view.py:103-128`]
 
-**COORDINATOR RULING NEEDED:** approve the expanded file below. Keeping a capability-only
-file requires a second source for runtime family/ABI and recreates the drift this file is
-meant to prevent.
+**Coordinator ruling (accepted):** use the expanded contract below. Family, ABI, and platform
+version are derived from platform's canonical `abi/families.toml` data as their single source;
+there is no second family/ABI source. The image build validates the emitted identity and
+capability tuple under the fatal preconditions listed below.
 
 ### 4. `needs_network` readiness: refuted as presently modeled
 
@@ -166,9 +169,13 @@ compatible installed app `Ready`, and retain the network badge/detail cue. The a
 its offline UI. A later real `NetworkPort` may make the cue dynamic without changing the
 descriptor contract.
 
-**COORDINATOR RULING NEEDED:** approve non-blocking network metadata, or add a production
-network adapter and a dynamic ready-state transition in this epic. The latter is larger and
-is not required to execute Poolsuite's existing network-aware application.
+**Coordinator ruling (accepted):** use that non-blocking metadata model. An installed,
+compatible app remains `Ready` while retaining the network cue, and the app owns its offline
+UI. Poolsuite already maps player connection failures and unavailable conditions into rendered
+player states. [poolsuite@`3e1077679ed78a0fe9726cf894e807ef52b110cd`
+`crates/ps-app/src/main.rs:663-677`; poolsuite@`3e1077679ed78a0fe9726cf894e807ef52b110cd`
+`crates/ps-ui/src/lib.rs:1415-1423`] A production `NetworkPort` and dynamic readiness are out
+of scope.
 
 ### 5. Poolsuite's currently pinned descriptor is not catalog-valid
 
@@ -188,8 +195,12 @@ non-canonical key preserves that fallback. [poolsuite@`3e1077679ed78a0fe9726cf89
 bumps `platform-version` to `20`, and runs the platform validator. `input`, `audio`,
 `launch.audio=true`, and `needs_network=true` remain unchanged.
 
-**COORDINATOR RULING NEEDED:** approve that prerequisite Poolsuite PR. Expanding the canonical
-app schema with an application-specific theme key is not the minimal generic mechanism.
+**Coordinator ruling (accepted):** that prerequisite Poolsuite PR is required and proves
+`pf app-validate`; version `20` is the platform used by target A133-open dev image `add26f08`.
+Theme selection stays in Poolsuite's persisted settings, and its fallback remains `classic`.
+[poolsuite@`3e1077679ed78a0fe9726cf894e807ef52b110cd`
+`crates/ps-app/src/main.rs:905-915`, `crates/ps-app/src/main.rs:931-944`,
+`crates/ps-app/src/main.rs:1151-1197`]
 
 ### 6. Generic unit and return path: partly confirmed, lifecycle observation is missing
 
@@ -225,19 +236,22 @@ restored shell presents its first frame it sends the already-defined
 `crates/pf-session-authority/src/lib.rs:1-7`, `crates/pf-session-authority/src/lib.rs:470-492`,
 `crates/pf-session-authority/src/lib.rs:908-928`]
 
-**COORDINATOR RULING NEEDED:** approve systemd-backed reconciliation in the runtime PR. Visual
+**Coordinator ruling (accepted):** implement systemd-backed reconciliation in the runtime PR,
+and publish `Returned` only after the restored shell's `presentation_acknowledged`. Visual
 restoration alone is insufficient. **Inference:** because the launch publishes a durable
 `Starting` event and no production path currently advances the observation ladder, the
 restarted launcher would replay that state without a truthful terminal receipt.
 
 ### 7. Branding gate and application scope: confirmed
 
-The generic mechanism is independent of Poolsuite. Poolsuite remains selected only for A133
-dev builds; release and A523 select the empty producer. Moving it to release after written
-permission remains a one-line selector change and is not part of this work.
+The generic mechanism is independent of Poolsuite. Per the coordinator's corrected scope, the
+mechanism ships only on A133-open dev and release profiles. Poolsuite remains A133-open dev
+only; A133-open release, A133 vendor/default, and A523 select no Poolsuite payload. Moving it
+to A133-open release after written permission remains a selector change and is not part of
+this work.
 [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
 `build/Dockerfile.pf:1429-1444`; platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
-`core/profile.py:444-450`]
+`core/profile.py:427-450`]
 
 ## Fixed interfaces
 
@@ -398,9 +412,10 @@ audio, and settings as always-backed platform capabilities. [runtime@`a2f149caef
 `crates/pf-broker/src/manifest.rs:441-453`,
 `crates/pf-broker/src/manifest.rs:619-627`]
 
-Platform adds an app-runtime capability list to each base device profile; derived profiles
-inherit it. `profile.py` derives family and platform version from the existing family registry,
-emits these four deterministic build arguments, and image renders the TOML file:
+Platform makes `abi/families.toml` the single source for the launcher-facing runtime family,
+ABI, and platform version, alongside the canonical supported-capability declaration.
+`profile.py` resolves that data and emits these four deterministic build arguments only for
+A133-open profiles; image renders the TOML file:
 
 ```text
 PF_APP_RUNTIME_FAMILY
@@ -409,8 +424,10 @@ PF_APP_PLATFORM_VERSION
 PF_APP_CAPABILITIES
 ```
 
-No new repository or BuildKit context is introduced. This uses platform's existing profile and
-build-argument seam, which already emits runtime, launcher, Poolsuite, and image identities.
+No new repository or BuildKit context is introduced. Non-open profiles emit none of these
+arguments and keep their current image inputs and rootfs bytes. This uses platform's existing
+profile and build-argument seam, which already emits runtime, launcher, Poolsuite, and image
+identities.
 [platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
 `core/profile.py:392-470`; platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
 `core/pf-build.sh:520-547`]
@@ -465,11 +482,12 @@ image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
 1. **Platform preparation PR (no `platform.lock` pin movement).** Add the app-runtime
    capability declaration/schema, derive the family/version, emit the four build args, and add
    resolver tests. **Inference:** because the old Dockerfile does not consume the new build
-   arguments, every existing lock-selected build remains valid. Scope: metadata/build argv for
-   all profiles; no rootfs byte change yet.
-2. **Poolsuite descriptor prerequisite PR.** Subject to ruling 5, remove `[app].theme`, bump
-   `platform-version` 18 to 20, and prove `pf app-validate`. Scope: Poolsuite source only; the
-   current lock continues selecting `3e107767` until step 6.
+   arguments, every existing lock-selected build remains valid. Scope: schema/source for the
+   platform contract, with the new build arguments emitted only for A133-open; non-open profile
+   outputs and rootfs bytes remain unchanged.
+2. **Poolsuite descriptor prerequisite PR.** Remove `[app].theme`, bump `platform-version` 18
+   to 20, and prove `pf app-validate`. Scope: Poolsuite source only; the current lock continues
+   selecting `3e107767` until step 6.
 3. **Runtime PR.** Add `pf-app-manifest`, strict resolver, `pf-app-launch`, authority resolution,
    item-id-aware commands and persisted lifecycle state, systemd reconciliation, reason codes,
    and hermetic positive/negative tests. Merge it. Scope: source only until the final lock bump;
@@ -483,16 +501,19 @@ image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
    `platform.lock:485-501`]
 5. **Image PR, before any pin movement.** Update both hard-coded SHA guards to the merged
    runtime and launcher heads; update `verify-w2c-prefsd-wiring.py`,
-   `test-launcher-runtime-contract.sh`, and the vendored-crate equality list; build/install
-   `pf-app-launch`; render/install the platform file; add `pf-app@.service`; remove the dedicated
-   Poolsuite service; and add unit/rootfs/profile tests. Merge it. The old platform lock still
-   selects image `e765ba2c`, so no fleet build sees the new guards yet.
-6. **One atomic platform lock PR owned by the pin lane.** Move `image`, `runtime`, and
-   `launcher` together to the merged steps 3-5 heads; also move `poolsuite` to step 2 if ruling 5
-   is approved. Do not split these pin changes. The same PR refreshes derived ABI/build evidence
-   required by platform policy.
+   `test-launcher-runtime-contract.sh`, and the vendored-crate equality list. In A133-open
+   stages only, build/install `pf-app-launch`, render/install the platform file, add
+   `pf-app@.service`, and remove the dedicated Poolsuite service. Add unit/rootfs/profile tests
+   that prove A133 vendor/default and A523 outputs remain byte-identical and contain none of
+   those files. Merge it. The old platform lock still selects image `e765ba2c`, so no fleet
+   build sees the new guards yet.
+6. **One atomic platform lock PR owned by gpu-14.** Move `image`, `runtime`, and `launcher`
+   together to the merged steps 3-5 heads, and move `poolsuite` to the merged step 2 head. Do not
+   split these pin changes. The same PR refreshes derived ABI/build evidence required by
+   platform policy.
 7. **Only after step 6:** run hermetic image builds/reviews. Device acceptance is separately
-   scheduled on `tsp-base`; it is not performed by these implementation turns.
+   scheduled on `tsp-base` using the A133-open dev image; it is not performed by these
+   implementation turns.
 
 This is the required three-way interlock: runtime/launcher merge first, the image realigns to
 both, and one platform lock PR moves image/runtime/launcher together.
@@ -518,16 +539,19 @@ The image PR adds or updates these fatal preconditions:
 2. `PF_LAUNCHER_SHA` equals the merged launcher head in the open stage.
 3. The launcher's vendored `pf-app-manifest` and every changed runtime contract crate are
    byte-equal to the staged runtime source.
-4. All four `PF_APP_*` values are present, syntactically valid, internally compatible, and
-   `PF_APP_CAPABILITIES` is sorted, unique, and a subset of runtime's known set.
-5. The generated platform TOML parses back to the exact build-arg values.
-6. `pf-app-launch` exists, is AArch64, and satisfies the same static-musl check as the other
-   runtime helpers.
-7. On open/display images, `pf-shell`, `pf-session-authorityd`, and `pf-app-launch` are
-   all-present or the build fails; non-open images install only the dormant generic helper,
-   template, and platform file.
-8. A dev Poolsuite tree must pass the shared descriptor validator before installation; release
-   remains an exact no-op for the app tree.
+4. On A133-open, all four `PF_APP_*` values are present, syntactically valid, internally
+   compatible, and `PF_APP_CAPABILITIES` is sorted, unique, and a subset of runtime's known set;
+   non-open profiles emit none of the four.
+5. On A133-open, the generated platform TOML parses back to the exact build-arg values.
+6. On A133-open, `pf-app-launch` exists, is AArch64, and satisfies the same static-musl check as
+   the other runtime helpers.
+7. On A133-open, `pf-shell`, `pf-session-authorityd`, `pf-app-launch`, `pf-app@.service`, and the
+   platform TOML are all present or the build fails. A133 vendor/default and A523 install none of
+   the default-app helper, template, or platform file and must remain byte-identical to their
+   corresponding pre-feature outputs.
+8. An A133-open dev Poolsuite tree must pass the shared descriptor validator before
+   installation; A133-open release and every non-open profile remain exact no-ops for the app
+   tree.
 
 The recovery literal remains a co-pin even though this design does not change it; current image
 checks it in both the recovery build stage and rootfs script. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
@@ -536,19 +560,20 @@ checks it in both the recovery build stage and rootfs script. [image@`e765ba2cd5
 
 ## Per-profile scope
 
-Owner direction says the generic mechanism ships in all images, while the launcher remains
-A133-open-only. Therefore non-open byte identity changes only by the explicitly listed dormant
-generic files; no new service is enabled there.
+The corrected coordinator scope follows the existing launcher/session-authority deployment
+boundary: the complete default-app mechanism ships only on A133-open dev and release. A133
+vendor/default and A523 receive no helper, template, platform file, or Poolsuite payload and
+remain byte-identical.
 
 | Change | A133 open (dev/release) | A133 vendor/default and owned (dev/release) | A523 (dev/release) |
 |---|---|---|---|
-| Platform support declaration/build args | active; A133 family/caps | same inherited A133 values | A523 family/caps |
-| `pf-app-manifest` source | compiled into authority/helper; vendored into shell | helper only | helper only |
-| `pf-app-launch`, `pf-app@.service`, platform TOML | installed; template dormant until launch | installed but dormant; intentional additive byte delta | installed but dormant; intentional additive byte delta |
+| Platform support declaration/build args | emitted; A133 family/ABI/version/caps | not emitted; byte-identical | not emitted; byte-identical |
+| `pf-app-manifest` source | compiled into authority/helper; vendored into shell | no image integration; byte-identical | no image integration; byte-identical |
+| `pf-app-launch`, `pf-app@.service`, platform TOML | installed; template dormant until launch | absent; byte-identical | absent; byte-identical |
 | `pf-session-authorityd` change | installed/enabled on open profiles | remains absent | remains absent |
 | launcher change | installed on open profiles | remains absent and no launcher source is staged | remains absent and no launcher source is staged |
-| Poolsuite payload | A133 dev only; release absent | A133 dev only; release absent | always absent |
-| dedicated Poolsuite service | removed where Track A installed it | removed where Track A installed it | never present |
+| Poolsuite payload | dev only; release absent | always absent; byte-identical | always absent; byte-identical |
+| dedicated Poolsuite service | removed from the open dev path it formerly served | no change; byte-identical | no change; byte-identical |
 
 The current image explicitly gates session authority and launcher on `PF_GPU_MODEL=open`, and
 platform emits launcher identity only for open profiles. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
@@ -556,11 +581,10 @@ platform emits launcher identity only for open profiles. [image@`e765ba2cd5d278b
 platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
 `core/profile.py:427-443`]
 
-Installing the dormant mechanism on A133 vendor/default and A523 is an intentional exception to
-their prior byte-identical posture, required by the owner statement “the mechanism ships in all
-images.” If “all images” was intended to mean only A133-open dev/release, the image PR must not
-touch the other rootfs paths; that interpretation needs an explicit coordinator correction
-before implementation.
+The earlier “mechanism ships in all images” wording was coordinator wording, not the owner's
+decision. The owner's decision is that Poolsuite becomes a default app. This corrected scope is
+load-bearing: the image and platform tests must fail if any default-app file or selector reaches
+an A133 vendor/default or A523 output.
 
 ## Failure modes and hermetic tests
 
@@ -580,14 +604,14 @@ before implementation.
 | Safe-return stop or kill times out | Runtime: existing graceful deadline and forced-close tests are repeated with item-id units and persisted/restarted state. The authority already models those phases and receipts. [runtime@`a2f149caef326215ce0bff7d0d076bac292595d4` `crates/pf-session-authority/src/lib.rs:729-780`, `crates/pf-session-authority/src/lib.rs:829-857`] |
 | Platform file missing/malformed | Launcher: missing, unreadable, invalid TOML, wrong schema, unknown cap, duplicate, unsorted; each yields one exact warning and empty capabilities with legacy family/ABI fallback. |
 | Runtime family/ABI/platform version mismatch | Launcher + runtime: each mismatch is unavailable/refused with its stable reason; matching A133 v20 is ready. |
-| Required capability absent | Launcher: `input` or `audio` missing makes Poolsuite `UnsupportedCapability`; both present makes it ready subject to rulings 4 and 5; optional cap stays ready. |
-| Network metadata blocks forever | Launcher: with no production network backend, `needs_network=true` remains launchable and exposes the network cue under ruling 4. |
+| Required capability absent | Launcher: `input` or `audio` missing makes Poolsuite `UnsupportedCapability`; both present with the matching identity makes it ready; an optional cap stays ready. |
+| Network metadata blocks forever | Launcher: with no production network backend, `needs_network=true` remains launchable and exposes the approved network cue. |
 | Wrong unit rendering | Image: parse `pf-app@.service`; assert exact root, user/groups, XDG paths, target join, hardening, no enable symlink, stop/restart policy, and helper command. |
 | Dedicated Poolsuite bypass survives | Image: assert no `pocketforge-poolsuite.service` in source or installed tree and installer has no unit argument/install. |
-| Capability file/build args drift | Platform + image: every base/derived profile emits the expected deterministic tuple; generated TOML round-trips; unknown/missing input is fatal. |
+| Capability file/build args drift | Platform + image: every A133-open profile emits the expected deterministic tuple and generated TOML round-trips; non-open profiles emit no tuple or file; unknown/missing open input is fatal. |
 | Runtime/launcher/image lock split | Image + platform: negative fixtures move each SHA alone and prove the old/new image guard refuses; positive fixture moves image/runtime/launcher together. |
-| Non-open launcher scope expands accidentally | Platform: A133 vendor/default and A523 still emit empty launcher repo/ref/SHA and stage no launcher context. |
-| Branding leaks to release or A523 | Image + platform: selectors and rootfs fixtures prove Poolsuite exists only in A133 dev and the generic mechanism exists in all requested profiles. |
+| Non-open default-app scope expands accidentally | Platform + image: A133 vendor/default and A523 emit no launcher or `PF_APP_*` identity, stage no launcher context, contain none of the three default-app files, and match the pre-feature byte fixtures. |
+| Branding leaks to release or non-open profiles | Image + platform: selectors and rootfs fixtures prove Poolsuite exists only in A133-open dev; the generic mechanism exists only in A133-open dev/release. |
 
 ## Device acceptance boundary
 
@@ -602,7 +626,8 @@ claims established by the reviewed repositories.
 
 This work does not add downloadable installation, per-app minisign/cosign verification,
 third-party broker sandbox enforcement, a production network-control adapter, verified boot,
-or a release selector for Poolsuite. The existing descriptor documents those future signing
-and packaging siblings, while the owner decision for this bead limits the first mechanism to
-image-shipped default apps. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
+an A133-open release selector for Poolsuite, or any default-app integration or rootfs byte change
+for A133 vendor/default or A523. The existing descriptor documents those future signing and
+packaging siblings, while the owner decision for this bead limits the first mechanism to
+image-shipped default apps on A133-open. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
 `docs/APP-DESCRIPTOR.md:10-36`, `docs/APP-DESCRIPTOR.md:38-59`]
