@@ -4,7 +4,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 guard="${repo_root}/scripts/check-launcher-runtime-contract.sh"
 dockerfile="${repo_root}/build/Dockerfile.pf"
-crates="pf-app-manifest pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme pf-input-map pf-prefs pf-prefs-port pf-session-client pf-session-authority pf-wire"
+crates="pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme pf-input-map pf-prefs pf-prefs-port pf-session-client pf-session-authority pf-wire"
 
 guard_call=$(sed -n \
     '/^check-launcher-runtime-contract \/work\/launcher \/work\/runtime-contract/,/pf-session-authority pf-wire$/p' \
@@ -16,7 +16,7 @@ test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 expected_runtime=0589fcfa959dca9150563ef0ed18d7d44b420dc5
-expected_launcher=2c8f819193a42385c9edc3e5cd90c3bd3b59f170
+expected_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
 old_runtime=a2f149caef326215ce0bff7d0d076bac292595d4
 old_launcher=bb8c9bc8c9ea15238d08cfee5376049bf67cf855
 
@@ -59,6 +59,22 @@ for crate in $crates; do
 done
 
 "$guard" "$scratch/launcher" "$scratch/runtime" $crates
+
+# A missing vendored crate must fail cleanly at the shell boundary. In
+# particular, do not enter the reference scanner with absent Cargo/source paths
+# and leak a Python traceback before the remaining crates are audited.
+mv "$scratch/launcher/vendor/pf-app-launch" "$scratch/pf-app-launch-missing"
+if output=$("$guard" "$scratch/launcher" "$scratch/runtime" $crates 2>&1); then
+    echo "FAIL: missing vendored crate passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: launcher/runtime contract drift: pf-app-launch'
+if printf '%s\n' "$output" | grep -Fq 'Traceback'; then
+    echo "FAIL: missing vendored crate leaked a Python traceback" >&2
+    exit 1
+fi
+mv "$scratch/pf-app-launch-missing" "$scratch/launcher/vendor/pf-app-launch"
 
 printf 'drift\n' >> "$scratch/launcher/vendor/pf-wire/src/lib.rs"
 if output=$("$guard" "$scratch/launcher" "$scratch/runtime" $crates 2>&1); then

@@ -39,12 +39,23 @@ assert runtime_guard == ["0589fcfa959dca9150563ef0ed18d7d44b420dc5"], (
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
+launcher_guard = re.findall(
+    r'^\[ "\$\{PF_LAUNCHER_SHA\}" = "([0-9a-f]{40})" \] '
+    r'\|\| \{ echo "FATAL: F13 launcher pin drift: \$\{PF_LAUNCHER_SHA\}"; exit 1; \}$',
+    dockerfile,
+    flags=re.MULTILINE,
+)
+assert launcher_guard == ["1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77"], (
+    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher 1e5a3d97, "
+    f"found: {launcher_guard}"
+)
 assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
 assert "systemd/pf-prefsd.service /out/systemd/pf-prefsd.service" in dockerfile
 assert "systemd/pf-session-authorityd.service /out/systemd/pf-session-authorityd.service" in dockerfile
 assert "systemd/pocketforge.conf /out/tmpfiles.d/pocketforge.conf" in dockerfile
 for crate in (
+    "pf-app-launch",
     "pf-app-manifest",
     "pf-scene",
     "pf-ports",

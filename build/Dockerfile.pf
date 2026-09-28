@@ -1629,12 +1629,12 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "2c8f819193a42385c9edc3e5cd90c3bd3b59f170" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
-# pf-shell vendors these thirteen runtime crates. Compare every source tree, not
+[ "${PF_LAUNCHER_SHA}" = "1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+# pf-shell vendors these fourteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
 check-launcher-runtime-contract /work/launcher /work/runtime-contract \
-  pf-app-manifest pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme \
+  pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme \
   pf-input-map pf-prefs pf-prefs-port pf-session-client \
   pf-session-authority pf-wire
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi

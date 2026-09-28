@@ -12,9 +12,17 @@ shift 2
 
 status=0
 for crate in "$@"; do
+    launcher_crate="${launcher_dir}/vendor/${crate}"
+    runtime_crate="${runtime_dir}/crates/${crate}"
+    if [ ! -d "${launcher_crate}/src" ] || [ ! -f "${launcher_crate}/Cargo.toml" ] \
+        || [ ! -d "${runtime_crate}/src" ] || [ ! -f "${runtime_crate}/Cargo.toml" ]; then
+        echo "FATAL: launcher/runtime contract drift: ${crate}" >&2
+        status=1
+        continue
+    fi
     if ! diff -qr \
-        "${launcher_dir}/vendor/${crate}/src" \
-        "${runtime_dir}/crates/${crate}/src" >/dev/null; then
+        "${launcher_crate}/src" \
+        "${runtime_crate}/src" >/dev/null; then
         echo "FATAL: launcher/runtime contract drift: ${crate}" >&2
         status=1
     fi
