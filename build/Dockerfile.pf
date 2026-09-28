@@ -67,6 +67,11 @@ ARG PF_DISPLAY_PIPELINE
 # empty producers; dev selects the real diagnostic/application producers.
 ARG PF_VARIANT=dev
 
+# The SoC is global because Poolsuite Track A is device-scoped: only A133
+# (sun50iw10p1) dev images may select the real producer. The default is an empty
+# NOT-SHIPPED alias so targeted builds that omit PF_SOC remain source-free.
+ARG PF_SOC=not-shipped
+
 # =============================================================================
 # fetch — vendor blobs (irreducibly-closed originals), by CID (B3 / tsp-1dl.3).
 # DECIDED mechanism: HERMETIC KUBO-IN-BUILD (owner + research, 2026-07-02). kubo (pinned
@@ -1420,12 +1425,22 @@ cat /out/.pf-poolsuite-provenance
 printf '%s\n' "${DEPS}" | awk '/NEEDED/{print}'
 POOLSUITEDEV
 
-# Release builds select this source-free empty producer. BuildKit therefore
-# prunes poolsuite-toolchain, poolsuite-fetch, poolsuite-dev and poolsuite-src.
+# Generic source-free NOT-SHIPPED producer. BuildKit prunes poolsuite-toolchain,
+# poolsuite-fetch, poolsuite-dev and poolsuite-src whenever this stage is selected.
 FROM ${PF_CONTAINER} AS poolsuite-release
 RUN mkdir -p /out
 
-FROM poolsuite-${PF_VARIANT} AS poolsuite
+# Track A targets the base TrimUI Smart Pro (A133/sun50iw10p1) only. A523
+# (sun55iw3) dev builds deliberately select the same empty stub as release; do
+# not build or silently drop a Poolsuite artifact on an unsupported device.
+FROM poolsuite-dev AS poolsuite-sun50iw10p1-dev
+FROM poolsuite-release AS poolsuite-sun50iw10p1-release
+FROM poolsuite-release AS poolsuite-sun55iw3-dev
+FROM poolsuite-release AS poolsuite-sun55iw3-release
+FROM poolsuite-release AS poolsuite-not-shipped-dev
+FROM poolsuite-release AS poolsuite-not-shipped-release
+
+FROM poolsuite-${PF_SOC}-${PF_VARIANT} AS poolsuite
 
 # =============================================================================
 # recovery — launcher-independent recovery surface (product-010 F16 authoring)

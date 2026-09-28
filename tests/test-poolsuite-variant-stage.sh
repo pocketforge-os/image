@@ -9,13 +9,22 @@ grep -Fx 'FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889ef
 grep -Fx 'ARG RUST_VERSION=1.91.0' "${dockerfile}" >/dev/null
 grep -Fx 'ARG RUSTUP_INIT_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c' "${dockerfile}" >/dev/null
 grep -Fx 'dpkg-query -W > /toolchain-packages.txt' "${dockerfile}" >/dev/null
+grep -Fx 'ARG PF_SOC=not-shipped' "${dockerfile}" >/dev/null
 
 grep -Fx 'FROM poolsuite-toolchain AS poolsuite-fetch' "${dockerfile}" >/dev/null
 grep -Fx 'FROM poolsuite-toolchain AS poolsuite-dev' "${dockerfile}" >/dev/null
 # shellcheck disable=SC2016 # Match literal Dockerfile ARG interpolation.
 grep -Fx 'FROM ${PF_CONTAINER} AS poolsuite-release' "${dockerfile}" >/dev/null
+# Only the A133 dev combination reaches the real producer. In particular, this
+# exact alias is the regression guard that an A523 dev build selects the stub.
+grep -Fx 'FROM poolsuite-dev AS poolsuite-sun50iw10p1-dev' "${dockerfile}" >/dev/null
+grep -Fx 'FROM poolsuite-release AS poolsuite-sun50iw10p1-release' "${dockerfile}" >/dev/null
+grep -Fx 'FROM poolsuite-release AS poolsuite-sun55iw3-dev' "${dockerfile}" >/dev/null
+grep -Fx 'FROM poolsuite-release AS poolsuite-sun55iw3-release' "${dockerfile}" >/dev/null
+grep -Fx 'FROM poolsuite-release AS poolsuite-not-shipped-dev' "${dockerfile}" >/dev/null
+grep -Fx 'FROM poolsuite-release AS poolsuite-not-shipped-release' "${dockerfile}" >/dev/null
 # shellcheck disable=SC2016 # Match literal Dockerfile ARG interpolation.
-grep -Fx 'FROM poolsuite-${PF_VARIANT} AS poolsuite' "${dockerfile}" >/dev/null
+grep -Fx 'FROM poolsuite-${PF_SOC}-${PF_VARIANT} AS poolsuite' "${dockerfile}" >/dev/null
 
 fetch_body="$(sed -n '/^FROM poolsuite-toolchain AS poolsuite-fetch$/,/^FROM poolsuite-toolchain AS poolsuite-dev$/p' "${dockerfile}")"
 grep -F 'COPY --from=poolsuite-src . /work/poolsuite' <<<"${fetch_body}" >/dev/null
@@ -34,7 +43,7 @@ for key in poolsuite@ cargo_lock_sha256 fetched_source_sha256 ps_app_sha256; do
 done
 
 # shellcheck disable=SC2016 # sed matches literal Dockerfile ARG interpolation.
-release_body="$(sed -n '/^FROM ${PF_CONTAINER} AS poolsuite-release$/,/^FROM poolsuite-${PF_VARIANT} AS poolsuite$/p' "${dockerfile}")"
+release_body="$(sed -n '/^FROM ${PF_CONTAINER} AS poolsuite-release$/,/^FROM poolsuite-dev AS poolsuite-sun50iw10p1-dev$/p' "${dockerfile}")"
 if grep -Eq 'poolsuite-src|poolsuite-fetch|PF_POOLSUITE_SHA|device-(fetch|build)' <<<"${release_body}"; then
     echo 'release stage unexpectedly references the Poolsuite build graph' >&2
     exit 1
