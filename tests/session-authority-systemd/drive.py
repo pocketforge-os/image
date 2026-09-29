@@ -379,7 +379,11 @@ def assert_crash_exit() -> str:
 def main() -> None:
     require(Path("/proc/1/comm").read_text().strip() == "systemd", "PID 1 is not systemd")
     require(command("uname", "-m").stdout.strip() == "x86_64", "container is not x86_64")
-    Path("/dev/fb0").touch()
+    framebuffer = Path("/dev/fb0")
+    require(
+        framebuffer.is_file() and framebuffer.stat().st_size == 0,
+        "/dev/fb0 test prerequisite is absent or is not an empty regular file",
+    )
     wait_for(
         lambda: unit_is_active(AUTHORITY_UNIT) and authority_is_responding(),
         "authority socket",
@@ -387,13 +391,21 @@ def main() -> None:
     wait_for(lambda: unit_is_active(OWNER_UNIT), "initial selected owner")
 
     assert_refusals_never_reach_systemd()
+    before_clean_invocations = invocation_count()
     clean_session = assert_clean_exit_with_restart()
+    clean_invocations = invocation_count() - before_clean_invocations
+    require(clean_invocations == 1, f"clean launch invocation count: {clean_invocations}")
+    before_crash_invocations = invocation_count()
     crash_session = assert_crash_exit()
+    crash_invocations = invocation_count() - before_crash_invocations
+    require(crash_invocations == 1, f"crash launch invocation count: {crash_invocations}")
 
     print(
         "evidence: "
         f"clean_session={clean_session} returned=1 restart_mid_ladder=ok "
         f"crash_session={crash_session} crash=1 returned=0 "
+        f"clean_invocations={clean_invocations} crash_invocations={crash_invocations} "
+        "fb0=empty-regular-file "
         "session_scoping_negative_control=ok refused_systemctl_starts=0 owner_restore=ok"
     )
 

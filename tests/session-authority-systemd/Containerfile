@@ -1,0 +1,83 @@
+FROM docker.io/library/rust:1.85-bookworm@sha256:e51d0265072d2d9d5d320f6a44dde6b9ef13653b035098febd68cce8fa7c0bc4 AS runtime-builder
+
+ARG PF_RUNTIME_SHA
+WORKDIR /src/runtime
+COPY runtime/ ./
+RUN bash scripts/check-vendor.sh \
+    && cargo fetch --locked --offline
+RUN cargo build --release --locked --offline \
+        -p pf-session-authority \
+        -p pf-app-launch \
+    && install -D -m 0755 target/release/pf-session-authorityd /out/pf-session-authorityd \
+    && install -D -m 0755 target/release/pf-app-launch /out/pf-app-launch
+
+FROM debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+
+ARG PF_RUNTIME_SHA
+LABEL org.opencontainers.image.source="https://github.com/pocketforge-os/runtime" \
+      org.opencontainers.image.revision="${PF_RUNTIME_SHA}"
+ENV container=docker
+
+RUN apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        passwd \
+        python3 \
+        systemd \
+        systemd-sysv \
+    && rm -rf /var/lib/apt/lists/* \
+    && for group_name in gamer audio input video; do \
+        getent group "${group_name}" >/dev/null || groupadd --system "${group_name}"; \
+    done \
+    && { getent passwd gamer >/dev/null \
+        || useradd --system --gid gamer --no-create-home gamer; } \
+    && usermod -a -G audio,input,video gamer
+
+RUN install -d -m 0755 \
+        /etc/systemd/system/pocketforge-foreground.target.d \
+        /opt/pocketforge/apps/org.pocketforge.fixture \
+        /usr/lib/tmpfiles.d \
+        /usr/local/libexec \
+        /usr/share/pocketforge \
+    && ln -sf /dev/null /etc/systemd/system/getty@.service \
+    && ln -sf /dev/null /etc/systemd/system/getty.target \
+    && ln -sf /dev/null /etc/systemd/system/console-getty.service \
+    && ln -sf /dev/null /etc/systemd/system/serial-getty@.service \
+    && ln -sf /dev/null /etc/systemd/system/autovt@.service
+
+COPY --from=runtime-builder /out/pf-session-authorityd /usr/bin/pf-session-authorityd
+COPY --from=runtime-builder /out/pf-app-launch /usr/bin/pf-app-launch
+COPY runtime/systemd/pf-session-authorityd.service /etc/systemd/system/pf-session-authorityd.service
+COPY runtime/systemd/pocketforge.conf /usr/lib/tmpfiles.d/pocketforge.conf
+COPY session-authority-test-tmpfiles.conf /usr/lib/tmpfiles.d/session-authority-test.conf
+COPY pf-app@.service /etc/systemd/system/pf-app@.service
+COPY pocketforge-foreground.target /etc/systemd/system/pocketforge-foreground.target
+COPY 10-owner-shell.conf /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf
+COPY pf-shell-selected.service /etc/systemd/system/pf-shell-selected.service
+COPY session-authority-test.target /etc/systemd/system/session-authority-test.target
+COPY app.toml /opt/pocketforge/apps/org.pocketforge.fixture/app.toml
+COPY fixture /opt/pocketforge/apps/org.pocketforge.fixture/fixture
+COPY platform-capabilities.toml /usr/share/pocketforge/platform-capabilities.toml
+COPY drive.py /usr/local/libexec/drive.py
+COPY remount-cgroup-systemd /usr/local/libexec/remount-cgroup-systemd
+
+RUN chmod 0755 \
+        /usr/bin/pf-session-authorityd \
+        /usr/bin/pf-app-launch \
+        /opt/pocketforge/apps/org.pocketforge.fixture/fixture \
+        /usr/local/libexec/drive.py \
+        /usr/local/libexec/remount-cgroup-systemd \
+    && chmod 0644 \
+        /etc/systemd/system/pf-session-authorityd.service \
+        /etc/systemd/system/pf-app@.service \
+        /etc/systemd/system/pocketforge-foreground.target \
+        /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf \
+        /etc/systemd/system/pf-shell-selected.service \
+        /etc/systemd/system/session-authority-test.target \
+        /usr/lib/tmpfiles.d/pocketforge.conf \
+        /usr/lib/tmpfiles.d/session-authority-test.conf \
+        /usr/share/pocketforge/platform-capabilities.toml \
+        /opt/pocketforge/apps/org.pocketforge.fixture/app.toml \
+    && ln -sf session-authority-test.target /etc/systemd/system/default.target
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

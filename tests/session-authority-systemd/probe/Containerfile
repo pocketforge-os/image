@@ -1,0 +1,24 @@
+FROM debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+
+ENV container=docker
+
+RUN apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        dbus \
+        systemd \
+        systemd-sysv \
+        util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /dev/null /etc/systemd/system/getty@.service \
+    && ln -sf /dev/null /etc/systemd/system/getty.target \
+    && ln -sf /dev/null /etc/systemd/system/console-getty.service \
+    && ln -sf /dev/null /etc/systemd/system/serial-getty@.service \
+    && ln -sf /dev/null /etc/systemd/system/autovt@.service \
+    && ln -sf multi-user.target /etc/systemd/system/default.target \
+    && install -d -m 0755 /usr/local/libexec
+
+COPY remount-cgroup-systemd /usr/local/libexec/remount-cgroup-systemd
+RUN chmod 0755 /usr/local/libexec/remount-cgroup-systemd
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

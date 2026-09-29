@@ -65,6 +65,7 @@ test-dockerfile-pf-transforms:
 	@python3 tests/verify-gamepad-input-wiring.py
 	@python3 tests/verify-owned-spl-layout-gate.py
 	@tests/test-launcher-runtime-contract.sh
+	@tests/test-session-authority-systemd-safety.sh
 
 test-kernel-build-identity:
 	@bash tests/test-kernel-build-identity.sh

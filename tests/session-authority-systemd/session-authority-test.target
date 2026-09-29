@@ -1,0 +1,5 @@
+[Unit]
+Description=PocketForge session-authority integration target (no gettys)
+Requires=basic.target pf-session-authorityd.service pf-shell-selected.service
+After=basic.target pf-session-authorityd.service pf-shell-selected.service
+AllowIsolate=yes
