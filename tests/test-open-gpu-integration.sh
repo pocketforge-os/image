@@ -28,7 +28,13 @@ grep -F '/lib/firmware/powervr/rogue_22.102.54.38_v1.fw' "$gate" >/dev/null
 # Firmware policy paths are asserted at extracted-rootfs assembly time alongside
 # the PowerVR custody checks: signed regdb and owner-approved XR829 BT both ship.
 grep -F 'lib/firmware/regulatory.db' "$root/scripts/verify-rootfs-firmware.sh" >/dev/null
-grep -F 'lib/firmware/fw_xr829_bt.bin' "$root/scripts/verify-rootfs-firmware.sh" >/dev/null
+# The verifier requires every XR829 artifact, fw_xr829_bt.bin included, through
+# one loop; tests/test-rootfs-firmware.sh exercises its refusal without them.
+grep -F 'for artifact in fw_xr829.bin boot_xr829.bin sdd_xr829.bin fw_xr829_bt.bin; do' \
+    "$root/scripts/verify-rootfs-firmware.sh" >/dev/null
+# shellcheck disable=SC2016 # literal verifier source
+grep -F 'require_rootfs_file "lib/firmware/${artifact}"' \
+    "$root/scripts/verify-rootfs-firmware.sh" >/dev/null
 grep -F 'wifi-firmware/fw_xr829_bt.bin' "$customize" >/dev/null
 grep -F 'llvmpipe' "$probe" >/dev/null
 grep -F 'PF-OPEN-GPU PASS:' "$gate" >/dev/null
