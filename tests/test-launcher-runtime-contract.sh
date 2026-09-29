@@ -15,16 +15,16 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# tsp-mc9m.60.21.3 moves runtime and launcher together: runtime#101 (d75beedf ->
-# 2ad0ca76) changed the vendored pf-framehost (panel orientation with the kernel's
-# meaning), and launcher#145 (1e5a3d97 -> 96feb08c) re-vendors exactly that tree.
-# The previous image guard accepted (d75beedf, 1e5a3d97). The new guard refuses
-# the old launcher, which carries the 180-degree-off pf-framehost, and an older
-# launcher still.
-expected_runtime=2ad0ca76efc984ad80a167759cfcf23657fb0c78
+# tsp-f3fm.217 moves runtime alone: runtime#102 (2ad0ca76 -> 59accd3f) changed only
+# pf-input-decode, pf-input-broker, pf-input-collect, pf-collect-ui, Cargo.lock and
+# the vendor lock, none of which the launcher vendors, so launcher 96feb08c stays
+# the co-pin. The previous image guard accepted (2ad0ca76, 96feb08c); the new guard
+# refuses the old runtime and the pre-#145 launcher 1e5a3d97, and an older one.
+expected_runtime=59accd3fb70a100f9f1381cf3712db441eca5e73
 expected_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
-old_runtime=d75beedfb1203b329801a777803dff1ae8d5da1c
-old_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
+old_runtime=2ad0ca76efc984ad80a167759cfcf23657fb0c78
+old_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
+pre145_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
 older_launcher=bb8c9bc8c9ea15238d08cfee5376049bf67cf855
 
 runtime_guard=$(sed -n 's/^\[ "${PF_RUNTIME_SHA}" = "\([0-9a-f]\{40\}\)" \].*/\1/p' "$dockerfile")
@@ -40,16 +40,15 @@ old_guard_accepts() {
 }
 
 # Each guard accepts exactly its own (runtime, launcher) pair: the new image
-# refuses the old runtime, the old launcher and an older launcher; the old image
-# refuses the new runtime and the new launcher. So the lock must move image,
-# runtime and launcher together.
+# refuses the old runtime, the pre-#145 launcher and an older launcher; the old
+# image refuses the new runtime. So the lock must move image and runtime together.
 new_guard_accepts "$expected_runtime" "$expected_launcher"
 ! new_guard_accepts "$old_runtime" "$expected_launcher"
-! new_guard_accepts "$expected_runtime" "$old_launcher"
+! new_guard_accepts "$expected_runtime" "$pre145_launcher"
 ! new_guard_accepts "$expected_runtime" "$older_launcher"
 old_guard_accepts "$old_runtime" "$old_launcher"
 ! old_guard_accepts "$expected_runtime" "$old_launcher"
-! old_guard_accepts "$old_runtime" "$expected_launcher"
+! old_guard_accepts "$old_runtime" "$pre145_launcher"
 ! old_guard_accepts "$old_runtime" "$older_launcher"
 
 grep -F -- '--no-default-features -p pf-shell' "$dockerfile" >/dev/null
