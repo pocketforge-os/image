@@ -34,22 +34,24 @@ runtime_guard = re.findall(
     dockerfile,
     flags=re.MULTILINE,
 )
-assert runtime_guard == ["d75beedfb1203b329801a777803dff1ae8d5da1c"], (
-    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime d75beedf, "
+assert runtime_guard == ["2ad0ca76efc984ad80a167759cfcf23657fb0c78"], (
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 2ad0ca76, "
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
 assert "0589fcfa959dca9150563ef0ed18d7d44b420dc5" not in dockerfile
+assert "d75beedfb1203b329801a777803dff1ae8d5da1c" not in dockerfile
 launcher_guard = re.findall(
     r'^\[ "\$\{PF_LAUNCHER_SHA\}" = "([0-9a-f]{40})" \] '
     r'\|\| \{ echo "FATAL: F13 launcher pin drift: \$\{PF_LAUNCHER_SHA\}"; exit 1; \}$',
     dockerfile,
     flags=re.MULTILINE,
 )
-assert launcher_guard == ["1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77"], (
-    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher 1e5a3d97, "
+assert launcher_guard == ["96feb08c110b090f85d822c9f69e52b407103ad5"], (
+    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher 96feb08c, "
     f"found: {launcher_guard}"
 )
+assert "1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77" not in dockerfile
 assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
 assert "systemd/pf-prefsd.service /out/systemd/pf-prefsd.service" in dockerfile
