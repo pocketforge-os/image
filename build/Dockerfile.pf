@@ -1877,6 +1877,7 @@ ROOTFS
 # cache edge for the provenance-critical userdata image.
 FROM rootfs AS assemble
 ARG PF_DEVICE_ID
+ARG PF_DISPLAY_PIPELINE
 ARG PF_GPU_REPO
 ARG PF_GPU_MODEL=ddk
 ARG PF_GPU_KM_MODEL
@@ -1915,6 +1916,10 @@ RUN --mount=type=secret,id=wifi,required=false \
     fi
 # /work/kboot = kernel Image + <dtb>.
 COPY --from=kernel /out/boot     /work/kboot
+# The packaged kernel's resolved .config: the owned-SPL initrd stages the
+# first-light frame-000 helper only if this kernel provides DRM-fbdev /dev/fb0
+# (build-initrd.sh first_frame_decision, bd tsp-3rd3.7).
+COPY --from=kernel /out/build/config /work/kbuild/config
 # /work/kernel-tsp/lib/modules = the owned kernel's modules_install tree. build-sd-image.sh's
 # initrd step resolves required kernel features from this tree as either modules or built-ins;
 # closed/DDK still consumes its loadable videobuf2-dma-contig.ko exactly as before. The boot/
@@ -2014,6 +2019,7 @@ case "${PF_BOOT_PROTO}" in
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
       PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL}" \
       PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES}" \
+      PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" KERNEL_CONFIG=/work/kbuild/config \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned \
         --boot-chain owned-spl --uboot-spl "${UBOOT_SPL}" \

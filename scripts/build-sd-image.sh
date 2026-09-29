@@ -36,6 +36,10 @@ PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
 PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:-}"
+# Resolved .config of the kernel being packaged (the kernel stage's
+# /out/build/config). Optional; with PF_DISPLAY_PIPELINE it lets build-initrd.sh
+# decide whether the first-light frame-000 helper can work (bd tsp-3rd3.7).
+KERNEL_CONFIG="${KERNEL_CONFIG:-}"
 
 # Parse arguments
 M1B_MODE=0
@@ -156,6 +160,9 @@ INITRD_ARGS+=(--kernel-tsp-dir "${KERNEL_TSP_DIR}" --gpu-km-dir "${GPU_KM_TSP_DI
 INITRD_ARGS+=(--gpu-model "${PF_GPU_MODEL}")
 INITRD_ARGS+=(--gpu-km-model "${PF_GPU_KM_MODEL}")
 INITRD_ARGS+=(--kernel-required-modules "${PF_KERNEL_REQUIRED_MODULES}")
+if [ -n "${KERNEL_CONFIG}" ]; then
+    INITRD_ARGS+=(--display-pipeline "${PF_DISPLAY_PIPELINE}" --kernel-config "${KERNEL_CONFIG}")
+fi
 bash "${BOARD_DIR}/initrd/build-initrd.sh" "${INITRD_ARGS[@]}"
 if [ "${PF_GPU_MODEL}" = "none" ]; then
     if gzip -dc "${WORK}/initrd.gz" | cpio -t 2>/dev/null \

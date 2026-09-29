@@ -8,6 +8,7 @@
 #   /lib/modules/*.ko             (PowerVR set from blobs/tsp/kernel-4.9.191)
 #   /etc/pocketforge-initrd-version
 #   /etc/pocketforge-m1b-mode     (ONLY when --m1b-mode)
+#   /lib/pocketforge-first-frame/ (ONLY for a DRM-fbdev display; see below)
 #
 # Run INSIDE the pocketforge/build container (needs busybox-static:arm64 from
 # the snapshot mirror, cpio, gzip, dpkg, aarch64 readelf). Hand-rolled, NOT
@@ -22,13 +23,15 @@
 #
 # Usage:
 #   build-initrd.sh [--m1b-mode] [--blobs DIR] [--out FILE] [--src DIR]
+#                   [--display-pipeline fbdev|drm|none --kernel-config FILE]
 #
 # Defaults assume the documented container bind-mount layout:
 #   --src   /work/src     (this image repo)
 #   --blobs /work/blobs   (the blobs repo checkout)
 #   --out   /work/out/initrd.gz
 #
-# bd: tsp-iuz.1.6 (initrd), tsp-iuz.1.11 (M1.B-mode), tsp-iuz.1.3 (kernel blobs)
+# bd: tsp-iuz.1.6 (initrd), tsp-iuz.1.11 (M1.B-mode), tsp-iuz.1.3 (kernel blobs),
+#     tsp-3rd3.7 (first-light frame 000)
 # =============================================================================
 set -euo pipefail
 
@@ -44,6 +47,8 @@ PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
 PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 declare -a KERNEL_REQUIRED_MODULE_LIST=()
+DISPLAY_PIPELINE=""
+KERNEL_CONFIG=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -57,6 +62,8 @@ while [ $# -gt 0 ]; do
         --gpu-model)       PF_GPU_MODEL="$2"; shift 2 ;;
         --gpu-km-model)    PF_GPU_KM_MODEL="$2"; shift 2 ;;
         --kernel-required-modules) PF_KERNEL_REQUIRED_MODULES="$2"; shift 2 ;;
+        --display-pipeline) DISPLAY_PIPELINE="$2"; shift 2 ;;
+        --kernel-config)   KERNEL_CONFIG="$2"; shift 2 ;;
         *) echo "build-initrd.sh: unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -65,6 +72,37 @@ case "${PF_GPU_MODEL}" in
     ddk|open|none) ;;
     *) echo "build-initrd.sh: --gpu-model must be ddk|open|none (got '${PF_GPU_MODEL}')" >&2; exit 2 ;;
 esac
+case "${DISPLAY_PIPELINE}" in
+    ''|fbdev|drm|none) ;;
+    *) echo "build-initrd.sh: --display-pipeline must be fbdev|drm|none (got '${DISPLAY_PIPELINE}')" >&2; exit 2 ;;
+esac
+if [ -n "${KERNEL_CONFIG}" ] && [ ! -f "${KERNEL_CONFIG}" ]; then
+    echo "build-initrd.sh: --kernel-config ${KERNEL_CONFIG} not found" >&2; exit 2
+fi
+
+# First-light frame 000 (bd tsp-3rd3.7). /init paints the boot animation's
+# frame 000 as soon as the kernel exposes /dev/fb0 (see its FIRST LIGHT block),
+# using the boot animator itself, statically linked, in --first-frame mode. Stage
+# that payload only where it can work and where it was asked for: a declared
+# fbdev display pipeline AND a kernel whose resolved config provides the DRM fbdev
+# emulation device node. Everything else -- no arguments (legacy callers), the
+# vendor 4.9 kernel, a kernel without CONFIG_FB_DEVICE, display "none"/"drm",
+# M1.B mode -- stages nothing, and /init's hook is then a silent no-op.
+first_frame_decision() {
+    if [ "$M1B_MODE" = 1 ]; then echo "skip m1b-mode"; return; fi
+    case "${DISPLAY_PIPELINE}" in
+        fbdev) ;;
+        '') echo "skip display-pipeline-not-given"; return ;;
+        *) echo "skip display-pipeline=${DISPLAY_PIPELINE}"; return ;;
+    esac
+    if [ -z "${KERNEL_CONFIG}" ]; then echo "skip kernel-config-not-given"; return; fi
+    grep -qx 'CONFIG_DRM_FBDEV_EMULATION=y' "${KERNEL_CONFIG}" \
+        || { echo "skip kernel-lacks-CONFIG_DRM_FBDEV_EMULATION"; return; }
+    grep -qx 'CONFIG_FB_DEVICE=y' "${KERNEL_CONFIG}" \
+        || { echo "skip kernel-lacks-CONFIG_FB_DEVICE"; return; }
+    echo "stage"
+}
+FIRST_FRAME_DECISION="$(first_frame_decision)"
 
 validate_open_module_contract() {
     [ -n "${PF_GPU_KM_MODEL}" ] \
@@ -196,6 +234,7 @@ echo "  blobs:   ${BLOBS_DIR}"
 echo "  out:     ${OUT_FILE}"
 echo "  mode:    $([ "$M1B_MODE" = 1 ] && echo 'M1.B (fall-through to shell)' || echo 'normal (switch_root)')"
 echo "  epoch:   ${SOURCE_DATE_EPOCH}"
+echo "  first-frame: ${FIRST_FRAME_DECISION} (display=${DISPLAY_PIPELINE:-<unset>} kconfig=${KERNEL_CONFIG:-<unset>})"
 
 [ -f "${INITRD_SRC}/init" ] || { echo "FATAL: ${INITRD_SRC}/init not found" >&2; exit 1; }
 
@@ -336,6 +375,34 @@ for m in $MODULES; do
     AFTER="$(stat -c%s "${STAGING}/lib/modules/${m}")"
     echo "  ${m}: ${BEFORE} -> ${AFTER} bytes"
 done
+
+# First-light payload (bd tsp-3rd3.7): the boot animator built from the same
+# source as the rootfs copy, but -static because the initrd has no libc, plus
+# frame 000 copied verbatim. Verified AArch64 with no PT_INTERP/DT_NEEDED, like
+# busybox above: a dynamic build could never exec before switch_root.
+if [ "${FIRST_FRAME_DECISION}" = "stage" ]; then
+    echo "=== staging first-light frame-000 helper ==="
+    FF_SRC="${SRC_DIR}/apps/pocketforge-boot-animator"
+    FF_DIR="${STAGING}/lib/pocketforge-first-frame"
+    mkdir -p "${FF_DIR}"
+    aarch64-none-linux-gnu-gcc -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+        -static -ffile-prefix-map="${SRC_DIR}/=" \
+        -I"${FF_SRC}/src" \
+        -o "${FF_DIR}/pocketforge-boot-animator" \
+        "${FF_SRC}/src/main.c" \
+        -lm
+    aarch64-none-linux-gnu-strip "${FF_DIR}/pocketforge-boot-animator"
+    chmod 0755 "${FF_DIR}/pocketforge-boot-animator"
+    aarch64-linux-gnu-readelf -h "${FF_DIR}/pocketforge-boot-animator" | grep -q 'AArch64' \
+        || { echo "FATAL: first-frame helper is not AArch64" >&2; exit 1; }
+    if aarch64-linux-gnu-readelf -l "${FF_DIR}/pocketforge-boot-animator" | grep -q 'INTERP' \
+        || aarch64-linux-gnu-readelf -d "${FF_DIR}/pocketforge-boot-animator" 2>/dev/null | grep -q 'NEEDED'; then
+        echo "FATAL: first-frame helper is not statically linked" >&2; exit 1
+    fi
+    install -m 0644 "${FF_SRC}/frames/frame-000.png" "${FF_DIR}/frame-000.png"
+    echo "  helper:    $(stat -c%s "${FF_DIR}/pocketforge-boot-animator") bytes (static AArch64, stripped)"
+    echo "  frame-000: $(stat -c%s "${FF_DIR}/frame-000.png") bytes sha256=$(sha256sum "${FF_DIR}/frame-000.png" | cut -d' ' -f1)"
+fi
 
 # Version stamp (read by /init's banner).
 printf '%s\n' "${SOURCE_DATE_EPOCH}-$([ "$M1B_MODE" = 1 ] && echo m1b || echo norm)" \
