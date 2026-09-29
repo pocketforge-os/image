@@ -11,7 +11,7 @@
 # a transient systemd unit joined to pocketforge-foreground.target — the
 # app-agnostic seam:
 #   start:  target activates → animator stops FIRST (Conflicts=/Before=,
-#           its SIGTERM handler clears fb0 and exits 0) → app starts.
+#           its SIGTERM handler holds the last frame and exits 0) → app starts.
 #   exit:   target deactivates (StopWhenUnneeded) → OnSuccess restores the
 #           animator. Device returns to its splash steady-state.
 #

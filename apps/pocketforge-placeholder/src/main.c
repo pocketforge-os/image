@@ -11,9 +11,9 @@
  * The fb0 handoff from pocketforge-boot-animator.service is done by systemd, not
  * here: this program's unit declares Conflicts=/After=pocketforge-boot-animator
  * on ITSELF, so starting it first STOPS the animator (SIGTERM → the animator
- * clears fb0 to black and exits 0) and only THEN starts us — exactly one fb0
- * writer at all times, no pan-fight (root cause tsp-7kpp). A brief black flash
- * during the handoff is accepted by design (see pocketforge-foreground.target).
+ * holds its last frame and exits 0, tsp-3rd3.6) and only THEN starts us —
+ * exactly one fb0 writer at all times, no pan-fight (root cause tsp-7kpp). Our
+ * first present replaces the held frame (see pocketforge-foreground.target).
  *
  * Pan-to-present (bd: tsp-woy3, mirrored from the animator): on this platform
  * fb0's scan-out is a g2d-ROTATED COPY of fb0 (the panel is portrait-native,

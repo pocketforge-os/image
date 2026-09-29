@@ -11,10 +11,10 @@
 #   Conflicts= and After= pocketforge-boot-animator.service are declared HERE, on
 #   the unit that gets STARTED. systemd enforces the STARTED unit's own Conflicts=
 #   ("starting the former stops the latter"), so activating this service first
-#   STOPS the animator (SIGTERM → the animator clears fb0 to black and exits 0),
-#   and After= orders our start behind that stop — exactly ONE fb0 writer at all
-#   times, no pan-fight (root cause tsp-7kpp). A brief black flash during the
-#   handoff is accepted by design (see pocketforge-foreground.target).
+#   STOPS the animator (SIGTERM → the animator holds its last frame and exits 0,
+#   tsp-3rd3.6), and After= orders our start behind that stop — exactly ONE fb0
+#   writer at all times, no pan-fight (root cause tsp-7kpp). Our first present
+#   replaces the held frame (see pocketforge-foreground.target).
 #
 #   We deliberately do NOT wire in via Requires=pocketforge-splash-handoff.target:
 #   that path relies on the ANIMATOR-side Conflicts= firing during a dependency

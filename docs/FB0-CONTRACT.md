@@ -36,11 +36,25 @@ After=pocketforge-foreground.target
 pf-take-panel env SDL_VIDEODRIVER=sunxifb /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
 ```
 
-What happens: activating the target **stops the current owner first** (its
-SIGTERM handler clears fb0 to black and exits 0), `After=` orders you behind
-that stop, and when you exit the target deactivates (`StopWhenUnneeded=yes`)
-and `OnSuccess=` restores the previous owner. A brief black flash at handoff is
-accepted by design.
+What happens: activating the target **stops the current owner first**, `After=`
+orders you behind that stop, and when you exit the target deactivates
+(`StopWhenUnneeded=yes`) and `OnSuccess=` restores the previous owner.
+
+**What the panel shows between the stop and your first present depends on the
+owner you displaced** (changed 2026-09-29, `tsp-3rd3.6`):
+
+- The **boot animator holds its last frame**: its SIGTERM handler unmaps fb0
+  and exits 0 without clearing or panning. There is no black gap; your first
+  full-buffer present replaces the splash frame. So paint the whole buffer on
+  your first present, not just the parts you changed.
+- The menu and placeholder still clear to black on exit
+  (`apps/pocketforge-menu/src/main.c` explains why that clear is kept for
+  diagnosis).
+
+A consequence for diagnosis: an app that never presents now leaves a **still**
+splash frame after displacing the animator, not a black panel. A still frame
+is therefore not evidence that the animator is running. Judge with
+burst/motion evidence, as in §4.
 
 An app started **outside** this contract pan-fights the current owner on the
 double-buffered fb0 and the panel alternates frames — the symptom originally
@@ -79,8 +93,32 @@ If you write `/dev/fb0` directly: draw into the back page, `msync`, set
 **Conforming consumers** to copy from: `pf-collect-ui` (in
 `pocketforge-os/runtime`) opens and mmaps fb0 and pans every frame;
 `apps/pocketforge-placeholder` and `apps/pocketforge-boot-animator` in this
-repo do the same, including clearing to black and panning once on SIGTERM so
-the next owner inherits a clean panel.
+repo do the same. The placeholder clears to black and pans once on SIGTERM;
+the animator holds its last frame (§1).
+
+### Open 7.x kernel (DRM fbdev emulation)
+
+On the open 7.x kernel (`kernel-sunxi-7.x`, `CONFIG_FB_DEVICE=y` since
+`tsp-mc9m.41.923.48`), fb0 is the kernel's DRM fbdev emulation, not disp2. As
+of 2026-09-29 this is from kernel source; device confirmation is pending in
+`tsp-3rd3.10`.
+
+- Its `FBIOGET_FSCREENINFO` id ends in `drmfb`, which the kernel documents as
+  uAPI (`drm_fb_helper.c:1627-1634`).
+- The buffer is in **native panel coordinates**: 720×1280 on the TSP, one
+  page (`CONFIG_DRM_FBDEV_OVERALLOC=100`). Nothing rotates it for you (the
+  sun8i mixer has no plane rotation). A landscape writer rotates in software
+  by the DSI connector's `panel orientation` property. That property takes
+  its kernel meaning: `Left Side Up` is `DRM_MODE_ROTATE_90`, counter-clockwise,
+  the same rotation fbcon uses. `apps/pocketforge-boot-animator/src/main.c`
+  holds the table and its kernel citations.
+- The launcher's pf-framehost currently reads that property 180° apart from
+  the kernel. Physical truth is owned by `tsp-c2b70c69022327ff5fee`, and
+  convergence by `tsp-mc9m.60.21.3`.
+- It is not yet device-verified whether mmap writes reach the panel without a
+  pan. The design note presumes they do, because sun4i has no dirty callback.
+  The animator issues `FBIOPAN_DISPLAY` with offset 0 after each update
+  anyway.
 
 ## 3. Which rendering path actually works today
 
@@ -131,5 +169,6 @@ reboot and re-run. If it renders, a negative verdict on your app is real.
 ---
 
 References: `tsp-ikk0.11` (the seam), `tsp-7kpp` (pan-fight root cause),
-`tsp-woy3` (pan-to-present), `tsp-1cl7.1` (launcher integration).
+`tsp-woy3` (pan-to-present), `tsp-1cl7.1` (launcher integration),
+`tsp-3rd3.6` (animator hold-last-frame and the open 7.x port).
 Team memory: `bd memories a133-display-app-contract --json`.

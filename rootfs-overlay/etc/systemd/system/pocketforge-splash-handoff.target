@@ -2,8 +2,8 @@
 #
 # The animator (pocketforge-boot-animator.service) has Conflicts= this target,
 # so activating it stops the animator (systemd sends SIGTERM). The animator
-# then clears fb0 to black and exits 0, leaving the panel clean for whatever
-# owns the display next.
+# then holds its last frame and exits 0 (tsp-3rd3.6); whatever owns the
+# display next replaces that frame with its first present.
 #
 # A future MainUI / kiosk service wires itself in with:
 #     [Unit]
