@@ -28,6 +28,19 @@ for shared_list in "${SHARED_PACKAGES}" "${SHARED_DEV_PACKAGES}" "${MAINLINE_PAC
     fi
 done
 
+# evtest reads current ABS axis values (EVIOCGABS, via its header) so pf-gamepad
+# decoder output can be proven read-only, without python3 (bead tsp-mc9m.41.923.53).
+# Added to the general A133 dev-only list the same way i2c-tools was
+# (image#59 / tsp-ozbp.3): dev variant only, independent of GPU model — never
+# shipped on a release image.
+packages "${SHARED_DEV_PACKAGES}" | grep -Fxq evtest
+for shared_list in "${SHARED_PACKAGES}" "${MAINLINE_PACKAGES}" "${MAINLINE_DEV_PACKAGES}"; do
+    if packages "${shared_list}" | grep -Fxq evtest; then
+        echo "FAIL: evtest leaked into ${shared_list}" >&2
+        exit 1
+    fi
+done
+
 # WiFi association remains supplied by the shared Debian runtime package and
 # the pinned PocketForge wpa stage; it must be available to every A133 variant.
 packages "${SHARED_PACKAGES}" | grep -Fxq wpasupplicant
