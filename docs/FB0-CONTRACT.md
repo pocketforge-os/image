@@ -206,18 +206,35 @@ the fix is **merged and pinned in `platform.lock`** (`kernel-sunxi-4.9#19`,
 so treat it as hardened but not yet proven.
 
 Until that verification lands, keep the protocol: judge with **burst/motion**
-evidence rather than a single frame, and before trusting a *negative* verdict
-run the positive control with your image's SDL driver (§1) —
+evidence rather than a single frame.
+
+**Closed DDK only: positive control.** Before trusting a *negative* verdict,
+run —
 
 ```sh
-# closed DDK
 pf-take-panel env SDL_VIDEODRIVER=sunxifb /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
-# open GPU (not yet a proven positive control: see §1)
-pf-take-panel env SDL_VIDEODRIVER=kmsdrm /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
 ```
 
 If `testgles2` does not render, the boot is affected and your verdict is void:
-reboot and re-run. If it renders, a negative verdict on your app is real.
+reboot and re-run. If it renders, a negative verdict on your app is real. This
+inference holds only on the closed DDK, where this `testgles2` path is proven on
+silicon (§3).
+
+**Open GPU: informational only, not a positive control.** The open image's SDL
+presents through KMSDRM, and that path is not yet verified on device (GBM
+scanout from Mesa into sun4i-drm, rotated present, fb0 restore after exit;
+§1). A `testgles2` failure there may be that unverified path failing, not the
+boot, so it does **not** void a verdict on your app. Run it and record both
+results side by side —
+
+```sh
+pf-take-panel env SDL_VIDEODRIVER=kmsdrm /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
+```
+
+— and judge your app on its own burst/motion evidence. This line becomes a
+positive control only after gpu-14's testgles2 KMSDRM rotated-present bench,
+`tsp-mc9m.41.924.16.12`, verifies the path on device. Promote it here when
+that bead closes with a device PASS.
 
 ---
 
