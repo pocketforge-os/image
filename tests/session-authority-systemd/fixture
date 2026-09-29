@@ -7,12 +7,16 @@ Modes (from /run/pocketforge/fixture-exit-code, written by drive.py):
   ignore-term  ignore SIGTERM so systemd must SIGKILL at TimeoutStopSec=2s (R4);
   abort        sleep 2 s, then die of SIGABRT with a bounded core (tsp-f3fm.222).
                Before anything observable the fixture sets its coredump_filter to 0
-               (the core holds ELF notes, registers and the vdso, never process
-               memory), caps RLIMIT_CORE at CORE_LIMIT_BYTES, and moves into its own
-               state directory. A file core_pattern therefore writes a small core
-               inside this ephemeral container; a pipe core_pattern receives the same
-               small core, which fits a pipe buffer. The main process then execs
-               /bin/sh to run `kill -ABRT $$`, so the unit's MainPID is what dumps.
+               (no process memory is dumped) and caps RLIMIT_CORE at CORE_LIMIT_BYTES
+               (a file core_pattern's ceiling). Neither bounds a PIPE core_pattern, so
+               the real ceiling is RLIMIT_AS: the main process execs /bin/sh, which
+               sets `ulimit -v AS_LIMIT_KIB` and execs a second /bin/sh (same PID) so
+               the aborting image is loaded under the limit. The kernel enforces
+               RLIMIT_AS at exec, mmap and brk whatever core_pattern says, and a core
+               holds at most the mapped address space plus ELF headers and notes.
+               Using builtins only, the aborting shell writes its own /proc/$$/limits
+               and /proc/$$/status readings to core-bound.txt, then runs
+               `kill -ABRT $$`: the unit's MainPID is what dumps.
 Each start records what the sandbox actually gives the app: the launch environment,
 whether the broker acquire socket is reachable, and whether the authority socket is.
 """
@@ -30,8 +34,26 @@ import time
 from pathlib import Path
 
 
-# drive.py holds the same bound and refuses a probe that reports more.
+# drive.py holds the same bounds and refuses a report that exceeds them.
 CORE_LIMIT_BYTES = 1024 * 1024
+AS_LIMIT_KIB = 16384
+# Runs as the aborting process, after `ulimit -v`: builtins only, so no reading
+# comes from a child. $$ is this shell, the unit's MainPID.
+ABORT_SCRIPT = r"""
+maps=0
+while IFS= read -r line; do maps=$((maps + 1)); done < /proc/$$/maps
+{
+    printf 'Pid: %s\n' "$$"
+    while IFS= read -r line; do
+        case $line in "Max address space"*|"Max core file size"*) printf '%s\n' "$line" ;; esac
+    done < /proc/$$/limits
+    while IFS= read -r line; do
+        case $line in VmPeak:*|VmSize:*|Threads:*) printf '%s\n' "$line" ;; esac
+    done < /proc/$$/status
+    printf 'Maps: %s\n' "$maps"
+} > core-bound.txt
+kill -ABRT $$
+"""
 
 
 def connect(path: str) -> str:
@@ -94,7 +116,10 @@ def main() -> int:
     if mode == "abort":
         time.sleep(2)
         os.chdir(state)
-        os.execv("/bin/sh", ["sh", "-c", "kill -ABRT $$"])
+        os.execv("/bin/sh", [
+            "sh", "-c", 'ulimit -v "$1" || exit 97; exec /bin/sh -c "$2" fixture-abort',
+            "fixture-abort", str(AS_LIMIT_KIB), ABORT_SCRIPT,
+        ])
     while True:
         time.sleep(1)
 

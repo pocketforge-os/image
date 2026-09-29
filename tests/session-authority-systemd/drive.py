@@ -1157,8 +1157,29 @@ def assert_crash_self_driven_to_recovery_then_late_ack(order: GrabOrder) -> str:
 # --- tsp-f3fm.222: SIGKILL (Result=signal) and abort (Result=core-dump) each end Crash + Idle ---
 
 # The fixture caps RLIMIT_CORE at this bound (fixture CORE_LIMIT_BYTES); a probe that
-# reports more is refused before its crash counts.
+# reports more is refused before its crash counts. RLIMIT_CORE only bounds a FILE
+# core_pattern; the kernel ignores it for a pipe (image#160 review).
 CORE_LIMIT_BYTES = 1024 * 1024
+# The real ceiling under any core_pattern: the aborting shell runs under RLIMIT_AS
+# (fixture AS_LIMIT_KIB, `ulimit -v`). The kernel enforces it at exec, mmap and brk,
+# so the dumpable memory can never exceed it.
+AS_LIMIT_KIB = 16384
+CORE_BOUND_REPORT = APP_STATE / "core-bound.txt"
+# ELF core headers and notes, beyond the memory segments (fs/binfmt_elf.c, x86_64):
+#   NT_FILE is capped by the kernel at 4 MiB (core_file_note_size_limit default,
+#   MAX_FILE_NOTE_SIZE before 6.13);
+#   per thread, prstatus + fpregset + the XSAVE area (under 12 KiB even with AMX) +
+#   siginfo fit in 64 KiB, four times over;
+#   per process, prpsinfo + siginfo + auxv fit in 64 KiB;
+#   one 56-byte program header per mapping, plus the gate vma and the note header;
+#   the 64-byte ELF header, and page alignment of the data offset (two pages).
+NT_FILE_CAP_BYTES = 4 * 1024 * 1024
+THREAD_NOTES_BYTES = 64 * 1024
+PROCESS_NOTES_BYTES = 64 * 1024
+PHDR_BYTES = 56
+ALIGNMENT_BYTES = 2 * 4096
+# Gate on the computed bound itself, so raising the limit is a reviewed change.
+CORE_UPPER_BOUND_CEILING = 32 * 1024 * 1024
 # systemd's ExecMainCode is the main process's SIGCHLD si_code.
 CLD_KILLED = "2"
 CLD_DUMPED = "3"
@@ -1262,6 +1283,70 @@ def finish_crash_case(
     return scope.session_id
 
 
+def parse_core_bound_report(text: str) -> dict[str, Any]:
+    """The aborting shell's own readings, written just before `kill -ABRT $$`."""
+    report: dict[str, Any] = {}
+    for line in text.splitlines():
+        if line.startswith("Max address space") or line.startswith("Max core file size"):
+            fields = line.split()
+            report["as" if line.startswith("Max address space") else "core"] = (fields[-3], fields[-2])
+        elif ":" in line:
+            key, value = line.split(":", 1)
+            report[key.strip()] = value.split()[0] if value.split() else ""
+    return report
+
+
+def core_notes_allowance(threads: int, maps: int) -> int:
+    return (
+        NT_FILE_CAP_BYTES
+        + threads * THREAD_NOTES_BYTES
+        + PROCESS_NOTES_BYTES
+        + (maps + 2) * PHDR_BYTES
+        + 64
+        + ALIGNMENT_BYTES
+    )
+
+
+def core_bound_violations(report: dict[str, Any], pid: str) -> tuple[list[str], dict[str, int]]:
+    """Whether the aborting process ran under the enforced RLIMIT_AS, and the core bound.
+
+    core_upper_bound_bytes = RLIMIT_AS + allowance holds at dump time, because the kernel
+    never lets the mapped size pass RLIMIT_AS. VmPeak + allowance is the tighter figure
+    observed when the shell read its own status.
+    """
+    violations: list[str] = []
+    limit_bytes = AS_LIMIT_KIB * 1024
+    soft, hard = report.get("as", ("absent", "absent"))
+    if (soft, hard) != (str(limit_bytes), str(limit_bytes)):
+        violations.append(f"max_address_space={soft}/{hard}!={limit_bytes}/{limit_bytes}")
+    if report.get("Pid") != pid:
+        violations.append(f"report_pid={report.get('Pid')}!=exec_main_pid={pid}")
+    try:
+        vm_peak = int(report["VmPeak"]) * 1024
+        vm_size = int(report["VmSize"]) * 1024
+        threads = int(report["Threads"])
+        maps = int(report["Maps"])
+    except (KeyError, ValueError):
+        return violations + [f"incomplete_report={sorted(report)}"], {}
+    if vm_peak > limit_bytes or vm_size > limit_bytes:
+        violations.append(f"vm_peak={vm_peak}/vm_size={vm_size}>{limit_bytes}")
+    if threads != 1:
+        violations.append(f"threads={threads}!=1")
+    allowance = core_notes_allowance(threads, maps)
+    bound = {
+        "vm_peak_bytes": vm_peak,
+        "vm_size_bytes": vm_size,
+        "threads": threads,
+        "maps": maps,
+        "notes_allowance_bytes": allowance,
+        "vm_peak_plus_allowance_bytes": vm_peak + allowance,
+        "core_upper_bound_bytes": limit_bytes + allowance,
+    }
+    if bound["core_upper_bound_bytes"] > CORE_UPPER_BOUND_CEILING:
+        violations.append(f"core_upper_bound={bound['core_upper_bound_bytes']}>{CORE_UPPER_BOUND_CEILING}")
+    return violations, bound
+
+
 def assert_sigkill_crash(order: GrabOrder) -> str:
     """(a) The app is killed with the exact S6b command, `systemctl kill -s KILL`:
     systemd reports Result=signal and the authority owes Crash{"systemd result: signal"}."""
@@ -1286,32 +1371,50 @@ def assert_abort_crash(order: GrabOrder) -> str:
     """(b) The app aborts (`kill -ABRT $$` in the unit's main process): systemd reports
     Result=core-dump and the authority owes Crash{"systemd result: core-dump"}.
 
-    The fixture bounds the core before it runs: coredump_filter 0 (no process memory),
-    RLIMIT_CORE <= CORE_LIMIT_BYTES, working directory = its state directory in this
-    container. Any core file the dump leaves there is measured and removed.
+    The ceiling on what the dump can emit, under a file OR a pipe core_pattern, is the
+    aborting process's RLIMIT_AS; its own /proc readings, taken just before the abort,
+    must show that limit and a mapped size within it. coredump_filter 0 (no process
+    memory) and RLIMIT_CORE (a file pattern's ceiling) stay as well. Any core file the
+    dump leaves in the state directory is measured and removed.
     """
     require(phase_summary()[0] == "Idle", f"authority busy before abort case: {authority_state()['phase']}")
-    stale_cores = sorted(path.name for path in APP_STATE.glob("core*"))
-    require(not stale_cores, f"core files present before the abort case: {stale_cores}")
+    stale = sorted(path.name for path in APP_STATE.glob("core*"))
+    require(not stale, f"core files or a core-bound report present before the abort case: {stale}")
     PROBE.unlink(missing_ok=True)
     before_invocations = invocation_count()
     scope, _ = assert_start_and_exit("abort", "failed")
     invocations = invocation_count() - before_invocations
     require(invocations == 1, f"abort launch invocation count: {invocations}")
     probe = json.loads(PROBE.read_text())
+    require(CORE_BOUND_REPORT.exists(), "the aborting shell wrote no core-bound report")
+    report_text = CORE_BOUND_REPORT.read_text()
+    CORE_BOUND_REPORT.unlink()
+    report = parse_core_bound_report(report_text)
+    exec_main_pid = property_value(APP_UNIT, "ExecMainPID")
+    bound_violations, bound = core_bound_violations(report, exec_main_pid)
     core_files = sorted(APP_STATE.glob("core*"))
     core_bytes = [path.stat().st_size for path in core_files]
     for path in core_files:
         path.unlink()
     pattern = str(probe.get("core_pattern", ""))
     destination = "pipe" if pattern.startswith("|") else "file"
+    soft_as, hard_as = report.get("as", ("absent", "absent"))
     details = (
-        f"core_pattern_kind={destination} coredump_filter={probe.get('coredump_filter')} "
-        f"core_limit={compact(probe.get('core_limit'))} "
-        f"core_limit_inherited={compact(probe.get('core_limit_inherited'))} "
+        f"core_pattern_kind={destination} rlimit_as={soft_as}/{hard_as} "
+        f"aborting_pid={report.get('Pid')} exec_main_pid={exec_main_pid} "
+        f"vm_peak_bytes={bound.get('vm_peak_bytes')} vm_size_bytes={bound.get('vm_size_bytes')} "
+        f"threads={bound.get('threads')} maps={bound.get('maps')} "
+        f"notes_allowance_bytes={bound.get('notes_allowance_bytes')} "
+        f"vm_peak_plus_allowance_bytes={bound.get('vm_peak_plus_allowance_bytes')} "
+        f"core_upper_bound_bytes={bound.get('core_upper_bound_bytes')} "
+        f"core_upper_bound_ceiling={CORE_UPPER_BOUND_CEILING} "
+        f"coredump_filter={probe.get('coredump_filter')} "
+        f"rlimit_core={compact(probe.get('core_limit'))} "
         f"core_files_in_state={len(core_files)} core_bytes={compact(core_bytes)} "
-        f"core_pattern={pattern.replace(' ', '_') or 'unread'} invocations={invocations}"
+        f"core_pattern={pattern.replace(' ', '_') or 'unread'} invocations={invocations} "
+        f"bound_violations={';'.join(bound_violations).replace(' ', '_') or 'none'}"
     )
+    require(not bound_violations, f"abort core is not bounded by RLIMIT_AS: {details}")
     require(
         probe.get("coredump_filter") == "00000000",
         f"abort fixture did not clear coredump_filter: {details}",
@@ -1321,7 +1424,10 @@ def assert_abort_crash(order: GrabOrder) -> str:
         and all(0 <= int(value) <= CORE_LIMIT_BYTES for value in probe["core_limit"]),
         f"abort fixture RLIMIT_CORE exceeds {CORE_LIMIT_BYTES}: {details}",
     )
-    require(all(size <= CORE_LIMIT_BYTES for size in core_bytes), f"core exceeds the bound: {details}")
+    require(
+        all(size <= bound["core_upper_bound_bytes"] for size in core_bytes),
+        f"core exceeds the bound: {details}",
+    )
     return finish_crash_case(
         order, scope, "abort_crash", "core-dump", CLD_DUMPED, str(int(signal.SIGABRT)), details,
     )
@@ -1356,6 +1462,40 @@ def self_test() -> None:
             f"expect_success=rejected({len(expect_success)}),non_idle=rejected"
         )
     require(not crash_receipt_violations(correct("success"), "success"), "self-test: clean stop refused")
+
+    limit = str(AS_LIMIT_KIB * 1024)
+    bounded = (
+        "Pid: 41\n"
+        "Max core file size        1048576              1048576              bytes     \n"
+        f"Max address space         {limit}             {limit}             bytes     \n"
+        "VmPeak:\t    2808 kB\nVmSize:\t    2808 kB\nThreads:\t1\nMaps: 24\n"
+    )
+    violations, bound = core_bound_violations(parse_core_bound_report(bounded), "41")
+    require(not violations, f"self-test: bounded report refused: {violations}")
+    require(
+        bound["core_upper_bound_bytes"] == AS_LIMIT_KIB * 1024 + core_notes_allowance(1, 24),
+        f"self-test: bound arithmetic: {bound}",
+    )
+    # Negative control: the same process with RLIMIT_AS absent must fail the bound.
+    unlimited = bounded.replace(
+        f"Max address space         {limit}             {limit}",
+        "Max address space         unlimited            unlimited",
+    )
+    require(unlimited != bounded, "self-test: RLIMIT_AS-absent fixture did not change the report")
+    no_limit, _ = core_bound_violations(parse_core_bound_report(unlimited), "41")
+    require(no_limit, "self-test: a report with RLIMIT_AS absent passed the core bound")
+    missing, _ = core_bound_violations(
+        parse_core_bound_report("\n".join(l for l in bounded.splitlines() if "address space" not in l)), "41"
+    )
+    require(missing, "self-test: a report without an address-space line passed the core bound")
+    over, _ = core_bound_violations(parse_core_bound_report(bounded.replace("2808 kB", "20000 kB")), "41")
+    require(over, "self-test: a mapped size above RLIMIT_AS passed the core bound")
+    other_pid, _ = core_bound_violations(parse_core_bound_report(bounded), "42")
+    require(other_pid, "self-test: a report from another process passed the core bound")
+    lines.append(
+        "core_bound:bounded=accepted,rlimit_as_absent=rejected,as_line_missing=rejected,"
+        "vm_above_limit=rejected,other_pid=rejected"
+    )
     print(f"session-authority crash-classification self-test: PASS {' '.join(lines)}", flush=True)
 
 
