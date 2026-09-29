@@ -673,7 +673,7 @@ grep -Fq 'run_scope_removed=true' "${stderr_log}" || exit 1
 audit_id=fixture-audit
 audit_label="org.pocketforge.session-authority-run=${audit_id}"
 audit_container="tsp-f3fm-211-systemd-${audit_id}"
-audit_image="tsp-f3fm-211-systemd:0589fcfa959d-${audit_id}"
+audit_image="tsp-f3fm-211-systemd:d75beedfb120-${audit_id}"
 dashdash=--
 privileged_flag="${dashdash}privileged"
 
@@ -850,14 +850,31 @@ grep -Fq 'COPY remount-cgroup-systemd /usr/local/libexec/remount-cgroup-systemd'
 grep -Fqx 'mount -o remount,rw /sys/fs/cgroup' "${remount_helper}" || exit 1
 grep -Fqx 'exec /sbin/init' "${remount_helper}" || exit 1
 
-if grep -Eq '\bmknod\b|^[[:space:]]*[cb][+!]?[[:space:]]+/dev/fb0([[:space:]]|$)' \
+if grep -Eq '\bmknod\b|^[[:space:]]*[cb][+!]?[[:space:]]+/dev/(fb0|uinput|input/[^[:space:]]+)([[:space:]]|$)' \
     "${recipe}" "${root}/tests/session-authority-systemd/session-authority-test-tmpfiles.conf"; then
-    echo 'session-authority systemd-safety: FAIL: framebuffer placeholder is a device node' >&2
+    echo 'session-authority systemd-safety: FAIL: framebuffer or input placeholder is a device node' >&2
     exit 1
 fi
+# B4 (tsp-f3fm.202.1.4): the app-session broker cases run the REAL runtime unit and
+# the REAL image drop-ins around a fake broker/shell; no input device reaches Docker.
+grep -Fqx 'COPY runtime/crates/pf-input-broker/systemd/pf-input-broker.service /etc/systemd/system/pf-input-broker.service' "${recipe}" || exit 1
+grep -Fqx 'COPY 10-app-session.conf /etc/systemd/system/pf-input-broker.service.d/10-app-session.conf' "${recipe}" || exit 1
+grep -Fqx 'COPY 10-input-broker.conf /etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf' "${recipe}" || exit 1
+grep -Fqx 'COPY fake-input-broker /usr/bin/pf-input-broker' "${recipe}" || exit 1
+grep -Fq 'pf-input-broker.service | grep -q .' "${recipe}" || exit 1
+for b4_check in 'R4 GATE FAILED' 'def assert_grab_timeline' 'def assert_broker_failure_never_traps' \
+    'grab_lock_is_held()' 'systemctl_stop_exit_after_sigkill=' '"--reuid=gamer"'; do
+    grep -Fq -- "${b4_check}" "${driver}" || {
+        echo "session-authority systemd-safety: FAIL: driver lost B4 check ${b4_check}" >&2
+        exit 1
+    }
+done
+for b4_input in fake-input-broker fake-shell capabilities.toml 10-app-session.conf 10-input-broker.conf; do
+    grep -Fq "${b4_input}" "${harness}" || exit 1
+done
 precondition_output="$(python3 "${precondition_verifier}")"
 grep -Fqx \
-    'session-authority path-preconditions: PASS conditions=1 providers=1 fb0=regular units=5' \
+    'session-authority path-preconditions: PASS conditions=2 providers=6 fb0=regular units=7' \
     <<<"${precondition_output}" || exit 1
 unprovided_unit="${tmp}/unprovided.service"
 printf '[Unit]\nConditionPathExists=/unprovided-test-path\n' >"${unprovided_unit}"

@@ -34,11 +34,12 @@ runtime_guard = re.findall(
     dockerfile,
     flags=re.MULTILINE,
 )
-assert runtime_guard == ["0589fcfa959dca9150563ef0ed18d7d44b420dc5"], (
-    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 0589fcfa, "
+assert runtime_guard == ["d75beedfb1203b329801a777803dff1ae8d5da1c"], (
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime d75beedf, "
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
+assert "0589fcfa959dca9150563ef0ed18d7d44b420dc5" not in dockerfile
 launcher_guard = re.findall(
     r'^\[ "\$\{PF_LAUNCHER_SHA\}" = "([0-9a-f]{40})" \] '
     r'\|\| \{ echo "FATAL: F13 launcher pin drift: \$\{PF_LAUNCHER_SHA\}"; exit 1; \}$',
@@ -54,6 +55,14 @@ assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
 assert "systemd/pf-prefsd.service /out/systemd/pf-prefsd.service" in dockerfile
 assert "systemd/pf-session-authorityd.service /out/systemd/pf-session-authorityd.service" in dockerfile
 assert "systemd/pocketforge.conf /out/tmpfiles.d/pocketforge.conf" in dockerfile
+# B4 (tsp-f3fm.202.1.4): the app-session input broker, the facade cdylib and the one
+# staged device descriptor join the open-only runtime-bin set.
+assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-input-broker --bin pf-input-broker" in dockerfile
+assert "install -D -m 0755 \"${BROKER_BIN}\" /out/bin/pf-input-broker" in dockerfile
+assert "crates/pf-input-broker/systemd/pf-input-broker.service /out/systemd/pf-input-broker.service" in dockerfile
+assert "install -D -m 0644 \"${CDYLIB}\" /out/lib/libpocketforge.so.1" in dockerfile
+assert "check-libpocketforge \"${CDYLIB}\" abi/libpocketforge.v1.abi" in dockerfile
+assert "/out/share/devices/${PF_DEVICE_DESCRIPTOR_ID}/capabilities.toml" in dockerfile
 for crate in (
     "pf-app-launch",
     "pf-app-manifest",

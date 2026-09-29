@@ -1107,6 +1107,24 @@ cat /out/.pf-wpa-provenance
 WPA
 
 # =============================================================================
+# platform-inputs — the ONE staged platform device descriptor (bd: tsp-f3fm.202.1
+# R1 / B3 platform#217 / B4). Platform stages devices/<ID>/capabilities.toml into
+# the `platform-inputs-src` named context ONLY for the A133-open app-runtime
+# profiles (the same profiles that emit PF_APP_*). Mirrors the launcher/recovery
+# pattern: only the open stage names the open-only context, and the selector
+# below prunes it from every other build, so ddk/none never reference a context
+# that is not staged for them. Both branches export /out; the runtime stage
+# verifies the ID/SHA-256 contract and parses the file before anything ships.
+# =============================================================================
+FROM ${PF_CONTAINER} AS platform-inputs-ddk
+RUN mkdir -p /out
+FROM ${PF_CONTAINER} AS platform-inputs-none
+RUN mkdir -p /out
+FROM ${PF_CONTAINER} AS platform-inputs-open
+COPY --from=platform-inputs-src devices /out/devices
+FROM platform-inputs-${PF_GPU_MODEL} AS platform-inputs
+
+# =============================================================================
 # runtime — runtime-layer binaries and the C SDK, built offline from the exact
 # platform.lock-selected source archive inside the owned build container.
 # =============================================================================
@@ -1120,15 +1138,26 @@ ARG PF_APP_RUNTIME_FAMILY=
 ARG PF_APP_RUNTIME_ABI=
 ARG PF_APP_PLATFORM_VERSION=
 ARG PF_APP_CAPABILITIES=
+ARG PF_DEVICE_DESCRIPTOR_ID=
+ARG PF_DEVICE_DESCRIPTOR_SHA256=
 ARG SOURCE_DATE_EPOCH
 ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 COPY --from=runtime-src . /work/runtime
+COPY --from=platform-inputs /out /work/platform-inputs
 COPY --from=image-src scripts/render-platform-capabilities.py /usr/local/bin/render-platform-capabilities
+COPY --from=image-src scripts/check-libpocketforge.sh /usr/local/bin/check-libpocketforge
+COPY --from=image-src scripts/check-device-descriptor.sh /usr/local/bin/check-device-descriptor
 COPY --from=image-src build/pf-app-validate.rs /work/runtime/crates/pf-app-manifest/examples/pf-app-validate.rs
+COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-input-broker/examples/pf-descriptor-validate.rs
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "0589fcfa959dca9150563ef0ed18d7d44b420dc5" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "d75beedfb1203b329801a777803dff1ae8d5da1c" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+# Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
+# file exist for A133-open only. Non-open: all three must be empty (prints nothing).
+# Open: exactly devices/a133/capabilities.toml with the pinned digest (prints its path).
+DESCRIPTOR="$(check-device-descriptor "${PF_GPU_MODEL:-ddk}" /work/platform-inputs \
+  "${PF_DEVICE_DESCRIPTOR_ID}" "${PF_DEVICE_DESCRIPTOR_SHA256}")"
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 cd /work/runtime
 # Build the SDK for every device: hwprobe is a separate build-graph input even
@@ -1228,10 +1257,48 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   cargo build --offline --locked --release -p pf-app-manifest --example pf-app-validate
   install -D -m 0755 target/release/examples/pf-app-validate \
     /out/build-tools/pf-app-validate
+  # --- Default-app input delivery (bd: tsp-f3fm.202.1 ruling (i), B4) --------------
+  # (1) The one staged device descriptor, already contract-checked above
+  #     (check-device-descriptor). Parse it with the SAME runtime loaders its
+  #     consumers use (pocketforge::Descriptor::load for the app facade, the
+  #     broker's Remap + ExpectedIdentity) before it may enter /out.
+  [ -n "${DESCRIPTOR}" ] || { echo "FATAL: A133-open build resolved no device descriptor"; exit 1; }
+  DESCRIPTOR_SHA256="$(sha256sum "${DESCRIPTOR}" | cut -d' ' -f1)"
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --offline --locked --release -p pf-input-broker --example pf-descriptor-validate
+  target/release/examples/pf-descriptor-validate "${DESCRIPTOR}" "${PF_DEVICE_DESCRIPTOR_ID}"
+  install -D -m 0644 "${DESCRIPTOR}" "/out/share/devices/${PF_DEVICE_DESCRIPTOR_ID}/capabilities.toml"
+  # (2) pf-input-broker, static musl like every other runtime daemon. Its runtime
+  #     unit ships verbatim; the image's drop-in scopes it to app sessions.
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-broker --bin pf-input-broker
+  BROKER_BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-broker"
+  [ -f "${BROKER_BIN}" ] || { echo "FATAL: pf-input-broker not built at ${BROKER_BIN}"; exit 1; }
+  BROKER_EM="$(od -An -tx1 -j18 -N2 "${BROKER_BIN}" | tr -d ' ')"
+  [ "${BROKER_EM}" = "b700" ] || { echo "FATAL: pf-input-broker is not aarch64 (e_machine=${BROKER_EM}, want b700)"; exit 1; }
+  if grep -qa 'ld-musl\|ld-linux' "${BROKER_BIN}"; then echo "FATAL: pf-input-broker is dynamically linked (expected static musl)"; exit 1; fi
+  install -D -m 0755 "${BROKER_BIN}" /out/bin/pf-input-broker
+  install -D -m 0644 crates/pf-input-broker/systemd/pf-input-broker.service /out/systemd/pf-input-broker.service
+  # (3) libpocketforge.so.1 — the cdylib ps-platform dlopens by that file name. It is
+  #     the gnu-target cdylib from the SDK build above (crate-type staticlib+cdylib),
+  #     linked against the toolchain's glibc sysroot. Gates: aarch64 ET_DYN, max
+  #     GLIBC_* symbol version <= 2.36 (the bookworm rootfs glibc) via objdump -T,
+  #     DT_NEEDED within bookworm libc6/libgcc-s1, and every frozen v1 ABI symbol plus
+  #     every symbol Poolsuite's ps-platform resolves exported and defined.
+  CDYLIB="target/aarch64-unknown-linux-gnu/release/libpocketforge.so"
+  [ -f "${CDYLIB}" ] || { echo "FATAL: libpocketforge cdylib not built at ${CDYLIB}"; exit 1; }
+  OBJDUMP=aarch64-none-linux-gnu-objdump READELF=aarch64-none-linux-gnu-readelf \
+    check-libpocketforge "${CDYLIB}" abi/libpocketforge.v1.abi
+  install -D -m 0644 "${CDYLIB}" /out/lib/libpocketforge.so.1
   {
     printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
     printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
     printf '  pf-app-launch sha256=%s\n' "$(sha256sum /out/bin/pf-app-launch | cut -d' ' -f1)"
+    printf '  pf-input-broker sha256=%s\n' "$(sha256sum /out/bin/pf-input-broker | cut -d' ' -f1)"
+    printf '  libpocketforge.so.1 sha256=%s\n' "$(sha256sum /out/lib/libpocketforge.so.1 | cut -d' ' -f1)"
+    printf '  devices/%s/capabilities.toml sha256=%s\n' "${PF_DEVICE_DESCRIPTOR_ID}" "${DESCRIPTOR_SHA256}"
   } >> /out/.pf-runtime-provenance
 fi
 cat /out/.pf-runtime-provenance

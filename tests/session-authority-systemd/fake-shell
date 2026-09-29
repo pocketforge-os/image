@@ -1,0 +1,52 @@
+#!/usr/bin/python3
+"""Fake selected shell for the ephemeral real-systemd harness (bd: tsp-f3fm.202.1.4).
+
+Models pf-shell's EVIOCGRAB on /dev/input/pf-gamepad with the same kernel-released
+flock the fake broker uses. A non-blocking grab that finds the lock held is a
+GRAB_CONFLICT (the broker would have broken the shell's grab, or vice versa). On
+SIGTERM it keeps the grab for 0.5 s before exiting, so a broker started before
+the shell's stop completed would conflict.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+GRAB = Path("/run/pf-grab")
+
+
+def append(name: str, line: str) -> None:
+    with open(GRAB / name, "a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+def main() -> int:
+    terminated = False
+
+    def on_term(*_: object) -> None:
+        nonlocal terminated
+        terminated = True
+
+    # Handler first: a stop that races startup still logs its term after the grab.
+    signal.signal(signal.SIGTERM, on_term)
+    lock = open(GRAB / "pf-gamepad.lock", "r+b")  # noqa: SIM115 - held until exit
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        append("violations", "GRAB_CONFLICT shell requested while held")
+        return 3
+    append("timeline", f"grab shell {time.monotonic_ns()} {os.getpid()}")
+    while not terminated:
+        time.sleep(0.05)
+    append("timeline", f"term shell {time.monotonic_ns()} {os.getpid()}")
+    time.sleep(0.5)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

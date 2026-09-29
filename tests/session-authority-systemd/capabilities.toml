@@ -1,0 +1,5 @@
+# Harness stub at the production PF_DESCRIPTOR path. The real descriptor is
+# platform-owned and parsed at image build time (build/pf-descriptor-validate.rs);
+# here only its path and readability are under test.
+[identity]
+id = "a133"

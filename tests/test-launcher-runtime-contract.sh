@@ -15,10 +15,15 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-expected_runtime=0589fcfa959dca9150563ef0ed18d7d44b420dc5
+# B4 (tsp-f3fm.202.1.4) moves runtime alone: runtime#100 (0589fcfa -> d75beedf)
+# changed only pf-input-broker, Cargo.lock and the vendor lock, none of which the
+# launcher vendors, so launcher 1e5a3d97 stays the co-pin. The previous image
+# guard accepted (0589fcfa, 1e5a3d97); an older launcher is still refused.
+expected_runtime=d75beedfb1203b329801a777803dff1ae8d5da1c
 expected_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
-old_runtime=a2f149caef326215ce0bff7d0d076bac292595d4
-old_launcher=bb8c9bc8c9ea15238d08cfee5376049bf67cf855
+old_runtime=0589fcfa959dca9150563ef0ed18d7d44b420dc5
+old_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
+older_launcher=bb8c9bc8c9ea15238d08cfee5376049bf67cf855
 
 runtime_guard=$(sed -n 's/^\[ "${PF_RUNTIME_SHA}" = "\([0-9a-f]\{40\}\)" \].*/\1/p' "$dockerfile")
 launcher_guard=$(sed -n 's/^\[ "${PF_LAUNCHER_SHA}" = "\([0-9a-f]\{40\}\)" \].*/\1/p' "$dockerfile")
@@ -32,14 +37,15 @@ old_guard_accepts() {
     test "$1" = "$old_runtime" && test "$2" = "$old_launcher"
 }
 
-# Moving either co-pin alone is refused by both the old and new image guards.
-# The positive fixture advances the runtime and launcher together.
+# Each guard accepts exactly its own (runtime, launcher) pair: the new image
+# refuses the old runtime and an older launcher, the old image refuses the new
+# runtime, so the lock must move image and runtime together (B5).
 new_guard_accepts "$expected_runtime" "$expected_launcher"
 ! new_guard_accepts "$old_runtime" "$expected_launcher"
-! new_guard_accepts "$expected_runtime" "$old_launcher"
+! new_guard_accepts "$expected_runtime" "$older_launcher"
 old_guard_accepts "$old_runtime" "$old_launcher"
 ! old_guard_accepts "$expected_runtime" "$old_launcher"
-! old_guard_accepts "$old_runtime" "$expected_launcher"
+! old_guard_accepts "$old_runtime" "$older_launcher"
 
 grep -F -- '--no-default-features -p pf-shell' "$dockerfile" >/dev/null
 if grep -E 'cargo build .*--features[ =][^#]*(desktop-sim)' "$dockerfile"; then
