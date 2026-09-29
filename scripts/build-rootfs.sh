@@ -1212,6 +1212,10 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
         "${ROOTFS}/usr/lib/pocketforge/open-gpu-gate.sh"
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service" \
         "${ROOTFS}/etc/systemd/system/pf-open-gpu-gate.service"
+    # The gate waits for the render node's device unit, never udev-settle; this
+    # drop-in bounds that wait (bd tsp-3rd3.18).
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/dev-dri-renderD128.device.d/50-pocketforge-device-timeout.conf" \
+        "${ROOTFS}/etc/systemd/system/dev-dri-renderD128.device.d/50-pocketforge-device-timeout.conf"
     ln -sf ../pf-open-gpu-gate.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-open-gpu-gate.service"
     if [ "${PF_HAS_DISPLAY}" = 1 ]; then

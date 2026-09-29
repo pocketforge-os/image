@@ -117,13 +117,23 @@ awk '
     END { exit !(requires && after) }
 ' "$required"
 
-# The gate may wait for device discovery, but must not wait for the foreground
-# target or any UI unit that is itself gated by this service.
+# The gate may wait for its own render node, but must not wait for the foreground
+# target or any UI unit that is itself gated by this service. It must also not
+# wait for udev-settle, which would hold sysinit (and MainUI) on every unrelated
+# coldplug event. tests/test-open-gpu-gate-ordering.sh proves that last point
+# on the real boot transaction (bd tsp-3rd3.18).
 after="$(sed -n 's/^After=//p' "$unit")"
-if [ "$after" != 'systemd-udev-settle.service dev-dri-renderD128.device' ]; then
+if [ "$after" != 'dev-dri-renderD128.device' ]; then
     echo "open GPU gate has unexpected After= ordering: $after" >&2
     exit 1
 fi
+if grep -v '^[[:space:]]*#' "$unit" | grep -F 'systemd-udev-settle' >/dev/null; then
+    echo 'open GPU gate must not pull in or order after systemd-udev-settle.service' >&2
+    exit 1
+fi
+bound_dropin="$root/rootfs-overlay/etc/systemd/system/dev-dri-renderD128.device.d/50-pocketforge-device-timeout.conf"
+grep -Fx 'JobRunningTimeoutSec=30s' "$bound_dropin" >/dev/null
+printf '%s\n' "$open_model_block" | grep -F '/etc/systemd/system/dev-dri-renderD128.device.d/50-pocketforge-device-timeout.conf' >/dev/null
 for forbidden in pocketforge-foreground.target pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
     case " $after " in
         *" $forbidden "*)

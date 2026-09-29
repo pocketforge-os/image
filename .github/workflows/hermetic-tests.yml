@@ -33,6 +33,12 @@ name: hermetic tests
 #     [self-hosted, pf-builder-vm] (reaped rc=137, wanted 139 -- see tsp-7854q).
 #     Excluded until tsp-7854q lands; re-add it there.
 #
+# tests/test-open-gpu-gate-ordering.sh (tsp-3rd3.18) also uses the runner's own
+# systemd binaries. `systemd --test` only computes the boot transaction and
+# executes nothing; systemd-fstab-generator writes to a tmpdir. Both run without
+# root, inside unprivileged bwrap views. If either tool is missing, the test
+# exits BLOCKED (75), which fails this job; it never passes silently.
+#
 # tests/test-session-authority-systemd-safety.sh IS included below: it fakes
 # docker entirely (a fixture `docker` binary on PATH) and is genuinely
 # hermetic, even though session-authority-systemd.yml's `probe` job also runs
@@ -98,6 +104,7 @@ jobs:
             tests/test-mainline-rootfs-packages.sh
             tests/test-none-gpu-model.sh
             tests/test-open-gpu-integration.sh
+            tests/test-open-gpu-gate-ordering.sh
             tests/test-open-module-contract.sh
             tests/test-poolsuite-rootfs-install.sh
             tests/test-poolsuite-variant-stage.sh

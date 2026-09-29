@@ -1,7 +1,16 @@
 [Unit]
 Description=PocketForge open GPU boot acceptance gate
-After=systemd-udev-settle.service dev-dri-renderD128.device
-Wants=systemd-udev-settle.service dev-dri-renderD128.device
+# Wait for the render node only. dev-dri-renderD128.device becomes active once
+# udevd has finished its event (70-pocketforge-drm-systemd.rules tags it, and
+# 60-pocketforge-dri.rules sets its permissions). powervr publishes the node only
+# after its firmware has booted. Never pull in systemd-udev-settle.service: the
+# stock unit is Before=sysinit.target, so every coldplug event, however
+# unrelated, would hold sysinit, basic and MainUI (tsp-3rd3.16, tsp-3rd3.18).
+# The drop-in dev-dri-renderD128.device.d/50-pocketforge-device-timeout.conf
+# bounds the wait. The dependency is Wants, not Requires, so after a timeout
+# the gate still runs and names the failure.
+After=dev-dri-renderD128.device
+Wants=dev-dri-renderD128.device
 Before=pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service
 
 [Service]
