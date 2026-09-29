@@ -33,6 +33,10 @@ CLIENT_ID = "image-real-systemd"
 GRAB = Path("/run/pf-grab")
 GRAB_LOCK = GRAB / "pf-gamepad.lock"
 BROKER_CONTROL = GRAB / "broker-control.sock"
+BROKER_MODE = GRAB / "broker-mode"
+BROKER_ATTEMPTS = GRAB / "broker-attempts"
+# Negative control only (run last): restores the runtime unit's Restart=on-failure.
+CONTROL_DROPIN = Path("/run/systemd/system/pf-input-broker.service.d/99-control-restart-on-failure.conf")
 UINPUT = Path("/dev/uinput")
 DESCRIPTOR = "/usr/share/pocketforge/devices/a133/capabilities.toml"
 
@@ -485,12 +489,16 @@ def assert_broker_dormant_at_boot() -> str:
     return enabled
 
 
-def press_guide() -> float:
+def broker_control(request: bytes) -> bytes:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(2)
         stream.connect(str(BROKER_CONTROL))
-        stream.sendall(b"guide\n")
-        reply = stream.recv(16)
+        stream.sendall(request + b"\n")
+        return stream.recv(16)
+
+
+def press_guide() -> float:
+    reply = broker_control(b"guide")
     require(reply.strip() == b"sent", f"fake broker did not accept the guide press: {reply!r}")
     return time.monotonic()
 
@@ -737,6 +745,248 @@ def assert_broker_failure_never_traps() -> str:
     return scope.session_id
 
 
+# --- tsp-f3fm.202.1.6: a broker that starts and then exits must fail ONCE -------------
+
+
+def broker_attempts() -> int:
+    return len(BROKER_ATTEMPTS.read_text().splitlines()) if BROKER_ATTEMPTS.exists() else 0
+
+
+def phase_summary() -> tuple[str, dict[str, Any]]:
+    phase = authority_state()["phase"]
+    name = phase if isinstance(phase, str) else next(iter(phase))
+    payload = phase.get(name, {}) if isinstance(phase, dict) else {}
+    return name, payload
+
+
+def compact(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
+
+
+def acknowledge_and_read_receipt(scope: SessionEventScope) -> Any:
+    """Acknowledge presentation only when the authority is waiting for exactly that."""
+    name, payload = phase_summary()
+    if not (
+        name == "Restoring"
+        and payload.get("session_id") == scope.session_id
+        and payload.get("rung") == "PresentationAcknowledged"
+    ):
+        return None
+    observed = rpc({"method": "observe", "observation": {"kind": "presentation_acknowledged"}})
+    require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
+    return history_entry(scope.session_id)["receipt"]
+
+
+def watch_units(seconds: float) -> dict[str, Any]:
+    """Sample the shell and the broker: a restart of either one, or a shell stop, shows here."""
+    owner_pids: set[str] = set()
+    owner_inactive = broker_up = samples = 0
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        owner_pids.add(property_value(OWNER_UNIT, "MainPID"))
+        owner_inactive += 0 if unit_is_active(OWNER_UNIT) else 1
+        broker_up += property_value(BROKER_UNIT, "ActiveState") in ("active", "activating", "reloading")
+        samples += 1
+        time.sleep(0.2)
+    return {"owner_pids": owner_pids, "owner_inactive": owner_inactive, "broker_up": broker_up,
+            "samples": samples}
+
+
+def assert_broker_exit_before_ready_never_traps() -> str:
+    """(a) The broker starts, then exits 1 before READY=1 (the .215 source refusal).
+
+    The start job fails once, with no restart, so the app job fails as a dependency.
+    The shell is back within 10 s and stays up, with no shell/broker ping-pong, for 30 s.
+    """
+    command("systemctl", "reset-failed", APP_UNIT, BROKER_UNIT, check=False)
+    require(phase_summary()[0] == "Idle", f"authority busy before case (a): {authority_state()['phase']}")
+    restart_policy = property_value(BROKER_UNIT, "Restart")
+    MODE.write_text("hold\n")
+    before_invocations = invocation_count()
+    before_grabs = broker_grab_count()
+    before_attempts = broker_attempts()
+    previous_owner = owner_pid()
+    restored_s: float | None = None
+    BROKER_MODE.write_text("exit-before-ready\n")
+    try:
+        launched = time.monotonic()
+        scope = launch()
+        try:
+            wait_for(
+                lambda: unit_is_active(OWNER_UNIT) and owner_pid() not in (0, previous_owner),
+                f"owner restore after the broker exited before READY in {scope.session_id}",
+                timeout=10.0,
+            )
+            wait_for_owner_grab(scope.session_id)
+            restored_s = time.monotonic() - launched
+        except TestFailure:
+            pass
+        restored_pid = property_value(OWNER_UNIT, "MainPID")
+        watch = watch_units(30.0)
+    finally:
+        BROKER_MODE.unlink(missing_ok=True)
+    nrestarts = property_value(BROKER_UNIT, "NRestarts")
+    broker_state = property_value(BROKER_UNIT, "ActiveState")
+    broker_result = property_value(BROKER_UNIT, "Result")
+    attempts = broker_attempts() - before_attempts
+    violations = grab_violations()
+    events()
+    phase_name, payload = phase_summary()
+    receipt = acknowledge_and_read_receipt(scope)
+    evidence(
+        f"broker_exit_before_ready session={scope.session_id} broker_restart={restart_policy} "
+        f"broker_state={broker_state} broker_result={broker_result} broker_nrestarts={nrestarts} "
+        f"broker_attempts={attempts} app_invocations={invocation_count() - before_invocations} "
+        f"broker_grabs={broker_grab_count() - before_grabs} "
+        f"owner_restore_s={'none' if restored_s is None else f'{restored_s:.2f}'} "
+        f"watch_s=30 watch_samples={watch['samples']} owner_pids_in_watch={len(watch['owner_pids'])} "
+        f"owner_inactive_samples={watch['owner_inactive']} broker_up_samples={watch['broker_up']} "
+        f"grab_violations={len(violations)} authority_phase={phase_name} rung={payload.get('rung')} "
+        f"receipt={compact(receipt)}"
+    )
+    require(restart_policy == "no", f"effective broker Restart={restart_policy!r}, want 'no'")
+    require(attempts == 1 and nrestarts == "0", f"broker restarted: attempts={attempts} NRestarts={nrestarts}")
+    require(broker_state == "failed" and broker_result == "exit-code",
+            f"broker did not fail once with exit-code: {broker_state}/{broker_result}")
+    require(invocation_count() == before_invocations, "app started although its broker exited before READY")
+    require(broker_grab_count() == before_grabs, "broker grabbed although it exited before READY")
+    require(restored_s is not None and restored_s <= 10.0, f"shell not back within 10 s: {restored_s}")
+    require(
+        watch["owner_pids"] == {restored_pid} and watch["owner_inactive"] == 0 and watch["broker_up"] == 0,
+        f"shell/broker ping-pong in 30 s: {watch} restored_pid={restored_pid}",
+    )
+    require(not violations, f"grab model conflicts: {violations}")
+    require(
+        phase_name == "Restoring" and payload.get("session_id") == scope.session_id
+        and payload.get("rung") == "PresentationAcknowledged",
+        f"authority stalled: phase={authority_state()['phase']}",
+    )
+    require(
+        isinstance(receipt, dict) and "systemd_start_failed" in receipt.get("Crash", {}).get("summary", ""),
+        f"receipt is not a systemd_start_failed Crash: {receipt}",
+    )
+    require(not session_events(events(), scope, "returned"), "broker exit before READY published Returned")
+    return scope.session_id
+
+
+def assert_broker_exit_mid_session_never_traps(order: GrabOrder) -> str:
+    """(b) The broker exits 1 mid-session, after READY=1, while the app runs.
+
+    The broker fails once. pf-app@ is stopped because it is bound to the broker,
+    the target is released, and the shell returns. The authority reaches its
+    presentation rung and records a terminal receipt; it does not stall in Restoring.
+    """
+    command("systemctl", "reset-failed", APP_UNIT, BROKER_UNIT, check=False)
+    scope = launch_held("hold")
+    before_attempts = broker_attempts()
+    before_invocations = invocation_count()
+    reply = broker_control(b"crash")
+    require(reply.strip() == b"crashing", f"fake broker did not accept the crash request: {reply!r}")
+    crashed = time.monotonic()
+    app_stopped = restored = True
+    try:
+        wait_for(
+            lambda: property_value(APP_UNIT, "ActiveState") in ("inactive", "failed"),
+            f"{APP_UNIT} to stop after its broker exited in {scope.session_id}",
+            timeout=10.0,
+        )
+    except TestFailure:
+        app_stopped = False
+    try:
+        wait_for(lambda: not unit_is_active(TARGET_UNIT), f"target release in {scope.session_id}", timeout=10.0)
+        wait_for(lambda: unit_is_active(OWNER_UNIT), f"owner restore in {scope.session_id}", timeout=10.0)
+        wait_for_owner_grab(scope.session_id)
+    except TestFailure:
+        restored = False
+    restore_s = time.monotonic() - crashed
+    # The runtime unit's RestartSec=2: wait past it so a restart would be visible.
+    time.sleep(max(0.0, crashed + 3.0 - time.monotonic()))
+    nrestarts = property_value(BROKER_UNIT, "NRestarts")
+    attempts = broker_attempts() - before_attempts
+    broker_state = property_value(BROKER_UNIT, "ActiveState")
+    broker_result = property_value(BROKER_UNIT, "Result")
+    app_state = property_value(APP_UNIT, "ActiveState")
+    app_result = property_value(APP_UNIT, "Result")
+    owner_state = property_value(OWNER_UNIT, "ActiveState")
+    events()
+    phase_name, payload = phase_summary()
+    pending = payload.get("receipt")
+    receipt = acknowledge_and_read_receipt(scope)
+    evidence(
+        f"broker_exit_mid_session session={scope.session_id} broker_state={broker_state} "
+        f"broker_result={broker_result} broker_nrestarts={nrestarts} broker_restart_attempts={attempts} "
+        f"app_state={app_state} app_result={app_result} app_stopped={'yes' if app_stopped else 'no'} "
+        f"app_invocations={invocation_count() - before_invocations} owner={owner_state} "
+        f"panel_returned={'yes' if restored else 'no'} exit_to_owner_grab_s={restore_s:.2f} "
+        f"authority_phase={phase_name} rung={payload.get('rung')} pending_receipt={compact(pending)} "
+        f"receipt={compact(receipt)}"
+    )
+    require(app_stopped and app_state != "active", f"user trapped: app still {app_state} after its broker exited")
+    require(attempts == 0 and nrestarts == "0", f"broker restarted: attempts={attempts} NRestarts={nrestarts}")
+    require(broker_state == "failed" and broker_result == "exit-code",
+            f"broker did not fail once with exit-code: {broker_state}/{broker_result}")
+    require(invocation_count() == before_invocations, "app was restarted after its broker exited")
+    require(restored and restore_s <= 10.0, f"panel not returned within 10 s: restored={restored} {restore_s:.2f}s")
+    require(
+        phase_name == "Restoring" and payload.get("session_id") == scope.session_id
+        and payload.get("rung") == "PresentationAcknowledged",
+        f"authority stalled: phase={authority_state()['phase']}",
+    )
+    require(receipt == "Returned" or (isinstance(receipt, dict) and "Crash" in receipt),
+            f"no Returned/Crash receipt recorded: {receipt}")
+    terminal = [name for name in ("returned", "crash", "forced_close", "recovery_required")
+                for _ in session_events(events(), scope, name)]
+    require(len(terminal) == 1, f"terminal publications for {scope.session_id}: {terminal}")
+    order.checkpoint(scope.session_id)
+    return scope.session_id
+
+
+def control_restart_on_failure_reproduces_trap() -> str:
+    """Negative control, run LAST: the same exit-before-READY broker with the runtime
+    unit's Restart=on-failure put back by a runtime drop-in must restart.
+
+    This proves that case (a)'s broker_attempts, NRestarts and watch readings can see
+    the .215 trap. The launch RPC may block, because the authority's systemctl start
+    waits on the restarting broker. The authority is left mid-launch, and nothing
+    runs after this.
+    """
+    require(phase_summary()[0] == "Idle", f"authority busy before the control: {authority_state()['phase']}")
+    command("systemctl", "reset-failed", APP_UNIT, BROKER_UNIT, check=False)
+    CONTROL_DROPIN.parent.mkdir(parents=True, exist_ok=True)
+    CONTROL_DROPIN.write_text("[Service]\nRestart=on-failure\n")
+    command("systemctl", "daemon-reload")
+    restart_policy = property_value(BROKER_UNIT, "Restart")
+    require(restart_policy == "on-failure", f"control drop-in not effective: Restart={restart_policy!r}")
+    MODE.write_text("hold\n")
+    before_attempts = broker_attempts()
+    before_invocations = invocation_count()
+    BROKER_MODE.write_text("exit-before-ready\n")
+    try:
+        launch()
+        launch_rpc = "returned"
+    except (OSError, TestFailure):
+        launch_rpc = "blocked"
+    try:
+        wait_for(lambda: broker_attempts() - before_attempts >= 3, "control: broker restarts", timeout=15.0)
+    except TestFailure:
+        pass
+    watch = watch_units(4.0)
+    attempts = broker_attempts() - before_attempts
+    nrestarts = property_value(BROKER_UNIT, "NRestarts")
+    phase_name, payload = phase_summary()
+    line = (
+        f"control_restart_on_failure broker_restart={restart_policy} broker_attempts={attempts} "
+        f"broker_nrestarts={nrestarts} app_invocations={invocation_count() - before_invocations} "
+        f"launch_rpc={launch_rpc} owner_inactive_samples={watch['owner_inactive']}/{watch['samples']} "
+        f"broker_up_samples={watch['broker_up']}/{watch['samples']} authority_phase={phase_name} "
+        f"rung={payload.get('rung')} trap_reproduced={'yes' if attempts >= 3 else 'no'}"
+    )
+    evidence(line)
+    require(attempts >= 3, f"negative control: Restart=on-failure did not restart the broker: {line}")
+    require(invocation_count() == before_invocations, "negative control: the app started")
+    return line
+
+
 def assert_grab_timeline(order: GrabOrder) -> str:
     require(not grab_violations(), f"grab model conflicts: {grab_violations()}")
     entries = grab_timeline()
@@ -750,7 +1000,7 @@ def assert_grab_timeline(order: GrabOrder) -> str:
     gaps = {"shell->broker": [], "broker->shell": []}
     last_term: dict[str, int] = {}
     for kind, who, monotonic_ns in entries:
-        if kind == "term":
+        if kind in ("term", "exit"):  # SIGTERM received, or a runtime exit (tsp-f3fm.202.1.6)
             last_term[who] = monotonic_ns
         elif who == "broker" and "shell" in last_term:
             gaps["shell->broker"].append(monotonic_ns - last_term.pop("shell"))
@@ -813,12 +1063,17 @@ def main() -> None:
     r4 = probe_systemctl_stop_after_sigkill(order)
     sigkill_session = assert_safe_return_after_sigkill(order, r4)
     broker_failure_session = assert_broker_failure_never_traps()
+    exit_before_ready_session = assert_broker_exit_before_ready_never_traps()
+    exit_mid_session = assert_broker_exit_mid_session_never_traps(order)
     evidence(
         f"grab_order {assert_grab_timeline(order)} "
-        f"sessions={clean_session},{crash_session},{graceful_session},r4-probe,{sigkill_session} "
+        f"sessions={clean_session},{crash_session},{graceful_session},r4-probe,{sigkill_session},"
+        f"{exit_mid_session} "
         f"broker_failure_session={broker_failure_session} "
+        f"broker_exit_before_ready_session={exit_before_ready_session} "
         f"R4=Returned systemctl_stop_exit_after_sigkill={r4['stop_exit']}"
     )
+    control_restart_on_failure_reproduces_trap()
 
 
 if __name__ == "__main__":

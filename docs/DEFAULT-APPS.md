@@ -344,7 +344,8 @@ The image-owned template is:
 ```ini
 [Unit]
 Description=PocketForge default application %i
-Requires=pocketforge-foreground.target pf-input-broker.service
+Requires=pocketforge-foreground.target
+BindsTo=pf-input-broker.service
 After=local-fs.target pocketforge-foreground.target pf-input-broker.service
 Conflicts=shutdown.target
 Before=shutdown.target
@@ -379,7 +380,9 @@ Nice=-5
 ```
 
 The `pf-input-broker.service` dependency, the two `PF_*` variables, and
-`InaccessiblePaths=` are the `tsp-f3fm.202.1` amendment; see
+`InaccessiblePaths=` are the `tsp-f3fm.202.1` amendment. The dependency is `BindsTo=`, not
+`Requires=` (`tsp-f3fm.202.1.6`): `Requires=` does not propagate a broker that exits by itself
+mid-session, so the app would keep the panel with no Menu intake. See
 [Input delivery](#input-delivery) and
 [Protected Safe Return during app sessions](#protected-safe-return-during-app-sessions).
 
@@ -755,8 +758,11 @@ While a default app owns the panel, `pf-input-broker` EVIOCGRABs it instead:
 
 - The runtime's `pf-input-broker.service` ships verbatim and is **never enabled**. Its
   `WantedBy=multi-user.target` would grab the pad at boot, under the shell.
-- `pf-app@.service` has `Requires=`/`After=pf-input-broker.service`, and the broker has
-  `StopWhenUnneeded=yes`, so it lives exactly as long as one `pf-app@<id>` does.
+- `pf-app@.service` has `BindsTo=`/`After=pf-input-broker.service`, and the broker has
+  `StopWhenUnneeded=yes`, so it lives exactly as long as one `pf-app@<id>` does. `BindsTo=`
+  also works in the other direction: if the broker dies, the app is stopped.
+- In an app session the broker fails once and is never restarted (`Restart=no`); see
+  [Updated units](#updated-units).
 - The broker is also the protected Menu intake; see the next section.
 
 **Grab timeline.** Each step is an ordered systemd job. At no instant are the shell and the
@@ -771,7 +777,7 @@ launch: the authority runs `systemctl start pf-app@<id>.service` (one transactio
   3. pf-input-broker start      After=target; EVIOCGRAB pf-gamepad, create the re-emit
                                 device, bind the acquire socket, then READY=1 (Type=notify)
   4. pf-app@<id> start          After=broker; the app acquires the re-emit fd
-return: Menu (below), or the app exits by itself
+return: Menu (below), the app exits by itself, or the broker fails (BindsTo= stops the app)
   5. pf-app@<id> inactive       StopWhenUnneeded= queues stop jobs for broker and target
   6. pf-input-broker stop       ordered before the target's stop (it is After= the target);
                                 its exit drops the grab and removes the re-emit device
@@ -853,6 +859,7 @@ the comments are omitted here and the directives are verbatim:
 ```ini
 [Unit]
 StopWhenUnneeded=yes
+Wants=pocketforge-foreground.target
 After=pocketforge-foreground.target pf-input-decode.service pf-prefsd.service
 Conflicts=pf-shell-selected.service
 ConditionPathExists=
@@ -862,6 +869,7 @@ AssertPathExists=/dev/uinput
 Group=gamer
 UMask=0007
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
+Restart=no
 ExecStart=
 ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/devices/a133/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock
 ```
@@ -871,6 +879,25 @@ ruling's list. The runtime unit's `ConditionPathExists=/dev/uinput` would turn a
 node into a *skipped* start. A skipped start is a success for `Requires=`, so the app would start
 with no input and no Menu intake: a trapped user. The empty assignment resets the inherited
 condition, and the assertion fails the broker job, which fails the dependent app job.
+`BindsTo=` with `After=` would not keep the app active beside a skipped broker either. The
+assertion makes it a start failure, so the app is never invoked (harness
+`broker_start_failure`).
+
+`Restart=no` and `Wants=pocketforge-foreground.target` are `tsp-f3fm.202.1.6` fixes for a
+broker that starts and then exits. On the .215 bench, the broker refused its source and exited 1
+right after start:
+
+- **`Restart=no`.** The runtime unit's `Restart=on-failure`/`RestartSec=2` restarted it every
+  2 s (NRestarts 19 to 66). Each start re-applied `Conflicts=pf-shell-selected.service`, and the
+  launcher stayed down. In an app session the broker must fail once:
+  - before READY, the start job fails and so does the dependent app job;
+  - after READY, `pf-app@`'s `BindsTo=` stops the app.
+- **`Wants=`.** systemd re-checks a `StopWhenUnneeded=` unit only when a unit that pulls it in
+  changes state. A broker that exits before READY fails the app's start job, but the app unit
+  itself never changes state. Without this line, the foreground target stayed active, its
+  `OnSuccess=` never fired, and the authority waited at rung `TargetReleased` with no shell.
+  This was measured by the harness with `Restart=no` alone. With `Wants=`, the broker's own
+  failed transition queues the target, and the target stops once no app job pins it.
 
 The shell drop-in is `/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf`:
 
@@ -885,8 +912,8 @@ After=pf-input-broker.service
 |---|---|---|
 | Broker enabled at boot | It would stop the shell at boot through `Conflicts=` and grab the pad | Image: the installer removes and then refuses any `*.wants/pf-input-broker.service`. Harness: `is-enabled` is `disabled` and the broker is inactive at boot |
 | Broker cannot start (no `/dev/uinput`) | The assertion fails the broker job, the app job fails as a dependency, the authority records `Crash` (`systemd_start_failed`), and the panel must return | Harness `broker_start_failure`: no app invocation, no broker grab, owner re-activated, `Crash` receipt |
-| Broker exits before READY (bad source or descriptor) | `Restart=on-failure` (runtime unit, `RestartSec=2`) retries until the start limit; the app start then fails as above | *Inference*: bounded by systemd's default start limit; B6 fault case |
-| Broker crashes mid-session | `Restart=on-failure` restarts it after 2 s. Menu is unavailable meanwhile. Whether systemd propagates the restart to `pf-app@` through `Requires=` is version-dependent | *Inference*; B6 `kill -9` fault case measures it |
+| Broker exits before READY (bad source or descriptor; the .215 trap) | It fails once (`Restart=no`) and the app is never invoked. `Wants=` releases the target, and `OnSuccess=` restores the shell, which stays up. The receipt is `Crash` (`systemd_start_failed`). Before the fix, the runtime unit's `Restart=on-failure` restarted the broker every 2 s, and each start stopped the shell again through `Conflicts=` | Harness `broker_exit_before_ready`: NRestarts 0, one start attempt, shell back within 10 s, one shell PID and zero broker activity over 30 s, no grab conflicts. Negative control `control_restart_on_failure`: the same broker with `Restart=on-failure` restored must restart |
+| Broker exits mid-session, after READY | It fails once (`Restart=no`). `BindsTo=` stops the app (SIGTERM, `Result=success`), the target is released, and the shell returns. The authority treats it as the app exiting, so the receipt is `Returned`. Under `Requires=` alone, the app kept running with no broker, no shell and no Menu intake | Harness `broker_exit_mid_session`, with grab order checked; B6 `kill -9` fault case on the target systemd |
 | App ignores SIGTERM | SIGKILL at `TimeoutStopSec=2s`; receipt `Returned` (R3) | Harness `r4_sigkill`, plus the direct `systemctl stop` exit probe |
 | App SIGSTOPped, then Menu | systemd sends SIGCONT with SIGTERM, then SIGKILL at 2 s; the receipt is as above | B6 fault case |
 | Shell and broker hold the pad at once | Prevented by `Conflicts=` plus ordering | Harness grab model plus timestamp checkpoints in every session |
