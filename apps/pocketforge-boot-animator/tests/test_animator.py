@@ -88,10 +88,14 @@ def kernel_placement(prop_name):
     return (lambda u, v: fbcon_cell_origin(rot, v, u, 1, 1, vxres, vyres)), vxres, vyres
 
 
-# pf-framehost (launcher@1e5a3d97 vendor/pf-framehost/src/lib.rs), transcribed
-# for the informational cross-consumer report only: lib.rs:349-356 maps the
-# property, lib.rs:316-321 maps buffer (x, y) -> scene (u, v).
-FRAMEHOST_PROP = {"Normal": 0, "Left Side Up": 90, "Upside Down": 180, "Right Side Up": 270}
+# pf-framehost (runtime@2ad0ca76 crates/pf-framehost/src/lib.rs, runtime#101;
+# launcher#145 vendors it), transcribed for the informational cross-consumer
+# report only. lib.rs:374-395 maps the property to the kernel's fbcon hint and
+# then to clockwise degrees (FB_ROTATE_CW -> 90, FB_ROTATE_CCW -> 270), and
+# lib.rs:318-331 maps buffer (x, y) -> scene (u, v). The image's current
+# launcher pin (1e5a3d97) still carries the pre-#101 table, which had Left and
+# Right Side Up swapped (180 degrees from the kernel).
+FRAMEHOST_PROP = {"Normal": 0, "Left Side Up": 270, "Upside Down": 180, "Right Side Up": 90}
 
 
 def framehost_source(rot, x, y, sw, sh):
@@ -666,7 +670,7 @@ def framehost_report(ctx):
             same &= (kx, ky) == (x, y)
             opposite &= (kx, ky) == (vxres - 1 - x, vyres - 1 - y)
         verdict = "agrees" if same else ("DISAGREES by 180 degrees" if opposite else "DISAGREES")
-        ctx.note(f"informational pf-framehost@1e5a3d97 source_coordinates vs kernel for {prop!r}: {verdict}")
+        ctx.note(f"informational pf-framehost@runtime-2ad0ca76 source_coordinates vs kernel for {prop!r}: {verdict}")
 
 
 def main():
