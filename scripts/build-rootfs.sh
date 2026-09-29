@@ -502,6 +502,7 @@ install_open_gpu_module_options() {
     install -d "${ROOTFS}/etc/modprobe.d"
     printf '%s\n' 'options powervr exp_hw_support=1' \
         > "${ROOTFS}/etc/modprobe.d/powervr-a133-open-7x-gpu.conf"
+    echo "[customize] PowerVR: /etc/modprobe.d/powervr-a133-open-7x-gpu.conf (options powervr exp_hw_support=1) for ${PF_DEVICE_ID}"
 }
 
 # Debian gives its locally re-signed regulatory database a higher alternatives

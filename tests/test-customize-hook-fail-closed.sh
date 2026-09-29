@@ -143,6 +143,9 @@ for device_id in a133-open-7x-gpu a133-open-7x-gpu-noradio; do
         echo "FAIL: generated hook skipped the ${device_id} PowerVR exp_hw_support option" >&2
         exit 1
     }
+    # The build log carries a positive line for the post-merge build check.
+    grep -Fx "[customize] PowerVR: /etc/modprobe.d/powervr-a133-open-7x-gpu.conf (options powervr exp_hw_support=1) for ${device_id}" \
+        "${scratch}/options-${device_id}.out" >/dev/null
 done
 
 # Only the two named sibling profiles may receive the option; near matches and
@@ -165,6 +168,10 @@ for tuple in \
         echo "FAIL: ${device_id} received the a133-open-7x-gpu PowerVR option" >&2
         exit 1
     }
+    if grep -F '[customize] PowerVR:' "${scratch}/excluded-${device_id}.out" >&2; then
+        echo "FAIL: ${device_id} logged the a133-open-7x-gpu PowerVR option" >&2
+        exit 1
+    fi
 done
 
 # A 7.x GPU device ID without the exact open/in-tree-7.x contract is refused.
