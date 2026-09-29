@@ -4,6 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 harness="${root}/tests/test-session-authority-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
+# shellcheck source=tests/session-authority-systemd/probe-diagnostics.sh
+source "${root}/tests/session-authority-systemd/probe-diagnostics.sh"
 label_key=org.pocketforge.session-authority-probe
 run_id="gha-${GITHUB_RUN_ID:-missing}-${GITHUB_RUN_ATTEMPT:-missing}-probe"
 run_id="$(printf '%s' "${run_id}" | tr -c 'A-Za-z0-9_.-' '-')"
@@ -196,10 +198,6 @@ docker build \
     "$(dirname "$(dirname "${probe_recipe}")")"
 require_disk_floor after-probe-build
 
-one_line() {
-    tr '\r\n\t ' '____'
-}
-
 emit_lines() {
     local prefix="$1" value="$2" line
     if [ -z "${value}" ]; then
@@ -311,7 +309,8 @@ probe_candidate() {
     shift 4
     local name="tsp-f3fm-211-probe-${run_id}-${key}"
     local state=unknown transient_start=not_run transient_stop=not_run
-    local reason=none output status=1 result=fail run_rc=0
+    local reason=none diagnostic_reason output status=1 result=fail run_rc=0
+    local diagnostics_admitted=0
     local systemctl_wait_output=not_run systemctl_wait_rc=125
     local failed_units_output=not_run failed_units_rc=125
     local cgroup_mount_options=not_run cgroup_mount_rc=125
@@ -360,29 +359,7 @@ probe_candidate() {
     initial_pid1_rc="${observed_pid1_rc}"
 
     if [ "${run_rc}" -eq 0 ]; then
-        if systemctl_wait_output="$(timeout --signal=TERM 90s \
-            docker exec "${name}" systemctl is-system-running --wait 2>&1)"; then
-            systemctl_wait_rc=0
-        else
-            systemctl_wait_rc=$?
-        fi
-        state="$(awk '/^(running|degraded|maintenance|initializing|starting|stopping|offline|unknown)$/ { value=$0 } END { print value }' \
-            <<<"${systemctl_wait_output}")"
-        state="${state:-unknown}"
-
-        if failed_units_output="$(docker exec "${name}" \
-            systemctl --failed --no-legend 2>&1)"; then
-            failed_units_rc=0
-        else
-            failed_units_rc=$?
-        fi
-        if cgroup_mount_options="$(docker exec "${name}" /bin/sh -c \
-            'awk '\''$2 == "/sys/fs/cgroup" { print $4; found=1 } END { if (!found) exit 1 }'\'' /proc/mounts' \
-            2>&1)"; then
-            cgroup_mount_rc=0
-        else
-            cgroup_mount_rc=$?
-        fi
+        collect_systemd_diagnostics "${name}"
     else
         reason="run_failed_rc_${run_rc}_$(one_line <<<"${output}")"
     fi
@@ -398,13 +375,12 @@ probe_candidate() {
             && { [ "${observed_pid1_rc}" -ne 0 ] \
                 || [ "${observed_pid1_comm}" != systemd ]; }; then
             reason="pid1_mismatch_rc_${observed_pid1_rc}_comm_$(one_line <<<"${observed_pid1_comm}")"
-        elif [ "${systemctl_wait_rc}" -eq 124 ]; then
-            reason="systemctl_wait_timeout_state_${state}"
-        elif [ "${state}" != running ] && [ "${state}" != degraded ]; then
-            reason="systemctl_wait_failed_rc_${systemctl_wait_rc}_output_$(one_line <<<"${systemctl_wait_output}")"
-        else
+        elif diagnostic_reason="$(candidate_diagnostics_reason)"; then
             status=0
+            diagnostics_admitted=1
             reason=none
+        else
+            reason="${diagnostic_reason}"
         fi
     fi
 
@@ -457,19 +433,12 @@ probe_candidate() {
         fi
     fi
 
-    if [ "${run_rc}" -eq 0 ]; then
-        if failed_units_output="$(docker exec "${name}" \
-            systemctl --failed --no-legend 2>&1)"; then
-            failed_units_rc=0
-        else
-            failed_units_rc=$?
-        fi
-        if cgroup_mount_options="$(docker exec "${name}" /bin/sh -c \
-            'awk '\''$2 == "/sys/fs/cgroup" { print $4; found=1 } END { if (!found) exit 1 }'\'' /proc/mounts' \
-            2>&1)"; then
-            cgroup_mount_rc=0
-        else
-            cgroup_mount_rc=$?
+    if [ "${diagnostics_admitted}" -eq 1 ]; then
+        # The post-transient failed-unit and cgroup state is part of admission.
+        collect_failed_units_and_cgroup "${name}"
+        if ! diagnostic_reason="$(candidate_diagnostics_reason)"; then
+            status=1
+            reason="${diagnostic_reason}"
         fi
     fi
     inspect_container_state "${name}"

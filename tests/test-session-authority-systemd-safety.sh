@@ -7,6 +7,7 @@ driver="${root}/tests/session-authority-systemd/drive.py"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
+probe_diagnostics="${root}/tests/session-authority-systemd/probe-diagnostics.sh"
 remount_helper="${root}/tests/session-authority-systemd/remount-cgroup-systemd"
 workflow="${root}/.github/workflows/session-authority-systemd.yml"
 precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditions.py"
@@ -155,6 +156,25 @@ case "${1:-}" in
             *) exit 2 ;;
         esac
         ;;
+    exec)
+        case "$*" in
+            *'systemctl is-system-running --wait'*)
+                printf '%s\n' "${FAKE_PROBE_STATE:-running}"
+                exit "${FAKE_PROBE_WAIT_RC:-0}"
+                ;;
+            *'systemctl --failed --no-legend'*)
+                [ -z "${FAKE_PROBE_FAILED_OUTPUT:-}" ] \
+                    || printf '%s\n' "${FAKE_PROBE_FAILED_OUTPUT}"
+                exit "${FAKE_PROBE_FAILED_RC:-0}"
+                ;;
+            *'/proc/mounts'*)
+                [ -z "${FAKE_PROBE_CGROUP_OPTIONS:-}" ] \
+                    || printf '%s\n' "${FAKE_PROBE_CGROUP_OPTIONS}"
+                exit "${FAKE_PROBE_CGROUP_RC:-0}"
+                ;;
+            *) exit 2 ;;
+        esac
+        ;;
     *) exit 2 ;;
 esac
 EOF
@@ -182,6 +202,113 @@ run_fake() {
         FAKE_DISK_MODE="${FAKE_DISK_MODE:-ample}" \
         bash "${harness}" "$@"
 }
+
+run_probe_diagnostics() {
+    env \
+        BASH_ENV=/dev/null \
+        PATH="${fake_bin}:${PATH}" \
+        DOCKER_CALL_LOG="${call_log}" \
+        FAKE_PROBE_STATE="${FAKE_PROBE_STATE:-running}" \
+        FAKE_PROBE_WAIT_RC="${FAKE_PROBE_WAIT_RC:-0}" \
+        FAKE_PROBE_FAILED_OUTPUT="${FAKE_PROBE_FAILED_OUTPUT:-}" \
+        FAKE_PROBE_FAILED_RC="${FAKE_PROBE_FAILED_RC:-0}" \
+        FAKE_PROBE_CGROUP_OPTIONS="${FAKE_PROBE_CGROUP_OPTIONS:-rw,nosuid,nodev,noexec}" \
+        FAKE_PROBE_CGROUP_RC="${FAKE_PROBE_CGROUP_RC:-0}" \
+        bash -c '
+            set -euo pipefail
+            source "$1"
+            collect_systemd_diagnostics fixture-systemd
+            if reason="$(candidate_diagnostics_reason)"; then
+                result=pass
+                status=0
+            else
+                status=$?
+                result=fail
+            fi
+            echo "probe-diagnostics: result=${result} state=${state} failed_units_rc=${failed_units_rc} failed_units=$(one_line <<<"${failed_units_output}") cgroup_mount_rc=${cgroup_mount_rc} cgroup_mount_options=$(one_line <<<"${cgroup_mount_options}") reason=${reason}"
+            exit "${status}"
+        ' bash "${probe_diagnostics}"
+}
+
+reset_logs
+if FAKE_PROBE_STATE=degraded \
+    FAKE_PROBE_WAIT_RC=1 \
+    FAKE_PROBE_FAILED_OUTPUT='broken.service loaded failed failed' \
+    FAKE_PROBE_FAILED_RC=0 \
+    FAKE_PROBE_CGROUP_OPTIONS=rw,nosuid,nodev,noexec \
+    FAKE_PROBE_CGROUP_RC=0 \
+    run_probe_diagnostics >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: degraded state with failed unit passed probe diagnostics' >&2
+    exit 1
+fi
+grep -Fq 'result=fail' "${stdout_log}" || exit 1
+grep -Fq 'reason=failed_units:broken.service_loaded_failed_failed_' "${stdout_log}" || exit 1
+
+reset_logs
+if FAKE_PROBE_STATE=running \
+    FAKE_PROBE_WAIT_RC=0 \
+    FAKE_PROBE_FAILED_OUTPUT='failed-unit query error' \
+    FAKE_PROBE_FAILED_RC=5 \
+    FAKE_PROBE_CGROUP_OPTIONS=rw,nosuid,nodev,noexec \
+    FAKE_PROBE_CGROUP_RC=0 \
+    run_probe_diagnostics >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: failed-unit probe error passed diagnostics' >&2
+    exit 1
+fi
+grep -Fq 'result=fail' "${stdout_log}" || exit 1
+grep -Fq 'reason=failed_units_probe_rc=5' "${stdout_log}" || exit 1
+
+reset_logs
+if FAKE_PROBE_STATE=running \
+    FAKE_PROBE_WAIT_RC=0 \
+    FAKE_PROBE_FAILED_OUTPUT='' \
+    FAKE_PROBE_FAILED_RC=0 \
+    FAKE_PROBE_CGROUP_OPTIONS='cgroup query failed' \
+    FAKE_PROBE_CGROUP_RC=42 \
+    run_probe_diagnostics >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: failed cgroup probe passed diagnostics' >&2
+    exit 1
+fi
+grep -Fq 'result=fail' "${stdout_log}" || exit 1
+grep -Fq 'reason=cgroup_probe_rc=42' "${stdout_log}" || exit 1
+
+reset_logs
+if FAKE_PROBE_STATE=running \
+    FAKE_PROBE_WAIT_RC=0 \
+    FAKE_PROBE_FAILED_OUTPUT='' \
+    FAKE_PROBE_FAILED_RC=0 \
+    FAKE_PROBE_CGROUP_OPTIONS=ro,nosuid,nodev,noexec \
+    FAKE_PROBE_CGROUP_RC=0 \
+    run_probe_diagnostics >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: read-only cgroup passed probe diagnostics' >&2
+    exit 1
+fi
+grep -Fq 'result=fail' "${stdout_log}" || exit 1
+grep -Fq 'reason=cgroup_not_rw' "${stdout_log}" || exit 1
+
+reset_logs
+FAKE_PROBE_STATE=running \
+FAKE_PROBE_WAIT_RC=0 \
+FAKE_PROBE_FAILED_OUTPUT='' \
+FAKE_PROBE_FAILED_RC=0 \
+FAKE_PROBE_CGROUP_OPTIONS=rw,nosuid,nodev,noexec \
+FAKE_PROBE_CGROUP_RC=0 \
+run_probe_diagnostics >"${stdout_log}" 2>"${stderr_log}"
+grep -Fq 'probe-diagnostics: result=pass state=running' "${stdout_log}" || exit 1
+grep -Fq 'failed_units_rc=0 failed_units=_' "${stdout_log}" || exit 1
+grep -Fq 'cgroup_mount_rc=0 cgroup_mount_options=rw,nosuid,nodev,noexec_ reason=none' \
+    "${stdout_log}" || exit 1
+
+reset_logs
+FAKE_PROBE_STATE=degraded \
+FAKE_PROBE_WAIT_RC=1 \
+FAKE_PROBE_FAILED_OUTPUT='' \
+FAKE_PROBE_FAILED_RC=0 \
+FAKE_PROBE_CGROUP_OPTIONS=rw,nosuid,nodev,noexec \
+FAKE_PROBE_CGROUP_RC=0 \
+run_probe_diagnostics >"${stdout_log}" 2>"${stderr_log}"
+grep -Fq 'probe-diagnostics: result=pass state=degraded' "${stdout_log}" || exit 1
+grep -Fq 'reason=none' "${stdout_log}" || exit 1
 
 reset_logs
 FAKE_GRAPHICAL=1
@@ -520,11 +647,16 @@ grep -Fq 'probe_positive_control=${result}' "${probe}" || exit 1
 grep -Fq -- '--entrypoint /bin/sleep' "${probe}" || exit 1
 grep -Fq "'{{.State.Status}} {{.State.ExitCode}} {{.State.Error}} {{.State.Pid}}'" \
     "${probe}" || exit 1
-grep -Fq 'systemctl is-system-running --wait' "${probe}" || exit 1
-grep -Fq 'timeout --signal=TERM 90s' "${probe}" || exit 1
-grep -Fq 'systemctl --failed --no-legend' "${probe}" || exit 1
+grep -Fq 'systemctl is-system-running --wait' "${probe_diagnostics}" || exit 1
+grep -Fq 'timeout --signal=TERM 90s' "${probe_diagnostics}" || exit 1
+grep -Fq 'systemctl --failed --no-legend' "${probe_diagnostics}" || exit 1
 grep -Fq 'docker logs --tail 40' "${probe}" || exit 1
 grep -Fq 'cgroup_mount_options=' "${probe}" || exit 1
+grep -Fq 'source "${root}/tests/session-authority-systemd/probe-diagnostics.sh"' \
+    "${probe}" || exit 1
+[ "$(grep -Fh 'collect_failed_units_and_cgroup "${name}"' \
+    "${probe}" "${probe_diagnostics}" | wc -l)" -eq 2 ] || exit 1
+[ "$(grep -Fc 'candidate_diagnostics_reason' "${probe}")" -eq 2 ] || exit 1
 grep -Fq 'private-cgroupns-rw-cgroup-bind-systempaths-unconfined' "${probe}" || exit 1
 grep -Fq 'cgroup-remount-apparmor-unconfined-without-cap' "${probe}" || exit 1
 grep -Fq 'docker buildx prune --force --all' "${probe}" || exit 1
@@ -539,4 +671,4 @@ grep -Fqx 'CMD ["/sbin/init"]' "${probe_recipe}" || exit 1
 grep -Fq 'candidate_e=${candidate_e_result} adopted=${adopted} owner_exception=${owner_exception}' \
     "${probe}" || exit 1
 
-echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=static probe_matrix=static getty_masks=5 runtime=fake-docker'
+echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker probe_matrix=static getty_masks=5 runtime=fake-docker'
