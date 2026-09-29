@@ -63,11 +63,23 @@ After=pocketforge-foreground.target
 `sudo -n`). The SDL video driver depends on the image's GPU profile:
 
 ```sh
-# closed DDK (vendor PowerVR EGL)
+# closed DDK (vendor PowerVR EGL): device=a133, device=a133-owned
 pf-take-panel env SDL_VIDEODRIVER=sunxifb /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
-# open GPU (Mesa; /etc/pocketforge-build-id says device=a133-open-*)
+# open GPU (Mesa): device=a133-open, device=a133-open-7x-gpu,
+#   device=a133-open-7x-gpu-noradio, device=a133-open-7x-gpu-spl-trace
 pf-take-panel env SDL_VIDEODRIVER=kmsdrm /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
 ```
+
+Read `device=` from `/etc/pocketforge-build-id`. It is the exact platform
+device ID (`scripts/generate-build-id.sh` prints `PF_DEVICE_ID` unchanged), so
+match the whole value against the lists above, not a prefix. What decides the
+driver is the device profile's `gpu.model` in `pocketforge-os/platform`
+(`devices/<id>/profile.toml`; unset means `ddk`), not the name. `a133-open` is
+the open GPU model although it has no suffix. `a133-open-7x` starts with
+`a133-open` but is `gpu.model=none`: it ships no SDL and no `testgles2` at
+all. These lists are platform `349c956` (2026-09-29). For a device ID not
+listed here, read its profile's `gpu.model`: `open` means `kmsdrm`, and
+unset/`ddk` means `sunxifb`.
 
 The closed-DDK SDL has `sunxifb` and no KMSDRM. The open-GPU SDL has KMSDRM
 and no `sunxifb` (`tsp-f3fm.218`, libsdl3-sunxifb#22). sunxifb's window
