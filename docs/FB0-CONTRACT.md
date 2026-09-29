@@ -143,8 +143,9 @@ of 2026-09-29 this is from kernel source; device confirmation is pending in
   the same rotation fbcon uses. `apps/pocketforge-boot-animator/src/main.c`
   holds the table and its kernel citations.
 - pf-framehost reads that property with the same kernel meaning from runtime
-  `2ad0ca76` (runtime#101, re-vendored by launcher#145). The launcher pinned
-  here (`1e5a3d97`) still reads it 180° apart until the launcher pin moves.
+  `2ad0ca76` (runtime#101), which launcher `96feb08c` (launcher#145) vendors. The
+  image's build guards require that pair. Launcher `1e5a3d97` and older read it
+  180° apart.
   Physical truth is owned by `tsp-c2b70c69022327ff5fee`, and convergence by
   `tsp-mc9m.60.21.3`.
 - It is not yet device-verified whether mmap writes reach the panel without a

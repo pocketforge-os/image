@@ -674,7 +674,17 @@ grep -Fq 'run_scope_removed=true' "${stderr_log}" || exit 1
 audit_id=fixture-audit
 audit_label="org.pocketforge.session-authority-run=${audit_id}"
 audit_container="tsp-f3fm-211-systemd-${audit_id}"
-audit_image="tsp-f3fm-211-systemd:d75beedfb120-${audit_id}"
+# The harness tags its image with the first 12 hex of its pinned runtime_sha
+# (configure_run_identity). Derive the tag from that pin. With a stale literal the
+# suite still passes, but four of the unsafe-argv cases below (missing-apparmor,
+# missing-capability, duplicate-admin, wrong-entrypoint) are then refused as an
+# "unapproved Docker run option" (the tag) instead of for the defect they name.
+audit_runtime="$(sed -n 's/^runtime_sha=\([0-9a-f]\{40\}\)$/\1/p' "${harness}")"
+[ "${#audit_runtime}" -eq 40 ] || {
+    echo 'session-authority systemd-safety: FAIL: harness runtime_sha not found' >&2
+    exit 1
+}
+audit_image="tsp-f3fm-211-systemd:${audit_runtime:0:12}-${audit_id}"
 dashdash=--
 privileged_flag="${dashdash}privileged"
 

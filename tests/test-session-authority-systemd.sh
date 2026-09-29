@@ -17,11 +17,13 @@ containerfile="${fixtures}/Containerfile"
 ephemeral_marker=/etc/pocketforge/ephemeral-runner.conf
 run_label_key=org.pocketforge.session-authority-run
 
-runtime_sha=d75beedfb1203b329801a777803dff1ae8d5da1c
+runtime_sha=2ad0ca76efc984ad80a167759cfcf23657fb0c78
 runtime_repository=https://github.com/pocketforge-os/runtime.git
 app_unit_sha256=d5bdd3fba3bcc2b9fdbc1eb8675574bb15492381c01987cf1bc9ab04f68daace
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
 # is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
+# crates/pf-input-broker is the same tree at d75beedf and 2ad0ca76 (runtime#101
+# touched only pf-framehost), so the broker unit digest is unchanged.
 broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
 broker_dropin_sha256=552f608d11f54b858d00b743e2af53f96fbf0f070fb12ce15c63f9f84589ffba
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
