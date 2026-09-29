@@ -1,0 +1,124 @@
+name: hermetic tests
+
+# Runs the image repo's hermetic tests/*.sh on every PR (bd tsp-mc9m.41.984.30).
+# "Hermetic" here means: no docker daemon, no network, no live device state --
+# only tmpdir fixtures, fake PATH binaries and local toolchains (cc, bwrap,
+# python3, mtools/dosfstools). Before this workflow the repo had ZERO PR-time
+# test signal (memory image-repo-runs-no-pr-checks: only sign-and-scan.yml
+# existed, gated to apps/** changes), so tests/test-rootfs-fallback-profile.sh
+# went red on main for a full cycle (ea8c7b8, tsp-mc9m.41.984.20.1) before
+# anyone noticed.
+#
+# Runner posture (tsp-ikk0.22): `image` is NOT on the `trimui-build-lab`
+# [self-hosted, docker] runner group's allow-list yet (see sign-and-scan.yml's
+# header), so this workflow must not require docker. It uses the SAME
+# [self-hosted, pf-builder-vm] group that session-authority-systemd.yml already
+# runs hermetic checks on (its `probe` job and test-session-authority-systemd-
+# safety.sh) -- proven working PR-check runner posture for this repo.
+#
+# EXCLUDED from the list below (each needs a real docker daemon or live device
+# state, so it stays out of a hermetic gate):
+#   - tests/f13-fault-definitions.sh -- a fault-definitions library, not a
+#     standalone test: it asserts against a LIVE device's systemd unit/socket
+#     state (systemctl is-active, /run/.../*.sock, /var/lib/...).
+#   - tests/probe-session-authority-docker-systemd.sh -- builds/runs REAL
+#     docker containers from tests/session-authority-systemd/probe/Containerfile.
+#   - tests/test-session-authority-systemd.sh -- the "live" systemd-in-docker
+#     harness; fails closed with MISSING_PREREQUISITE without a real `docker`
+#     binary. Already covered by its own dedicated workflow,
+#     .github/workflows/session-authority-systemd.yml.
+#   - tests/test-initrd-first-frame.sh -- fully hermetic (no docker, no
+#     network) and reliably green in every interactive dev-worktree run, but
+#     its "crash" case raced on this workflow's first real run on
+#     [self-hosted, pf-builder-vm] (reaped rc=137, wanted 139 -- see tsp-7854q).
+#     Excluded until tsp-7854q lands; re-add it there.
+#
+# tests/test-session-authority-systemd-safety.sh IS included below: it fakes
+# docker entirely (a fixture `docker` binary on PATH) and is genuinely
+# hermetic, even though session-authority-systemd.yml's `probe` job also runs
+# it on a narrower path filter -- harmless overlap, not a live-docker need.
+#
+# Audited for the same "fixture doesn't stage a script the real builder now
+# calls" class that caused this bead: every other tests/*.sh matching
+# `grep -l build-sd-image.sh scripts/build-rootfs.sh` either (a) runs those
+# scripts with SRC_DIR pointed at the real checkout (not a hand-copied partial
+# fixture), (b) only greps their source text, or (c) substitutes a synthetic
+# ROOTFS_BUILDER/fake builder that never calls the real script. None were
+# affected; only test-rootfs-fallback-profile.sh was.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermetic-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hermetic-tests:
+    # Fork guard (build-lab confinement invariant, BUILD_PIPELINE.md): never run
+    # fork / public-PR code on the self-hosted runner.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, pf-builder-vm]
+    timeout-minutes: 30
+    steps:
+      # SHA-pinned (org Actions policy sha_pinning_required=true; bare @v4 = startup_failure)
+      # fetch-depth: 0 (full history): tests/test-boot-animator.sh diffs against a
+      # pinned historical commit (BASELINE_COMMIT, apps/pocketforge-boot-animator/
+      # tests/test_animator.py) via `git show <sha>:path`, which a shallow default
+      # checkout cannot resolve (verified: exit 128 on this workflow's first CI run).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Run hermetic tests/*.sh
+        run: |
+          set -uo pipefail
+          tests=(
+            tests/test-boot-animator.sh
+            tests/test-build-id.sh
+            tests/test-build-rootfs-direct.sh
+            tests/test-cedar-spike.sh
+            tests/test-clock-seed.sh
+            tests/test-customize-hook-fail-closed.sh
+            tests/test-default-app-input-gates.sh
+            tests/test-default-app-platform.sh
+            tests/test-default-app-rootfs.sh
+            tests/test-dockerfile-pf-transforms.sh
+            tests/test-hwprobe-variant-stage.sh
+            tests/test-initrd-selfflash-watchdog.sh
+            tests/test-kernel-build-identity.sh
+            tests/test-kernel-module-form.sh
+            tests/test-launcher-runtime-contract.sh
+            tests/test-mainline-rootfs-packages.sh
+            tests/test-none-gpu-model.sh
+            tests/test-open-gpu-integration.sh
+            tests/test-open-module-contract.sh
+            tests/test-poolsuite-rootfs-install.sh
+            tests/test-poolsuite-variant-stage.sh
+            tests/test-recovery-entry.sh
+            tests/test-rootfs-abi-check.sh
+            tests/test-rootfs-bluetooth.sh
+            tests/test-rootfs-dns.sh
+            tests/test-rootfs-fallback-profile.sh
+            tests/test-rootfs-firmware.sh
+            tests/test-sdl-kmsdrm-sysroot.sh
+            tests/test-session-authority-systemd-safety.sh
+            tests/test-userdata-partition.sh
+          )
+          failed=0
+          for t in "${tests[@]}"; do
+            echo "::group::${t}"
+            if bash "${t}"; then
+              echo "PASS ${t}"
+            else
+              echo "FAIL ${t}" >&2
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "${failed}"
