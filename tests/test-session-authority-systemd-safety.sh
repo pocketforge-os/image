@@ -882,6 +882,58 @@ for b4_check in 'R4 GATE FAILED' 'def assert_grab_timeline' 'def assert_broker_f
         exit 1
     }
 done
+# tsp-f3fm.222: SIGKILL (Result=signal) and abort (Result=core-dump) each end in a
+# Crash receipt and phase Idle, with a same-run negative control and a bounded core.
+for crash_check in 'def assert_sigkill_crash' 'def assert_abort_crash' \
+    '"systemctl", "kill", "-s", "KILL", APP_UNIT' 'negative_control_expect_success=' \
+    'crash_receipt_violations(observed, "success")' 'sigkill_crash_session = assert_sigkill_crash(order)' \
+    'abort_crash_session = assert_abort_crash(order)' 'probe.get("coredump_filter") == "00000000"' \
+    'bound_violations, bound = core_bound_violations(report, exec_main_pid)' \
+    'require(not bound_violations, f"abort core is not bounded by RLIMIT_AS: {details}")' \
+    'core_upper_bound_bytes=' 'vm_peak_plus_allowance_bytes='; do
+    grep -Fq -- "${crash_check}" "${driver}" || {
+        echo "session-authority systemd-safety: FAIL: driver lost crash-result check ${crash_check}" >&2
+        exit 1
+    }
+done
+crash_fixture="${root}/tests/session-authority-systemd/fixture"
+for crash_fixture_check in 'Path("/proc/self/coredump_filter").write_text("0\n")' \
+    'resource.setrlimit(resource.RLIMIT_CORE, (core_limit, core_limit))' 'os.chdir(state)' \
+    'ulimit -v "$1" || exit 97; exec /bin/sh -c "$2" fixture-abort' 'done < /proc/$$/limits' \
+    'done < /proc/$$/status' '} > core-bound.txt' 'kill -ABRT $$'; do
+    grep -Fq -- "${crash_fixture_check}" "${crash_fixture}" || {
+        echo "session-authority systemd-safety: FAIL: fixture lost abort bound ${crash_fixture_check}" >&2
+        exit 1
+    }
+done
+for shared_bound in CORE_LIMIT_BYTES AS_LIMIT_KIB; do
+    driver_bound="$(sed -n "s/^${shared_bound} = //p" "${driver}")"
+    [ -n "${driver_bound}" ] && [ "${driver_bound}" = "$(sed -n "s/^${shared_bound} = //p" "${crash_fixture}")" ] || {
+        echo "session-authority systemd-safety: FAIL: driver and fixture ${shared_bound} differ" >&2
+        exit 1
+    }
+done
+crash_self_test="$(python3 "${driver}" --self-test)"
+grep -Eq '^session-authority crash-classification self-test: PASS signal:correct=accepted,broken_stub=rejected' \
+    <<<"${crash_self_test}" || exit 1
+# Negative control: a checker that accepts everything must fail its own self-test.
+sed 's/^    return violations$/    return []/' "${driver}" >"${tmp}/accept-all-drive.py"
+! cmp -s "${driver}" "${tmp}/accept-all-drive.py" || exit 1
+if python3 "${tmp}/accept-all-drive.py" --self-test >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: an accept-all crash checker passed the self-test' >&2
+    exit 1
+fi
+grep -Fq 'self-test: broken classifier stub passed for signal' "${stderr_log}" || exit 1
+grep -Fq 'core_bound:bounded=accepted,rlimit_as_absent=rejected' <<<"${crash_self_test}" || exit 1
+# Negative control: a bound check that ignores RLIMIT_AS must fail its own self-test.
+sed 's/^    if (soft, hard) != (str(limit_bytes), str(limit_bytes)):$/    if False:/' \
+    "${driver}" >"${tmp}/no-rlimit-as-drive.py"
+! cmp -s "${driver}" "${tmp}/no-rlimit-as-drive.py" || exit 1
+if python3 "${tmp}/no-rlimit-as-drive.py" --self-test >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: a bound check without RLIMIT_AS passed the self-test' >&2
+    exit 1
+fi
+grep -Fq 'self-test: a report with RLIMIT_AS absent passed the core bound' "${stderr_log}" || exit 1
 for b4_input in fake-input-broker fake-shell capabilities.toml 10-app-session.conf 10-input-broker.conf; do
     grep -Fq "${b4_input}" "${harness}" || exit 1
 done
