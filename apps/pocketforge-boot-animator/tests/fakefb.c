@@ -26,6 +26,8 @@
  *   FAKEFB_REDIRECT  "from=to;from=to" path-prefix rewrites
  *   FAKEFB_SNAP      comma list of pan numbers to snapshot (pan-NNNN.raw)
  *   FAKEFB_TERM_AT_PAN  raise(SIGTERM) right after pan N (snapshot term.raw)
+ *   FAKEFB_PAN_FAIL     every FBIOPAN_DISPLAY fails with EIO (logged)
+ *   FAKEFB_VSYNC_FAIL   every FBIO_WAITFORVSYNC fails with ENOTTY (logged)
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -120,6 +122,10 @@ static int fake_open(int dirfd, const char *path, int flags, mode_t mode) {
         event("drm-open accmode=%s", (flags & O_ACCMODE) == O_RDONLY ? "rdonly" : "write");
         return fd;
     }
+    /* /dev/kmsg takes every write as its own record; the regular file it is
+     * redirected to needs O_APPEND for the same effect. */
+    if (path && strcmp(path, "/dev/kmsg") == 0)
+        flags |= O_APPEND;
     char buf[4096];
     const char *real = redirect(path, buf, sizeof(buf));
     int fd = real_openat(dirfd, real, flags, mode);
@@ -250,6 +256,11 @@ static int fb_ioctl(unsigned long req, void *arg) {
     case FBIOPAN_DISPLAY: {
         struct fb_var_screeninfo *v = arg;
         unsigned n = pan_count++;
+        if (getenv("FAKEFB_PAN_FAIL")) {
+            event("pan n=%u yoffset=%u EIO", n, v->yoffset);
+            errno = EIO;
+            return -1;
+        }
         if (v->yoffset + g.yres > g.yv || v->xoffset != 0) {
             event("pan n=%u yoffset=%u EINVAL", n, v->yoffset);
             errno = EINVAL;
@@ -286,6 +297,11 @@ static int fb_ioctl(unsigned long req, void *arg) {
         return 0;
     }
     case FBIO_WAITFORVSYNC:
+        if (getenv("FAKEFB_VSYNC_FAIL")) {
+            event("vsync ENOTTY");
+            errno = ENOTTY;
+            return -1;
+        }
         event("vsync");
         return 0;
     default:

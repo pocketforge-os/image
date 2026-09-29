@@ -143,12 +143,19 @@ fi
 # =============================================================================
 # FIRST LIGHT: boot frame 000  (bd tsp-3rd3.7; fail-open, never a boot decision)
 # -----------------------------------------------------------------------------
-# On the open 7.x kernel the DSI panel lights (fbcon on DRM fbdev) about 0.9 s
-# after /init starts, seconds before systemd's animator can run, so the first lit
+# On the open 7.x kernel the DSI panel is enabled (fbcon on DRM fbdev) before
+# /init starts, seconds before systemd's animator can run, so the first lit
 # picture would be a black console. A background subshell waits at most 2.5 s
 # (50 x 50 ms) for /dev/fb0, then execs the static boot animator in --first-frame
 # mode: it resolves the panel orientation itself (and paints nothing if it is
-# unknown), unbinds fbcon, paints frame 000, logs the kmsg marker, and exits.
+# unknown), unbinds fbcon, paints frame 000, logs the kmsg marker, turns the
+# backlight on, and exits.
+#
+# Backlight (bd tsp-3rd3.14): the panel driver keeps the backlight dark at that
+# first enable (kernel-sunxi-7.x otm1289a backlight_hold_ms) until the helper
+# writes 0 to bl_power after painting. If the helper never does (absent, killed
+# here, hung, crashed, nothing painted), the kernel's own fallback turns the
+# backlight on at the end of the hold. So /init never touches the backlight.
 #
 # Fail-open contract:
 #   - /init never waits for it and never branches on its exit status;

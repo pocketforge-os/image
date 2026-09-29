@@ -12,8 +12,12 @@ computed from the kernel's own formulas (the connector property ->
 drm_client_rotation -> fbcon hint table, and the fbcon putcs cell origin
 arithmetic), cited in KERNEL_* below at kernel-sunxi-7.x@03822b3f.
 
-Needs: python3, a host C compiler (cc), git (for the pre-port baseline), and
-optionally systemd-analyze. Runs in about a minute.
+The backlight release (bd tsp-3rd3.14) is checked against a fake
+/sys/class/backlight whose bl_power starts at 4 (FB_BLANK_POWERDOWN), as the
+open 7.x panel driver's first-paint hold leaves it.
+
+Needs: python3, a host C compiler (cc), git (for the pre-port baseline and the
+pre-release helper), and optionally systemd-analyze. Runs in about a minute.
 
     tests/test_animator.py            # run everything
     tests/test_animator.py -k orient  # only tests whose name contains "orient"
@@ -45,6 +49,9 @@ import crop_frames  # noqa: E402
 # Last commit that changed the pre-port animator source (tsp-woy3). The vendor
 # byte-identity and cost baselines are built from exactly this source.
 BASELINE_COMMIT = "08b0f163ba3417e34c332462eeebf22a5eb79b54"
+# Image main before the first-frame helper released the backlight (tsp-3rd3.14):
+# the negative control for the release checks.
+PRE_RELEASE_COMMIT = "ea5ed12ee05e32307454872fc60f73a76c654e68"
 SCENE_W, SCENE_H = 1280, 720
 REGION = (507, 146, 266, 307)          # the committed frame set's changed rectangle
 CFLAGS = ["-O2", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-unused-function"]
@@ -148,6 +155,7 @@ class Ctx:
         self.work = work
         self.bin_new = os.path.join(work, "anim-new")
         self.bin_old = os.path.join(work, "anim-old")
+        self.bin_prev = os.path.join(work, "anim-pre-release")
         self.shim = os.path.join(work, "fakefb.so")
         self.real_frames = os.path.join(APP, "frames")
         self.cropped = os.path.join(work, "crop-a", "frames")
@@ -192,11 +200,26 @@ def geom_str(xres, yres, xv, yv, stride):
 
 
 def run_animator(ctx, binary, *, geom, fb_id, drm="absent", fbcon=None, frames=None,
-                 args=(), term_at=None, snap=(), timeout=30, nohash=False):
-    """fbcon: None (no fbcon vtconsole) or (bound: bool, rotate: str)."""
+                 args=(), term_at=None, snap=(), timeout=30, nohash=False,
+                 backlight=("backlight",), env_extra=None):
+    """fbcon: None (no fbcon vtconsole) or (bound: bool, rotate: str).
+    backlight: None (no /sys/class/backlight) or device names, each with a
+    bl_power reading 4 (held dark); a name ending in ":dir" gets a directory
+    where bl_power should be, so opening it for writing fails."""
     ctx.n += 1
     root = os.path.join(ctx.work, f"run-{ctx.n:03d}")
     state = os.path.join(root, "state")
+    if backlight is not None:
+        os.makedirs(os.path.join(root, "sys/class/backlight"))
+        for dev in backlight:
+            name, _, kind = dev.partition(":")
+            d = os.path.join(root, "sys/class/backlight", name)
+            os.makedirs(d)
+            if kind == "dir":
+                os.makedirs(os.path.join(d, "bl_power"))
+            else:
+                with open(os.path.join(d, "bl_power"), "w") as fh:
+                    fh.write("4\n")
     os.makedirs(os.path.join(root, "sys/class/vtconsole/vtcon0"))
     os.makedirs(os.path.join(root, "sys/class/graphics/fbcon"))
     os.makedirs(os.path.join(root, "dev"))
@@ -238,6 +261,7 @@ def run_animator(ctx, binary, *, geom, fb_id, drm="absent", fbcon=None, frames=N
         env["FAKEFB_TERM_AT_PAN"] = str(term_at)
     if nohash:
         env["FAKEFB_NOHASH"] = "1"
+    env.update(env_extra or {})
     p = subprocess.Popen([binary, *args], env=env, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE)
     deadline = time.monotonic() + timeout
@@ -278,6 +302,14 @@ def vtcon1_bind(run):
     return open(path).read().strip() if os.path.exists(path) else None
 
 
+def bl_power(run, name="backlight"):
+    path = os.path.join(run.root, "sys/class/backlight", name, "bl_power")
+    return open(path).read() if os.path.isfile(path) else None
+
+
+BL_ON = "<6>pf-boot-splash: backlight on src=first-frame device={}"
+
+
 # geometries: (xres, yres, xres_virtual, yres_virtual, line_length)
 G_VENDOR = (1280, 720, 1280, 1440, 5120)          # disp2: landscape, double-buffered
 G_DRM_PORTRAIT = (720, 1280, 720, 1280, 2880)     # 7.x DRM fbdev, OVERALLOC=100
@@ -307,6 +339,15 @@ def build(ctx):
         fh.write(old)
     subprocess.run([cc, *CFLAGS, "-I", src, "-o", ctx.bin_old,
                     os.path.join(old_src_dir, "main.c"), "-lm"], check=True)
+    prev_src_dir = os.path.join(ctx.work, "pre-release-src")
+    os.makedirs(prev_src_dir)
+    prev = subprocess.run(["git", "-C", REPO, "show",
+                           f"{PRE_RELEASE_COMMIT}:apps/pocketforge-boot-animator/src/main.c"],
+                          check=True, capture_output=True).stdout
+    with open(os.path.join(prev_src_dir, "main.c"), "wb") as fh:
+        fh.write(prev)
+    subprocess.run([cc, *CFLAGS, "-I", src, "-o", ctx.bin_prev,
+                    os.path.join(prev_src_dir, "main.c"), "-lm"], check=True)
     subprocess.run([cc, "-O2", "-Wall", "-Wextra", "-fPIC", "-shared", "-o", ctx.shim,
                     os.path.join(HERE, "fakefb.c"), "-ldl"], check=True)
 
@@ -397,7 +438,10 @@ def test_orientation_goldens(ctx):
         assert not r.has("drm-forced-probe"), "GETCONNECTOR asked for a forced probe"
         assert r.has("vsync"), "region tick did not wait for vblank"
         assert vtcon1_bind(r) == "0", "fbcon not unbound"
-        # --first-frame: same frame 000, one kmsg marker, exit 0, no loop
+        # the systemd animator never touches the backlight (tsp-3rd3.14)
+        assert bl_power(r) == "4\n" and not r.has("backlight"), "animator mode wrote bl_power"
+        # --first-frame: same frame 000, the marker, then the backlight
+        # release; exit 0, no loop
         f = run_animator(ctx, ctx.bin_new, geom=geom, fb_id=DRM_ID, drm=f"prop:{prop}",
                          fbcon=(True, "0"), frames=ctx.card_dir, args=("--first-frame",))
         assert f.rc == 0, (prop, f.stderr)
@@ -406,7 +450,8 @@ def test_orientation_goldens(ctx):
                "Left Side Up": "ROTATE_90", "Right Side Up": "ROTATE_270"}[prop]
         want = (f'<6>pf-boot-splash: first-frame presented src=first-frame rotation={rot} '
                 f'orientation="{prop}" source=drm-connector pan=ok')
-        assert kmsg_lines(f) == [want], kmsg_lines(f)
+        assert kmsg_lines(f) == [want, BL_ON.format("backlight")], kmsg_lines(f)
+        assert bl_power(f) == "0\n", bl_power(f)
         first_pages[prop] = exp0
         ctx.note(f"orientation {prop!r}: all {SCENE_W * SCENE_H} scene px match the kernel fbcon placement "
                  f"(frame 000 + region tick), card0 rdonly closed before unbind+paint")
@@ -447,6 +492,7 @@ def test_orientation_unknown_paints_nothing(ctx):
         assert r.fb.count(0) == len(r.fb), f"{label}: painted"
         assert not r.pans() and not r.has("fb-mmap"), label
         assert kmsg_lines(r) == [], label
+        assert bl_power(r) == "4\n", f"{label}: released the backlight with nothing painted"
         if fbcon is not None:
             assert vtcon1_bind(r) == ("1" if fbcon[0] else "0"), f"{label}: touched fbcon"
     # known orientation that cannot hold the 1280x720 scene: refuse, exit 1
@@ -455,6 +501,85 @@ def test_orientation_unknown_paints_nothing(ctx):
     assert r.rc == 1 and "unexpected fb0 geometry" in r.stderr and r.fb.count(0) == len(r.fb)
     ctx.note(f"unknown orientation: {len(cases)} cases exit 0 with no mmap/pan/kmsg; "
              "Normal on 720x1280 refused (exit 1)")
+
+
+def test_backlight_release(ctx):
+    """--first-frame on DRM: backlight on only after frame 000 is presented (tsp-3rd3.14)."""
+    geom, prop = ORIENT_GEOM["Right Side Up"], "Right Side Up"
+    marker = ('<6>pf-boot-splash: first-frame presented src=first-frame rotation=ROTATE_270 '
+              'orientation="Right Side Up" source=drm-connector pan=ok')
+
+    def first_frame(binary=None, **kw):
+        kw.setdefault("drm", f"prop:{prop}")
+        kw.setdefault("fbcon", (True, "0"))
+        return run_animator(ctx, binary or ctx.bin_new, geom=kw.pop("geom", geom),
+                            fb_id=kw.pop("fb_id", DRM_ID), frames=ctx.card_dir,
+                            args=("--first-frame",), **kw)
+
+    # released after the present: pan, one vblank, then bl_power
+    r = first_frame()
+    assert r.rc == 0, r.stderr
+    assert kmsg_lines(r) == [marker, BL_ON.format("backlight")], kmsg_lines(r)
+    assert bl_power(r) == "0\n", bl_power(r)
+    i_pan, i_vsync = r.first(" pan n=0 "), r.first(" vsync")
+    i_bl = r.first("open /sys/class/backlight/backlight/bl_power w -> 0")
+    assert None not in (i_pan, i_vsync, i_bl), r.events
+    assert i_pan < i_vsync < i_bl, r.events
+    assert len(r.pans()) == 1
+
+    # negative control: the helper before this change leaves the backlight
+    # held, so the checks above fail on it
+    old = first_frame(ctx.bin_prev)
+    assert old.rc == 0 and len(old.pans()) == 1, old.stderr
+    assert bl_power(old) == "4\n" and kmsg_lines(old) == [marker], (bl_power(old), kmsg_lines(old))
+
+    # every backlight device is released
+    r = first_frame(backlight=("backlight", "backlight-aux"))
+    assert bl_power(r, "backlight") == "0\n" and bl_power(r, "backlight-aux") == "0\n"
+    assert sorted(kmsg_lines(r)[1:]) == sorted([BL_ON.format("backlight"),
+                                                BL_ON.format("backlight-aux")]), kmsg_lines(r)
+
+    # FBIO_WAITFORVSYNC failing does not stop the release
+    r = first_frame(env_extra={"FAKEFB_VSYNC_FAIL": "1"})
+    assert r.rc == 0 and bl_power(r) == "0\n", r.stderr
+    assert kmsg_lines(r) == [marker, BL_ON.format("backlight")], kmsg_lines(r)
+    assert "FBIO_WAITFORVSYNC before backlight release" in r.stderr
+
+    # nothing to release: logged, exit 0, frame still painted
+    skipped = '<4>pf-boot-splash: backlight release skipped src=first-frame reason='
+    r = first_frame(backlight=None)
+    assert r.rc == 0 and len(r.pans()) == 1, r.stderr
+    assert kmsg_lines(r) == [marker, skipped + '"/sys/class/backlight: No such file or directory"'], \
+        kmsg_lines(r)
+    r = first_frame(backlight=())
+    assert r.rc == 0 and kmsg_lines(r) == [marker, skipped + '"no backlight device"'], kmsg_lines(r)
+
+    # a write that fails is logged; the kernel fallback owns the backlight
+    r = first_frame(backlight=("backlight:dir",))
+    assert r.rc == 0, r.stderr
+    assert kmsg_lines(r) == [marker, '<4>pf-boot-splash: backlight release failed '
+                             'src=first-frame device=backlight error="Is a directory"'], kmsg_lines(r)
+
+    # a failed pan releases nothing
+    r = first_frame(env_extra={"FAKEFB_PAN_FAIL": "1"})
+    assert r.rc == 0 and bl_power(r) == "4\n", (r.stderr, bl_power(r))
+    assert kmsg_lines(r) == [marker.replace("pan=ok", "pan=failed"), skipped + '"pan failed"'], \
+        kmsg_lines(r)
+
+    # nothing painted (orientation unknown): nothing released, nothing logged
+    r = first_frame(drm="noprop", fbcon=None)
+    assert r.rc == 0 and not r.pans(), r.stderr
+    assert bl_power(r) == "4\n" and kmsg_lines(r) == [], (bl_power(r), kmsg_lines(r))
+
+    # legacy fbdev (vendor 4.9) has no hold: the backlight is not touched
+    r = first_frame(geom=G_VENDOR, fb_id=VENDOR_ID, drm="absent", fbcon=None)
+    assert r.rc == 0 and len(r.pans()) == 1, r.stderr
+    assert bl_power(r) == "4\n" and not r.has("backlight"), r.events
+    assert len(kmsg_lines(r)) == 1 and "src=first-frame" in kmsg_lines(r)[0], kmsg_lines(r)
+
+    ctx.note("backlight release: after pan + vblank on DRM --first-frame only; every device; "
+             "vsync failure tolerated; skip/fail logged with exit 0; none on pan failure, "
+             "unknown orientation, legacy fbdev or animator mode; pre-release helper leaves it held")
 
 
 def pan_series(run):
@@ -650,6 +775,7 @@ TESTS = [
     ("orient-goldens", test_orientation_goldens),
     ("orient-fallback", test_orientation_fbcon_fallback),
     ("orient-unknown", test_orientation_unknown_paints_nothing),
+    ("backlight-release", test_backlight_release),
     ("vendor-identical", test_vendor_byte_identical),
     ("drm-region", test_drm_region_matches_full_frames),
     ("sigterm-hold", test_sigterm_holds_last_frame),

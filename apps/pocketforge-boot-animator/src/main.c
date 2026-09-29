@@ -38,7 +38,8 @@
  * the tsp-3rd3.4 clear-to-black contract, docs/FB0-CONTRACT.md).
  *
  * --first-frame: resolve orientation, unbind fbcon, paint frame 000, emit the
- * marker, exit 0. For the initrd first-light helper (bd tsp-3rd3.7).
+ * marker, exit 0. For the initrd first-light helper (bd tsp-3rd3.7). On the
+ * DRM path it then turns the backlight on (see "Backlight release" below).
  * --measure:     per-tick decode/blit timing plus a CPU/RSS summary on exit.
  * --frames-dir D: read frame-NNN.png from D instead of the installed set.
  *
@@ -46,6 +47,21 @@
  *   pf-boot-splash: first-frame presented src=<animator|first-frame> ...
  * (kernel clock; the tsp-3rd3.9 boot-splash harness keys the lit-black gap on
  * it).
+ *
+ * Backlight release (--first-frame, DRM path only; bd tsp-3rd3.14). The open
+ * 7.x panel driver keeps the backlight dark at the first panel enable
+ * (kernel-sunxi-7.x otm1289a backlight_hold_ms) until userspace writes 0 to
+ * bl_power, or until its own fallback timer fires. After the frame-000 marker
+ * the helper waits one vblank, so the scan-out in progress is all frame 000.
+ * Then it writes "0" to every /sys/class/backlight/<dev>/bl_power and logs,
+ * per device, one of:
+ *   pf-boot-splash: backlight on src=first-frame device=<dev>
+ *   pf-boot-splash: backlight release failed src=first-frame device=<dev> error=...
+ * or, when nothing was written:
+ *   pf-boot-splash: backlight release skipped src=first-frame reason=...
+ * With nothing painted or a failed pan it releases nothing, and the kernel
+ * fallback turns the panel on. A kernel without the hold already has
+ * bl_power 0, so the write is a no-op there.
  *
  * Only libc/libm are used, and every path goes through open/read/write/ioctl/
  * mmap, so the binary links statically for the initrd and the hermetic tests
@@ -55,8 +71,10 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <linux/fb.h>
 #include <signal.h>
 #include <stdint.h>
@@ -98,6 +116,7 @@
 #define VTCON_MAX          16         /* MAX_NR_CON_DRIVER */
 #define FBCON_VTCON_NAME   "frame buffer device"
 #define KMSG_PATH          "/dev/kmsg"
+#define BACKLIGHT_DIR      "/sys/class/backlight"
 #define DRM_MAX_CONNECTORS 16
 #define DRM_MAX_PROPS      64
 #define DRM_MAX_ENUMS      16
@@ -544,14 +563,15 @@ static unsigned frame_for_tick(unsigned k) {
     return LOOP_START + ((k - INTRO_FRAMES) % loop_len);
 }
 
-static void emit_first_frame_marker(const char *mode, const struct orientation *o, int pan_ok) {
+/* One "<level>text\n" line to /dev/kmsg (kernel clock), echoed to stderr. */
+static void kmsg_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void kmsg_printf(const char *fmt, ...) {
     char line[256];
-    int n = snprintf(line, sizeof(line),
-                     "<6>pf-boot-splash: first-frame presented src=%s rotation=%s orientation=\"%s\" source=%s pan=%s\n",
-                     mode, o->row ? o->row->rot_name : "ROTATE_0",
-                     o->row ? o->row->prop_name : "legacy", o->source,
-                     pan_ok ? "ok" : "failed");
-    if (n <= 0 || (size_t)n >= sizeof(line)) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (n <= 3 || (size_t)n >= sizeof(line)) return;
     fprintf(stderr, "animator: %s", line + 3);
     int fd = open(KMSG_PATH, O_WRONLY | O_CLOEXEC);
     if (fd < 0) {
@@ -561,6 +581,59 @@ static void emit_first_frame_marker(const char *mode, const struct orientation *
     if (write(fd, line, (size_t)n) != n)
         fprintf(stderr, "animator: write %s: %s\n", KMSG_PATH, strerror(errno));
     close(fd);
+}
+
+static void emit_first_frame_marker(const char *mode, const struct orientation *o, int pan_ok) {
+    kmsg_printf("<6>pf-boot-splash: first-frame presented src=%s rotation=%s orientation=\"%s\" source=%s pan=%s\n",
+                mode, o->row ? o->row->rot_name : "ROTATE_0",
+                o->row ? o->row->prop_name : "legacy", o->source,
+                pan_ok ? "ok" : "failed");
+}
+
+/* Turn the backlight on once frame 000 is on the panel (see "Backlight
+ * release" above). Never fails the helper: every outcome is one kmsg line
+ * per device, and the kernel's fallback covers anything not released here. */
+static void release_backlight(int fb, const char *mode) {
+    __u32 crtc = 0;
+    if (ioctl(fb, FBIO_WAITFORVSYNC, &crtc) < 0)
+        fprintf(stderr, "animator: FBIO_WAITFORVSYNC before backlight release: %s (continuing)\n",
+                strerror(errno));
+
+    int dfd = open(BACKLIGHT_DIR, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    DIR *dir = dfd < 0 ? NULL : fdopendir(dfd);
+    if (!dir) {
+        int err = errno;
+        if (dfd >= 0) close(dfd);
+        kmsg_printf("<4>pf-boot-splash: backlight release skipped src=%s reason=\"%s: %s\"\n",
+                    mode, BACKLIGHT_DIR, strerror(err));
+        return;
+    }
+    unsigned devices = 0;
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char path[320];
+        int n = snprintf(path, sizeof(path), BACKLIGHT_DIR "/%s/bl_power", de->d_name);
+        if (n <= 0 || (size_t)n >= sizeof(path)) continue;
+        devices++;
+        int fd = open(path, O_WRONLY | O_CLOEXEC);
+        ssize_t w = -1;
+        if (fd >= 0) {
+            do { w = write(fd, "0\n", 2); } while (w < 0 && errno == EINTR);
+            if (w >= 0 && w != 2) errno = EIO;
+        }
+        int err = errno;
+        if (fd >= 0) close(fd);
+        if (w == 2)
+            kmsg_printf("<6>pf-boot-splash: backlight on src=%s device=%s\n", mode, de->d_name);
+        else
+            kmsg_printf("<4>pf-boot-splash: backlight release failed src=%s device=%s error=\"%s\"\n",
+                        mode, de->d_name, strerror(err));
+    }
+    closedir(dir);
+    if (devices == 0)
+        kmsg_printf("<4>pf-boot-splash: backlight release skipped src=%s reason=\"no backlight device\"\n",
+                    mode);
 }
 
 static void usage(void) {
@@ -721,6 +794,13 @@ int main(int argc, char **argv) {
             if (!painted) {
                 painted = 1;
                 emit_first_frame_marker(mode, &orient, pan_ok);
+                if (first_frame && is_drm) {
+                    if (pan_ok)
+                        release_backlight(fb, mode);
+                    else
+                        kmsg_printf("<4>pf-boot-splash: backlight release skipped src=%s reason=\"pan failed\"\n",
+                                    mode);
+                }
             }
             last_frame = fidx;
         } else {
