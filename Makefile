@@ -59,6 +59,7 @@ test-dockerfile-pf-transforms:
 	@tests/test-dockerfile-pf-transforms.sh
 	@tests/test-initrd-selfflash-watchdog.sh
 	@tests/test-poolsuite-variant-stage.sh
+	@python3 -B tests/test-poolsuite-source-digest.py
 	@tests/test-poolsuite-rootfs-install.sh
 	@tests/test-default-app-platform.sh
 	@tests/test-default-app-rootfs.sh
@@ -66,6 +67,7 @@ test-dockerfile-pf-transforms:
 	@python3 tests/verify-owned-spl-layout-gate.py
 	@tests/test-launcher-runtime-contract.sh
 	@tests/test-session-authority-systemd-safety.sh
+	@python3 -B tests/test-reproducible-assembly.py
 
 test-kernel-build-identity:
 	@bash tests/test-kernel-build-identity.sh
