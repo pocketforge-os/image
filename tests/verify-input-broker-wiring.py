@@ -78,6 +78,7 @@ assert not any(section == "Install" for section, _, _ in app), "pf-app@ must sta
 # Broker drop-in: exactly the ruling's directives plus the Condition->Assert fix.
 assert broker == [
     ("Unit", "StopWhenUnneeded", "yes"),
+    ("Unit", "Wants", "pocketforge-foreground.target"),
     ("Unit", "After", "pocketforge-foreground.target pf-input-decode.service pf-prefsd.service"),
     ("Unit", "Conflicts", "pf-shell-selected.service"),
     ("Unit", "ConditionPathExists", ""),

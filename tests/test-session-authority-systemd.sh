@@ -23,7 +23,7 @@ app_unit_sha256=f83f9a970a94ba3df93a290927073fd6bd1991b35c321ad3ac5db43f805120b9
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
 # is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
 broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=385b3ba60cc3ec6d2b402decbcb11d3ed1b7297e5567f4a28e91f75f435f61a4
+broker_dropin_sha256=8aa6b5c4472e012b952f0e9d85071456596902220168a895c6583f061bbccd02
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))

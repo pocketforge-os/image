@@ -853,6 +853,7 @@ the comments are omitted here and the directives are verbatim:
 ```ini
 [Unit]
 StopWhenUnneeded=yes
+Wants=pocketforge-foreground.target
 After=pocketforge-foreground.target pf-input-decode.service pf-prefsd.service
 Conflicts=pf-shell-selected.service
 ConditionPathExists=
