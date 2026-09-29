@@ -4,6 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 harness="${root}/tests/test-session-authority-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
+# shellcheck source=tests/session-authority-systemd/docker-argv-audit.sh
+source "${root}/tests/session-authority-systemd/docker-argv-audit.sh"
 # shellcheck source=tests/session-authority-systemd/probe-diagnostics.sh
 source "${root}/tests/session-authority-systemd/probe-diagnostics.sh"
 label_key=org.pocketforge.session-authority-probe
@@ -11,6 +13,11 @@ run_id="gha-${GITHUB_RUN_ID:-missing}-${GITHUB_RUN_ATTEMPT:-missing}-probe"
 run_id="$(printf '%s' "${run_id}" | tr -c 'A-Za-z0-9_.-' '-')"
 run_label="${label_key}=${run_id}"
 probe_image="tsp-f3fm-211-systemd-probe:${run_id}"
+test_image="${probe_image}"
+systemd_container=
+docker_run_profile=
+ephemeral_admitted=0
+allow_full_cache_prune=0
 work=
 cache_before=
 cache_current=
@@ -37,6 +44,31 @@ owner_exception=none
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
 disk_floor_bytes=$((4 * gib))
+
+fail() {
+    failure_reason="$*"
+    echo "systemd-docker-probe: FAIL: $*" >&2
+    exit 1
+}
+
+probe_docker_run() {
+    audit_docker_argv "$@"
+    command docker "$@"
+}
+
+case "${1:-}" in
+    --audit-run-fixture)
+        [ "$#" -ge 5 ] \
+            || fail 'USAGE: --audit-run-fixture FIXTURE_ROOT PROFILE CONTAINER ARGV...'
+        "${harness}" --check-host-guard "$2"
+        ephemeral_admitted=1
+        docker_run_profile="$3"
+        systemd_container="$4"
+        shift 4
+        probe_docker_run "$@"
+        exit 0
+        ;;
+esac
 
 capture_cache_ids() {
     docker buildx du --format '{{.ID}}' 2>/dev/null \
@@ -148,6 +180,7 @@ cleanup() {
 
 # This executes only guard logic; it cannot contact Docker.
 "${harness}" --check-host-guard /
+ephemeral_admitted=1
 for command_name in docker python3 sha256sum timeout; do
     command -v "${command_name}" >/dev/null 2>&1 \
         || { echo "systemd-docker-probe: missing ${command_name}" >&2; exit 1; }
@@ -264,17 +297,26 @@ for key in ("Status", "ExitCode", "Error", "Pid"):
 positive_control() {
     local name="tsp-f3fm-211-probe-${run_id}-positive" result=fail reason=none
     local output inspect_quoted
+    local -a run_argv
 
     docker rm --force "${name}" >/dev/null 2>&1 || true
-    if ! output="$(docker run --detach --tty \
-        --name "${name}" \
-        --label "${run_label}" \
-        --cgroupns=private \
-        --network none \
-        --tmpfs /run:rw,nosuid,nodev,mode=755 \
-        --tmpfs /run/lock:rw,nosuid,nodev,mode=755 \
-        --entrypoint /bin/sleep \
-        "${probe_image}" infinity 2>&1)"; then
+    systemd_container="${name}"
+    docker_run_profile=positive-control
+    run_argv=(
+        run
+        --detach
+        --tty
+        --name "${name}"
+        --label "${run_label}"
+        --cgroupns=private
+        --network none
+        --tmpfs '/run:rw,nosuid,nodev,mode=755'
+        --tmpfs '/run/lock:rw,nosuid,nodev,mode=755'
+        --entrypoint /bin/sleep
+        "${probe_image}"
+        infinity
+    )
+    if ! output="$(probe_docker_run "${run_argv[@]}" 2>&1)"; then
         reason="run_failed_$(one_line <<<"${output}")"
     else
         inspect_container_state "${name}"
@@ -306,7 +348,8 @@ positive_control() {
 
 probe_candidate() {
     local key="$1" adoptable="$2" description="$3" pid1_mode="$4"
-    shift 4
+    local audit_profile="$5"
+    shift 5
     local name="tsp-f3fm-211-probe-${run_id}-${key}"
     local state=unknown transient_start=not_run transient_stop=not_run
     local reason=none diagnostic_reason output status=1 result=fail run_rc=0
@@ -321,7 +364,7 @@ probe_candidate() {
     local initial_inspect initial_inspect_rc initial_status initial_exit_code
     local initial_error initial_pid initial_pid1_comm initial_pid1_rc
     local inspect_quoted initial_inspect_quoted last_log_flat
-    local -a extra=() command=()
+    local -a extra=() command=() run_argv=()
 
     while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
         extra+=("$1")
@@ -333,16 +376,23 @@ probe_candidate() {
     fi
 
     docker rm --force "${name}" >/dev/null 2>&1 || true
-    if output="$(docker run --detach --tty \
-        --name "${name}" \
-        --label "${run_label}" \
-        --cgroupns=private \
-        --network none \
-        --tmpfs /run:rw,nosuid,nodev,mode=755 \
-        --tmpfs /run/lock:rw,nosuid,nodev,mode=755 \
-        "${extra[@]}" \
-        "${probe_image}" \
-        "${command[@]}" 2>&1)"; then
+    systemd_container="${name}"
+    docker_run_profile="${audit_profile}"
+    run_argv=(
+        run
+        --detach
+        --tty
+        --name "${name}"
+        --label "${run_label}"
+        --cgroupns=private
+        --network none
+        --tmpfs '/run:rw,nosuid,nodev,mode=755'
+        --tmpfs '/run/lock:rw,nosuid,nodev,mode=755'
+        "${extra[@]}"
+        "${probe_image}"
+        "${command[@]}"
+    )
+    if output="$(probe_docker_run "${run_argv[@]}" 2>&1)"; then
         run_rc=0
     else
         run_rc=$?
@@ -465,46 +515,13 @@ probe_candidate() {
     require_disk_floor "after-candidate-${key}"
 }
 
-# Least privilege first. Candidate e is the owner-approved exception only on an
-# admitted one-job ephemeral Actions runner; it remains forbidden everywhere else.
+# Permanent approved-only matrix: harmless positive control, baseline candidate
+# a, and owner-approved ephemeral-only candidate e. The broader discovery matrix
+# from workflow run 36498172908 is history and must not be reintroduced here.
 positive_control
-probe_candidate a yes private-cgroupns-tmpfs-pty direct \
+probe_candidate a yes private-cgroupns-tmpfs-pty direct baseline-systemd \
     -- /sbin/init
-probe_candidate b yes private-cgroupns-rw-cgroup-bind direct \
-    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup \
-    -- /sbin/init
-probe_candidate b-systempaths yes private-cgroupns-rw-cgroup-bind-systempaths-unconfined direct \
-    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup \
-    --security-opt systempaths=unconfined \
-    -- /sbin/init
-probe_candidate c-seccomp yes private-cgroupns-seccomp-unconfined direct \
-    --security-opt seccomp=unconfined \
-    -- /sbin/init
-probe_candidate c-apparmor yes private-cgroupns-apparmor-unconfined direct \
-    --security-opt apparmor=unconfined \
-    -- /sbin/init
-probe_candidate c-systempaths yes private-cgroupns-systempaths-unconfined direct \
-    --security-opt systempaths=unconfined \
-    -- /sbin/init
-probe_candidate c-userns yes private-cgroupns-userns-host direct \
-    --userns=host \
-    -- /sbin/init
-probe_candidate d yes nested-user-pid-namespace-systemd inner \
-    -- /usr/local/libexec/nested-systemd
-probe_candidate d-seccomp yes nested-user-pid-namespace-seccomp-unconfined inner \
-    --security-opt seccomp=unconfined \
-    -- /usr/local/libexec/nested-systemd
-probe_candidate d-apparmor yes nested-user-pid-namespace-apparmor-unconfined inner \
-    --security-opt apparmor=unconfined \
-    -- /usr/local/libexec/nested-systemd
-probe_candidate d-unconfined yes nested-user-pid-namespace-security-unconfined inner \
-    --security-opt seccomp=unconfined \
-    --security-opt apparmor=unconfined \
-    -- /usr/local/libexec/nested-systemd
-probe_candidate c-remount yes cgroup-remount-apparmor-unconfined-without-cap direct \
-    --security-opt apparmor=unconfined \
-    -- /usr/local/libexec/remount-cgroup-systemd
-probe_candidate e no owner-exception-ephemeral-only-cap-sys-admin-cgroup-remount direct \
+probe_candidate e no owner-exception-ephemeral-only-cap-sys-admin-cgroup-remount direct owner-exception \
     --security-opt apparmor=unconfined \
     --cap-add=SYS_ADMIN \
     -- /usr/local/libexec/remount-cgroup-systemd

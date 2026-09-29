@@ -7,6 +7,7 @@ driver="${root}/tests/session-authority-systemd/drive.py"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
+argv_audit="${root}/tests/session-authority-systemd/docker-argv-audit.sh"
 probe_diagnostics="${root}/tests/session-authority-systemd/probe-diagnostics.sh"
 remount_helper="${root}/tests/session-authority-systemd/remount-cgroup-systemd"
 workflow="${root}/.github/workflows/session-authority-systemd.yml"
@@ -230,6 +231,19 @@ run_probe_diagnostics() {
         ' bash "${probe_diagnostics}"
 }
 
+run_probe_fake() {
+    env \
+        BASH_ENV=/dev/null \
+        PATH="${fake_bin}:${PATH}" \
+        GITHUB_ACTIONS=true \
+        DOCKER_CALL_LOG="${call_log}" \
+        FAKE_HOSTNAME=mm-eph-build-0 \
+        FAKE_GRAPHICAL=0 \
+        FAKE_DISPLAY_MANAGER=0 \
+        FAKE_DISPLAY_PROCESS=0 \
+        bash "${probe}" "$@"
+}
+
 reset_logs
 if FAKE_PROBE_STATE=degraded \
     FAKE_PROBE_WAIT_RC=1 \
@@ -309,6 +323,29 @@ FAKE_PROBE_CGROUP_RC=0 \
 run_probe_diagnostics >"${stdout_log}" 2>"${stderr_log}"
 grep -Fq 'probe-diagnostics: result=pass state=degraded' "${stdout_log}" || exit 1
 grep -Fq 'reason=none' "${stdout_log}" || exit 1
+
+reset_logs
+probe_audit_container=tsp-f3fm-211-probe-fixture-host-bind
+if run_probe_fake --audit-run-fixture \
+    "${fake_root}" baseline-systemd "${probe_audit_container}" \
+    run --detach --tty \
+    --name "${probe_audit_container}" \
+    --label org.pocketforge.session-authority-probe=gha-missing-missing-probe \
+    --cgroupns private \
+    --network none \
+    --tmpfs /run:rw,nosuid,nodev,mode=755 \
+    --tmpfs /run/lock:rw,nosuid,nodev,mode=755 \
+    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup \
+    tsp-f3fm-211-systemd-probe:gha-missing-missing-probe /sbin/init \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: probe accepted host cgroup bind candidate' >&2
+    exit 1
+fi
+grep -Fq 'UNSAFE_CONTAINER_ARGV: host cgroup mount' "${stderr_log}" || exit 1
+[ ! -s "${call_log}" ] || {
+    echo 'session-authority systemd-safety: FAIL: rejected probe candidate reached Docker' >&2
+    exit 1
+}
 
 reset_logs
 FAKE_GRAPHICAL=1
@@ -531,6 +568,8 @@ expect_rejected host-network "${safe_run[@]}" --network host \
     "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
 expect_rejected host-cgroup-namespace "${safe_run[@]}" --cgroupns host \
     "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
+expect_rejected host-user-namespace "${safe_run[@]}" --userns=host \
+    "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
 expect_rejected host-cgroup-volume "${safe_run[@]}" \
     -v /sys/fs/cgroup:/sys/fs/cgroup \
     "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
@@ -652,13 +691,30 @@ grep -Fq 'timeout --signal=TERM 90s' "${probe_diagnostics}" || exit 1
 grep -Fq 'systemctl --failed --no-legend' "${probe_diagnostics}" || exit 1
 grep -Fq 'docker logs --tail 40' "${probe}" || exit 1
 grep -Fq 'cgroup_mount_options=' "${probe}" || exit 1
+grep -Fq 'source "${fixtures}/docker-argv-audit.sh"' "${harness}" || exit 1
+grep -Fq 'source "${root}/tests/session-authority-systemd/docker-argv-audit.sh"' \
+    "${probe}" || exit 1
+grep -Fq 'audit_docker_argv "$@"' "${probe}" || exit 1
+! grep -Eq 'docker[[:space:]]+(run|create)([[:space:]]|$)' "${probe}" || {
+    echo 'session-authority systemd-safety: FAIL: probe bypasses shared run auditor' >&2
+    exit 1
+}
+[ "$(grep -Ec '^probe_candidate (a|e) ' "${probe}")" -eq 2 ] || exit 1
+[ "$(grep -Ec '^probe_candidate ' "${probe}")" -eq 2 ] || exit 1
+if grep -Eq -- 'source=/sys/fs/cgroup|src=/sys/fs/cgroup|seccomp=unconfined|systempaths=unconfined|--userns=host|nested-systemd|/usr/bin/unshare' \
+    "${probe}" "${probe_recipe}"; then
+    echo 'session-authority systemd-safety: FAIL: probe retains an unapproved discovery configuration' >&2
+    exit 1
+fi
+grep -Fq 'UNSAFE_CONTAINER_ARGV: host cgroup mount' "${argv_audit}" || exit 1
+grep -Fq 'baseline-systemd)' "${argv_audit}" || exit 1
+grep -Fq 'positive-control)' "${argv_audit}" || exit 1
+grep -Fq 'owner-exception)' "${argv_audit}" || exit 1
 grep -Fq 'source "${root}/tests/session-authority-systemd/probe-diagnostics.sh"' \
     "${probe}" || exit 1
 [ "$(grep -Fh 'collect_failed_units_and_cgroup "${name}"' \
     "${probe}" "${probe_diagnostics}" | wc -l)" -eq 2 ] || exit 1
 [ "$(grep -Fc 'candidate_diagnostics_reason' "${probe}")" -eq 2 ] || exit 1
-grep -Fq 'private-cgroupns-rw-cgroup-bind-systempaths-unconfined' "${probe}" || exit 1
-grep -Fq 'cgroup-remount-apparmor-unconfined-without-cap' "${probe}" || exit 1
 grep -Fq 'docker buildx prune --force --all' "${probe}" || exit 1
 grep -Fq 'allow_full_cache_prune=1' "${harness}" || exit 1
 ! grep -Fq 'reason="boot_failed_$(docker logs' "${probe}" || exit 1
@@ -671,4 +727,4 @@ grep -Fqx 'CMD ["/sbin/init"]' "${probe_recipe}" || exit 1
 grep -Fq 'candidate_e=${candidate_e_result} adopted=${adopted} owner_exception=${owner_exception}' \
     "${probe}" || exit 1
 
-echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker probe_matrix=static getty_masks=5 runtime=fake-docker'
+echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused probe_host_cgroup_bind=refused-zero-docker probe_argv_audit=shared probe_matrix=approved-only docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker getty_masks=5 runtime=fake-docker'
