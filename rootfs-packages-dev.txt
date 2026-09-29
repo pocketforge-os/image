@@ -5,6 +5,7 @@
 #
 # Source: pocketforge-plan.md §3.5 (variant definitions)
 
+evtest
 ffmpeg
 i2c-tools
 iperf3
