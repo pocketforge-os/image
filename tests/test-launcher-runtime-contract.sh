@@ -15,12 +15,12 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# tsp-f3fm.217 moves runtime alone: runtime#102 (2ad0ca76 -> 59accd3f) changed only
+# tsp-f3fm.217 moves runtime alone: runtime#102 (merged 2ad0ca76 -> 0955d8a8) changed only
 # pf-input-decode, pf-input-broker, pf-input-collect, pf-collect-ui, Cargo.lock and
 # the vendor lock, none of which the launcher vendors, so launcher 96feb08c stays
 # the co-pin. The previous image guard accepted (2ad0ca76, 96feb08c); the new guard
 # refuses the old runtime and the pre-#145 launcher 1e5a3d97, and an older one.
-expected_runtime=59accd3fb70a100f9f1381cf3712db441eca5e73
+expected_runtime=0955d8a83ee59df89eaba79ffee9e99e4f52384c
 expected_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
 old_runtime=2ad0ca76efc984ad80a167759cfcf23657fb0c78
 old_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
