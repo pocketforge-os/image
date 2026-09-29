@@ -60,11 +60,26 @@ After=pocketforge-foreground.target
 ```
 
 **If it is not**, use the sanctioned wrapper (needs root; HIL/test callers use
-`sudo -n`):
+`sudo -n`). The SDL video driver depends on the image's GPU profile:
 
 ```sh
+# closed DDK (vendor PowerVR EGL)
 pf-take-panel env SDL_VIDEODRIVER=sunxifb /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
+# open GPU (Mesa; /etc/pocketforge-build-id says device=a133-open-*)
+pf-take-panel env SDL_VIDEODRIVER=kmsdrm /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
 ```
+
+The closed-DDK SDL has `sunxifb` and no KMSDRM. The open-GPU SDL has KMSDRM
+and no `sunxifb` (`tsp-f3fm.218`, libsdl3-sunxifb#22). sunxifb's window
+surface is an EGL surface on native window 0, which only the vendor DDK
+accepts, so on Mesa every window failed with `sunxifb: Can't create EGL window
+surface`. Naming `kmsdrm` explicitly is also correct on open images built
+before that change: their SDL still contains sunxifb and would try it first.
+A KMSDRM app becomes DRM master and presents through DRM page flips, not
+through fb0. As of 2026-09-29 that path is not yet verified on device (GBM
+scanout from Mesa into sun4i-drm, rotated present, fb0 restore after exit).
+The checks are `tsp-mc9m.41.924.16.12` (testgles2 on kmsdrm) and the
+`tsp-f3fm.215` Poolsuite run.
 
 What happens: activating the target **stops the current owner first**, `After=`
 orders you behind that stop, and when you exit the target deactivates
@@ -114,8 +129,9 @@ being perfectly correct** — its pixels land in a page nothing scans out.
 If you write `/dev/fb0` directly: draw into the back page, `msync`, set
 `yoffset`, then `FBIOPAN_DISPLAY` — every frame.
 
-> **SDL apps must NOT hand-roll panning.** SDL's `sunxifb` backend already
-> pans. This contract binds **raw fbdev writers only**. Adding manual
+> **SDL apps must NOT hand-roll panning.** SDL's `sunxifb` backend (closed
+> DDK) already pans, and SDL's KMSDRM backend (open GPU) does not use fb0 at
+> all. This contract binds **raw fbdev writers only**. Adding manual
 > `FBIOPAN_DISPLAY` calls around an SDL app is redundant at best — and
 > historically SDL's pans carrying a *non-panning* owner's frames into scan-out
 > is the origin of the old "z-fight" report.
@@ -157,7 +173,8 @@ of 2026-09-29 this is from kernel source; device confirmation is pending in
 
 Measured on silicon on the base A133 on **2026-07-27** (`tsp-1pw9`, reported by
 `tsp-osr-coord`) — not an opinion, and worth re-checking against that lane
-before trusting it as current:
+before trusting it as current. This is the **closed-DDK** stack. On the open
+GPU model, SDL uses KMSDRM instead (§1), and its device status is pending:
 
 | Path | Status |
 | --- | --- |
@@ -190,10 +207,13 @@ so treat it as hardened but not yet proven.
 
 Until that verification lands, keep the protocol: judge with **burst/motion**
 evidence rather than a single frame, and before trusting a *negative* verdict
-run the positive control —
+run the positive control with your image's SDL driver (§1) —
 
 ```sh
+# closed DDK
 pf-take-panel env SDL_VIDEODRIVER=sunxifb /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
+# open GPU (not yet a proven positive control: see §1)
+pf-take-panel env SDL_VIDEODRIVER=kmsdrm /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
 ```
 
 If `testgles2` does not render, the boot is affected and your verdict is void:
