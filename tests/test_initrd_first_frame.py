@@ -22,7 +22,11 @@ busybox 1.35.0 arm64 ash through qemu-aarch64-static -- the shell that runs
 
 Each case asserts that switch_root is reached, that no process other than /init
 exists when it is (and before self-flash recovery), the reaped exit status, and
-the helper's observable effects. Timing cases compare the init path (banner ->
+the helper's observable effects. Those include the backlight (bd tsp-3rd3.14):
+the fake /sys/class/backlight/backlight/bl_power starts at 4, the state the open
+7.x panel driver's first-paint hold leaves it in. Only a painted frame 000
+turns it on. /init itself never touches it in any case, because the bound on a
+dark panel is the kernel's own fallback (KUnit in kernel-sunxi-7.x). Timing cases compare the init path (banner ->
 switch_root) against the no-payload path under identical stubs and bound the
 difference by 50 ms; the watchdog case compares every keepalive gap. Then the
 same checks run against deliberately broken copies of /init and of
@@ -152,6 +156,7 @@ class Result:
         self.helper_log = []
         self.kmsg = []
         self.events = []
+        self.bl_power = None   # /sys/class/backlight/backlight/bl_power at the end
 
     def t_of(self, needle):
         for t, text in self.lines:
@@ -211,7 +216,7 @@ def make_root(ctx, case, init_text):
     for d in ("bin", "etc", "proc", "sys", "dev", "t", "fbdev", "pflog", "newroot/usr/sbin",
               "newroot/usr/bin", "newroot/usr/lib/systemd", "newroot/usr/lib/aarch64-linux-gnu",
               "t/sys/class/vtconsole/vtcon0", "t/sys/class/graphics/fbcon", "t/fakefb",
-              "lib/pocketforge-first-frame"):
+              "t/sys/class/backlight/backlight", "lib/pocketforge-first-frame"):
         os.makedirs(os.path.join(root, d), exist_ok=True)
     os.symlink("usr/lib64", os.path.join(root, "lib64"))
     for name, text in (("busybox", STUB_BUSYBOX), ("switch_root", STUB_SWITCH_ROOT),
@@ -243,6 +248,8 @@ def make_root(ctx, case, init_text):
         write(os.path.join(root, "t/sys/class/graphics/fbcon/rotate"),
               case.get("fbcon_rotate", "1") + "\n")
     write(os.path.join(root, "t/kmsg"), "")
+    # held dark by the panel driver until the helper paints (tsp-3rd3.14)
+    write(os.path.join(root, "t/sys/class/backlight/backlight/bl_power"), "4\n")
     os.mkfifo(os.path.join(root, "t/hang.fifo"))
     payload = case.get("payload", "absent")
     ffdir = os.path.join(root, "lib/pocketforge-first-frame")
@@ -337,6 +344,7 @@ def run_init(ctx, shell, case, init_text=None, timeout=20.0):
         res.scans.append((int(parts[1]), parts[2:]))
     res.helper_log = readlines(os.path.join(root, "t/helper.log"))
     res.kmsg = [ln for ln in readlines(os.path.join(root, "t/kmsg")) if ln]
+    res.bl_power = "".join(readlines(os.path.join(root, "t/sys/class/backlight/backlight/bl_power")))
     res.events = readlines(os.path.join(root, "t/fakefb/events.log"))
     res.root = root
     return res
@@ -359,12 +367,19 @@ def readlines(path):
 
 # ---- assertions ---------------------------------------------------------------
 
-def check_boot(res, label, *, reap=True, scan_clean=True):
-    """The fail-open invariants every case shares. Returns failure strings."""
+def check_boot(res, label, *, reap=True, scan_clean=True, backlight="held"):
+    """The fail-open invariants every case shares. Returns failure strings.
+    backlight: "held" (bl_power still 4: nothing but a painted frame 000 may
+    turn it on), "on" (the helper painted and released it) or None (not
+    checked: a run where the reap may race the paint)."""
     fails = []
     if res.timed_out:
         fails.append(f"{label}: /init did not finish (timed out) -- boot held")
         return fails
+    want_bl = {"held": "4", "on": "0", None: res.bl_power}[backlight]
+    if res.bl_power != want_bl:
+        fails.append(f"{label}: bl_power={res.bl_power!r} at the end (want {want_bl!r}: "
+                     f"backlight {backlight})")
     if not res.has("STAGE: switch_root /newroot"):
         fails.append(f"{label}: switch_root not reached")
     if res.has("FAILURE:") or res.has("STUB /bin/sh reached"):
@@ -427,14 +442,17 @@ def c_absent(res, label):
     return f
 
 
+BL_ON = "pf-boot-splash: backlight on src=first-frame device=backlight"
+
+
 @case("paint", payload="real", fb_delay=0.10, root_delay=0.8)
 def c_paint(res, label):
-    f = check_boot(res, label)
+    f = check_boot(res, label, backlight="on")
     expect(res.reaped_rc() == 0, f, f"{label}: reaped rc={res.reaped_rc()} (want 0)")
     want = ('pf-boot-splash: first-frame presented src=first-frame rotation=ROTATE_270 '
             'orientation="Right Side Up" source=drm-connector pan=ok')
-    expect(len(res.kmsg) == 1 and want in res.kmsg[0], f,
-           f"{label}: kmsg {res.kmsg!r} (want exactly one first-frame marker)")
+    expect(len(res.kmsg) == 2 and want in res.kmsg[0] and BL_ON in res.kmsg[1], f,
+           f"{label}: kmsg {res.kmsg!r} (want the first-frame marker, then backlight on)")
     expect(any(e.split()[1:2] == ["pan"] for e in res.events), f,
            f"{label}: no pan in fakefb events")
     expect(res.helper_log and "--first-frame --frames-dir /lib/pocketforge-first-frame"
@@ -448,12 +466,12 @@ def c_paint(res, label):
 @case("paint-left-side-up", payload="real", fb_delay=0.10, root_delay=0.8,
       drm="prop:Left Side Up", fbcon_rotate="3")
 def c_paint_left(res, label):
-    f = check_boot(res, label)
+    f = check_boot(res, label, backlight="on")
     expect(res.reaped_rc() == 0, f, f"{label}: reaped rc={res.reaped_rc()} (want 0)")
     want = ('pf-boot-splash: first-frame presented src=first-frame rotation=ROTATE_90 '
             'orientation="Left Side Up" source=drm-connector pan=ok')
-    expect(len(res.kmsg) == 1 and want in res.kmsg[0], f,
-           f"{label}: kmsg {res.kmsg!r} (want exactly one first-frame marker)")
+    expect(len(res.kmsg) == 2 and want in res.kmsg[0] and BL_ON in res.kmsg[1], f,
+           f"{label}: kmsg {res.kmsg!r} (want the first-frame marker, then backlight on)")
     return f
 
 
@@ -551,6 +569,7 @@ def c_m1b(res, label):
     expect(res.has("STAGE: M1.B mode") and res.has("STUB /bin/sh reached"), f,
            f"{label}: M1.B shell not reached")
     expect(not res.has("first-frame helper pid"), f, f"{label}: helper started in M1.B mode")
+    expect(res.bl_power == "4", f, f"{label}: bl_power={res.bl_power!r} (want '4': held)")
     return f
 
 
@@ -625,7 +644,8 @@ def test_watchdog_cadence(ctx):
         for payload, extra in (("real", {"fb_delay": 0.10}), ("hang", {"fb_delay": 0.05})):
             spec = {"payload": payload, "root_delay": 0.1, "dev": True, **extra}
             r = run_init(ctx, shell, spec)
-            fails.extend(check_boot(r, f"{shell}/cadence-{payload}"))
+            fails.extend(check_boot(r, f"{shell}/cadence-{payload}",
+                                    backlight=None if payload == "real" else "held"))
             bb = bytes(b for _, b in base.pings)
             rb = bytes(b for _, b in r.pings)
             if not bb or bb != rb:

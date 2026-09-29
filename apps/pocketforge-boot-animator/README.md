@@ -23,6 +23,18 @@ then **holds its last frame** so the handoff has no black gap.
 4. Paints **frame 000 in full once**, then writes one line to `/dev/kmsg`:
    `pf-boot-splash: first-frame presented src=… rotation=… orientation=… source=… pan=…`.
    The tsp-3rd3.9 boot-splash harness keys the lit-black gap on this line.
+   - **Backlight release** (`--first-frame` on the DRM path only; tsp-3rd3.14).
+     The open 7.x panel driver keeps the backlight dark at the first panel
+     enable (kernel-sunxi-7.x otm1289a `backlight_hold_ms`). After a
+     successful pan, the helper waits one vblank and writes `0` to every
+     `/sys/class/backlight/<dev>/bl_power`. It then logs, per device,
+     `pf-boot-splash: backlight on src=first-frame device=<dev>`.
+   - If the write fails, the line is `backlight release failed … error=…`. If
+     there is nothing to release, it is `backlight release skipped … reason=…`.
+     The helper still exits 0, and the kernel's fallback timer turns the
+     backlight on.
+   - Nothing is released in animator mode, on legacy fbdev, when nothing was
+     painted, or after a failed pan.
 5. Plays frames **001..015 once** (the intro), then **loops 016..047**.
    Each tick decodes and blits only the **cropped changed region**
    (266×307, 8.9 % of the scene). On the DRM path it blits right after
