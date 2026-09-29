@@ -10,6 +10,10 @@ if ! printf 'Y\n' > /sys/module/pvrsrvkm/parameters/odyssey_capture; then
     exit 0
 fi
 
+# Closed-DDK diagnostic: the odyssey_capture parameter belongs to the vendor
+# pvrsrvkm module, so this line runs only on a DDK image, whose SDL driver is
+# sunxifb. The open-GPU SDL has no sunxifb (tsp-f3fm.218), and there the
+# parameter is absent and the script exits above.
 pf-take-panel env SDL_VIDEODRIVER=sunxifb \
     /opt/pocketforge/bin/testgles2 --quit-after-ms 15000 &
 runner_pid=$!

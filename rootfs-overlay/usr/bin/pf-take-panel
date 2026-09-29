@@ -21,9 +21,19 @@
 #     Requires=pocketforge-foreground.target
 #     After=pocketforge-foreground.target
 #
-# stdio is piped through (--pipe), so FPS-line parsing (HIL cube-fps) works:
+# stdio is piped through (--pipe), so FPS-line parsing (HIL cube-fps) works.
+# The SDL video driver is per GPU profile (tsp-f3fm.218): the closed-DDK SDL
+# has sunxifb and no KMSDRM, and the open-GPU SDL has KMSDRM and no sunxifb.
+# Pick by the exact device= value in /etc/pocketforge-build-id (the platform
+# profile's gpu.model decides; see docs/FB0-CONTRACT.md §1):
+#     # closed DDK (vendor PowerVR EGL): device=a133, device=a133-owned
 #     pf-take-panel env SDL_VIDEODRIVER=sunxifb \
 #         /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
+#     # open GPU (Mesa): device=a133-open, device=a133-open-7x-gpu,
+#     #   device=a133-open-7x-gpu-noradio, device=a133-open-7x-gpu-spl-trace
+#     pf-take-panel env SDL_VIDEODRIVER=kmsdrm \
+#         /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
+# (a133-open-7x is gpu.model=none and ships no SDL.)
 # Environment does not cross into the transient unit — pass it via `env`
 # inside the command line, as above. Needs root (system-level systemd-run);
 # HIL/test users already launch via sudo -n.

@@ -750,8 +750,9 @@ if [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_HAS_DISPLAY}" = 1 ]; then
 fi
 
 # SDL test binaries (bd tsp-tyt) — dev variant only; present only when the sdl
-# stage built them (a133/sunxifb). Lets the sunxifb functional gate
-# (SDL_VIDEODRIVER=sunxifb testgles2) run on-device without scp.
+# stage built them (a133). Lets the SDL functional gate (testgles2 with
+# SDL_VIDEODRIVER=sunxifb on the closed DDK, kmsdrm on the open GPU model;
+# tsp-f3fm.218) run on-device without scp.
 if [ "${PF_HAS_DISPLAY}" = 1 ] && [ "${POCKETFORGE_VARIANT:-dev}" = "dev" ] &&
     [ -d /work/libsdl3/testbin ] && ls /work/libsdl3/testbin/* >/dev/null 2>&1; then
     install -d "${ROOTFS}/opt/pocketforge/bin"

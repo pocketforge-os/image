@@ -60,11 +60,38 @@ After=pocketforge-foreground.target
 ```
 
 **If it is not**, use the sanctioned wrapper (needs root; HIL/test callers use
-`sudo -n`):
+`sudo -n`). The SDL video driver depends on the image's GPU profile:
 
 ```sh
+# closed DDK (vendor PowerVR EGL): device=a133, device=a133-owned
 pf-take-panel env SDL_VIDEODRIVER=sunxifb /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
+# open GPU (Mesa): device=a133-open, device=a133-open-7x-gpu,
+#   device=a133-open-7x-gpu-noradio, device=a133-open-7x-gpu-spl-trace
+pf-take-panel env SDL_VIDEODRIVER=kmsdrm /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
 ```
+
+Read `device=` from `/etc/pocketforge-build-id`. It is the exact platform
+device ID (`scripts/generate-build-id.sh` prints `PF_DEVICE_ID` unchanged), so
+match the whole value against the lists above, not a prefix. What decides the
+driver is the device profile's `gpu.model` in `pocketforge-os/platform`
+(`devices/<id>/profile.toml`; unset means `ddk`), not the name. `a133-open` is
+the open GPU model although it has no suffix. `a133-open-7x` starts with
+`a133-open` but is `gpu.model=none`: it ships no SDL and no `testgles2` at
+all. These lists are platform `349c956` (2026-09-29). For a device ID not
+listed here, read its profile's `gpu.model`: `open` means `kmsdrm`, and
+unset/`ddk` means `sunxifb`.
+
+The closed-DDK SDL has `sunxifb` and no KMSDRM. The open-GPU SDL has KMSDRM
+and no `sunxifb` (`tsp-f3fm.218`, libsdl3-sunxifb#22). sunxifb's window
+surface is an EGL surface on native window 0, which only the vendor DDK
+accepts, so on Mesa every window failed with `sunxifb: Can't create EGL window
+surface`. Naming `kmsdrm` explicitly is also correct on open images built
+before that change: their SDL still contains sunxifb and would try it first.
+A KMSDRM app becomes DRM master and presents through DRM page flips, not
+through fb0. As of 2026-09-29 that path is not yet verified on device (GBM
+scanout from Mesa into sun4i-drm, rotated present, fb0 restore after exit).
+The checks are `tsp-mc9m.41.924.16.12` (testgles2 on kmsdrm) and the
+`tsp-f3fm.215` Poolsuite run.
 
 What happens: activating the target **stops the current owner first**, `After=`
 orders you behind that stop, and when you exit the target deactivates
@@ -114,8 +141,9 @@ being perfectly correct** — its pixels land in a page nothing scans out.
 If you write `/dev/fb0` directly: draw into the back page, `msync`, set
 `yoffset`, then `FBIOPAN_DISPLAY` — every frame.
 
-> **SDL apps must NOT hand-roll panning.** SDL's `sunxifb` backend already
-> pans. This contract binds **raw fbdev writers only**. Adding manual
+> **SDL apps must NOT hand-roll panning.** SDL's `sunxifb` backend (closed
+> DDK) already pans, and SDL's KMSDRM backend (open GPU) does not use fb0 at
+> all. This contract binds **raw fbdev writers only**. Adding manual
 > `FBIOPAN_DISPLAY` calls around an SDL app is redundant at best — and
 > historically SDL's pans carrying a *non-panning* owner's frames into scan-out
 > is the origin of the old "z-fight" report.
@@ -157,7 +185,8 @@ of 2026-09-29 this is from kernel source; device confirmation is pending in
 
 Measured on silicon on the base A133 on **2026-07-27** (`tsp-1pw9`, reported by
 `tsp-osr-coord`) — not an opinion, and worth re-checking against that lane
-before trusting it as current:
+before trusting it as current. This is the **closed-DDK** stack. On the open
+GPU model, SDL uses KMSDRM instead (§1), and its device status is pending:
 
 | Path | Status |
 | --- | --- |
@@ -189,15 +218,35 @@ the fix is **merged and pinned in `platform.lock`** (`kernel-sunxi-4.9#19`,
 so treat it as hardened but not yet proven.
 
 Until that verification lands, keep the protocol: judge with **burst/motion**
-evidence rather than a single frame, and before trusting a *negative* verdict
-run the positive control —
+evidence rather than a single frame.
+
+**Closed DDK only: positive control.** Before trusting a *negative* verdict,
+run —
 
 ```sh
 pf-take-panel env SDL_VIDEODRIVER=sunxifb /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
 ```
 
 If `testgles2` does not render, the boot is affected and your verdict is void:
-reboot and re-run. If it renders, a negative verdict on your app is real.
+reboot and re-run. If it renders, a negative verdict on your app is real. This
+inference holds only on the closed DDK, where this `testgles2` path is proven on
+silicon (§3).
+
+**Open GPU: informational only, not a positive control.** The open image's SDL
+presents through KMSDRM, and that path is not yet verified on device (GBM
+scanout from Mesa into sun4i-drm, rotated present, fb0 restore after exit;
+§1). A `testgles2` failure there may be that unverified path failing, not the
+boot, so it does **not** void a verdict on your app. Run it and record both
+results side by side —
+
+```sh
+pf-take-panel env SDL_VIDEODRIVER=kmsdrm /opt/pocketforge/bin/testgles2 --quit-after-ms 15000
+```
+
+— and judge your app on its own burst/motion evidence. This line becomes a
+positive control only after gpu-14's testgles2 KMSDRM rotated-present bench,
+`tsp-mc9m.41.924.16.12`, verifies the path on device. Promote it here when
+that bead closes with a device PASS.
 
 ---
 
