@@ -864,7 +864,9 @@ grep -Fqx 'COPY 10-input-broker.conf /etc/systemd/system/pf-shell-selected.servi
 grep -Fqx 'COPY fake-input-broker /usr/bin/pf-input-broker' "${recipe}" || exit 1
 grep -Fq 'pf-input-broker.service | grep -q .' "${recipe}" || exit 1
 for b4_check in 'R4 GATE FAILED' 'def assert_grab_timeline' 'def assert_broker_failure_never_traps' \
-    'grab_lock_is_held()' 'systemctl_stop_exit_after_sigkill=' '"--reuid=gamer"'; do
+    'grab_lock_is_held()' 'systemctl_stop_exit_after_sigkill=' '"--reuid=gamer"' \
+    'def assert_broker_exit_before_ready_never_traps' 'def assert_broker_exit_mid_session_never_traps' \
+    'def control_restart_on_failure_reproduces_trap' 'watch_units(30.0)'; do
     grep -Fq -- "${b4_check}" "${driver}" || {
         echo "session-authority systemd-safety: FAIL: driver lost B4 check ${b4_check}" >&2
         exit 1
@@ -892,6 +894,11 @@ grep -Fq 'tests/verify-session-authority-shell-fixture.py' "${harness}" || exit 
 grep -Fq 'SHELL_FIXTURE_DRIFT' "${harness}" || exit 1
 grep -Fq -- '- rootfs-overlay/etc/systemd/system/pf-shell-selected.service' "${workflow}" || exit 1
 grep -Fq -- '- tests/verify-session-authority-shell-fixture.py' "${workflow}" || exit 1
+# The broker's effective Restart=no (bd tsp-f3fm.202.1.6) is a static contract that
+# the image repo's CI would otherwise never run.
+grep -Fq -- '- tests/verify-input-broker-wiring.py' "${workflow}" || exit 1
+grep -Fqx '        run: python3 tests/verify-input-broker-wiring.py' "${workflow}" || exit 1
+grep -Fq 'exit-before-ready' "${root}/tests/session-authority-systemd/fake-input-broker" || exit 1
 precondition_output="$(python3 "${precondition_verifier}")"
 grep -Fqx \
     'session-authority path-preconditions: PASS conditions=2 providers=6 fb0=regular units=7' \

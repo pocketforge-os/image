@@ -862,6 +862,7 @@ AssertPathExists=/dev/uinput
 Group=gamer
 UMask=0007
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
+Restart=no
 ExecStart=
 ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/devices/a133/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock
 ```

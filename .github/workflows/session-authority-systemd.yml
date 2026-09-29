@@ -17,6 +17,7 @@ on:
       - rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf
       - rootfs-overlay/etc/systemd/system/pf-shell-selected.service
       - tests/verify-session-authority-shell-fixture.py
+      - tests/verify-input-broker-wiring.py
 
 permissions:
   contents: read
@@ -42,6 +43,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Run static broker wiring contract
+        run: python3 tests/verify-input-broker-wiring.py
 
       - name: Run hermetic safety checks
         run: tests/test-session-authority-systemd-safety.sh

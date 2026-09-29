@@ -85,6 +85,7 @@ assert broker == [
     ("Service", "Group", "gamer"),
     ("Service", "UMask", "0007"),
     ("Service", "Environment", "PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock"),
+    ("Service", "Restart", "no"),
     ("Service", "ExecStart", ""),
     ("Service", "ExecStart", "/usr/bin/pf-input-broker --descriptor " + DESCRIPTOR
      + " --acquire-sock " + BROKER_SOCK + " --source /dev/input/pf-gamepad"
@@ -96,6 +97,34 @@ assert flags["--descriptor"] == DESCRIPTOR == environment[environment.index(f"PF
 assert flags["--acquire-sock"] == BROKER_SOCK
 assert flags["--safe-return-sock"] == values(app, "Service", "InaccessiblePaths")[0].lstrip("-")
 assert shell == [("Unit", "After", "pf-input-broker.service")], shell
+
+
+def effective_restart(dropin_dir: Path, base: str = "on-failure") -> str:
+    """Restart= as systemd resolves it: the runtime unit's value (Restart=on-failure,
+    pinned by hash in tests/test-session-authority-systemd.sh), then every drop-in in
+    lexical file-name order; the last assignment wins, and an empty one resets it."""
+    value = base
+    for dropin in sorted(dropin_dir.glob("*.conf"), key=lambda path: path.name):
+        for section, key, assigned in directives(dropin.read_text()):
+            if (section, key) == ("Service", "Restart"):
+                value = assigned or "no"
+    return value
+
+
+# App-session broker must fail ONCE (bd: tsp-f3fm.202.1.6): an auto-restart re-applies
+# Conflicts=pf-shell-selected.service on every start and keeps the launcher down.
+assert effective_restart(BROKER_DROPIN.parent) == "no", effective_restart(BROKER_DROPIN.parent)
+# Negative control in the same run: a later drop-in that restores on-failure must be seen.
+import tempfile  # noqa: E402
+
+with tempfile.TemporaryDirectory() as scratch:
+    control = Path(scratch)
+    (control / BROKER_DROPIN.name).write_text(BROKER_DROPIN.read_text())
+    (control / "20-later.conf").write_text("[Service]\nRestart=on-failure\n")
+    assert effective_restart(control) == "on-failure", "effective_restart missed a later drop-in"
+    (control / "20-later.conf").unlink()
+    (control / BROKER_DROPIN.name).write_text(BROKER_DROPIN.read_text().replace("Restart=no\n", ""))
+    assert effective_restart(control) == "on-failure", "effective_restart missed the inherited value"
 
 # Never enabled in the overlay (the installer also refuses a *.wants link).
 assert not list(SYSTEMD.glob("*.wants/pf-input-broker.service"))
@@ -171,4 +200,4 @@ assert "rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-b
 assert "      - rootfs-overlay/etc/systemd/system/pf-shell-selected.service\n" in workflow
 assert "tests/verify-session-authority-shell-fixture.py" in workflow
 
-print("PASS default-app input wiring (units, cross-file paths, open-only Dockerfile, doc drift)")
+print("PASS default-app input wiring (units, cross-file paths, broker Restart=no, open-only Dockerfile, doc drift)")
