@@ -23,6 +23,8 @@ for line_number, line in enumerate(source.read_text().splitlines(), 1):
     record = json.loads(line)
     record_id = record.get("ID")
     parents = record.get("Parents", [])
+    if parents is None:
+        parents = []
     if not isinstance(record_id, str) or not record_id or any(c.isspace() for c in record_id):
         raise ValueError(f"invalid cache record ID at line {line_number}")
     if not isinstance(parents, list) or not all(

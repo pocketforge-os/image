@@ -194,7 +194,7 @@ path = Path(sys.argv[1])
 target = sys.argv[2]
 stuck = sys.argv[3]
 records = [json.loads(line) for line in path.read_text().splitlines() if line]
-if target == stuck or any(target in record.get("Parents", []) for record in records):
+if target == stuck or any(target in (record.get("Parents") or []) for record in records):
     raise SystemExit(0)
 path.write_text("".join(
     json.dumps(record, separators=(",", ":")) + "\n"
@@ -884,11 +884,11 @@ build_cache_cleanup_pause() {
 source "${build_cache_audit}"
 printf '%s\n' \
     '{"ID":"base-parent","Parents":["base-root"]}' \
-    '{"ID":"base-root","Parents":[]}' >"${cache_state}"
+    '{"ID":"base-root","Parents":null}' >"${cache_state}"
 capture_build_cache_records "${cache_before}"
 printf '%s\n' \
     '{"ID":"base-parent","Parents":["base-root"]}' \
-    '{"ID":"base-root","Parents":[]}' \
+    '{"ID":"base-root","Parents":null}' \
     '{"ID":"a-new-parent","Parents":["base-parent"]}' \
     '{"ID":"z-new-child","Parents":["a-new-parent"]}' \
     '{"ID":"m-new-baseline-child","Parents":["base-parent"]}' \
@@ -921,7 +921,7 @@ unset FAKE_CACHE_DU_COUNTER FAKE_CACHE_LATE_RECORD
 # carry the leftover ID in the machine-readable failure reason.
 printf '%s\n' \
     '{"ID":"base-parent","Parents":["base-root"]}' \
-    '{"ID":"base-root","Parents":[]}' \
+    '{"ID":"base-root","Parents":null}' \
     '{"ID":"stuck-new","Parents":["base-parent"]}' \
     >"${cache_state}"
 export FAKE_CACHE_STUCK_ID=stuck-new
