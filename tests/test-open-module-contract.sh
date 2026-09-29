@@ -125,60 +125,12 @@ ROOTFS="${wifi_root}" KREL=7.0.0-pocketforge PF_GPU_MODEL=open \
 grep -Fx xradio "${wifi_root}/etc/modules-load.d/pocketforge-wifi.conf" >/dev/null
 grep -F 'KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent}' "${rootfs_script}" >/dev/null
 
-# Execute the exact customize-hook helper that owns the source-visible 7.x
-# admission parameter. Only the two explicitly named sibling profiles may
-# receive the file; near matches and unknown IDs must stay excluded.
-option_helper="${scratch}/option-helper.sh"
-sed -n '/^is_a133_open_7x_gpu_device() {$/,/^}$/p' "${rootfs_script}" > "${option_helper}"
-sed -n '/^install_open_gpu_module_options() {$/,/^}$/p' "${rootfs_script}" >> "${option_helper}"
-for tuple in \
-    'a133-open open in-tree-6.x' \
-    'a133-open-7x none none' \
-    'a133-open-7x-gpu-extra open in-tree-7.x' \
-    'a133-open-7x-gpu-noradio-extra open in-tree-7.x' \
-    'unknown open in-tree-7.x' \
-    'a133 ddk out-of-tree-ddk' \
-    'a523 ddk out-of-tree-ddk'; do
-    read -r device_id gpu_model gpu_km_model <<< "${tuple}"
-    option_root="${scratch}/option-${device_id}"
-    mkdir -p "${option_root}"
-    ROOTFS="${option_root}" PF_DEVICE_ID="${device_id}" PF_GPU_MODEL="${gpu_model}" \
-        PF_GPU_KM_MODEL="${gpu_km_model}" \
-        bash -c 'source "$1"; install_open_gpu_module_options' _ "${option_helper}"
-    [ ! -e "${option_root}/etc/modprobe.d/powervr-a133-open-7x-gpu.conf" ]
-done
-for device_id in a133-open-7x-gpu a133-open-7x-gpu-noradio; do
-    option_root="${scratch}/option-${device_id}"
-    mkdir -p "${option_root}"
-    ROOTFS="${option_root}" PF_DEVICE_ID="${device_id}" \
-        PF_GPU_MODEL=open PF_GPU_KM_MODEL=in-tree-7.x \
-        bash -c 'source "$1"; install_open_gpu_module_options' _ "${option_helper}"
-    [ "$(cat "${option_root}/etc/modprobe.d/powervr-a133-open-7x-gpu.conf")" = \
-        'options powervr exp_hw_support=1' ]
-done
-for device_id in a133-open-7x-gpu a133-open-7x-gpu-noradio; do
-    if ROOTFS="${scratch}/wrong-option-${device_id}" PF_DEVICE_ID="${device_id}" \
-        PF_GPU_MODEL=open PF_GPU_KM_MODEL=in-tree-6.x \
-        bash -c 'source "$1"; install_open_gpu_module_options' _ "${option_helper}" \
-        2>"${scratch}/wrong-option-${device_id}.err"; then
-        echo "FAIL: ${device_id} PowerVR option accepted a non-7.x contract" >&2
-        exit 1
-    fi
-    grep -F 'without its exact open/in-tree-7.x contract' \
-        "${scratch}/wrong-option-${device_id}.err" >/dev/null
-done
-
-for device_id in a133-open-7x-gpu a133-open-7x-gpu-noradio; do
-    PF_DEVICE_ID="${device_id}" bash -c \
-        'source "$1"; is_a133_open_7x_gpu_device "$PF_DEVICE_ID"' _ "${option_helper}"
-done
-for device_id in a133-open-7x-gpu-extra a133-open-7x-gpu-noradio-extra unknown; do
-    if PF_DEVICE_ID="${device_id}" bash -c \
-        'source "$1"; is_a133_open_7x_gpu_device "$PF_DEVICE_ID"' _ "${option_helper}"; then
-        echo "FAIL: near-match/unknown device ID '${device_id}' entered the 7.x GPU contract" >&2
-        exit 1
-    fi
-done
+# The 7.x PowerVR option gate (install_open_gpu_module_options and its device
+# predicate) is exercised on the generated customize hook itself by
+# tests/test-customize-hook-fail-closed.sh, not on outer-script copies of its
+# functions: pasting the outer is_a133_open_7x_gpu_device into this test once
+# hid that the hook never defined it (tsp-mc9m.41.986).
+bash "${root}/tests/test-customize-hook-fail-closed.sh" >/dev/null
 
 # Run the open half of the real Dockerfile GPUKM heredoc with a fake objcopy
 # over a module fixture. This checks exact repo/ref/SHA, one release directory,
