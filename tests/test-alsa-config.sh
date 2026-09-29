@@ -25,6 +25,13 @@
 #   4. an empty or unknown kernel repo fails the install.
 #   5. audio-defaults.sh applies every line with amixer on card Codec and
 #      fails when a control or the card is missing.
+#   6. unit graph: no install target (WantedBy=/RequiredBy=) of
+#      pocketforge-audio-defaults.service appears in its After= (static
+#      rule); and systemd-analyze verify over the rendered rootfs (with stubs
+#      for the Debian alsa units) loads the unit, pulls it in from
+#      sound.target, and finds no ordering cycle. The verify detector is
+#      proven in the same run on a fixture pair with a real ordering cycle.
+#      systemd-analyze is required under GitHub Actions, optional locally.
 # Controls in the same run: the checkers must reject the stock file on an
 # open kernel (the bytes image main shipped there) and a defaults file
 # naming a vendor control; and this test, run over image main before the fix
@@ -49,6 +56,10 @@ STOCK_SHA256=bc19e036d6348e49d4dfc13ab907a0bceef6b424399eb10b7ebfea8c81fca321
 OPEN_CARD=Codec
 # Image main before this fix (tsp-f3fm.220): the negative control's tree.
 PRE_FIX_COMMIT=3c2ac542464055cef5dcbfab238eab25bc8d17e8
+# PR image#158 first head, whose unit listed its own install target
+# (sound.target) in After=: the negative control for the static unit rule.
+AFTER_INSTALL_TARGET_COMMIT=27a1c491cdd79abb082c19fcf7fc9d658e1aefe1
+UNIT_PATH=rootfs-overlay/etc/systemd/system/pocketforge-audio-defaults.service
 
 # Profiles as the platform repo defines them today (devices/*/profile.toml
 # kernel.repo). The installer keys on the kernel repo, so a new profile on a
@@ -231,6 +242,112 @@ for entry in "${PROFILES[@]}"; do
             ;;
     esac
 done
+
+# ---- 6. unit graph ---------------------------------------------------------
+# check_unit_install_order UNIT: no WantedBy=/RequiredBy=/UpheldBy= target may
+# appear in After=. A target orders itself after what it Wants
+# (systemd.target(5)), so such a unit orders itself after a target that is
+# ordered after it; systemd only suppresses that loop by special case.
+check_unit_install_order() {
+    python3 - "$1" <<'PY2'
+import sys
+after, install = set(), set()
+section = None
+for raw in open(sys.argv[1]):
+    line = raw.strip()
+    if not line or line[0] in "#;":
+        continue
+    if line.startswith("[") and line.endswith("]"):
+        section = line[1:-1]
+        continue
+    if "=" not in line:
+        continue
+    key, value = (x.strip() for x in line.split("=", 1))
+    if section == "Unit" and key == "After":
+        after.update(value.split()) if value else after.clear()
+    elif section == "Install" and key in ("WantedBy", "RequiredBy", "UpheldBy"):
+        install.update(value.split())
+if not install:
+    print("no WantedBy=/RequiredBy=/UpheldBy= install target")
+    sys.exit(1)
+bad = sorted(install & after)
+if bad:
+    print("install target(s) " + ", ".join(bad) + " also in After=: the target is ordered after this unit, so the unit must not order itself after the target")
+    sys.exit(1)
+PY2
+}
+
+unit_src="${REPO_DIR}/${UNIT_PATH}"
+reason="$(check_unit_install_order "${unit_src}")" \
+    || fail "pocketforge-audio-defaults.service: ${reason}"
+grep -qx 'WantedBy=sound.target' "${unit_src}" \
+    || fail "pocketforge-audio-defaults.service is not WantedBy=sound.target (install-alsa-config.sh links it into sound.target.wants)"
+if [ -z "${PF_ALSA_NEGATIVE_RUN:-}" ]; then
+    git -C "${REPO_DIR}" show "${AFTER_INSTALL_TARGET_COMMIT}:${UNIT_PATH}" > "${TMP}/unit-27a1c49" \
+        || fail "control: cannot read ${AFTER_INSTALL_TARGET_COMMIT}:${UNIT_PATH} (needs full git history)"
+    if reason="$(check_unit_install_order "${TMP}/unit-27a1c49")"; then
+        fail "control: static unit rule accepted the ${AFTER_INSTALL_TARGET_COMMIT:0:12} unit (After=sound.target + WantedBy=sound.target)"
+    fi
+    echo "NEGATIVE CONTROL: unit at ${AFTER_INSTALL_TARGET_COMMIT:0:12} is rejected: ${reason}"
+fi
+pass "pocketforge-audio-defaults.service: no install target in After="
+
+# stage_verify_root DIR: minimal unit universe for systemd-analyze --root.
+stage_verify_root() {
+    local root="$1" units="$1/usr/lib/systemd/system" t
+    mkdir -p "${units}/sound.target.wants" "${root}/bin"
+    cp /bin/true "${root}/bin/true"
+    for t in sysinit.target basic.target shutdown.target; do
+        printf '[Unit]\nDescription=stub %s\n' "${t}" > "${units}/${t}"
+    done
+    # systemd's own sound.target (units/sound.target): no dependencies of
+    # its own; udev starts it on card hotplug.
+    printf '[Unit]\nDescription=Sound Card\nDocumentation=man:systemd.special(7)\nStopWhenUnneeded=yes\n' \
+        > "${units}/sound.target"
+}
+
+if command -v systemd-analyze >/dev/null 2>&1; then
+    # Detector control: a real ordering cycle must be reported.
+    cyc="${TMP}/verify-cycle"
+    stage_verify_root "${cyc}"
+    printf '[Unit]\nWants=cyc-b.service\nAfter=cyc-b.service\n[Service]\nType=oneshot\nExecStart=/bin/true\n' \
+        > "${cyc}/usr/lib/systemd/system/cyc-a.service"
+    printf '[Unit]\nAfter=cyc-a.service\n[Service]\nType=oneshot\nExecStart=/bin/true\n' \
+        > "${cyc}/usr/lib/systemd/system/cyc-b.service"
+    systemd-analyze verify --man=no --root="${cyc}" cyc-a.service > "${TMP}/verify-cycle.out" 2>&1 || true
+    grep -q 'Found ordering cycle' "${TMP}/verify-cycle.out" \
+        || fail "control: systemd-analyze verify did not report a real ordering cycle ($(systemd-analyze --version | head -n 1)): $(cat "${TMP}/verify-cycle.out")"
+
+    vr="${TMP}/verify-open"
+    mkdir -p "${vr}"
+    "${REPO_DIR}/scripts/install-alsa-config.sh" kernel-sunxi-7.x "${vr}" "${REPO_DIR}" > /dev/null
+    stage_verify_root "${vr}"
+    # Debian alsa-utils' units, as bookworm ships them: alsa-restore after
+    # alsa-state, both wanted by sound.target.
+    printf '[Unit]\nDescription=Save/Restore Sound Card State\nAfter=alsa-state.service\n[Service]\nType=oneshot\nRemainAfterExit=true\nExecStart=/bin/true\n' \
+        > "${vr}/usr/lib/systemd/system/alsa-restore.service"
+    printf '[Unit]\nDescription=Manage Sound Card State\n[Service]\nType=oneshot\nExecStart=/bin/true\n' \
+        > "${vr}/usr/lib/systemd/system/alsa-state.service"
+    ln -s ../alsa-restore.service "${vr}/usr/lib/systemd/system/sound.target.wants/alsa-restore.service"
+    ln -s ../alsa-state.service "${vr}/usr/lib/systemd/system/sound.target.wants/alsa-state.service"
+    # At the default log level verify prints only problems: any output fails.
+    status=0
+    systemd-analyze verify --man=no --root="${vr}" \
+        sound.target pocketforge-audio-defaults.service > "${TMP}/verify-open.out" 2>&1 || status=$?
+    if [ "${status}" -ne 0 ] || [ -s "${TMP}/verify-open.out" ]; then
+        fail "systemd-analyze verify (status ${status}) reported: $(cat "${TMP}/verify-open.out")"
+    fi
+    # Debug log only to observe that sound.target's start pulls the unit in.
+    SYSTEMD_LOG_LEVEL=debug systemd-analyze verify --man=no --root="${vr}" \
+        sound.target > "${TMP}/verify-open-debug.out" 2>&1 || true
+    grep -q 'pocketforge-audio-defaults.service: Installed new job pocketforge-audio-defaults.service/start' "${TMP}/verify-open-debug.out" \
+        || fail "sound.target does not pull in pocketforge-audio-defaults.service in systemd-analyze verify"
+    pass "systemd-analyze verify ($(systemd-analyze --version | head -n 1 | awk '{print $2}')): unit loads, sound.target pulls it in, no ordering cycle (detector control: real cycle reported)"
+elif [ "${GITHUB_ACTIONS:-}" = true ]; then
+    fail "systemd-analyze is not installed on this CI runner; the unit-graph verify check is required in CI"
+else
+    echo "SKIP: systemd-analyze not installed; static unit rule still enforced"
+fi
 
 # ---- 4. empty or unknown kernel repo fails closed --------------------------
 for bad in "" kernel-sunxi-5.15 kernel-tsp; do
