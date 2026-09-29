@@ -1,7 +1,9 @@
 # Default applications: discovery, launch, and return contract
 
 Status: design confirmation for `tsp-f3fm.202`. This document fixes the interfaces and
-merge order; it does not implement them.
+merge order; it does not implement them. Amended by `tsp-f3fm.202.1` (input delivery and
+protected Safe Return during app sessions): see
+[Amendment: input delivery and protected Safe Return](#amendment-input-delivery-and-protected-safe-return-tsp-f3fm2021).
 
 ## Evidence basis
 
@@ -342,8 +344,8 @@ The image-owned template is:
 ```ini
 [Unit]
 Description=PocketForge default application %i
-Requires=pocketforge-foreground.target
-After=local-fs.target pocketforge-foreground.target
+Requires=pocketforge-foreground.target pf-input-broker.service
+After=local-fs.target pocketforge-foreground.target pf-input-broker.service
 Conflicts=shutdown.target
 Before=shutdown.target
 ConditionPathExists=/dev/fb0
@@ -356,6 +358,8 @@ SupplementaryGroups=audio input video
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
+Environment=PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml
+Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
@@ -365,6 +369,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
 ReadWritePaths=/var/lib/pocketforge/apps/%i
+InaccessiblePaths=-/run/pocketforge/session-authority.sock
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
@@ -372,6 +377,11 @@ Restart=no
 MemoryMax=256M
 Nice=-5
 ```
+
+The `pf-input-broker.service` dependency, the two `PF_*` variables, and
+`InaccessiblePaths=` are the `tsp-f3fm.202.1` amendment; see
+[Input delivery](#input-delivery) and
+[Protected Safe Return during app sessions](#protected-safe-return-during-app-sessions).
 
 The template is installed but never enabled. It joins the existing foreground target exactly
 as display apps do, and the target's image-selected drop-in restores the launcher. The current
@@ -531,7 +541,10 @@ both, and one platform lock PR moves image/runtime/launcher together.
 
 ### Image inputs and new fatal preconditions
 
-The design adds **no new staged repository input and no new BuildKit context**. The existing
+The design adds **no new staged repository input and no new BuildKit context**. *Amended by
+ruling R1 of `tsp-f3fm.202.1`: exactly one new staged input, the platform device descriptor
+`devices/a133/capabilities.toml` in the A133-open-only `platform-inputs-src` context; see
+[R1: the one staged device descriptor](#r1-the-one-staged-device-descriptor).* The existing
 contexts remain image, kernel, GPU, SDL, WPA, runtime, blobs, vendor manifest, bootchain,
 Poolsuite, and profile-gated sim/hwprobe/open-GPU/launcher/recovery contexts.
 [platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
@@ -589,6 +602,7 @@ vendor/default release and every A523 profile.
 | launcher change | installed on open profiles | remains absent and no launcher source is staged | remains absent; byte-identical | remains absent and no launcher source is staged; byte-identical |
 | Poolsuite payload | dev only; release absent | **migration: payload removed; `NOT-SHIPPED` stub selected** | absent; byte-identical | absent; byte-identical |
 | dedicated Poolsuite service | removed from the open dev path it formerly served | **migration: service removed** | absent; byte-identical | absent; byte-identical |
+| `pf-input-broker` + unit + app-session drop-in, shell ordering drop-in, `libpocketforge.so.1`, `devices/a133/capabilities.toml` (`tsp-f3fm.202.1`) | installed; broker never enabled | absent | absent; byte-identical | absent; byte-identical |
 
 The current image explicitly gates session authority and launcher on `PF_GPU_MODEL=open`, and
 platform emits launcher identity only for open profiles. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
@@ -650,3 +664,268 @@ it removes the existing Poolsuite payload and service. The existing descriptor d
 future signing and packaging siblings, while the owner decision for this bead limits the first
 mechanism to image-shipped default apps on A133-open. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
 `docs/APP-DESCRIPTOR.md:10-36`, `docs/APP-DESCRIPTOR.md:38-59`]
+
+## Amendment: input delivery and protected Safe Return (`tsp-f3fm.202.1`)
+
+Status: coordinator ruling (i) of `tsp-f3fm.202.1`, implemented by B4 (`tsp-f3fm.202.1.4`).
+It closes two gaps the original design left open:
+
+- Default apps received no controller input. Nothing on the default-app path set `PF_DESCRIPTOR`.
+- There was no return path while an app owned the panel. Menu/SafeReturn existed only inside
+  `pf-shell`, which is stopped for the session.
+
+Sources read for this amendment:
+
+| Repository | Commit |
+|---|---|
+| `pocketforge-os/runtime` | `d75beedfb1203b329801a777803dff1ae8d5da1c` (runtime#100, B1) |
+| `pocketforge-os/platform` | `9b01b8838881ea832f1c509f9f835848d4926af1` (platform#217, B3) |
+| `pocketforge-os/launcher` | `1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77` |
+| `pocketforge-os/poolsuite` | `5658c674` |
+| `pocketforge-os/image` | `3aff434f94807a0239a7553b08e129ffff0232b7` |
+
+### R1: the one staged device descriptor
+
+The original design ruled "no new staged repository input and no new BuildKit context". That
+line is amended to allow exactly **one** staged input: the platform-owned device descriptor
+`devices/a133/capabilities.toml`.
+
+Why:
+
+- The app facade needs it. `pocketforge::connect()` loads `PF_DESCRIPTOR` before it will
+  choose the broker backend, and Poolsuite's `SessionInput::for_launch_environment()` enables
+  device input only when `PF_DESCRIPTOR` is set (poolsuite `crates/ps-input/src/lib.rs`).
+- The broker needs it. It loads the same file (`--descriptor`) to build its canonical remap,
+  its source identity match, and the guide (`BTN_MODE`) control it withholds for SafeReturn.
+- `platform-capabilities.toml` is the launcher-facing app-support schema, not a device
+  descriptor, so it cannot stand in.
+- The data belongs to platform. Deriving it in the image would fork it.
+
+How it is staged and checked:
+
+- Platform emits `PF_DEVICE_DESCRIPTOR_ID=a133` and `PF_DEVICE_DESCRIPTOR_SHA256`, and stages
+  the verbatim bytes into the `platform-inputs-src` context, **only** for the A133-open
+  app-runtime profiles (platform#217). Every other profile's build arguments and contexts
+  stay byte-identical.
+- The image's `platform-inputs-open` stage is the only one that names that context. The
+  `platform-inputs-${PF_GPU_MODEL}` selector prunes it everywhere else.
+- `scripts/check-device-descriptor.sh` fails closed on any of these:
+  - an ID, digest, or staged tree on a non-open profile;
+  - an open build with no ID;
+  - an ID other than `a133`;
+  - a malformed or mismatched SHA-256;
+  - a symlinked or missing file;
+  - any extra staged entry.
+- `build/pf-descriptor-validate.rs` is a build-only example compiled from the pinned runtime,
+  like `pf-app-validate`. It parses the file with `pocketforge::Descriptor::load` and with the
+  broker's own `Remap::from_descriptor` and `ExpectedIdentity`, and requires `BTN_MODE`.
+- `install-default-app-support.sh` installs it at
+  `/usr/share/pocketforge/devices/a133/capabilities.toml` (0644).
+
+### Input delivery
+
+**Who owns the pad.** `pf-input-decode` (always on, A133) exposes the pad as the uinput device
+`/dev/input/pf-gamepad` (`TRIMUI Player1`). While the shell owns the panel, `pf-shell`
+EVIOCGRABs it.
+
+While a default app owns the panel, `pf-input-broker` EVIOCGRABs it instead:
+
+- It re-emits a descriptor-canonical stream on its own uinput device
+  `PocketForge Input (a133)`. The `pf-gamepad` udev rule does not match that device.
+- It serves `Acquire("input")` on `/run/pocketforge/input-broker.sock` over a persistent PFW1
+  session, handing the re-emit read fd by `SCM_RIGHTS`.
+- `GetAppearance` passes through to `pf-prefsd` via `PF_PREFSD_SOCK`.
+
+**What the app gets:**
+
+- `PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml`.
+- `PF_BROKER_SOCK=/run/pocketforge/input-broker.sock`. The socket is `root:gamer 0770`
+  (broker `Group=gamer`, `UMask=0007`); the app runs as `gamer`.
+- `libpocketforge.so.1` at `/usr/lib/aarch64-linux-gnu/`, the gnu-target cdylib that Poolsuite's
+  `ps-platform` dlopens by that file name.
+  - The cdylib carries no `DT_SONAME`, and a Debian multiarch directory is on the loader's
+    default search path, so no ld.so.cache entry is needed.
+  - `scripts/check-libpocketforge.sh` gates it:
+    - an aarch64 `ET_DYN`;
+    - the highest `GLIBC_*` version from `objdump -T` is at most 2.36 (bookworm);
+    - `DT_NEEDED` stays within libc6/libgcc-s1;
+    - every frozen v1 ABI symbol and every symbol `ps-platform` resolves is defined.
+
+**Lifetime.** The broker is scoped to an app session:
+
+- The runtime's `pf-input-broker.service` ships verbatim and is **never enabled**. Its
+  `WantedBy=multi-user.target` would grab the pad at boot, under the shell.
+- `pf-app@.service` has `Requires=`/`After=pf-input-broker.service`, and the broker has
+  `StopWhenUnneeded=yes`, so it lives exactly as long as one `pf-app@<id>` does.
+- The broker is also the protected Menu intake; see the next section.
+
+**Grab timeline.** Each step is an ordered systemd job. At no instant are the shell and the
+broker both active: the broker's `Conflicts=` enforces it, and the target's `10-owner-shell.conf`
+covers the same edge.
+
+```text
+launch: the authority runs `systemctl start pf-app@<id>.service` (one transaction)
+  1. pf-shell-selected stop     Conflicts= from the target drop-in and from the broker
+                                drop-in; pf-shell exits and the kernel drops its EVIOCGRAB
+  2. foreground target start    After=pf-shell-selected (a stop runs before a start)
+  3. pf-input-broker start      After=target; EVIOCGRAB pf-gamepad, create the re-emit
+                                device, bind the acquire socket, then READY=1 (Type=notify)
+  4. pf-app@<id> start          After=broker; the app acquires the re-emit fd
+return: Menu (below), or the app exits by itself
+  5. pf-app@<id> inactive       StopWhenUnneeded= queues stop jobs for broker and target
+  6. pf-input-broker stop       ordered before the target's stop (it is After= the target);
+                                its exit drops the grab and removes the re-emit device
+  7. foreground target stop     OnSuccess=pf-shell-selected.service
+  8. pf-shell-selected start    After=pf-input-broker (drop-in), so it starts after step 6;
+                                pf-shell EVIOCGRABs pf-gamepad again
+  9. authority restoration      TargetReleased -> start the owner (idempotent) ->
+                                OwnerActive -> presentation ack -> terminal receipt
+```
+
+The real-systemd harness checks this ordering in every session with two independent
+instruments:
+
+- **A grab model.** The fake shell and fake broker contend for one kernel-released flock, taken
+  non-blocking like `EVIOCGRAB`. Each keeps it for 0.5 s after SIGTERM, which widens any
+  ordering race. Any contention is recorded as a `GRAB_CONFLICT`.
+- **systemd's own timestamps.** The shell's `InactiveEnter` must come no later than the broker's
+  `ExecMainStart`, and the broker's `InactiveEnter` no later than the restored shell's
+  `ExecMainStart`.
+
+### Protected Safe Return during app sessions
+
+**Who watches Menu.** The broker does, running with `--safe-return-sock
+/run/pocketforge/session-authority.sock`:
+
+- It drops guide/`BTN_MODE` press *and* release from the re-emit stream, so the app never sees
+  Menu.
+- On each press edge, a worker thread sends one pf-wire `{"method":"safe_return"}` to the
+  authority (250 ms connect and 5 s read timeouts). Presses are coalesced while one is in
+  flight, and the pump never blocks.
+
+The authority honours `SafeReturn` in `Starting`/`Running`:
+
+1. It runs the blocking `systemctl stop pf-app@<id>.service`: SIGTERM, then SIGKILL at
+   `TimeoutStopSec=2s`.
+2. It enters `StoppingGracefully`.
+3. It maps the inactive unit, whether its result was `success` or `timeout`, to `UnitInactive`,
+   and so to a `Returned` receipt.
+4. The receipt is published after the restored shell acknowledges presentation.
+
+The authority, launcher and vendored crates are unchanged.
+
+**Who else can request it.** Only the broker. `pf-app@` gets
+`InaccessiblePaths=-/run/pocketforge/session-authority.sock`, so an app cannot drive the
+authority, even though its `gamer` group could otherwise open the `root:gamer 0770` socket.
+The harness checks this in the same run: the app sandbox is refused, while `gamer` outside the
+unit connects.
+
+**R3/R4.** R3 treats a SIGKILL at the 2 s timeout as `Returned`, not `ForcedClose`. The concern
+behind R4 was `pf-session-authority` `lib.rs:995-1004`: a non-zero `systemctl stop` would be
+followed by `systemctl kill` and then `ForcedClose` or `RecoveryRequired`. The ephemeral
+real-systemd harness pins the outcome:
+
+Evidence: image#143 CI run 36528282419, live job 109276248107 on a `pf-builder-vm` ephemeral
+runner. The run used runtime `d75beedf`, the real authority and `pf-app-launch`, the runtime's
+verbatim `pf-input-broker.service` plus this drop-in, and systemd `252.39-1~deb12u2`.
+
+- **Direct probe of the authority's exact stop command.** The app ignores SIGTERM. `systemctl stop
+  pf-app@<id>.service` returned after 2.17 s with the unit `failed`/`Result=timeout`, and it
+  **exited 0**. `systemctl kill --kill-who=all` on the failed unit also exits 0, so even the
+  non-zero branch would not have reached `RecoveryRequired`.
+- **SafeReturn with the app ignoring SIGTERM** (session-4). Guide to `failed`/`timeout` took
+  2.09 s. The authority was left at `Restoring{receipt: Returned, rung: PresentationAcknowledged}`
+  and published exactly one `Returned` after the presentation acknowledgement. There was no
+  `ForcedClose`, `Crash`, or `RecoveryRequired`.
+- **Graceful SafeReturn** (session-3). Guide to inactive took 0.08 s, with `Result=success` and
+  receipt `Returned`.
+
+**R4 holds: `Returned`, not `RecoveryRequired`.** The device bench (B6) repeats it on the target
+systemd.
+
+### Updated units
+
+`pf-app@.service` is shown in full [above](#pf-appservice).
+
+The broker drop-in is `/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf`;
+the comments are omitted here and the directives are verbatim:
+
+```ini
+[Unit]
+StopWhenUnneeded=yes
+After=pocketforge-foreground.target pf-input-decode.service pf-prefsd.service
+Conflicts=pf-shell-selected.service
+ConditionPathExists=
+AssertPathExists=/dev/uinput
+
+[Service]
+Group=gamer
+UMask=0007
+Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
+ExecStart=
+ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/devices/a133/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock
+```
+
+`ConditionPathExists=` followed by `AssertPathExists=/dev/uinput` is a B4 addition to the
+ruling's list. The runtime unit's `ConditionPathExists=/dev/uinput` would turn a missing uinput
+node into a *skipped* start. A skipped start is a success for `Requires=`, so the app would start
+with no input and no Menu intake: a trapped user. The empty assignment resets the inherited
+condition, and the assertion fails the broker job, which fails the dependent app job.
+
+The shell drop-in is `/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf`:
+
+```ini
+[Unit]
+After=pf-input-broker.service
+```
+
+### Failure modes (amendment)
+
+| Failure mode | Behaviour | Test |
+|---|---|---|
+| Broker enabled at boot | It would stop the shell at boot through `Conflicts=` and grab the pad | Image: the installer removes and then refuses any `*.wants/pf-input-broker.service`. Harness: `is-enabled` is `disabled` and the broker is inactive at boot |
+| Broker cannot start (no `/dev/uinput`) | The assertion fails the broker job, the app job fails as a dependency, the authority records `Crash` (`systemd_start_failed`), and the panel must return | Harness `broker_start_failure`: no app invocation, no broker grab, owner re-activated, `Crash` receipt |
+| Broker exits before READY (bad source or descriptor) | `Restart=on-failure` (runtime unit, `RestartSec=2`) retries until the start limit; the app start then fails as above | *Inference*: bounded by systemd's default start limit; B6 fault case |
+| Broker crashes mid-session | `Restart=on-failure` restarts it after 2 s. Menu is unavailable meanwhile. Whether systemd propagates the restart to `pf-app@` through `Requires=` is version-dependent | *Inference*; B6 `kill -9` fault case measures it |
+| App ignores SIGTERM | SIGKILL at `TimeoutStopSec=2s`; receipt `Returned` (R3) | Harness `r4_sigkill`, plus the direct `systemctl stop` exit probe |
+| App SIGSTOPped, then Menu | systemd sends SIGCONT with SIGTERM, then SIGKILL at 2 s; the receipt is as above | B6 fault case |
+| Shell and broker hold the pad at once | Prevented by `Conflicts=` plus ordering | Harness grab model plus timestamp checkpoints in every session |
+| App reaches the authority socket | Prevented by `InaccessiblePaths=` | Harness sandbox probe, with a positive control outside the unit |
+| Authority restarts during an app session | The socket is recreated. Unlinking a mountpoint from another mount namespace detaches the app's `InaccessiblePaths=` mount (Linux >= 3.18), so the app could reach the new socket | Known limitation; see non-goals (peer authentication) |
+| Descriptor, broker, or library missing on A133-open | The build fails | `check-device-descriptor.sh`, the Dockerfile gates, `test-default-app-rootfs.sh` |
+| Any of them on a non-open profile | The build fails; the installer is a byte-for-byte no-op | `test-default-app-rootfs.sh`, `test-default-app-input-gates.sh` |
+
+### Sequence (B1-B6)
+
+1. **B1 runtime** (merged, runtime#100 `d75beedf`): persistent PFW1 broker loop,
+   `GetAppearance` pass-through, `--safe-return-sock` intake with guide suppression, musl build
+   fix. No vendored-crate change, so launcher `1e5a3d97` still passes the source-equality guard
+   against `d75beedf`.
+2. **B2 poolsuite** (`tsp-f3fm.202.1.2`): bounded SIGTERM shutdown, SessionInput reconnect,
+   appearance via the facade.
+3. **B3 platform** (merged, platform#217 `9b01b883`): descriptor staging for A133-open only. No
+   lock move.
+4. **B4 image** (this amendment): broker, library and descriptor; units and drop-ins; runtime
+   guard moved to `d75beedf`; harness cases. It merges before any pin movement; the current lock
+   still selects the old image.
+5. **B5 platform.lock** (gpu-14): one PR moves runtime to `d75beedf`, the image to the B4 merge,
+   and Poolsuite to B2 together.
+6. **B6 bench** (inside `.215`):
+   - the broker is inactive at boot;
+   - the pad drives the player;
+   - Menu returns in under 2 s with a `Returned` receipt;
+   - 10 cycles with no `RecoveryRequired`;
+   - fault cases: `kill -9` the broker; SIGSTOP the app, then Menu.
+
+### Non-goals (amendment)
+
+- Following the user's `remaps.json` Safe Return chord (R2). SafeReturn is fixed to guide/Menu
+  in v1.
+- Peer authentication (`SO_PEERCRED`) on the authority socket. Protection is path-based
+  (`InaccessiblePaths=`) and has the authority-restart limitation above.
+- Taking direct input access away from apps. `pf-app@` keeps `SupplementaryGroups=input`. The
+  broker's grab makes the pad exclusive, but the broker is not an input security boundary.
+- Distinguishing `ForcedClose` from `Returned` for a SIGKILLed app (R3); that would change a
+  launcher-vendored crate.
+- Any of this on A133 vendor/default or A523. The broker, library and descriptor are
+  A133-open-only, like the rest of the default-app mechanism.
