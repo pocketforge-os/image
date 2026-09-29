@@ -21,6 +21,12 @@ fb0 has **exactly one writer at all times**. The boot animator owns it from
 early boot and loops until a successor takes over. You do not negotiate this
 per app; you join the slot and systemd enforces it.
 
+Before systemd there is one more writer, and it never overlaps the slot: on
+initrds built for a DRM-fbdev display (the open 7.x profiles), `/init` runs the
+same animator binary in `--first-frame` mode to paint frame 000 at first light,
+and kills and reaps it before `switch_root` (`boards/tsp/initrd/init`, FIRST
+LIGHT; `tsp-3rd3.7`). No systemd unit can start before that reap.
+
 **If your app is a systemd unit**, declare:
 
 ```ini

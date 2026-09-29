@@ -141,6 +141,106 @@ else
 fi
 
 # =============================================================================
+# FIRST LIGHT: boot frame 000  (bd tsp-3rd3.7; fail-open, never a boot decision)
+# -----------------------------------------------------------------------------
+# On the open 7.x kernel the DSI panel lights (fbcon on DRM fbdev) about 0.9 s
+# after /init starts, seconds before systemd's animator can run, so the first lit
+# picture would be a black console. A background subshell waits at most 2.5 s
+# (50 x 50 ms) for /dev/fb0, then execs the static boot animator in --first-frame
+# mode: it resolves the panel orientation itself (and paints nothing if it is
+# unknown), unbinds fbcon, paints frame 000, logs the kmsg marker, and exits.
+#
+# Fail-open contract:
+#   - /init never waits for it and never branches on its exit status;
+#   - the wait is `read -t` on a private FIFO (a shell builtin, unlike the
+#     forking `sleep` applet), so the subshell has no children and one SIGKILL
+#     ends everything it started;
+#   - pf_first_frame_reap kills and reaps it before self-flash recovery and before
+#     switch_root, polling /proc for at most ~30 ms and never blocking in `wait`
+#     on a live process; a helper stuck in uninterruptible kernel I/O is logged
+#     and left behind rather than holding boot;
+#   - the payload is staged only into initrds built for a DRM-fbdev display
+#     (build-initrd.sh --display-pipeline/--kernel-config); absent => no-op.
+#     M1.B mode never starts it.
+# PF_FF_DIR/PF_FF_FB/PF_FF_TICK/PF_FF_PROC are test seams (tests/test-initrd-
+# first-frame.sh), like WATCHDOG_DEV above.
+PF_FF_DIR="${PF_FF_DIR:-/lib/pocketforge-first-frame}"
+PF_FF_FB="${PF_FF_FB:-/dev/fb0}"
+PF_FF_TICK="${PF_FF_TICK:-/pf-first-frame.tick}"
+PF_FF_PROC="${PF_FF_PROC:-/proc}"
+PF_FF_PID=""
+
+pf_first_frame_start() {
+    PF_FF_PID=""
+    if [ -f /etc/pocketforge-m1b-mode ]; then
+        return 0
+    fi
+    # Not staged (every initrd not built for a DRM-fbdev display): silent no-op,
+    # so those boots log exactly what they logged before.
+    if [ ! -x "$PF_FF_DIR/pocketforge-boot-animator" ] || [ ! -f "$PF_FF_DIR/frame-000.png" ]; then
+        return 0
+    fi
+    if ! mkfifo "$PF_FF_TICK" 2>/dev/null; then
+        log "STAGE: first-frame helper skipped (cannot create $PF_FF_TICK)"
+        return 0
+    fi
+    (
+        # O_RDWR: the open never blocks and nothing ever writes, so each
+        # `read -t` is a 50 ms builtin sleep.
+        exec 3<>"$PF_FF_TICK"
+        pf_ff_n=0
+        while [ ! -e "$PF_FF_FB" ]; do
+            [ "$pf_ff_n" -lt 50 ] || exit 124
+            # shellcheck disable=SC2034,SC3045  # busybox ash: fractional read -t
+            read -r -t 0.05 pf_ff_x <&3
+            pf_ff_n=$((pf_ff_n + 1))
+        done
+        exec 3<&- 0</dev/null 1>/dev/null
+        exec "$PF_FF_DIR/pocketforge-boot-animator" --first-frame --frames-dir "$PF_FF_DIR"
+    ) &
+    PF_FF_PID=$!
+    log "STAGE: first-frame helper pid $PF_FF_PID (waits <= 2.5 s for $PF_FF_FB; fail-open)"
+}
+
+pf_first_frame_reap() {
+    [ -n "$PF_FF_PID" ] || return 0
+    pf_ff_pid="$PF_FF_PID"
+    PF_FF_PID=""
+    kill -KILL "$pf_ff_pid" 2>/dev/null
+    if [ ! -r "$PF_FF_PROC/$$/stat" ]; then
+        # Without a readable /proc a live process and a reaped one look alike,
+        # and `wait` on a live one could block the boot: do not wait at all.
+        log "WARN: first-frame helper pid $pf_ff_pid signalled; $PF_FF_PROC unreadable — not waiting; boot continues"
+        return 0
+    fi
+    pf_ff_i=0
+    while :; do
+        pf_ff_st=""
+        { read -r pf_ff_st < "$PF_FF_PROC/$pf_ff_pid/stat"; } 2>/dev/null
+        pf_ff_st="${pf_ff_st##*) }"
+        pf_ff_st="${pf_ff_st%% *}"
+        case "$pf_ff_st" in
+            ''|Z|X)
+                # Exited (zombie or already collected): this wait cannot block.
+                wait "$pf_ff_pid" 2>/dev/null
+                pf_ff_rc=$?
+                log "STAGE: first-frame helper reaped (rc=$pf_ff_rc)"
+                return 0
+                ;;
+        esac
+        [ "$pf_ff_i" -lt 6 ] || break
+        # 5 ms builtin sleep on the tick FIFO (no fork on the handoff path).
+        # shellcheck disable=SC2034,SC3045
+        read -r -t 0.005 pf_ff_x <>"$PF_FF_TICK"
+        pf_ff_i=$((pf_ff_i + 1))
+    done
+    log "WARN: first-frame helper pid $pf_ff_pid still in state $pf_ff_st after SIGKILL — not waiting; boot continues"
+    return 0
+}
+
+pf_first_frame_start
+
+# =============================================================================
 # SELF-FLASH RECOVERY  (dev images only; bd tsp-bcx.17)
 # -----------------------------------------------------------------------------
 # In-place whole-image self-flash for swap-free dev iteration. A host pushes a
@@ -393,6 +493,7 @@ if [ -f /etc/pocketforge-selfflash ]; then
                 watchdog_ping
                 log "STAGE: self-flash flag FILE present on ${SF_ROOTPART}"
                 watchdog_ping
+                pf_first_frame_reap   # self-flash mode runs with no helper (tsp-3rd3.7)
                 selfflash_recover "$SF_SD" "/sfp5" "$SF_FLAGTXT" \
                     && log "selfflash: recovery returned without reboot — continuing normal boot" \
                     || log "selfflash: not flashing — continuing normal boot"
@@ -462,6 +563,10 @@ log "STAGE: rootfs is $ROOT"
 mkdir -p /newroot
 log "STAGE: mount $ROOT -> /newroot (ext4)"
 mount -t ext4 -o rw,noatime "$ROOT" /newroot || fail "mount $ROOT failed"
+
+# --- first-frame helper: reap before handoff (bd tsp-3rd3.7) ------------------
+# Nothing the initrd started may outlive it into switch_root (see FIRST LIGHT).
+pf_first_frame_reap
 
 # --- watchdog keepalive before handoff -----------------------------------------
 # The vendor kernel auto-starts sunxi-wdt at driver probe (CONFIG_SUNXI_WDOG_
