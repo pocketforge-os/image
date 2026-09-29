@@ -236,6 +236,8 @@ run_probe_fake() {
         BASH_ENV=/dev/null \
         PATH="${fake_bin}:${PATH}" \
         GITHUB_ACTIONS=true \
+        GITHUB_RUN_ID=missing \
+        GITHUB_RUN_ATTEMPT=missing \
         DOCKER_CALL_LOG="${call_log}" \
         FAKE_HOSTNAME=mm-eph-build-0 \
         FAKE_GRAPHICAL=0 \
