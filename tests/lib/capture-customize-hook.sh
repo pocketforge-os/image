@@ -68,7 +68,7 @@ EOF
     GPU_UM_MESA_DIR="${fixture}/mesa" WPA_DIR="${fixture}/wpa" \
     KERNEL_TSP_DIR="${fixture}/kernel" GPU_KM_TSP_DIR="${fixture}/unused-gpu" \
     OUT_DIR="${fixture}/out" SOURCE_DATE_EPOCH=1700000000 \
-    PF_DEVICE_ID=a133-open-7x-gpu PF_GPU_MODEL=open \
+    PF_DEVICE_ID=a133-open-7x-gpu PF_KERNEL_REPO=kernel-sunxi-7.x PF_GPU_MODEL=open \
     PF_GPU_KM_MODEL=in-tree-7.x PF_KERNEL_REQUIRED_MODULES=powervr \
     PF_DISPLAY_PIPELINE=none \
         bash "${repo_dir}/scripts/build-rootfs.sh" --variant dev \

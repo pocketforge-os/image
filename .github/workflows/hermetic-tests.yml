@@ -79,6 +79,7 @@ jobs:
         run: |
           set -uo pipefail
           tests=(
+            tests/test-alsa-config.sh
             tests/test-boot-animator.sh
             tests/test-build-id.sh
             tests/test-build-rootfs-direct.sh

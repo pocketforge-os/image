@@ -1,0 +1,62 @@
+# PocketForge ALSA configuration for the mainline sun4i-codec card
+# (open kernel lines kernel-sunxi-6.x / kernel-sunxi-7.x, bd tsp-f3fm.220).
+#
+# The A133 on-SoC codec binds "allwinner,sun50i-a133-codec" to the H616
+# card in sound/soc/sunxi/sun4i-codec.c: card name "H616 Audio Codec",
+# so ALSA card id "Codec". The vendor 4.9 kernel names the same codec
+# "audiocodec"; that profile keeps the stock file (asound.conf.sunxi-vendor).
+#
+# Playback keeps the stock chain unchanged: default -> Playback (plug) ->
+# softvol "Soft Volume Master" -> PlaybackDmix (plug) -> dmix 48 kHz S16_LE
+# -> hw:Codec,0. The card is referenced by id, never by index.
+#
+# There is no capture on this card: its DAI link is playback_only, and the
+# open kernels expose no AC107 (stock "sndac10710036") card. So the default
+# asym has no capture slave, and opening "default" for capture fails with
+# EINVAL rather than binding to a device that does not exist. The stock
+# capture PCMs and the vendor-control hook PCMs (PlaybackHpoutSpeaker,
+# PlaybackLineoutSpeaker, CaptureMic, CaptureReference, CaptureAec) name
+# controls and cards the open driver does not have, so they are left out.
+# The speaker path's mixer gates are set at boot by
+# pocketforge-audio-defaults.service, not by PCM hooks.
+
+ctl.!default {
+    type hw
+    card Codec
+}
+
+pcm.!default {
+    type asym
+    playback.pcm "Playback"
+}
+
+pcm.Playback {
+    type plug
+    slave.pcm {
+        type softvol
+        slave.pcm PlaybackDmix
+        control {
+            name "Soft Volume Master"
+            card Codec
+        }
+        min_dB -51.0
+        max_dB 0.0
+        resolution 256
+    }
+}
+
+pcm.PlaybackDmix {
+    type plug
+    slave.pcm {
+        type dmix
+        ipc_key 1111
+        ipc_perm 0666
+        slave {
+            pcm "hw:Codec,0"
+            format S16_LE
+            rate 48000
+            period_size 1024
+            periods 4
+        }
+    }
+}

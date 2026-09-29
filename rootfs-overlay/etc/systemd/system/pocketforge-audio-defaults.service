@@ -1,0 +1,28 @@
+# =============================================================================
+# pocketforge-audio-defaults.service: speaker-path mixer defaults (sun4i-codec)
+# =============================================================================
+# Installed only on open-kernel profiles (kernel-sunxi-6.x / kernel-sunxi-7.x)
+# by scripts/install-alsa-config.sh. The mainline sun4i-codec card resets its
+# speaker path to muted. This oneshot unmutes it and sets the stock vendor
+# levels from /usr/share/pocketforge/alsa/mixer-defaults.sun4i-codec.
+#
+# Hotplug activation: udev starts sound.target when a sound card appears
+# (systemd.special(7)), and sound.target Wants this unit through the [Install]
+# symlink. A kernel without the card never adds this unit to the boot
+# transaction, so boot never waits on a missing device.
+# It is ordered after Debian's alsa-restore/alsa-state units so alsactl's
+# restore at boot cannot overwrite these values.
+#
+# bd: tsp-f3fm.220
+# =============================================================================
+[Unit]
+Description=PocketForge: speaker-path mixer defaults for the sun4i-codec card
+After=sound.target alsa-restore.service alsa-state.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/pocketforge/audio-defaults.sh
+
+[Install]
+WantedBy=sound.target
