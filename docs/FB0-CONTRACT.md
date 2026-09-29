@@ -142,9 +142,11 @@ of 2026-09-29 this is from kernel source; device confirmation is pending in
   its kernel meaning: `Left Side Up` is `DRM_MODE_ROTATE_90`, counter-clockwise,
   the same rotation fbcon uses. `apps/pocketforge-boot-animator/src/main.c`
   holds the table and its kernel citations.
-- The launcher's pf-framehost currently reads that property 180° apart from
-  the kernel. Physical truth is owned by `tsp-c2b70c69022327ff5fee`, and
-  convergence by `tsp-mc9m.60.21.3`.
+- pf-framehost reads that property with the same kernel meaning from runtime
+  `2ad0ca76` (runtime#101, re-vendored by launcher#145). The launcher pinned
+  here (`1e5a3d97`) still reads it 180° apart until the launcher pin moves.
+  Physical truth is owned by `tsp-c2b70c69022327ff5fee`, and convergence by
+  `tsp-mc9m.60.21.3`.
 - It is not yet device-verified whether mmap writes reach the panel without a
   pan. The design note presumes they do, because sun4i has no dirty callback.
   The animator issues `FBIOPAN_DISPLAY` with offset 0 after each update
