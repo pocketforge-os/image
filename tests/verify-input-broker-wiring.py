@@ -66,7 +66,11 @@ broker = directives(BROKER_DROPIN.read_text())
 shell = directives(SHELL_DROPIN.read_text())
 
 # pf-app@: the session pulls the broker in and gets the facade environment.
-assert "pf-input-broker.service" in values(app, "Unit", "Requires"), "pf-app@ must Require the broker"
+# BindsTo=, not Requires= (bd: tsp-f3fm.202.1.6): Requires= does not stop the app when
+# the broker exits by itself mid-session, and the app would keep the panel with no
+# Menu intake (real-systemd harness, case (b)).
+assert values(app, "Unit", "BindsTo") == ["pf-input-broker.service"], "pf-app@ must be BindsTo= the broker"
+assert "pf-input-broker.service" not in values(app, "Unit", "Requires"), "broker belongs in BindsTo=, not Requires="
 assert "pf-input-broker.service" in values(app, "Unit", "After"), "pf-app@ must order After the broker"
 assert "pocketforge-foreground.target" in values(app, "Unit", "Requires")
 environment = values(app, "Service", "Environment")

@@ -15,7 +15,8 @@ from pathlib import Path
 
 expected = """[Unit]
 Description=PocketForge default application %i
-Requires=pocketforge-foreground.target pf-input-broker.service
+Requires=pocketforge-foreground.target
+BindsTo=pf-input-broker.service
 After=local-fs.target pocketforge-foreground.target pf-input-broker.service
 Conflicts=shutdown.target
 Before=shutdown.target
