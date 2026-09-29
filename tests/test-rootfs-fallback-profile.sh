@@ -3,7 +3,32 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d)"
-trap 'find "${scratch}" -mindepth 1 -delete; rmdir "${scratch}"' EXIT
+
+# On any failure, print the failing command and the tail of every captured build
+# stderr BEFORE the EXIT trap deletes ${scratch}. Before this, a bare `set -e`
+# exit (e.g. an assertion grep failing because the fixture build died earlier)
+# printed nothing at all (bd tsp-mc9m.41.984.30).
+fail_line=""
+fail_cmd=""
+on_err() { fail_line="$1"; fail_cmd="$2"; }
+trap 'on_err "${LINENO}" "${BASH_COMMAND}"' ERR
+
+cleanup() {
+    local ec=$?
+    if [ "${ec}" -ne 0 ]; then
+        echo "FAIL: test-rootfs-fallback-profile.sh exited ${ec}" >&2
+        [ -z "${fail_cmd}" ] || \
+            echo "  failing command (line ${fail_line}): ${fail_cmd}" >&2
+        for err_file in "${scratch}"/*.err; do
+            [ -e "${err_file}" ] || continue
+            echo "  --- $(basename "${err_file}") (stderr tail) ---" >&2
+            tail -n 30 "${err_file}" >&2
+        done
+    fi
+    find "${scratch}" -mindepth 1 -delete
+    rmdir "${scratch}"
+}
+trap cleanup EXIT
 
 fixture_src="${scratch}/src"
 fixture_board="${fixture_src}/boards/tsp"
@@ -25,12 +50,13 @@ mkdir -p "${fixture_src}/scripts" "${fixture_board}/initrd" \
     "${scratch}/blobs/sunxi/a133/boot-chain" \
     "${scratch}/blobs/sunxi/a133/wifi-firmware"
 
-install -m 0755 "${repo_dir}/scripts/build-rootfs-direct.sh" \
-    "${fixture_src}/scripts/build-rootfs-direct.sh"
-install -m 0755 "${repo_dir}/scripts/build-rootfs.sh" \
-    "${fixture_src}/scripts/build-rootfs.sh"
-install -m 0644 "${repo_dir}/scripts/kernel-module-form.sh" \
-    "${fixture_src}/scripts/kernel-module-form.sh"
+# Stage every script build-sd-image.sh (or anything it calls) might invoke by
+# copying the real scripts/ directory wholesale, preserving each file's
+# committed mode. A newly added helper (e.g. make-reproducible-vfat.sh,
+# bd tsp-mc9m.41.984.20.1) is then staged automatically instead of needing a
+# new hand-added line here every time build-sd-image.sh grows one
+# (bd tsp-mc9m.41.984.30).
+cp -a "${repo_dir}/scripts/." "${fixture_src}/scripts/"
 for input in rootfs-packages.txt rootfs-packages-dev.txt rootfs-packages-mainline.txt rootfs-packages-mainline-dev.txt \
     snapshot-date.txt; do
     install -m 0644 "${repo_dir}/${input}" "${fixture_src}/${input}"
@@ -93,12 +119,23 @@ cat > "${fixture_bin}/mkdosfs" <<'EOF'
 exit 0
 EOF
 
+# make-reproducible-vfat.sh (bd tsp-mc9m.41.984.20.1, staged by the wholesale
+# scripts/ copy above) formats via the faked no-op mkdosfs, then labels via a
+# real mlabel -- against a file the fake dd/mkdosfs never actually formatted.
+# Fake mlabel too, so this test keeps exercising preflight logic on a synthetic
+# boot-resource image rather than real FAT bytes (that is
+# tests/test-reproducible-assembly.py's job).
+cat > "${fixture_bin}/mlabel" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+
 cat > "${fixture_bin}/qemu-aarch64-static" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
 chmod 0755 "${fixture_bin}/abootimg" "${fixture_bin}/dd" \
-    "${fixture_bin}/mkdosfs" "${fixture_bin}/qemu-aarch64-static"
+    "${fixture_bin}/mkdosfs" "${fixture_bin}/mlabel" "${fixture_bin}/qemu-aarch64-static"
 
 for input in libsdl3 wpa runtime launcher hwprobe gpu; do
     printf '%s fixture\n' "${input}" > "${scratch}/${input}/payload"
