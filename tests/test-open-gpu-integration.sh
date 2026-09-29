@@ -147,7 +147,7 @@ rendered_customize="${closure_tmp}/customize-hook.sh"
 closure_helpers="${closure_tmp}/open-gpu-closure-helpers.sh"
 closure_root="${closure_tmp}/rootfs"
 host_library_dir="${closure_tmp}/host-libraries"
-customize_heredoc_marker="cat > \"\${CUSTOMIZE_SCRIPT}\" << 'CUSTOMIZE_EOF'"
+customize_heredoc_marker="cat >> \"\${CUSTOMIZE_SCRIPT}\" << 'CUSTOMIZE_EOF'"
 
 if [ "$(grep -Fxc "${customize_heredoc_marker}" "${customize}")" -ne 1 ]; then
     echo 'expected exactly one production CUSTOMIZE_EOF heredoc' >&2

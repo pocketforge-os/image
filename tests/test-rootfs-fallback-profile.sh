@@ -183,13 +183,21 @@ mv "${scratch}/powervr.ko.saved" "${powervr_module}"
 
 # Execute the real customize-hook module block.  Its source tree must be the
 # selected modules root, not either the full kernel tree or canonical hardcode.
+# Take the block and the definitions it calls from the hook exactly as
+# build-rootfs.sh generates it: the hook is its own process, so outer-script
+# functions pasted in here would hide a call the hook cannot resolve
+# (tsp-mc9m.41.986).
+# shellcheck source=tests/lib/capture-customize-hook.sh
+. "${repo_dir}/tests/lib/capture-customize-hook.sh"
+generated_hook="${scratch}/generated-customize-hook.sh"
+capture_customize_hook "${fixture_src}" "${scratch}/hook-capture" "${generated_hook}"
 customize_modules="${scratch}/customize-modules.sh"
-sed -n '/^is_a133_open_7x_gpu_device() {$/,/^}$/p' \
-    "${fixture_src}/scripts/build-rootfs.sh" > "${customize_modules}"
-sed -n '/^install_open_gpu_module_options() {$/,/^}$/p' \
-    "${fixture_src}/scripts/build-rootfs.sh" >> "${customize_modules}"
+awk '{ print } /^install_open_gpu_module_options\(\) \{$/ { in_helper = 1 }
+     in_helper && /^}$/ { exit }' "${generated_hook}" > "${customize_modules}"
+[ "$(tail -n 1 "${customize_modules}")" = '}' ]
 sed -n '/^# --- Kernel modules install/,/^# --- Firmware install/p' \
-    "${fixture_src}/scripts/build-rootfs.sh" | sed '$d' >> "${customize_modules}"
+    "${generated_hook}" | sed '$d' >> "${customize_modules}"
+grep -Fx 'install_open_gpu_module_options' "${customize_modules}" >/dev/null
 cat > "${fixture_bin}/chroot" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -204,10 +212,11 @@ chmod 0755 "${fixture_bin}/chroot"
 
 customize_root="${scratch}/customize-root"
 mkdir -p "${customize_root}"
-PATH="${fixture_bin}:${PATH}" ROOTFS="${customize_root}" \
+PATH="${fixture_bin}:${PATH}" \
 PF_DEVICE_ID=a133-open-7x-gpu PF_GPU_MODEL=open PF_GPU_KM_MODEL=in-tree-7.x \
 KERNEL_MODULES_ROOT="${kernel_modules_root}" \
-bash "${customize_modules}" > "${scratch}/customize.out" 2> "${scratch}/customize.err"
+bash "${customize_modules}" "${customize_root}" \
+    > "${scratch}/customize.out" 2> "${scratch}/customize.err"
 test -f "${customize_root}/lib/modules/${kernel_release}/module-root-marker"
 test -f "${customize_root}/lib/modules/${kernel_release}/kernel/drivers/gpu/drm/imagination/powervr.ko"
 test -s "${customize_root}/lib/modules/${kernel_release}/modules.dep"
@@ -216,11 +225,11 @@ test -s "${customize_root}/lib/modules/${kernel_release}/modules.dep"
 
 customize_noradio_root="${scratch}/customize-noradio-root"
 mkdir -p "${customize_noradio_root}"
-PATH="${fixture_bin}:${PATH}" ROOTFS="${customize_noradio_root}" \
+PATH="${fixture_bin}:${PATH}" \
 PF_DEVICE_ID=a133-open-7x-gpu-noradio PF_GPU_MODEL=open PF_GPU_KM_MODEL=in-tree-7.x \
 KERNEL_MODULES_ROOT="${kernel_modules_root}" \
-bash "${customize_modules}" > "${scratch}/customize-noradio.out" \
-    2> "${scratch}/customize-noradio.err"
+bash "${customize_modules}" "${customize_noradio_root}" \
+    > "${scratch}/customize-noradio.out" 2> "${scratch}/customize-noradio.err"
 [ "$(cat "${customize_noradio_root}/etc/modprobe.d/powervr-a133-open-7x-gpu.conf")" = \
     'options powervr exp_hw_support=1' ]
 grep -F 'KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT}' \

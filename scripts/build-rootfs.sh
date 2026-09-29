@@ -367,13 +367,63 @@ echo "=== Step 3/4: mmdebstrap rootfs build ==="
 
 ROOTFS_TAR="${WORK}/rootfs.tar"
 
+# The customize hook is a separate process: mmdebstrap runs the
+# --customize-hook command through `sh -c`, so the hook inherits none of this
+# script's shell functions.  A function the hook calls without defining is
+# "command not found" (status 127), and errexit ignores that inside an if/while
+# condition or a !/&&/|| list.  That is how every a133-open-7x-gpu image built
+# since image#133 lost its PowerVR exp_hw_support option: the hook's
+# `if ! is_a133_open_7x_gpu_device` took the skip branch (tsp-mc9m.41.986).
+# The generated prelude therefore:
+#   1. copies each function the hook shares with this script from its single
+#      definition in this file (CUSTOMIZE_HOOK_SHARED_FUNCTIONS); and
+#   2. fails the hook on any command that is not found, in any context.  bash
+#      runs command_not_found_handle in a forked child, which cannot exit the
+#      hook, so the handler records the name and the hook's EXIT trap turns
+#      any record into status 127, which fails mmdebstrap and the build.
+CUSTOMIZE_HOOK_SHARED_FUNCTIONS=(is_a133_open_7x_gpu_device)
+
+write_customize_hook_prelude() {
+    local shared
+    cat <<'PRELUDE_EOF'
+#!/bin/bash
+set -euo pipefail
+
+PF_CUSTOMIZE_MISSING_COMMANDS="$(mktemp)"
+pf_customize_hook_exit() {
+    local status=$?
+    if [ -s "${PF_CUSTOMIZE_MISSING_COMMANDS}" ]; then
+        echo "FATAL: customize-hook called undefined command(s): $(sort -u "${PF_CUSTOMIZE_MISSING_COMMANDS}" | tr '\n' ' ')" >&2
+        status=127
+    fi
+    rm -f "${PF_CUSTOMIZE_MISSING_COMMANDS}"
+    exit "${status}"
+}
+trap pf_customize_hook_exit EXIT
+command_not_found_handle() {
+    printf 'FATAL: customize-hook: command not found: %s\n' "$1" >&2
+    printf '%s\n' "$1" >> "${PF_CUSTOMIZE_MISSING_COMMANDS}"
+    return 127
+}
+
+# Shared with build-rootfs.sh; copied from its single definition there.
+PRELUDE_EOF
+    for shared in "${CUSTOMIZE_HOOK_SHARED_FUNCTIONS[@]}"; do
+        declare -F "${shared}" >/dev/null || {
+            echo "FATAL: customize-hook shared function ${shared} is not defined" >&2
+            return 1
+        }
+        declare -f "${shared}"
+    done
+    printf '\n'
+}
+
 # The customize-hook script runs OUTSIDE the chroot — $1 is the rootfs path.
 # This is critical: we can copy files from /work/blobs into the rootfs
 # by targeting "$1/path/in/rootfs".
 CUSTOMIZE_SCRIPT="${WORK}/customize-hook.sh"
-cat > "${CUSTOMIZE_SCRIPT}" << 'CUSTOMIZE_EOF'
-#!/bin/bash
-set -euo pipefail
+write_customize_hook_prelude > "${CUSTOMIZE_SCRIPT}"
+cat >> "${CUSTOMIZE_SCRIPT}" << 'CUSTOMIZE_EOF'
 ROOTFS="$1"
 
 echo "[customize] Starting PocketForge rootfs customization..."
