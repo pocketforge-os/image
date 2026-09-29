@@ -326,26 +326,97 @@ grep -Fq 'reason=none' "${stdout_log}" || exit 1
 
 reset_logs
 probe_audit_container=tsp-f3fm-211-probe-fixture-host-bind
-if run_probe_fake --audit-run-fixture \
-    "${fake_root}" baseline-systemd "${probe_audit_container}" \
-    run --detach --tty \
-    --name "${probe_audit_container}" \
-    --label org.pocketforge.session-authority-probe=gha-missing-missing-probe \
-    --cgroupns private \
-    --network none \
-    --tmpfs /run:rw,nosuid,nodev,mode=755 \
-    --tmpfs /run/lock:rw,nosuid,nodev,mode=755 \
-    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup \
-    tsp-f3fm-211-systemd-probe:gha-missing-missing-probe /sbin/init \
-    >"${stdout_log}" 2>"${stderr_log}"; then
-    echo 'session-authority systemd-safety: FAIL: probe accepted host cgroup bind candidate' >&2
-    exit 1
-fi
-grep -Fq 'UNSAFE_CONTAINER_ARGV: host cgroup mount' "${stderr_log}" || exit 1
-[ ! -s "${call_log}" ] || {
-    echo 'session-authority systemd-safety: FAIL: rejected probe candidate reached Docker' >&2
-    exit 1
+probe_audit_label=org.pocketforge.session-authority-probe=gha-missing-missing-probe
+probe_audit_image=tsp-f3fm-211-systemd-probe:gha-missing-missing-probe
+probe_run_base=(
+    run --detach --tty
+    --name "${probe_audit_container}"
+    --label "${probe_audit_label}"
+    --cgroupns=private
+    --network none
+    --tmpfs '/run:rw,nosuid,nodev,mode=755'
+    --tmpfs '/run/lock:rw,nosuid,nodev,mode=755'
+)
+probe_owner_base=(
+    "${probe_run_base[@]}"
+    --security-opt apparmor=unconfined
+    --cap-add=SYS_ADMIN
+)
+live_owner_base=(
+    run --detach --tty
+    --name "${probe_audit_container}"
+    --label "${probe_audit_label}"
+    --hostname tsp-f3fm-211-systemd
+    --cgroupns=private
+    --network=none
+    --tmpfs '/run:rw,nosuid,nodev,mode=755'
+    --tmpfs '/run/lock:rw,nosuid,nodev,mode=755'
+    --pids-limit=512
+    --env=container=docker
+    --security-opt apparmor=unconfined
+    --cap-add SYS_ADMIN
+)
+
+expect_probe_admitted_audit_only() {
+    local profile="$1"
+    shift
+    reset_logs
+    run_probe_fake --audit-run-fixture \
+        "${fake_root}" "${profile}" "${probe_audit_container}" "$@" \
+        >"${stdout_log}" 2>"${stderr_log}"
+    grep -Fq 'systemd-docker-probe argv-audit: PASS docker run ' \
+        "${stdout_log}" || exit 1
+    [ ! -s "${call_log}" ] || {
+        echo "session-authority systemd-safety: FAIL: admitted probe fixture called Docker profile=${profile}" >&2
+        exit 1
+    }
 }
+
+expect_probe_rejected_no_docker() {
+    local label="$1"
+    shift
+    reset_logs
+    if run_probe_fake --audit-run-fixture \
+        "${fake_root}" owner-exception "${probe_audit_container}" \
+        "${live_owner_base[@]}" "$@" \
+        "${probe_audit_image}" /usr/local/libexec/remount-cgroup-systemd \
+        >"${stdout_log}" 2>"${stderr_log}"; then
+        echo "session-authority systemd-safety: FAIL: probe accepted unapproved run option label=${label}" >&2
+        exit 1
+    fi
+    grep -Fq 'UNSAFE_CONTAINER_ARGV:' "${stderr_log}" || {
+        echo "session-authority systemd-safety: FAIL: probe refusal reason missing label=${label}" >&2
+        cat "${stderr_log}" >&2
+        exit 1
+    }
+    [ ! -s "${call_log}" ] || {
+        echo "session-authority systemd-safety: FAIL: rejected probe option reached Docker label=${label}" >&2
+        exit 1
+    }
+}
+
+expect_probe_admitted_audit_only baseline-systemd \
+    "${probe_run_base[@]}" "${probe_audit_image}" /sbin/init
+expect_probe_admitted_audit_only positive-control \
+    "${probe_run_base[@]}" --entrypoint /bin/sleep \
+    "${probe_audit_image}" infinity
+expect_probe_admitted_audit_only owner-exception \
+    "${probe_owner_base[@]}" "${probe_audit_image}" \
+    /usr/local/libexec/remount-cgroup-systemd
+
+expect_probe_rejected_no_docker device-cgroup-rule \
+    --device-cgroup-rule 'b *:* rwm'
+expect_probe_rejected_no_docker root-volume -v /:/host
+expect_probe_rejected_no_docker root-mount \
+    --mount type=bind,source=/,target=/host
+expect_probe_rejected_no_docker nonnormalized-dev-volume -v //dev:/hostdev
+expect_probe_rejected_no_docker docker-socket-volume \
+    -v /var/run/docker.sock:/var/run/docker.sock
+expect_probe_rejected_no_docker host-ipc --ipc=host
+expect_probe_rejected_no_docker host-uts --uts=host
+expect_probe_rejected_no_docker other-container-pid --pid=container:other
+expect_probe_rejected_no_docker host-cgroup-bind \
+    --mount type=bind,source=/sys/fs/cgroup,target=/sys/fs/cgroup
 
 reset_logs
 FAKE_GRAPHICAL=1
@@ -485,6 +556,10 @@ reset_logs
 run_fake --audit-systemd-spec "${fake_root}" "${audit_id}" \
     >"${stdout_log}" 2>"${stderr_log}"
 safe_spec="$(cat "${stdout_log}")"
+[ ! -s "${call_log}" ] || {
+    echo 'session-authority systemd-safety: FAIL: admitted live argv audit called Docker' >&2
+    exit 1
+}
 for required in \
     'docker run' \
     '--tty' \
@@ -528,7 +603,7 @@ safe_run_base=(
     run --detach --tty
     --name "${audit_container}"
     --label "${audit_label}"
-    --cgroupns private
+    --cgroupns=private
     --network none
     --tmpfs '/run:rw,nosuid,nodev,mode=755'
     --tmpfs '/run/lock:rw,nosuid,nodev,mode=755'
@@ -695,6 +770,11 @@ grep -Fq 'source "${fixtures}/docker-argv-audit.sh"' "${harness}" || exit 1
 grep -Fq 'source "${root}/tests/session-authority-systemd/docker-argv-audit.sh"' \
     "${probe}" || exit 1
 grep -Fq 'audit_docker_argv "$@"' "${probe}" || exit 1
+grep -Fq 'systemd-docker-probe argv-audit: PASS docker' "${probe}" || exit 1
+! grep -Fq 'probe_docker_run "$@"' "${probe}" || {
+    echo 'session-authority systemd-safety: FAIL: probe audit fixture can execute Docker' >&2
+    exit 1
+}
 ! grep -Eq 'docker[[:space:]]+(run|create)([[:space:]]|$)' "${probe}" || {
     echo 'session-authority systemd-safety: FAIL: probe bypasses shared run auditor' >&2
     exit 1
@@ -706,7 +786,8 @@ if grep -Eq -- 'source=/sys/fs/cgroup|src=/sys/fs/cgroup|seccomp=unconfined|syst
     echo 'session-authority systemd-safety: FAIL: probe retains an unapproved discovery configuration' >&2
     exit 1
 fi
-grep -Fq 'UNSAFE_CONTAINER_ARGV: host cgroup mount' "${argv_audit}" || exit 1
+grep -Fq 'UNSAFE_CONTAINER_ARGV: unapproved Docker run option=' \
+    "${argv_audit}" || exit 1
 grep -Fq 'baseline-systemd)' "${argv_audit}" || exit 1
 grep -Fq 'positive-control)' "${argv_audit}" || exit 1
 grep -Fq 'owner-exception)' "${argv_audit}" || exit 1
@@ -727,4 +808,4 @@ grep -Fqx 'CMD ["/sbin/init"]' "${probe_recipe}" || exit 1
 grep -Fq 'candidate_e=${candidate_e_result} adopted=${adopted} owner_exception=${owner_exception}' \
     "${probe}" || exit 1
 
-echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused probe_host_cgroup_bind=refused-zero-docker probe_argv_audit=shared probe_matrix=approved-only docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker getty_masks=5 runtime=fake-docker'
+echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused run_allowlist=ok probe_host_cgroup_bind=refused-zero-docker probe_fixture=audit-only probe_argv_audit=shared probe_matrix=approved-only docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker getty_masks=5 runtime=fake-docker'

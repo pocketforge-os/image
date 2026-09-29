@@ -37,6 +37,190 @@ argv_has_option_value() {
     return 1
 }
 
+audit_docker_run_argv() {
+    # Docker run is an exact allowlist: an option not parsed below is unsafe,
+    # even when Docker itself would otherwise accept it.
+    local -a argv=("$@")
+    local arg value index=1 image_index=-1 last_index
+    local detach_count=0 tty_count=0 name_count=0 label_count=0
+    local hostname_count=0 cgroupns_count=0 network_count=0
+    local run_tmpfs_count=0 lock_tmpfs_count=0 pids_count=0 env_count=0
+    local capability_count=0 apparmor_unconfined_count=0 entrypoint_count=0
+
+    [ "${ephemeral_admitted}" -eq 1 ] \
+        || fail 'UNSAFE_CONTAINER_ARGV: Docker run lacks verified ephemeral admission'
+
+    while [ "${index}" -lt "${#argv[@]}" ]; do
+        arg="${argv[index]}"
+        if [ "${arg}" = "${test_image}" ]; then
+            image_index="${index}"
+            break
+        fi
+        case "${arg}" in
+            --detach)
+                detach_count=$((detach_count + 1))
+                ;;
+            --tty|-t)
+                tty_count=$((tty_count + 1))
+                ;;
+            --name)
+                index=$((index + 1))
+                value="${argv[index]-}"
+                [ "${value}" = "${systemd_container}" ] \
+                    || fail "UNSCOPED_CONTAINER_ARGV: Docker run container name=${value:-missing}"
+                name_count=$((name_count + 1))
+                ;;
+            --label)
+                index=$((index + 1))
+                value="${argv[index]-}"
+                [ "${value}" = "${run_label}" ] \
+                    || fail "UNSCOPED_CONTAINER_ARGV: Docker run label=${value:-missing}"
+                label_count=$((label_count + 1))
+                ;;
+            --hostname)
+                index=$((index + 1))
+                value="${argv[index]-}"
+                [ "${value}" = tsp-f3fm-211-systemd ] \
+                    || fail "UNSAFE_CONTAINER_ARGV: Docker run hostname=${value:-missing}"
+                hostname_count=$((hostname_count + 1))
+                ;;
+            --cgroupns=private)
+                cgroupns_count=$((cgroupns_count + 1))
+                ;;
+            --network=none)
+                network_count=$((network_count + 1))
+                ;;
+            --network)
+                index=$((index + 1))
+                value="${argv[index]-}"
+                [ "${value}" = none ] \
+                    || fail "UNSAFE_CONTAINER_ARGV: Docker run network=${value:-missing}"
+                network_count=$((network_count + 1))
+                ;;
+            --tmpfs)
+                index=$((index + 1))
+                value="${argv[index]-}"
+                case "${value}" in
+                    /run:rw,nosuid,nodev,mode=755)
+                        run_tmpfs_count=$((run_tmpfs_count + 1))
+                        ;;
+                    /run/lock:rw,nosuid,nodev,mode=755)
+                        lock_tmpfs_count=$((lock_tmpfs_count + 1))
+                        ;;
+                    *)
+                        fail "UNSAFE_CONTAINER_ARGV: Docker run tmpfs=${value:-missing}"
+                        ;;
+                esac
+                ;;
+            --pids-limit=512)
+                pids_count=$((pids_count + 1))
+                ;;
+            --env=container=docker)
+                env_count=$((env_count + 1))
+                ;;
+            --security-opt)
+                index=$((index + 1))
+                value="${argv[index]-}"
+                [ "${value}" = apparmor=unconfined ] \
+                    || fail "UNSAFE_CONTAINER_ARGV: security option=${value:-missing}"
+                apparmor_unconfined_count=$((apparmor_unconfined_count + 1))
+                ;;
+            --cap-add)
+                index=$((index + 1))
+                value="${argv[index]-}"
+                [ "${value}" = SYS_ADMIN ] \
+                    || fail "UNSAFE_CONTAINER_ARGV: added capability=${value:-missing}"
+                capability_count=$((capability_count + 1))
+                ;;
+            --cap-add=SYS_ADMIN)
+                capability_count=$((capability_count + 1))
+                ;;
+            --entrypoint)
+                index=$((index + 1))
+                value="${argv[index]-}"
+                [ "${value}" = /bin/sleep ] \
+                    || fail "UNSAFE_CONTAINER_ARGV: entrypoint=${value:-missing}"
+                entrypoint_count=$((entrypoint_count + 1))
+                ;;
+            *)
+                fail "UNSAFE_CONTAINER_ARGV: unapproved Docker run option=${arg}"
+                ;;
+        esac
+        index=$((index + 1))
+    done
+
+    [ "${image_index}" -ge 0 ] \
+        || fail 'UNSCOPED_CONTAINER_ARGV: Docker run image is missing or mismatched'
+    [ "${detach_count}" -eq 1 ] \
+        || fail 'UNSCOPED_CONTAINER_ARGV: Docker run detach count drifted'
+    [ "${tty_count}" -eq 1 ] \
+        || fail 'UNSCOPED_CONTAINER_ARGV: Docker run PTY count drifted'
+    [ "${name_count}" -eq 1 ] \
+        || fail 'UNSCOPED_CONTAINER_ARGV: Docker run name count drifted'
+    [ "${label_count}" -eq 1 ] \
+        || fail 'UNSCOPED_CONTAINER_ARGV: Docker run label count drifted'
+    [ "${cgroupns_count}" -eq 1 ] \
+        || fail 'UNSCOPED_CONTAINER_ARGV: Docker run private cgroup namespace count drifted'
+    [ "${network_count}" -eq 1 ] \
+        || fail 'UNSCOPED_CONTAINER_ARGV: Docker run isolated network count drifted'
+    [ "${run_tmpfs_count}" -eq 1 ] \
+        || fail 'UNSCOPED_CONTAINER_ARGV: Docker run /run tmpfs count drifted'
+    [ "${lock_tmpfs_count}" -eq 1 ] \
+        || fail 'UNSCOPED_CONTAINER_ARGV: Docker run /run/lock tmpfs count drifted'
+    [ "${hostname_count}" -le 1 ] \
+        && [ "${pids_count}" -le 1 ] \
+        && [ "${env_count}" -le 1 ] \
+        || fail 'UNSAFE_CONTAINER_ARGV: Docker run safe option duplicated'
+
+    last_index=$((${#argv[@]} - 1))
+    [ "${image_index}" -eq "$((last_index - 1))" ] \
+        || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks exact image and command tail'
+    case "${docker_run_profile:-}" in
+        baseline-systemd)
+            [ "${capability_count}" -eq 0 ] \
+                && [ "${apparmor_unconfined_count}" -eq 0 ] \
+                && [ "${entrypoint_count}" -eq 0 ] \
+                && [ "${hostname_count}" -eq 0 ] \
+                && [ "${pids_count}" -eq 0 ] \
+                && [ "${env_count}" -eq 0 ] \
+                || fail 'UNSAFE_CONTAINER_ARGV: baseline profile contains an unapproved option'
+            [ "${argv[last_index]}" = /sbin/init ] \
+                || fail 'UNSCOPED_CONTAINER_ARGV: baseline run lacks exact systemd command'
+            ;;
+        positive-control)
+            [ "${capability_count}" -eq 0 ] \
+                && [ "${apparmor_unconfined_count}" -eq 0 ] \
+                && [ "${entrypoint_count}" -eq 1 ] \
+                && [ "${hostname_count}" -eq 0 ] \
+                && [ "${pids_count}" -eq 0 ] \
+                && [ "${env_count}" -eq 0 ] \
+                || fail 'UNSAFE_CONTAINER_ARGV: positive-control profile drifted'
+            [ "${argv[last_index]}" = infinity ] \
+                || fail 'UNSCOPED_CONTAINER_ARGV: positive control lacks exact sleep command'
+            ;;
+        owner-exception)
+            [ "${capability_count}" -eq 1 ] \
+                && [ "${apparmor_unconfined_count}" -eq 1 ] \
+                && [ "${entrypoint_count}" -eq 0 ] \
+                || fail 'UNSCOPED_CONTAINER_ARGV: owner exception is incomplete or duplicated'
+            if [ "${hostname_count}" -eq 0 ] \
+                && [ "${pids_count}" -eq 0 ] \
+                && [ "${env_count}" -eq 0 ]; then
+                :
+            elif [ "${hostname_count}" -eq 1 ] \
+                && [ "${pids_count}" -eq 1 ] \
+                && [ "${env_count}" -eq 1 ]; then
+                :
+            else
+                fail 'UNSCOPED_CONTAINER_ARGV: owner-exception run shape drifted'
+            fi
+            [ "${argv[last_index]}" = /usr/local/libexec/remount-cgroup-systemd ] \
+                || fail 'UNSCOPED_CONTAINER_ARGV: owner exception lacks exact cgroup-remount command'
+            ;;
+        *) fail 'UNSCOPED_CONTAINER_ARGV: unknown Docker run profile' ;;
+    esac
+}
+
 audit_docker_argv() {
     local -a argv=("$@")
     local dashdash=--
@@ -57,6 +241,10 @@ audit_docker_argv() {
     local capability_count=0 apparmor_unconfined_count=0 entrypoint_count=0
 
     [ -n "${command_name}" ] || fail 'UNSCOPED_CONTAINER_ARGV: empty Docker argv'
+    if [ "${command_name}" = run ]; then
+        audit_docker_run_argv "${argv[@]}"
+        return 0
+    fi
     for ((index = 0; index < ${#argv[@]}; index++)); do
         arg="${argv[index]}"
         case "${arg}" in
@@ -175,61 +363,6 @@ audit_docker_argv() {
                 || fail 'UNSCOPED_CONTAINER_ARGV: Docker build lacks run label'
             argv_has_option_value --tag "${test_image}" "${argv[@]}" \
                 || fail 'UNSCOPED_CONTAINER_ARGV: Docker build lacks run image tag'
-            ;;
-        run)
-            argv_has_option_value --label "${run_label}" "${argv[@]}" \
-                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks run label'
-            argv_has_option_value --name "${systemd_container}" "${argv[@]}" \
-                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks run container name'
-            argv_has_option_value --cgroupns private "${argv[@]}" \
-                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks private cgroup namespace'
-            argv_has_option_value --network none "${argv[@]}" \
-                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks isolated network'
-            argv_has_option_value --tmpfs '/run:rw,nosuid,nodev,mode=755' "${argv[@]}" \
-                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks /run tmpfs'
-            argv_has_option_value --tmpfs '/run/lock:rw,nosuid,nodev,mode=755' "${argv[@]}" \
-                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks /run/lock tmpfs'
-            argv_has --tty "${argv[@]}" || argv_has -t "${argv[@]}" \
-                || fail 'UNSCOPED_CONTAINER_ARGV: Docker run lacks PTY'
-            [ "${ephemeral_admitted}" -eq 1 ] \
-                || fail 'UNSAFE_CONTAINER_ARGV: Docker run lacks verified ephemeral admission'
-            last_index=$((${#argv[@]} - 1))
-            case "${docker_run_profile:-}" in
-                baseline-systemd)
-                    [ "${capability_count}" -eq 0 ] \
-                        && [ "${apparmor_unconfined_count}" -eq 0 ] \
-                        && [ "${entrypoint_count}" -eq 0 ] \
-                        || fail 'UNSAFE_CONTAINER_ARGV: baseline profile contains owner exception'
-                    [ "${last_index}" -ge 1 ] \
-                        && [ "${argv[last_index - 1]}" = "${test_image}" ] \
-                        && [ "${argv[last_index]}" = /sbin/init ] \
-                        || fail 'UNSCOPED_CONTAINER_ARGV: baseline run lacks exact systemd command'
-                    ;;
-                positive-control)
-                    [ "${capability_count}" -eq 0 ] \
-                        && [ "${apparmor_unconfined_count}" -eq 0 ] \
-                        || fail 'UNSAFE_CONTAINER_ARGV: positive control contains owner exception'
-                    [ "${entrypoint_count}" -eq 1 ] \
-                        || fail 'UNSCOPED_CONTAINER_ARGV: positive control entrypoint count drifted'
-                    argv_has_option_value --entrypoint /bin/sleep "${argv[@]}" \
-                        || fail 'UNSCOPED_CONTAINER_ARGV: positive control lacks sleep entrypoint'
-                    [ "${last_index}" -ge 1 ] \
-                        && [ "${argv[last_index - 1]}" = "${test_image}" ] \
-                        && [ "${argv[last_index]}" = infinity ] \
-                        || fail 'UNSCOPED_CONTAINER_ARGV: positive control lacks exact sleep command'
-                    ;;
-                owner-exception)
-                    [ "${capability_count}" -eq 1 ] \
-                        && [ "${apparmor_unconfined_count}" -eq 1 ] \
-                        && [ "${entrypoint_count}" -eq 0 ] \
-                        || fail 'UNSCOPED_CONTAINER_ARGV: owner exception is incomplete or duplicated'
-                    [ "${last_index}" -ge 1 ] \
-                        && [ "${argv[last_index - 1]}" = "${test_image}" ] \
-                        && [ "${argv[last_index]}" = /usr/local/libexec/remount-cgroup-systemd ] \
-                        || fail 'UNSCOPED_CONTAINER_ARGV: owner exception lacks exact cgroup-remount command'
-                    ;;
-                *) fail 'UNSCOPED_CONTAINER_ARGV: unknown Docker run profile' ;;
-            esac
             ;;
         exec|logs|rm)
             argv_has "${systemd_container}" "${argv[@]}" \

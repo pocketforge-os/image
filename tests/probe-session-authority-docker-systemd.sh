@@ -65,7 +65,12 @@ case "${1:-}" in
         docker_run_profile="$3"
         systemd_container="$4"
         shift 4
-        probe_docker_run "$@"
+        # FIXTURE_ROOT is caller-controlled test input. This mode may exercise
+        # admission and argv validation, but it must never invoke Docker.
+        audit_docker_argv "$@"
+        printf 'systemd-docker-probe argv-audit: PASS docker'
+        printf ' %q' "$@"
+        printf '\n'
         exit 0
         ;;
 esac
