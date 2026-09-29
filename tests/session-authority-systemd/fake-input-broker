@@ -1,0 +1,165 @@
+#!/usr/bin/python3
+"""Fake pf-input-broker for the ephemeral real-systemd harness (bd: tsp-f3fm.202.1.4).
+
+Runs under runtime's verbatim pf-input-broker.service plus the image's app-session
+drop-in, so it receives the production ExecStart argv, Group=, UMask= and
+Environment=. It models the pad grab with a kernel-released flock (released only
+when this process dies, like EVIOCGRAB), sends the real pf-wire SafeReturn frame
+to the socket named by --safe-return-sock when the driver presses "guide", and
+holds the lock for 0.5 s after SIGTERM to widen any ordering race.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+GRAB = Path("/run/pf-grab")
+LOCK = GRAB / "pf-gamepad.lock"
+CONTROL = GRAB / "broker-control.sock"
+EXPECTED = {
+    "--descriptor": "/usr/share/pocketforge/devices/a133/capabilities.toml",
+    "--acquire-sock": "/run/pocketforge/input-broker.sock",
+    "--source": "/dev/input/pf-gamepad",
+    "--safe-return-sock": "/run/pocketforge/session-authority.sock",
+}
+stop = threading.Event()
+
+
+def append(name: str, line: str) -> None:
+    with open(GRAB / name, "a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+def unit_state(unit: str) -> str:
+    return subprocess.run(
+        ["systemctl", "show", "--property", "ActiveState", "--value", unit],
+        check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    ).stdout.strip()
+
+
+def parse(argv: list[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    iterator = iter(argv)
+    for flag in iterator:
+        values[flag] = next(iterator, "")
+    return values
+
+
+def notify_ready() -> None:
+    address = os.environ.get("NOTIFY_SOCKET", "")
+    if not address:
+        raise SystemExit("fake broker: NOTIFY_SOCKET unset (unit is not Type=notify)")
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+        notify.sendto(b"READY=1", address)
+
+
+def safe_return(authority: str) -> None:
+    body = json.dumps({"method": "safe_return"}, separators=(",", ":")).encode()
+    started = time.monotonic()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
+            stream.settimeout(0.25)
+            stream.connect(authority)
+            stream.settimeout(5)
+            stream.sendall(struct.pack(">I", len(body)) + body)
+            header = stream.recv(4)
+            length = struct.unpack(">I", header)[0] if len(header) == 4 else 0
+            reply = stream.recv(length).decode(errors="replace") if length else "<closed>"
+    except OSError as error:
+        reply = f"<{type(error).__name__}: {error}>"
+    append("safe-return.log", f"reply={reply} elapsed_ms={int((time.monotonic() - started) * 1000)}")
+
+
+def main() -> int:
+    arguments = parse(sys.argv[1:])
+    record = {
+        "argv": sys.argv[1:],
+        "uid": os.getuid(),
+        "gid": os.getgid(),
+        "umask": oct(os.umask(0o007)),
+        "PF_PREFSD_SOCK": os.environ.get("PF_PREFSD_SOCK"),
+        "shell": unit_state("pf-shell-selected.service"),
+        "target": unit_state("pocketforge-foreground.target"),
+    }
+    os.umask(int(record["umask"], 8))
+    for flag, value in EXPECTED.items():
+        if arguments.get(flag) != value:
+            append("violations", f"BROKER_ARGV {flag}={arguments.get(flag)!r}")
+            return 2
+    if not Path(arguments["--source"]).exists() or not Path(arguments["--descriptor"]).is_file():
+        append("violations", "BROKER_INPUTS source or descriptor missing")
+        return 2
+
+    lock = open(LOCK, "r+b")  # noqa: SIM115 - held until the process dies
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        append("violations", f"GRAB_CONFLICT broker requested while held (shell={record['shell']})")
+        return 3
+    append("timeline", f"grab broker {time.monotonic_ns()} {os.getpid()}")
+    record["grab_monotonic_ns"] = time.monotonic_ns()
+    append("broker-starts.jsonl", json.dumps(record, sort_keys=True))
+
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    acquire_path = arguments["--acquire-sock"]
+    try:
+        os.unlink(acquire_path)
+    except FileNotFoundError:
+        pass
+    acquire = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    acquire.bind(acquire_path)
+    acquire.listen(8)
+    acquire.settimeout(0.05)
+    try:
+        os.unlink(CONTROL)
+    except FileNotFoundError:
+        pass
+    control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    control.bind(str(CONTROL))
+    control.listen(4)
+    control.settimeout(0.05)
+    notify_ready()
+
+    while not stop.is_set():
+        try:
+            client, _ = acquire.accept()
+            append("broker-clients", f"acquire {time.monotonic_ns()}")
+            client.close()
+        except (TimeoutError, socket.timeout):
+            pass
+        try:
+            driver, _ = control.accept()
+            with driver:
+                if driver.recv(16).strip() == b"guide":
+                    append("safe-return.log", f"guide {time.monotonic_ns()}")
+                    threading.Thread(
+                        target=safe_return, args=(arguments["--safe-return-sock"],), daemon=True
+                    ).start()
+                    driver.sendall(b"sent\n")
+        except (TimeoutError, socket.timeout):
+            pass
+
+    append("timeline", f"term broker {time.monotonic_ns()} {os.getpid()}")
+    time.sleep(0.5)  # still holding the grab: a premature shell start would conflict
+    for path in (acquire_path, str(CONTROL)):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

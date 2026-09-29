@@ -44,6 +44,10 @@ def parse_args() -> argparse.Namespace:
             / "rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf",
             fixtures / "pf-shell-selected.service",
             fixtures / "session-authority-test.target",
+            root
+            / "rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf",
+            root
+            / "rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf",
         ]
     return args
 

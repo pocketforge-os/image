@@ -1,7 +1,7 @@
 [Unit]
 Description=PocketForge default application %i
-Requires=pocketforge-foreground.target
-After=local-fs.target pocketforge-foreground.target
+Requires=pocketforge-foreground.target pf-input-broker.service
+After=local-fs.target pocketforge-foreground.target pf-input-broker.service
 Conflicts=shutdown.target
 Before=shutdown.target
 ConditionPathExists=/dev/fb0
@@ -14,6 +14,8 @@ SupplementaryGroups=audio input video
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
+Environment=PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml
+Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
@@ -23,6 +25,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
 ReadWritePaths=/var/lib/pocketforge/apps/%i
+InaccessiblePaths=-/run/pocketforge/session-authority.sock
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s

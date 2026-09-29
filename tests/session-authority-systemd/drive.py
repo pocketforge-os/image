@@ -3,8 +3,12 @@
 
 from __future__ import annotations
 
+import fcntl
+import grp
 import json
+import os
 import socket
+import stat
 import struct
 import subprocess
 import time
@@ -18,10 +22,19 @@ APP_UNIT = f"pf-app@{APP_ID}.service"
 AUTHORITY_UNIT = "pf-session-authorityd.service"
 OWNER_UNIT = "pf-shell-selected.service"
 TARGET_UNIT = "pocketforge-foreground.target"
+BROKER_UNIT = "pf-input-broker.service"
 SOCKET = Path("/run/pocketforge/session-authority.sock")
+BROKER_SOCKET = Path("/run/pocketforge/input-broker.sock")
 MODE = Path("/run/pocketforge/fixture-exit-code")
-INVOCATIONS = Path(f"/var/lib/pocketforge/apps/{APP_ID}/state/invocations")
+APP_STATE = Path(f"/var/lib/pocketforge/apps/{APP_ID}/state")
+INVOCATIONS = APP_STATE / "invocations"
+PROBE = APP_STATE / "probe.json"
 CLIENT_ID = "image-real-systemd"
+GRAB = Path("/run/pf-grab")
+GRAB_LOCK = GRAB / "pf-gamepad.lock"
+BROKER_CONTROL = GRAB / "broker-control.sock"
+UINPUT = Path("/dev/uinput")
+DESCRIPTOR = "/usr/share/pocketforge/devices/a133/capabilities.toml"
 
 
 class TestFailure(RuntimeError):
@@ -207,6 +220,7 @@ def wait_for_app_exit(scope: SessionEventScope, expected_state: str) -> None:
         lambda: unit_is_active(OWNER_UNIT),
         f"{OWNER_UNIT} to become active again for {scope.session_id}",
     )
+    wait_for_owner_grab(scope.session_id)
     events()
     require_session_phase(scope, "Restoring", "PresentationAcknowledged")
 
@@ -240,8 +254,10 @@ def assert_start_and_exit(
         not unit_is_active(OWNER_UNIT),
         f"selected owner stayed active while {scope.session_id} owned the slot",
     )
+    require(unit_is_active(BROKER_UNIT), f"{BROKER_UNIT} not active during {scope.session_id}")
 
     wait_for_app_exit(scope, expected_state)
+    wait_for(lambda: not unit_is_active(BROKER_UNIT), f"{BROKER_UNIT} to stop after {scope.session_id}")
     restored_owner_pid = owner_pid()
     require(
         restored_owner_pid > 0,
@@ -376,6 +392,382 @@ def assert_crash_exit() -> str:
     return scope.session_id
 
 
+# --- B4 (tsp-f3fm.202.1.4): app-session input broker, grab order, SafeReturn, R4 ----
+
+
+def evidence(line: str) -> None:
+    print(f"evidence: {line}", flush=True)
+
+
+def monotonic_usec(unit: str, property_name: str) -> int:
+    value = property_value(unit, property_name)
+    return int(value) if value.isdigit() else 0
+
+
+def grab_lock_is_held() -> bool:
+    """Negative control for the grab model: can a third party take the pad lock now?"""
+    with open(GRAB_LOCK, "rb") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(handle, fcntl.LOCK_UN)
+    return False
+
+
+def grab_violations() -> list[str]:
+    path = GRAB / "violations"
+    return path.read_text().splitlines() if path.exists() else []
+
+
+def grab_timeline() -> list[tuple[str, str, int]]:
+    path = GRAB / "timeline"
+    entries = []
+    for line in path.read_text().splitlines() if path.exists() else []:
+        kind, who, monotonic_ns, _pid = line.split()
+        entries.append((kind, who, int(monotonic_ns)))
+    return entries
+
+
+def wait_for_owner_grab(label: str) -> None:
+    """The restored shell process itself (by MainPID) holds the grab before we go on."""
+
+    def grabbed() -> bool:
+        path = GRAB / "timeline"
+        if not path.exists():
+            return False
+        pid = property_value(OWNER_UNIT, "MainPID")
+        grabs = [line.split() for line in path.read_text().splitlines() if line.startswith("grab ")]
+        return bool(grabs) and grabs[-1][1] == "shell" and grabs[-1][3] == pid
+
+    wait_for(grabbed, f"restored shell grab after {label}")
+
+
+def broker_grab_count() -> int:
+    return sum(1 for kind, who, _ in grab_timeline() if (kind, who) == ("grab", "broker"))
+
+
+class GrabOrder:
+    """systemd's own unit timestamps, read after every restore, as a second instrument.
+
+    Shell stop must complete before the broker's main process starts, and the broker's
+    stop must complete before the restored shell's main process starts.
+    """
+
+    def __init__(self) -> None:
+        self.last_shell_start = 0
+        self.sessions = 0
+
+    def checkpoint(self, label: str) -> None:
+        shell_stopped = monotonic_usec(OWNER_UNIT, "InactiveEnterTimestampMonotonic")
+        broker_started = monotonic_usec(BROKER_UNIT, "ExecMainStartTimestampMonotonic")
+        broker_stopped = monotonic_usec(BROKER_UNIT, "InactiveEnterTimestampMonotonic")
+        shell_started = monotonic_usec(OWNER_UNIT, "ExecMainStartTimestampMonotonic")
+        order = (
+            f"{label}: shell_stopped={shell_stopped} broker_started={broker_started} "
+            f"broker_stopped={broker_stopped} shell_started={shell_started}"
+        )
+        require(
+            self.last_shell_start < shell_stopped <= broker_started < broker_stopped <= shell_started,
+            f"grab order violated (usec, CLOCK_MONOTONIC): {order} previous_shell_start={self.last_shell_start}",
+        )
+        require(not grab_violations(), f"grab model conflict after {label}: {grab_violations()}")
+        self.last_shell_start = shell_started
+        self.sessions += 1
+
+
+def assert_broker_dormant_at_boot() -> str:
+    require(not unit_is_active(BROKER_UNIT), f"{BROKER_UNIT} is active at boot")
+    enabled = command("systemctl", "is-enabled", BROKER_UNIT, check=False).stdout.strip()
+    require(enabled == "disabled", f"{BROKER_UNIT} is-enabled={enabled!r}, want disabled")
+    require(broker_grab_count() == 0, "broker grabbed before any app session")
+    require(grab_lock_is_held(), "negative control: the shell does not hold the pad grab model")
+    return enabled
+
+
+def press_guide() -> float:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
+        stream.settimeout(2)
+        stream.connect(str(BROKER_CONTROL))
+        stream.sendall(b"guide\n")
+        reply = stream.recv(16)
+    require(reply.strip() == b"sent", f"fake broker did not accept the guide press: {reply!r}")
+    return time.monotonic()
+
+
+def launch_held(mode: str) -> SessionEventScope:
+    MODE.write_text(f"{mode}\n")
+    PROBE.unlink(missing_ok=True)
+    before_invocations = invocation_count()
+    require(owner_pid() > 0, "selected owner did not start before launch")
+    scope = launch()
+    wait_for(
+        lambda: invocation_count() == before_invocations + 1 and PROBE.exists(),
+        f"fixture invocation and sandbox probe for {scope.session_id}",
+    )
+    require(unit_is_active(APP_UNIT), f"{APP_UNIT} never reached active")
+    require(unit_is_active(BROKER_UNIT), f"{BROKER_UNIT} not active during {scope.session_id}")
+    require(not unit_is_active(OWNER_UNIT), f"selected owner active during {scope.session_id}")
+    events()
+    require_session_phase(scope, "Running")
+    return scope
+
+
+def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
+    """What the real pf-app@ sandbox and the real broker drop-in give each side."""
+    probe = json.loads(PROBE.read_text())
+    require(probe["PF_DESCRIPTOR"] == DESCRIPTOR, f"PF_DESCRIPTOR: {probe}")
+    require(probe["descriptor_readable"] is True, f"descriptor unreadable in app sandbox: {probe}")
+    require(probe["PF_BROKER_SOCK"] == str(BROKER_SOCKET), f"PF_BROKER_SOCK: {probe}")
+    require(probe["broker_connect"] == "ok", f"app cannot reach the broker acquire socket: {probe}")
+    require(
+        probe["authority_connect"] != "ok" and probe["authority_mode"] == "0o0",
+        f"app can reach the session authority (InaccessiblePaths ineffective): {probe}",
+    )
+    # Positive control, same run: the same uid OUTSIDE the unit sandbox can connect,
+    # so the refusal above is the unit's InaccessiblePaths=, not socket permissions.
+    outside = command(
+        "setpriv", "--reuid=gamer", "--regid=gamer", "--init-groups", "python3", "-c",
+        "import socket; s = socket.socket(socket.AF_UNIX); "
+        f"s.connect({str(SOCKET)!r}); print('ok')",
+        check=False,
+    )
+    require(outside.stdout.strip() == "ok", f"positive control failed: gamer outside pf-app@ "
+            f"cannot reach the authority: rc={outside.returncode} {outside.stderr.strip()}")
+    broker_socket = os.stat(BROKER_SOCKET)
+    gamer_gid = grp.getgrnam("gamer").gr_gid
+    require(
+        stat.S_ISSOCK(broker_socket.st_mode)
+        and stat.S_IMODE(broker_socket.st_mode) == 0o770
+        and broker_socket.st_uid == 0
+        and broker_socket.st_gid == gamer_gid,
+        f"broker acquire socket is not root:gamer 0770: mode={oct(broker_socket.st_mode)} "
+        f"uid={broker_socket.st_uid} gid={broker_socket.st_gid}",
+    )
+    start = json.loads((GRAB / "broker-starts.jsonl").read_text().splitlines()[-1])
+    require(start["uid"] == 0 and start["gid"] == gamer_gid, f"broker credentials: {start}")
+    require(start["umask"] == "0o7", f"broker UMask: {start}")
+    require(start["PF_PREFSD_SOCK"] == "/run/pocketforge/prefsd.sock", f"broker env: {start}")
+    require(
+        start["shell"] == "inactive" and start["target"] == "active",
+        f"broker started before the shell stopped or the target started: {start}",
+    )
+    require(grab_lock_is_held(), "negative control: the broker does not hold the pad grab model")
+    return probe
+
+
+def assert_safe_return_graceful(order: GrabOrder) -> str:
+    scope = launch_held("hold")
+    probe = assert_app_session_wiring(scope)
+    pressed = press_guide()
+    wait_for(
+        lambda: property_value(APP_UNIT, "ActiveState") == "inactive",
+        f"SafeReturn to stop {APP_UNIT} for {scope.session_id}",
+        timeout=5,
+    )
+    stop_seconds = time.monotonic() - pressed
+    require(property_value(APP_UNIT, "Result") == "success", "graceful SafeReturn stop was not clean")
+    require(stop_seconds < 2.0, f"graceful SafeReturn took {stop_seconds:.2f}s (TimeoutStopSec=2s)")
+    wait_for_app_exit(scope, "inactive")
+    wait_for(lambda: not unit_is_active(BROKER_UNIT), f"{BROKER_UNIT} to stop after {scope.session_id}")
+    assert_no_terminal_before_presentation(scope)
+    observed = rpc({"method": "observe", "observation": {"kind": "presentation_acknowledged"}})
+    require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
+    final_events = events()
+    returned = session_events(final_events, scope, "returned")
+    require(len(returned) == 1, f"SafeReturn Returned count for {scope.session_id}: {returned}")
+    for other in ("crash", "forced_close", "recovery_required"):
+        require(not session_events(final_events, scope, other), f"graceful SafeReturn published {other}")
+    require(history_entry(scope.session_id)["receipt"] == "Returned", "graceful receipt not durable")
+    order.checkpoint(scope.session_id)
+    evidence(
+        f"safe_return_graceful session={scope.session_id} receipt=Returned app_result=success "
+        f"guide_to_inactive_s={stop_seconds:.2f} broker_sock=root:gamer:0770 "
+        f"app_broker_connect={probe['broker_connect']} app_authority_connect={probe['authority_connect']} "
+        "authority_outside_sandbox=ok grab_lock_negative_control=held-by-broker"
+    )
+    return scope.session_id
+
+
+def app_timeout_log_count() -> int:
+    journal = command("journalctl", "--unit", APP_UNIT, "--no-pager", "--output", "cat").stdout
+    return journal.count("Failed with result 'timeout'")
+
+
+def probe_systemctl_stop_after_sigkill(order: GrabOrder) -> dict[str, Any]:
+    """R4, measured directly: the exit status of the authority's exact stop command
+    when the app ignores SIGTERM and systemd SIGKILLs it at TimeoutStopSec=2s."""
+    require(authority_state()["phase"] == "Idle", f"authority busy before R4 probe: {authority_state()['phase']}")
+    MODE.write_text("ignore-term\n")
+    PROBE.unlink(missing_ok=True)
+    before_invocations = invocation_count()
+    before_timeouts = app_timeout_log_count()
+    started = command("systemctl", "start", APP_UNIT, check=False)
+    require(started.returncode == 0, f"R4 probe start failed: {started.stderr.strip()}")
+    wait_for(lambda: invocation_count() == before_invocations + 1 and PROBE.exists(), "R4 probe app")
+    stop_started = time.monotonic()
+    stopped = command("systemctl", "stop", APP_UNIT, check=False)
+    stop_seconds = time.monotonic() - stop_started
+    active_state = property_value(APP_UNIT, "ActiveState")
+    result = property_value(APP_UNIT, "Result")
+    killed = command("systemctl", "kill", "--kill-who=all", APP_UNIT, check=False)
+    wait_for(lambda: not unit_is_active(TARGET_UNIT), "target release after R4 probe")
+    wait_for(lambda: unit_is_active(OWNER_UNIT), "owner restore after R4 probe")
+    wait_for(lambda: not unit_is_active(BROKER_UNIT), "broker stop after R4 probe")
+    wait_for_owner_grab("r4-probe")
+    require(
+        active_state == "failed" and result == "timeout" and stop_seconds >= 1.9,
+        f"R4 probe did not exercise the SIGKILL path: state={active_state} result={result} "
+        f"stop_s={stop_seconds:.2f}",
+    )
+    require(app_timeout_log_count() == before_timeouts + 1, "R4 probe: no 'Failed with result timeout' journal line")
+    order.checkpoint("r4-probe")
+    command("systemctl", "reset-failed", APP_UNIT, check=False)
+    return {
+        "stop_exit": stopped.returncode,
+        "kill_exit": killed.returncode,
+        "kill_stderr": killed.stderr.strip().replace(" ", "_") or "none",
+        "stop_seconds": stop_seconds,
+        "result": result,
+    }
+
+
+def assert_safe_return_after_sigkill(order: GrabOrder, r4: dict[str, Any]) -> str:
+    """R4 GATE (gpu-14): SafeReturn to an app that ignores SIGTERM must end Returned."""
+    scope = launch_held("ignore-term")
+    before_timeouts = app_timeout_log_count()
+    pressed = press_guide()
+    wait_for(
+        lambda: property_value(APP_UNIT, "ActiveState") == "failed",
+        f"SIGKILL at TimeoutStopSec for {scope.session_id}",
+        timeout=8,
+    )
+    stop_seconds = time.monotonic() - pressed
+    result = property_value(APP_UNIT, "Result")
+    wait_for(lambda: not unit_is_active(TARGET_UNIT), f"target release after {scope.session_id}")
+    wait_for(lambda: unit_is_active(OWNER_UNIT), f"owner restore after {scope.session_id}")
+    wait_for(lambda: not unit_is_active(BROKER_UNIT), f"broker stop after {scope.session_id}")
+    wait_for_owner_grab(scope.session_id)
+    try:
+        events()
+        rpc_state = "ok"
+    except TestFailure as error:
+        rpc_state = f"error:{error}".replace(" ", "_")
+    phase = authority_state()["phase"]
+    phase_name = phase if isinstance(phase, str) else next(iter(phase))
+    payload = phase.get(phase_name, {}) if isinstance(phase, dict) else {}
+    pending = payload.get("receipt")
+    pending_name = pending if isinstance(pending, str) else json.dumps(pending, separators=(",", ":"))
+    safe_return_log = (GRAB / "safe-return.log").read_text().splitlines()[-1:]
+    evidence(
+        f"r4_sigkill session={scope.session_id} app_result={result} "
+        f"guide_to_failed_s={stop_seconds:.2f} authority_phase={phase_name} "
+        f"rung={payload.get('rung')} pending_receipt={pending_name} "
+        f"reason={str(payload.get('reason', 'none')).replace(' ', '_')} events_rpc={rpc_state} "
+        f"systemctl_stop_exit_after_sigkill={r4['stop_exit']} probe_stop_s={r4['stop_seconds']:.2f} "
+        f"systemctl_kill_exit_on_failed_unit={r4['kill_exit']} kill_stderr={r4['kill_stderr']} "
+        f"broker_safe_return={safe_return_log}"
+    )
+    require(
+        result == "timeout" and stop_seconds >= 1.9 and app_timeout_log_count() == before_timeouts + 1,
+        f"R4: SafeReturn did not reach the SIGKILL path: result={result} stop_s={stop_seconds:.2f}",
+    )
+    require(
+        phase_name == "Restoring"
+        and payload.get("rung") == "PresentationAcknowledged"
+        and pending == "Returned",
+        f"R4 GATE FAILED: authority phase after SIGKILL at TimeoutStopSec=2s is {phase} "
+        f"(systemctl stop exit {r4['stop_exit']}, systemctl kill exit {r4['kill_exit']})",
+    )
+    observed = rpc({"method": "observe", "observation": {"kind": "presentation_acknowledged"}})
+    require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
+    final_events = events()
+    require(len(session_events(final_events, scope, "returned")) == 1, "R4: Returned not published once")
+    for other in ("crash", "forced_close", "recovery_required"):
+        require(not session_events(final_events, scope, other), f"R4 session published {other}")
+    require(history_entry(scope.session_id)["receipt"] == "Returned", "R4 receipt not durable")
+    order.checkpoint(scope.session_id)
+    return scope.session_id
+
+
+def assert_broker_failure_never_traps() -> str:
+    """A broker that cannot start keeps the app from starting AND gives the panel back."""
+    command("systemctl", "reset-failed", APP_UNIT, BROKER_UNIT, check=False)
+    MODE.write_text("hold\n")
+    before_invocations = invocation_count()
+    before_broker_grabs = broker_grab_count()
+    previous_owner = owner_pid()
+    UINPUT.unlink()
+    try:
+        scope = launch()
+    finally:
+        UINPUT.touch(mode=0o600)
+    assert_result = property_value(BROKER_UNIT, "AssertResult")
+    released = True
+    try:
+        wait_for(lambda: not unit_is_active(TARGET_UNIT), f"target release after broker failure in {scope.session_id}")
+        wait_for(lambda: unit_is_active(OWNER_UNIT), f"owner restore after broker failure in {scope.session_id}")
+        wait_for_owner_grab(scope.session_id)
+    except TestFailure:
+        released = False
+    target_state = property_value(TARGET_UNIT, "ActiveState")
+    owner_state = property_value(OWNER_UNIT, "ActiveState")
+    events()
+    phase = authority_state()["phase"]
+    evidence(
+        f"broker_start_failure session={scope.session_id} broker_assert_result={assert_result} "
+        f"app_invocations={invocation_count() - before_invocations} target={target_state} "
+        f"owner={owner_state} panel_returned={'yes' if released else 'no'} "
+        f"authority_phase={json.dumps(phase, separators=(',', ':'))}"
+    )
+    require(assert_result == "no", f"broker AssertPathExists=/dev/uinput did not fail: {assert_result!r}")
+    require(invocation_count() == before_invocations, "app started although its broker failed")
+    require(broker_grab_count() == before_broker_grabs, "failed broker grabbed the pad")
+    require(released, f"user trapped: broker start failure left target={target_state} owner={owner_state}")
+    require(owner_pid() != previous_owner, "owner was not re-activated after the broker failure")
+    require_session_phase(scope, "Restoring", "PresentationAcknowledged")
+    observed = rpc({"method": "observe", "observation": {"kind": "presentation_acknowledged"}})
+    require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
+    receipt = history_entry(scope.session_id)["receipt"]
+    require(
+        isinstance(receipt, dict) and "systemd_start_failed" in receipt.get("Crash", {}).get("summary", ""),
+        f"broker failure receipt is not a systemd_start_failed Crash: {receipt}",
+    )
+    require(not session_events(events(), scope, "returned"), "broker failure published Returned")
+    return scope.session_id
+
+
+def assert_grab_timeline(order: GrabOrder) -> str:
+    require(not grab_violations(), f"grab model conflicts: {grab_violations()}")
+    entries = grab_timeline()
+    grabs = [who for kind, who, _ in entries if kind == "grab"]
+    require(grabs and grabs[0] == "shell" and grabs[-1] == "shell", f"grab sequence ends: {grabs}")
+    for previous, current in zip(grabs, grabs[1:]):
+        require(not (previous == current == "broker"), f"two broker grabs without a shell between: {grabs}")
+    require(grabs.count("broker") == order.sessions, f"broker grabs {grabs.count('broker')} != sessions {order.sessions}")
+    # Each grab follows the previous holder's SIGTERM by at least its 0.5 s hold:
+    # the next unit started only after the previous one's process exited.
+    gaps = {"shell->broker": [], "broker->shell": []}
+    last_term: dict[str, int] = {}
+    for kind, who, monotonic_ns in entries:
+        if kind == "term":
+            last_term[who] = monotonic_ns
+        elif who == "broker" and "shell" in last_term:
+            gaps["shell->broker"].append(monotonic_ns - last_term.pop("shell"))
+        elif who == "shell" and "broker" in last_term:
+            gaps["broker->shell"].append(monotonic_ns - last_term.pop("broker"))
+    for edge, values in gaps.items():
+        require(len(values) == order.sessions, f"{edge} handoffs {len(values)} != sessions {order.sessions}")
+        require(min(values) >= 450_000_000, f"{edge} handoff shorter than the 0.5 s release hold: {values}")
+    cycles = command("journalctl", "--boot", "--no-pager", "--output", "cat").stdout
+    require("ordering cycle" not in cycles, "systemd reported an ordering cycle")
+    return (
+        f"grab_sequence={','.join(grabs)} broker_sessions={order.sessions} violations=0 "
+        f"min_shell_to_broker_ms={min(gaps['shell->broker']) // 1_000_000} "
+        f"min_broker_to_shell_ms={min(gaps['broker->shell']) // 1_000_000} ordering_cycles=0"
+    )
+
+
 def main() -> None:
     require(Path("/proc/1/comm").read_text().strip() == "systemd", "PID 1 is not systemd")
     require(command("uname", "-m").stdout.strip() == "x86_64", "container is not x86_64")
@@ -384,21 +776,28 @@ def main() -> None:
         framebuffer.is_file() and framebuffer.stat().st_size == 0,
         "/dev/fb0 test prerequisite is absent or is not an empty regular file",
     )
+    for prerequisite in (UINPUT, Path("/dev/input/pf-gamepad"), GRAB_LOCK):
+        require(prerequisite.is_file(), f"{prerequisite} test prerequisite is not a regular file")
     wait_for(
         lambda: unit_is_active(AUTHORITY_UNIT) and authority_is_responding(),
         "authority socket",
     )
     wait_for(lambda: unit_is_active(OWNER_UNIT), "initial selected owner")
+    wait_for_owner_grab("boot")
+    broker_boot = assert_broker_dormant_at_boot()
+    order = GrabOrder()
 
     assert_refusals_never_reach_systemd()
     before_clean_invocations = invocation_count()
     clean_session = assert_clean_exit_with_restart()
     clean_invocations = invocation_count() - before_clean_invocations
     require(clean_invocations == 1, f"clean launch invocation count: {clean_invocations}")
+    order.checkpoint(clean_session)
     before_crash_invocations = invocation_count()
     crash_session = assert_crash_exit()
     crash_invocations = invocation_count() - before_crash_invocations
     require(crash_invocations == 1, f"crash launch invocation count: {crash_invocations}")
+    order.checkpoint(crash_session)
 
     print(
         "evidence: "
@@ -406,7 +805,19 @@ def main() -> None:
         f"crash_session={crash_session} crash=1 returned=0 "
         f"clean_invocations={clean_invocations} crash_invocations={crash_invocations} "
         "fb0=empty-regular-file "
-        "session_scoping_negative_control=ok refused_systemctl_starts=0 owner_restore=ok"
+        "session_scoping_negative_control=ok refused_systemctl_starts=0 owner_restore=ok "
+        f"broker_at_boot=inactive,{broker_boot} grab_lock_negative_control=held-by-shell",
+        flush=True,
+    )
+    graceful_session = assert_safe_return_graceful(order)
+    r4 = probe_systemctl_stop_after_sigkill(order)
+    sigkill_session = assert_safe_return_after_sigkill(order, r4)
+    broker_failure_session = assert_broker_failure_never_traps()
+    evidence(
+        f"grab_order {assert_grab_timeline(order)} "
+        f"sessions={clean_session},{crash_session},{graceful_session},r4-probe,{sigkill_session} "
+        f"broker_failure_session={broker_failure_session} "
+        f"R4=Returned systemctl_stop_exit_after_sigkill={r4['stop_exit']}"
     )
 
 

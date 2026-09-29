@@ -1,11 +1,11 @@
 [Unit]
-Description=PocketForge selected owner integration fixture
+Description=PocketForge selected owner integration fixture (models the pf-shell grab)
 
 [Service]
 Type=simple
 User=gamer
 Group=gamer
-ExecStart=/bin/sleep infinity
+ExecStart=/usr/local/libexec/fake-shell
 Restart=no
 
 [Install]

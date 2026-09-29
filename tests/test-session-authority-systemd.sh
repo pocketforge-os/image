@@ -11,13 +11,20 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixtures="${root}/tests/session-authority-systemd"
 app_unit="${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
 owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf"
+broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
+shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
 containerfile="${fixtures}/Containerfile"
 ephemeral_marker=/etc/pocketforge/ephemeral-runner.conf
 run_label_key=org.pocketforge.session-authority-run
 
-runtime_sha=0589fcfa959dca9150563ef0ed18d7d44b420dc5
+runtime_sha=d75beedfb1203b329801a777803dff1ae8d5da1c
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=ecf620a219af3ca98760707e111fe301e420a9ba977a98ba149187a3bf6f622f
+app_unit_sha256=f83f9a970a94ba3df93a290927073fd6bd1991b35c321ad3ac5db43f805120b9
+# B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
+# is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
+broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
+broker_dropin_sha256=5ecf48ed4d6749810cb236020a0a71c92bf63e1337958350574543397d805e1a
+shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
 disk_floor_bytes=$((4 * gib))
@@ -583,6 +590,13 @@ cleanup_docker_resources=1
 actual_unit_sha256="$(sha256sum "${app_unit}" | awk '{print $1}')"
 [ "${actual_unit_sha256}" = "${app_unit_sha256}" ] \
     || fail "APP_UNIT_DRIFT: expected ${app_unit_sha256}, got ${actual_unit_sha256}"
+for pinned in "broker_dropin:${broker_dropin}:${broker_dropin_sha256}" \
+    "shell_dropin:${shell_dropin}:${shell_dropin_sha256}"; do
+    IFS=: read -r pinned_name pinned_path pinned_sha256 <<<"${pinned}"
+    actual_pinned_sha256="$(sha256sum "${pinned_path}" | awk '{print $1}')"
+    [ "${actual_pinned_sha256}" = "${pinned_sha256}" ] \
+        || fail "UNIT_DRIFT: ${pinned_name} expected ${pinned_sha256}, got ${actual_pinned_sha256}"
+done
 
 git clone --quiet --filter=blob:none --no-checkout "${runtime_repository}" "${runtime}"
 git -C "${runtime}" fetch --quiet origin "${runtime_sha}"
@@ -610,6 +624,10 @@ for item in source.iterdir():
 PY
 find "${runtime}" -mindepth 1 -delete
 rmdir "${runtime}"
+actual_broker_unit_sha256="$(sha256sum \
+    "${context}/runtime/crates/pf-input-broker/systemd/pf-input-broker.service" | awk '{print $1}')"
+[ "${actual_broker_unit_sha256}" = "${broker_unit_sha256}" ] \
+    || fail "UNIT_DRIFT: runtime pf-input-broker.service expected ${broker_unit_sha256}, got ${actual_broker_unit_sha256}"
 
 install -m 0644 "${containerfile}" "${context}/Containerfile"
 install -m 0644 "${app_unit}" "${context}/pf-app@.service"
@@ -618,6 +636,11 @@ install -m 0644 "${fixtures}/pocketforge-foreground.target" \
 install -m 0644 "${owner_dropin}" "${context}/10-owner-shell.conf"
 install -m 0644 "${fixtures}/pf-shell-selected.service" \
     "${context}/pf-shell-selected.service"
+install -m 0644 "${broker_dropin}" "${context}/10-app-session.conf"
+install -m 0644 "${shell_dropin}" "${context}/10-input-broker.conf"
+install -m 0755 "${fixtures}/fake-input-broker" "${context}/fake-input-broker"
+install -m 0755 "${fixtures}/fake-shell" "${context}/fake-shell"
+install -m 0644 "${fixtures}/capabilities.toml" "${context}/capabilities.toml"
 install -m 0644 "${fixtures}/session-authority-test.target" \
     "${context}/session-authority-test.target"
 install -m 0644 "${fixtures}/session-authority-test-tmpfiles.conf" \
@@ -683,6 +706,15 @@ container_unit_sha256="$(
 )" || fail_recorded_or 'CONTAINER_APP_UNIT_HASH_FAILED'
 [ "${container_unit_sha256}" = "${app_unit_sha256}" ] \
     || fail "CONTAINER_APP_UNIT_DRIFT: got ${container_unit_sha256}"
+container_broker_hashes="$(
+    docker_checked exec "${systemd_container}" sha256sum \
+        /etc/systemd/system/pf-input-broker.service \
+        /etc/systemd/system/pf-input-broker.service.d/10-app-session.conf \
+        /etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf \
+        | awk '{print $1}' | paste -sd' ' -
+)" || fail_recorded_or 'CONTAINER_BROKER_UNIT_HASH_FAILED'
+[ "${container_broker_hashes}" = "${broker_unit_sha256} ${broker_dropin_sha256} ${shell_dropin_sha256}" ] \
+    || fail "CONTAINER_BROKER_UNIT_DRIFT: got ${container_broker_hashes}"
 
 host_vt_devices="$(
     docker_checked exec "${systemd_container}" /bin/sh -ceu '
@@ -759,10 +791,16 @@ if ! test_output="$(
         journalctl --no-pager --output short-monotonic --lines 200 \
         --unit pf-session-authorityd.service \
         --unit pf-app@org.pocketforge.fixture.service \
+        --unit pf-input-broker.service \
+        --unit pocketforge-foreground.target \
         --unit pf-shell-selected.service >&2 || true
+    docker_checked exec "${systemd_container}" /bin/sh -c \
+        'for f in /run/pf-grab/timeline /run/pf-grab/violations /run/pf-grab/safe-return.log; do
+            [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done; echo "== authority.json";
+            cat /var/lib/pocketforge/session-authority/authority.json' >&2 || true
     fail 'INTEGRATION_ASSERTION_FAILED'
 fi
 echo "${test_output}"
 sample_disk integration_complete
-pass_fields="runtime_sha=${runtime_sha} container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true adopted=e owner_exception=ephemeral-only cap_add=SYS_ADMIN apparmor=unconfined cgroup_remount=rw"
+pass_fields="runtime_sha=${runtime_sha} broker_units=${broker_unit_sha256:0:12},${broker_dropin_sha256:0:12},${shell_dropin_sha256:0:12} container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true adopted=e owner_exception=ephemeral-only cap_add=SYS_ADMIN apparmor=unconfined cgroup_remount=rw"
 run_completed=1

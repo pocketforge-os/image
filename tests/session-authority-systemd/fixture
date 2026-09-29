@@ -1,7 +1,72 @@
-#!/bin/sh
-set -eu
+#!/usr/bin/python3
+"""Default-app fixture launched by the real pf-app-launch inside pf-app@.service.
 
-exit_code="$(cat /run/pocketforge/fixture-exit-code)"
-printf '%s\n' "${exit_code}" >> "${XDG_STATE_HOME}/invocations"
-sleep 2
-exit "${exit_code}"
+Modes (from /run/pocketforge/fixture-exit-code, written by drive.py):
+  <digits>     sleep 2 s, then exit with that status (clean / crash cases);
+  hold         run until stopped; SIGTERM has its default action (graceful SafeReturn);
+  ignore-term  ignore SIGTERM so systemd must SIGKILL at TimeoutStopSec=2s (R4).
+Each start records what the sandbox actually gives the app: the launch environment,
+whether the broker acquire socket is reachable, and whether the authority socket is.
+"""
+
+from __future__ import annotations
+
+import errno
+import json
+import os
+import signal
+import socket
+import stat
+import time
+from pathlib import Path
+
+
+def connect(path: str) -> str:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
+            stream.settimeout(1)
+            stream.connect(path)
+        return "ok"
+    except OSError as error:
+        return errno.errorcode.get(error.errno or 0, type(error).__name__)
+
+
+def main() -> int:
+    state = Path(os.environ["XDG_STATE_HOME"])
+    mode = Path("/run/pocketforge/fixture-exit-code").read_text().strip()
+    if mode == "ignore-term":
+        # Before anything observable: once the probe exists, a stop must need SIGKILL.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    elif not (mode.isdigit() or mode == "hold"):
+        raise SystemExit(f"fixture: unknown mode {mode!r}")
+    with open(state / "invocations", "a", encoding="utf-8") as handle:
+        handle.write(mode + "\n")
+    descriptor = os.environ.get("PF_DESCRIPTOR", "")
+    broker = os.environ.get("PF_BROKER_SOCK", "")
+    authority = "/run/pocketforge/session-authority.sock"
+    try:
+        authority_mode = oct(stat.S_IMODE(os.stat(authority).st_mode))
+    except OSError as error:
+        authority_mode = errno.errorcode.get(error.errno or 0, "error")
+    probe = {
+        "mode": mode,
+        "PF_DESCRIPTOR": descriptor,
+        "descriptor_readable": bool(descriptor) and os.access(descriptor, os.R_OK),
+        "PF_BROKER_SOCK": broker,
+        "broker_connect": connect(broker) if broker else "unset",
+        "authority_connect": connect(authority),
+        "authority_mode": authority_mode,
+        "uid": os.getuid(),
+    }
+    (state / "probe.json.tmp").write_text(json.dumps(probe, sort_keys=True) + "\n")
+    os.replace(state / "probe.json.tmp", state / "probe.json")
+
+    if mode.isdigit():
+        time.sleep(2)
+        return int(mode)
+    while True:
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

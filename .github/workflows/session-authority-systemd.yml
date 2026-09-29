@@ -13,6 +13,8 @@ on:
       - tests/session-authority-systemd/**
       - rootfs-overlay/etc/systemd/system/pf-app@.service
       - rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf
+      - rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/**
+      - rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf
 
 permissions:
   contents: read
