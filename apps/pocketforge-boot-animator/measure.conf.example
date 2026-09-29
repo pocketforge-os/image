@@ -4,6 +4,8 @@
 #   /etc/systemd/system/pocketforge-boot-animator.service.d/measure.conf
 # then `systemctl daemon-reload`, cold-POR, and harvest with
 #   journalctl -u pocketforge-boot-animator -o cat | grep 'tick='
+# When the animator is stopped it also prints one summary line (bd tsp-3rd3.6):
+#   animator: measure ticks=N cpu_ms=... wall_ms=... vm_hwm_kb=... rss_anon_kb=...
 # Remove the drop-in + daemon-reload back to clean when done.
 #
 # Cost of --measure: one fprintf per frame at 16 fps -> ~16 write(2)/sec into

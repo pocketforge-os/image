@@ -11,9 +11,9 @@
 #   the unit being STARTED. systemd enforces the STARTED unit's Conflicts=
 #   ("starting the former stops the latter" — the reliable direction proven
 #   by tsp-ikk0.11), so activating this service SIGTERMs the animator, which
-#   clears fb0 to black and exits 0; After= orders our start behind that
-#   stop — exactly ONE fb0 writer at all times, no pan-fight (root cause
-#   tsp-7kpp). Brief black flash during the handoff is accepted by design.
+#   holds its last frame and exits 0 (tsp-3rd3.6); After= orders our start
+#   behind that stop — exactly ONE fb0 writer at all times, no pan-fight
+#   (root cause tsp-7kpp). Our first present replaces the held frame.
 
 [Unit]
 Description=PocketForge MVP menu (3-entry LRADC-navigable launcher)

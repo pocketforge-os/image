@@ -517,8 +517,9 @@ int main(void) {
         fprintf(stderr, "menu: highlight=%d page=%u\n", highlight, page);
     }
 
-    /* Handoff: leave the panel clean-black for the successor, the same exit
-     * contract the boot animator already honours. Clear every page, then pan
+    /* Handoff: leave the panel clean-black for the successor. (The boot
+     * animator no longer does this: since tsp-3rd3.6 it holds its last frame
+     * so boot has no black gap.) Clear every page, then pan
      * to a DIFFERENT yoffset so the black actually propagates through the
      * g2d-rot scan-out (a bare memset is invisible — tsp-woy3).
      *
