@@ -355,9 +355,17 @@ if [ -d "${BOOT_RES_DIR}" ] && ls "${BOOT_RES_DIR}"/* >/dev/null 2>&1; then
     done
 fi
 
-# Owned-SPL boot payload (tsp-147u.13): the owned u-boot's CONFIG_BOOTCOMMAND does
-#   load mmc 0:4 <Image> && load mmc 0:4 <dtb.bin> && load mmc 0:4 <initrd.gz> && booti ...
-# so the FAT p4 (this boot-resource partition, = mmc 0:4) must carry Image/dtb.bin/initrd.gz.
+# Owned-SPL boot payload (tsp-147u.13): the owned u-boot's CONFIG_BOOTCOMMAND
+# (tg5040_defconfig; FEL guard since u-boot-tsp-a133#50, c21fbfb8, tsp-3rd3.11)
+# has two branches:
+#   - FEL-loaded U-Boot (${fel_booted} set): it never autoboots the SD kernel. It
+#     prints "tg5040: FEL boot, skipping SD autoboot" and sources the FEL-supplied
+#     script at ${fel_scriptaddr} when one was loaded. The bootcmd itself loads
+#     nothing from p4 in this branch.
+#   - otherwise (normal SD boot):
+#       load mmc 0:4 <Image> && load mmc 0:4 <dtb.bin> && load mmc 0:4 <initrd.gz> && booti ...
+# so for a normal boot the FAT p4 (this boot-resource partition, = mmc 0:4) must
+# carry Image/dtb.bin/initrd.gz.
 # The vendor path leaves them out (it boots the Android boot.img via vendor u-boot instead).
 # Exact filenames are load-bearing — they match the merged tg5040_defconfig bootcmd.
 if [ "${BOOT_CHAIN}" = "owned-spl" ]; then

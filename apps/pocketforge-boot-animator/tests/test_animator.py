@@ -358,7 +358,7 @@ def test_crop_reproducible(ctx):
 def test_premise_main_refuses_drm_geometry(ctx):
     """Reproduction step 1: the pre-port binary on a 720x1280 DRM fb exits 1, paints nothing."""
     r = run_animator(ctx, ctx.bin_old, geom=G_DRM_PORTRAIT, fb_id=DRM_ID,
-                     drm="prop:Left Side Up", frames=ctx.real_frames, timeout=10)
+                     drm="prop:Right Side Up", frames=ctx.real_frames, timeout=10)
     assert r.rc == 1, r.rc
     assert "unexpected fb0 geometry; expected 1280x720 @32bpp" in r.stderr, r.stderr
     assert r.fb.count(0) == len(r.fb), "pre-port binary painted"
@@ -495,12 +495,15 @@ def pan_series_black(run):
 
 
 def test_drm_region_matches_full_frames(ctx):
-    """7.x path with the real cropped frames equals the pre-port full frames, rotated."""
+    """7.x path with the real cropped frames equals the pre-port full frames, rotated.
+
+    The device case: the TSP panel DT rotation = <90> publishes Right Side Up
+    (fbcon rotate 1). The four-orientation goldens cover the other values."""
     snaps = (0, 1, 5, 6)
-    r = run_animator(ctx, ctx.bin_new, geom=G_DRM_PORTRAIT, fb_id=DRM_ID, drm="prop:Left Side Up",
-                     fbcon=(True, "3"), frames=ctx.cropped, term_at=6, snap=snaps)
+    r = run_animator(ctx, ctx.bin_new, geom=G_DRM_PORTRAIT, fb_id=DRM_ID, drm="prop:Right Side Up",
+                     fbcon=(True, "1"), frames=ctx.cropped, term_at=6, snap=snaps)
     assert r.rc == 0, r.stderr
-    place, vxres, vyres = kernel_placement("Left Side Up")
+    place, vxres, vyres = kernel_placement("Right Side Up")
     for s in snaps:
         src = read_state(ctx.vendor_old, f"pan-{s:04d}.raw")        # 1280x720 BGRX
         got = read_state(r, f"pan-{s:04d}.raw")
@@ -512,14 +515,14 @@ def test_drm_region_matches_full_frames(ctx):
                 o = y * 2880 + x * 4
                 exp[o:o + 4] = row[u * 4:u * 4 + 4]
         assert bytes(exp) == got, f"pan {s}: rotated region composition differs"
-    ctx.note("7.x Left Side Up: pans 0,1,5,6 == pre-port full frames rotated by the kernel table")
+    ctx.note("7.x Right Side Up: pans 0,1,5,6 == pre-port full frames rotated by the kernel table")
     ctx.drm_run = r
 
 
 def test_sigterm_holds_last_frame(ctx):
     """SIGTERM: no clear, no extra pan, exit 0, last frame stays in the buffer."""
     for label, geom, fb_id, drm, fbcon in (
-            ("7.x drm", G_DRM_PORTRAIT, DRM_ID, "prop:Left Side Up", (True, "3")),
+            ("7.x drm", G_DRM_PORTRAIT, DRM_ID, "prop:Right Side Up", (True, "1")),
             ("vendor", G_VENDOR, VENDOR_ID, "absent", None)):
         r = run_animator(ctx, ctx.bin_new, geom=geom, fb_id=fb_id, drm=drm, fbcon=fbcon,
                          frames=ctx.cropped, term_at=6)
@@ -544,7 +547,7 @@ def test_cost_budget(ctx):
     old = run_animator(ctx, ctx.bin_old, geom=G_VENDOR, fb_id=VENDOR_ID, nohash=True,
                        frames=ctx.real_frames, args=("--measure",), term_at=48)
     new = run_animator(ctx, ctx.bin_new, geom=G_DRM_PORTRAIT, fb_id=DRM_ID, nohash=True,
-                       drm="prop:Left Side Up", frames=ctx.cropped, args=("--measure",), term_at=48)
+                       drm="prop:Right Side Up", frames=ctx.cropped, args=("--measure",), term_at=48)
     ven = run_animator(ctx, ctx.bin_new, geom=G_VENDOR, fb_id=VENDOR_ID, nohash=True,
                        frames=ctx.cropped, args=("--measure",), term_at=48)
     to = [t for k, t in parse_ticks(old.stderr) if k >= 1]

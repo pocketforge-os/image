@@ -63,7 +63,9 @@ The last column is exactly where fbcon draws the same console cell
 (`fbcon_ccw.c:150-151`, `fbcon_cw.c:135-136`, `fbcon_ud.c:172-173`).
 `Left Side Up` therefore puts the scene's top on the panel's native left
 edge, which is the documented meaning (`drm_connector.h:369-370`). The TSP
-device tree says `rotation = <270>`, which maps to `Left Side Up`.
+device tree says `rotation = <90>` (kernel-sunxi-7.x#47), which maps to
+`Right Side Up` and fbcon rotate 1. Its earlier `<270>` mapped to `Left Side
+Up` (fbcon rotate 3), and the console showed 180° wrong on the device.
 
 This bead does **not** decide which way is physically upright:
 
