@@ -13,6 +13,7 @@ build_cache_audit="${root}/tests/session-authority-systemd/build-cache-audit.sh"
 remount_helper="${root}/tests/session-authority-systemd/remount-cgroup-systemd"
 workflow="${root}/.github/workflows/session-authority-systemd.yml"
 precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditions.py"
+shell_fixture_verifier="${root}/tests/verify-session-authority-shell-fixture.py"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
 fake_root="${tmp}/host"
 fake_bin="${fake_root}/.test-bin"
@@ -872,6 +873,25 @@ done
 for b4_input in fake-input-broker fake-shell capabilities.toml 10-app-session.conf 10-input-broker.conf; do
     grep -Fq "${b4_input}" "${harness}" || exit 1
 done
+# The harness runs a FIXTURE shell; the real unit's edges toward harness units
+# must match it (bd tsp-3rd3.12). Positive run, then a negative control that
+# gives the real unit an unmodelled ordering edge on the broker.
+shell_fixture_output="$(python3 "${shell_fixture_verifier}")"
+grep -Eq '^session-authority shell-fixture parity: PASS harness_units=[0-9]+ edges_to_harness_units=0 ' \
+    <<<"${shell_fixture_output}" || exit 1
+sed 's/^After=/After=pf-input-broker.service /' \
+    "${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service" >"${tmp}/drifted-shell.service"
+if python3 "${shell_fixture_verifier}" --real "${tmp}/drifted-shell.service" \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: unmodelled shell edge passed the fixture parity check' >&2
+    exit 1
+fi
+grep -Fq "After= toward harness units differs: real ['pf-input-broker.service'] fixture []" \
+    "${stderr_log}" || exit 1
+grep -Fq 'tests/verify-session-authority-shell-fixture.py' "${harness}" || exit 1
+grep -Fq 'SHELL_FIXTURE_DRIFT' "${harness}" || exit 1
+grep -Fq -- '- rootfs-overlay/etc/systemd/system/pf-shell-selected.service' "${workflow}" || exit 1
+grep -Fq -- '- tests/verify-session-authority-shell-fixture.py' "${workflow}" || exit 1
 precondition_output="$(python3 "${precondition_verifier}")"
 grep -Fqx \
     'session-authority path-preconditions: PASS conditions=2 providers=6 fb0=regular units=7' \
@@ -1051,4 +1071,4 @@ fi
     'BUILD_CACHE_USAGE_DRIFT:leftover_ids=stuck-new;missing_ids=none' ] || exit 1
 unset FAKE_CACHE_STUCK_ID FAKE_CACHE_RECORDS
 
-echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok fixture_root_modes=external-docker-refused owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused run_allowlist=ok probe_host_cgroup_bind=refused-zero-docker probe_fixture=audit-only probe_argv_audit=shared probe_matrix=approved-only docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after cache_baseline=exact cache_parent_graph=child-first cache_leftover_ids=reported argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker getty_masks=5 runtime=fake-docker'
+echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok fixture_root_modes=external-docker-refused owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused run_allowlist=ok probe_host_cgroup_bind=refused-zero-docker probe_fixture=audit-only probe_argv_audit=shared probe_matrix=approved-only docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after cache_baseline=exact cache_parent_graph=child-first cache_leftover_ids=reported argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 shell_fixture_parity=ok fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker getty_masks=5 runtime=fake-docker'

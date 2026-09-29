@@ -605,9 +605,15 @@ def test_unit(ctx):
     nice = int(u["Service"].get("Nice", "0"))
     assert nice >= 0, nice
     assert "--" not in u["Service"]["ExecStart"], "default boot must not pass diagnostic flags"
+    # The MainUI hands off at start time, not by Conflicts= (bd tsp-3rd3.12: a
+    # Conflicts= in the shared boot transaction deleted this unit's start). The
+    # handoff itself is proven by tests/test-panel-owner-boot-handoff.py.
     shell = unit("pf-shell-selected.service")
-    assert "pocketforge-boot-animator.service" in shell["Unit"]["Conflicts"].split()
+    assert "pocketforge-boot-animator.service" not in shell["Unit"]["Conflicts"].split()
     assert "pocketforge-boot-animator.service" in shell["Unit"]["After"].split()
+    shell_text = open(os.path.join(REPO, "rootfs-overlay/etc/systemd/system/pf-shell-selected.service")).read()
+    assert "\nExecStartPre=-+/bin/systemctl stop pocketforge-boot-animator.service\nExecStart=" in shell_text
+    assert u["Unit"].get("ConditionDirectoryNotEmpty") == "!/run/pocketforge-panel-owner"
     sa = shutil.which("systemd-analyze")
     if not sa:
         ctx.note("unit: static checks ok; systemd-analyze not installed, verify SKIPPED")
@@ -627,7 +633,7 @@ def test_unit(ctx):
     out = (r.stdout + r.stderr).strip()
     assert r.returncode == 0 and "pocketforge-boot-animator" not in out, out
     ctx.note(f"unit: systemd-analyze verify clean ({subprocess.run([sa, '--version'], capture_output=True, text=True).stdout.split()[1]}); "
-             f"Nice={nice}; no dev-fb0.device; pf-shell-selected Conflicts=/After= unchanged")
+             f"Nice={nice}; no dev-fb0.device; pf-shell-selected After= + start-time stop, no Conflicts=; yields to a live owner")
 
 
 TESTS = [

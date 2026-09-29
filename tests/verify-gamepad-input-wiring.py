@@ -18,12 +18,25 @@ def load_unit(name: str) -> ConfigParser:
     return unit
 
 
+def exec_start_pre(name: str) -> list[str]:
+    """Every ExecStartPre= value in file order. ConfigParser (strict=False) keeps
+    only the last one, and pf-shell-selected carries two: the gamepad wait, then
+    the boot-animator stop (bd tsp-3rd3.12)."""
+    values = []
+    for line in (UNIT_DIR / name).read_text().splitlines():
+        if line.startswith("ExecStartPre="):
+            values.append(line.split("=", 1)[1])
+    return values
+
+
 for name in ("pf-shell-selected.service", "pf-foreground@.service"):
     unit = load_unit(name)
     command = unit["Service"]["ExecStart"]
     assert f"--input {GAMEPAD}" in command, f"{name}: unstable input path: {command}"
     assert "/dev/input/event" not in command, f"{name}: numbered evdev node remains"
-    wait = unit["Service"].get("ExecStartPre", "")
+    waits = [pre for pre in exec_start_pre(name) if GAMEPAD in pre]
+    assert len(waits) == 1, f"{name}: expected exactly one gamepad wait, found {waits}"
+    wait = waits[0]
     assert GAMEPAD in wait and "sleep 0.2" in wait and '"$i" -lt 20' in wait, (
         f"{name}: expected bounded four-second gamepad wait"
     )

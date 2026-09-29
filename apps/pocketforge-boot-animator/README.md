@@ -115,12 +115,22 @@ the page presented at every pan is byte-identical to the pre-port animator
 
 ## Exit contract (takeover handshake)
 
-Successors stop the animator through systemd `Conflicts=`:
+Successors stop the animator through systemd:
 
-- `pf-shell-selected` (MainUI);
-- the menu and the placeholder;
-- `pocketforge-foreground.target` for transient apps (`pf-take-panel`);
-- `pocketforge-splash-handoff.target`.
+- `pf-shell-selected` (MainUI), and the menu and the placeholder, stop it from
+  their last `ExecStartPre=` (`-+/bin/systemctl stop ...`), ordered
+  `After=` its start. They do **not** use `Conflicts=`. They start in the same
+  boot transaction as the animator, and an owner-side `Conflicts=` made systemd
+  delete the animator's start job, so it never ran (`tsp-3rd3.12`).
+- `pocketforge-foreground.target` stops it for transient apps (`pf-take-panel`),
+  and `pocketforge-splash-handoff.target` also stops it. Both use `Conflicts=`,
+  and neither is in the boot transaction.
+
+The animator yields to a live owner. While an owner holds
+`RuntimeDirectory=pocketforge-panel-owner/%N`, its
+`ConditionDirectoryNotEmpty=!/run/pocketforge-panel-owner` turns a later start
+(for example a HIL script "restoring" the animator) into a skip. See
+`docs/FB0-CONTRACT.md` §1 and `tests/test-panel-owner-boot-handoff.py`.
 
 On SIGTERM the animator **holds its last frame** and exits 0 within
 milliseconds. The successor's first present replaces the whole buffer, so
@@ -132,7 +142,7 @@ now leaves a **still** splash frame on the panel, not a black one. See
 `docs/FB0-CONTRACT.md` §1.
 
 Nothing is required to wait on the animator. It is `Type=simple`, and a
-Conflicts= stop completes as soon as the process exits.
+stop completes as soon as the process exits.
 
 ## Unit and boot cost
 
@@ -232,8 +242,8 @@ They cover:
 - **SIGTERM.** The last frame is held on both paths.
 - **Cost.** The ≤ 20 % budget.
 - **Static link.**
-- **Unit.** `systemd-analyze verify`, and the pf-shell-selected relationship
-  is unchanged.
+- **Unit.** `systemd-analyze verify`, and the pf-shell-selected start-time
+  handoff (no `Conflicts=`) with the yield condition.
 
 The tests also print, for information only, whether pf-framehost's
 `source_coordinates` would place the card the same way as the kernel.

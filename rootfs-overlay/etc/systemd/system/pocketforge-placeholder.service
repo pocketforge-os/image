@@ -7,33 +7,40 @@
 # nothing here is reused (owner ruling 2026-07-17 on tsp-147u.15). Delete this
 # unit + apps/pocketforge-placeholder when the real launcher lands.
 #
-# CLEAN fb0 HANDOFF — the crux:
-#   Conflicts= and After= pocketforge-boot-animator.service are declared HERE, on
-#   the unit that gets STARTED. systemd enforces the STARTED unit's own Conflicts=
-#   ("starting the former stops the latter"), so activating this service first
-#   STOPS the animator (SIGTERM → the animator holds its last frame and exits 0,
-#   tsp-3rd3.6), and After= orders our start behind that stop — exactly ONE fb0
-#   writer at all times, no pan-fight (root cause tsp-7kpp). Our first present
-#   replaces the held frame (see pocketforge-foreground.target).
+# CLEAN fb0 HANDOFF — the crux (bd tsp-3rd3.12; the full reasoning is in the
+# pf-shell-selected.service header):
+#   The animator is deliberately NOT in Conflicts=. This unit is enabled into
+#   the SAME boot transaction as the animator, and a Conflicts= there makes
+#   systemd delete the animator's start job, so it would never run. Instead
+#   After=pocketforge-boot-animator.service orders our start behind the
+#   animator's start, and ExecStartPre=-+/bin/systemctl stop ... STOPS the
+#   animator synchronously right before ExecStart (SIGTERM → the animator holds
+#   its last frame and exits 0, tsp-3rd3.6) — exactly ONE fb0 writer at all
+#   times, no pan-fight (root cause tsp-7kpp). Our first present replaces the
+#   held frame (see pocketforge-foreground.target).
+#   RuntimeDirectory=pocketforge-panel-owner/%N marks the panel as owned, so a
+#   later animator start is a skip (ConditionDirectoryNotEmpty=
+#   !/run/pocketforge-panel-owner on the animator), not a second writer.
 #
 #   We deliberately do NOT wire in via Requires=pocketforge-splash-handoff.target:
 #   that path relies on the ANIMATOR-side Conflicts= firing during a dependency
 #   pull, which tsp-ikk0.11 proved on-device it does NOT (only a conflict on the
-#   unit actually being started is enforced in a pull transaction). Declaring the
-#   conflict on this service is the direction that reliably stops the animator.
+#   unit actually being started is enforced in a pull transaction).
 
 [Unit]
 Description=PocketForge minimal placeholder screen (throwaway post-boot splash successor)
 Documentation=https://github.com/pocketforge-os/image/tree/main/apps/pocketforge-placeholder
 DefaultDependencies=no
 After=sysinit.target local-fs.target multi-user.target pocketforge-boot-animator.service
-Conflicts=pocketforge-boot-animator.service shutdown.target
+Conflicts=shutdown.target
 Before=shutdown.target
 ConditionPathExists=/dev/fb0
 
 [Service]
 Type=simple
+ExecStartPre=-+/bin/systemctl stop pocketforge-boot-animator.service
 ExecStart=/opt/pocketforge/bin/pocketforge-placeholder
+RuntimeDirectory=pocketforge-panel-owner/%N
 # On stop the process exits cleanly; the presented page stays on the panel.
 KillSignal=SIGTERM
 TimeoutStopSec=2s

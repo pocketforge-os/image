@@ -597,6 +597,11 @@ for pinned in "broker_dropin:${broker_dropin}:${broker_dropin_sha256}" \
     [ "${actual_pinned_sha256}" = "${pinned_sha256}" ] \
         || fail "UNIT_DRIFT: ${pinned_name} expected ${pinned_sha256}, got ${actual_pinned_sha256}"
 done
+# The shell under test is a fixture; refuse to run when the real unit has an
+# edge toward a harness unit that the fixture does not model (bd tsp-3rd3.12).
+shell_fixture_parity="$(python3 "${root}/tests/verify-session-authority-shell-fixture.py" 2>&1)" \
+    || fail "SHELL_FIXTURE_DRIFT: ${shell_fixture_parity}"
+echo "${shell_fixture_parity}"
 
 git clone --quiet --filter=blob:none --no-checkout "${runtime_repository}" "${runtime}"
 git -C "${runtime}" fetch --quiet origin "${runtime_sha}"
@@ -802,5 +807,5 @@ if ! test_output="$(
 fi
 echo "${test_output}"
 sample_disk integration_complete
-pass_fields="runtime_sha=${runtime_sha} broker_units=${broker_unit_sha256:0:12},${broker_dropin_sha256:0:12},${shell_dropin_sha256:0:12} container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true adopted=e owner_exception=ephemeral-only cap_add=SYS_ADMIN apparmor=unconfined cgroup_remount=rw"
+pass_fields="runtime_sha=${runtime_sha} broker_units=${broker_unit_sha256:0:12},${broker_dropin_sha256:0:12},${shell_dropin_sha256:0:12} shell_fixture_parity=pass container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true adopted=e owner_exception=ephemeral-only cap_add=SYS_ADMIN apparmor=unconfined cgroup_remount=rw"
 run_completed=1

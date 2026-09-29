@@ -7,13 +7,26 @@
 # It unbinds the framebuffer console by name first, so console text cannot
 # bleed through. See apps/pocketforge-boot-animator/README.md.
 #
-# The animator runs until a successor takes fb0: pf-shell-selected (MainUI),
-# the menu/placeholder, or a foreground app via pocketforge-foreground.target
-# all declare Conflicts= on it, so systemd stops it first. On SIGTERM it HOLDS
-# the last frame (no clear) and exits 0; the successor's first present
-# replaces the whole buffer, so there is no black gap (bd tsp-3rd3.6, design
-# note section 3.5; supersedes the tsp-3rd3.4 clear-to-black contract).
-# With no successor it loops forever: the splash IS the state until then.
+# The animator runs until a successor takes fb0, and systemd stops it first:
+#   - a boot-enabled panel owner (pf-shell-selected = MainUI, or the
+#     menu/placeholder) stops it from its ExecStartPre, right before its own
+#     ExecStart. The owner is NOT Conflicts= with the animator: both are in
+#     the one boot transaction, and that Conflicts= made systemd delete this
+#     unit's start job, so the animator never ran (bd tsp-3rd3.12);
+#   - a foreground app or recovery, via pocketforge-foreground.target or its
+#     own Conflicts= (never in the boot transaction).
+# On SIGTERM it HOLDS the last frame (no clear) and exits 0; the successor's
+# first present replaces the whole buffer, so there is no black gap (bd
+# tsp-3rd3.6, design note section 3.5; supersedes the tsp-3rd3.4
+# clear-to-black contract). With no successor it loops forever: the splash
+# IS the state until then.
+#
+# It YIELDS to a live owner: every panel owner holds
+# RuntimeDirectory=pocketforge-panel-owner/%N while starting/running, and
+# ConditionDirectoryNotEmpty=! below makes a later start of this unit (e.g. a
+# HIL script restoring "the animator") a skip rather than a second fb0 writer.
+# At boot the directory is empty: owners start after basic.target, this unit
+# before it.
 #
 # Ordering rationale (bd tsp-3rd3.6):
 #   - DefaultDependencies=no and RequiresMountsFor= the frame set ONLY: it
@@ -53,6 +66,8 @@ Before=pocketforge-foreground.target
 Conflicts=pocketforge-splash-handoff.target pocketforge-foreground.target shutdown.target
 ConditionPathExists=/dev/fb0
 ConditionPathExists=/opt/pocketforge/boot-anim/frames/frame-000.png
+# Yield to a live panel owner (see the header; bd tsp-3rd3.12).
+ConditionDirectoryNotEmpty=!/run/pocketforge-panel-owner
 
 [Service]
 Type=simple

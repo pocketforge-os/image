@@ -1,9 +1,37 @@
+# pf-shell-selected.service -- the F13 selected persistent fb0 owner (MainUI).
+#
+# BOOT-ANIMATOR HANDOFF (bd tsp-3rd3.12). The animator (basic.target.wants) and
+# this unit (multi-user.target.wants) start in ONE boot transaction. A
+# Conflicts=pocketforge-boot-animator.service here would put a conflicting
+# stop job for the animator into that transaction, and systemd resolves the
+# start/stop pair by deleting the animator's START: the animator would never
+# run on any shell-owner image. So the animator is NOT in Conflicts= and is
+# stopped at start time instead:
+#   - After=pocketforge-boot-animator.service orders this start behind the
+#     animator's start (Type=simple: it is complete once forked; no wait on
+#     the animation itself).
+#   - ExecStartPre=-+/bin/systemctl stop ... is the LAST start step before
+#     ExecStart: a synchronous stop (SIGTERM; the animator holds its last
+#     frame and exits, bounded by its TimeoutStopSec=2s), so fb0 has exactly
+#     one writer. It runs after the gamepad wait, so the splash keeps animating
+#     during that wait. The `-` means a missing or masked animator never blocks
+#     the MainUI.
+#   - RuntimeDirectory=pocketforge-panel-owner/%N exists exactly while this
+#     unit is starting/running. The animator's
+#     ConditionDirectoryNotEmpty=!/run/pocketforge-panel-owner makes a later
+#     `systemctl start pocketforge-boot-animator` a skip while an owner holds
+#     the panel: the animator yields to the owner (no second writer, and the
+#     owner is not stopped).
+# Proof: tests/test-panel-owner-boot-handoff.py (real boot transaction plus a
+# live systemd run). The same pattern is on pocketforge-menu.service and
+# pocketforge-placeholder.service.
+
 [Unit]
 Description=PocketForge selected persistent foreground owner
 Wants=pf-prefsd.service
 After=dev-fb0.device pf-input-decode.service pf-prefsd.service pocketforge-boot-animator.service
 Requires=dev-fb0.device
-Conflicts=pocketforge-boot-animator.service pocketforge-menu.service pocketforge-placeholder.service shutdown.target
+Conflicts=pocketforge-menu.service pocketforge-placeholder.service shutdown.target
 Before=shutdown.target
 ConditionPathExists=/dev/fb0
 
@@ -13,8 +41,10 @@ User=gamer
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
 SupplementaryGroups=input video
 ExecStartPre=/bin/sh -c 'i=0; while [ ! -e /dev/input/pf-gamepad ] && [ "$i" -lt 20 ]; do sleep 0.2; i=$((i + 1)); done; exit 0'
+ExecStartPre=-+/bin/systemctl stop pocketforge-boot-animator.service
 ExecStart=/usr/bin/pf-shell --fbdev --device /dev/fb0 --input /dev/input/pf-gamepad --state-dir /var/lib/pocketforge/shell
 StateDirectory=pocketforge/shell
+RuntimeDirectory=pocketforge-panel-owner/%N
 KillSignal=SIGTERM
 TimeoutStopSec=2s
 Restart=on-failure
