@@ -337,9 +337,11 @@ cp "${BLOBS_DIR}/sunxi/a133/boot-chain/env.img"     "${GENIMAGE_INPUT}/env.img"
 # Create the empty FAT32 boot-resource partition image.
 # genimage's vfat{} handler runs 'mcopy rootpath/* ::' which fails when rootpath
 # is empty; we create the FAT image ourselves and feed it to genimage as raw.
-echo "  Creating FAT32 boot-resource image (64 MiB, label POCKETFORGE)..."
-dd if=/dev/zero of="${GENIMAGE_INPUT}/boot-resource.vfat" bs=1M count=64 2>/dev/null
-mkdosfs -F 32 -n POCKETFORGE "${GENIMAGE_INPUT}/boot-resource.vfat" >/dev/null
+# The volume serial is the committed BOOTRES_VOLID, and the label entry is
+# stamped from SOURCE_DATE_EPOCH, not the wall clock (bd tsp-mc9m.41.984.20.1).
+echo "  Creating FAT32 boot-resource image (64 MiB, label POCKETFORGE, volume id ${BOOTRES_VOLID})..."
+bash "${SRC_DIR}/scripts/make-reproducible-vfat.sh" \
+    "${GENIMAGE_INPUT}/boot-resource.vfat" 64 POCKETFORGE "${BOOTRES_VOLID}"
 
 # Copy any files from boards/tsp/boot-resource/ into the FAT image.
 # wifi.txt is generated at build time by 'make generate-wifi-config' from
