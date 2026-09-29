@@ -41,6 +41,18 @@ fetch_body="$(sed -n '/^FROM poolsuite-toolchain AS poolsuite-fetch$/,/^FROM poo
 grep -F 'COPY --from=poolsuite-src . /work/poolsuite' <<<"${fetch_body}" >/dev/null
 grep -F './ci/device-fetch.sh' <<<"${fetch_body}" >/dev/null
 grep -F 'there is no fallback' <<<"${fetch_body}" >/dev/null
+# fetched_source_sha256 digests the Cargo.lock-pinned source (tested by
+# tests/test-poolsuite-source-digest.py), never the whole CARGO_HOME, whose fetch
+# bookkeeping differs on every fetch (bd tsp-mc9m.41.984.20.1).
+grep -Fx 'COPY --from=image-src scripts/poolsuite-source-digest.py /usr/local/bin/poolsuite-source-digest' <<<"${fetch_body}" >/dev/null
+# shellcheck disable=SC2016 # Match literal Dockerfile shell interpolation.
+grep -F 'python3 /usr/local/bin/poolsuite-source-digest --cargo-home "${CARGO_HOME}"' <<<"${fetch_body}" >/dev/null
+grep -F -- '--cargo-lock Cargo.lock --manifest /poolsuite-fetched-source.manifest' <<<"${fetch_body}" >/dev/null
+grep -Fx '  > /poolsuite-fetched-source.sha256' <<<"${fetch_body}" >/dev/null
+if grep -Eq 'tar .*-cf - \.' <<<"${fetch_body}"; then
+    echo 'poolsuite fetch stage still digests the whole CARGO_HOME' >&2
+    exit 1
+fi
 
 # shellcheck disable=SC2016 # sed matches literal Dockerfile ARG interpolation.
 dev_body="$(sed -n '/^FROM poolsuite-toolchain AS poolsuite-dev$/,/^FROM ${PF_CONTAINER} AS poolsuite-not-shipped$/p' "${dockerfile}")"

@@ -1435,6 +1435,7 @@ FROM poolsuite-toolchain AS poolsuite-fetch
 ARG PF_POOLSUITE_SHA
 ENV CARGO_HOME=/opt/poolsuite-cargo-home
 COPY --from=poolsuite-src . /work/poolsuite
+COPY --from=image-src scripts/poolsuite-source-digest.py /usr/local/bin/poolsuite-source-digest
 WORKDIR /work/poolsuite
 RUN <<'POOLSUITEFETCH'
 set -eux
@@ -1447,14 +1448,16 @@ if ! ./ci/device-fetch.sh; then
   echo 'FATAL: Poolsuite locked dependency fetch failed; a pinned git dependency may be unreachable and there is no fallback' >&2
   exit 1
 fi
-# Canonical digest of the complete fetched Cargo source/cache closure. Normalize
-# tar metadata so the digest records names+bytes rather than fetch timestamps.
-FETCHED_SOURCE_SHA256="$(
-  bash -o pipefail -c \
-    'cd "${CARGO_HOME}"; tar --sort=name --mtime="@0" --owner=0 --group=0 --numeric-owner -cf - . | sha256sum | cut -d" " -f1'
-)"
-printf '%s\n' "${FETCHED_SOURCE_SHA256}" > /poolsuite-fetched-source.sha256
-echo "poolsuite fetched source sha256=${FETCHED_SOURCE_SHA256}"
+# Digest the Cargo.lock-pinned source the build compiles: every fetched .crate,
+# verified against its Cargo.lock checksum, and every git checkout's tree at its
+# Cargo.lock rev. Fetch bookkeeping (sparse-index cache, git object databases,
+# checkout .git indexes, .global-cache) differs on every fetch and is excluded,
+# so two builds of one lock record one value (bd tsp-mc9m.41.984.20.1).
+python3 /usr/local/bin/poolsuite-source-digest --cargo-home "${CARGO_HOME}" \
+  --cargo-lock Cargo.lock --manifest /poolsuite-fetched-source.manifest \
+  > /poolsuite-fetched-source.sha256
+cat /poolsuite-fetched-source.manifest
+echo "poolsuite fetched source sha256=$(cat /poolsuite-fetched-source.sha256)"
 POOLSUITEFETCH
 
 FROM poolsuite-toolchain AS poolsuite-dev
