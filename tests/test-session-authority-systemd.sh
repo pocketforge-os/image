@@ -137,7 +137,9 @@ assert_safe_host() {
     done
 }
 
-assert_ephemeral_slot() {
+# Fixture admission is only for pure guard/argv checks or for a Docker shim
+# proven to live inside the fixture. It must never gate a real Docker command.
+assert_fixture_ephemeral_slot() {
     local fixture_root="${1:-/}"
     local marker="${fixture_root%/}${ephemeral_marker}"
 
@@ -146,6 +148,38 @@ assert_ephemeral_slot() {
     [ -f "${marker}" ] \
         || fail "UNAPPROVED_HOST: ephemeral runner marker missing path=${marker}"
     ephemeral_admitted=1
+}
+
+assert_real_ephemeral_slot() {
+    [ "${GITHUB_ACTIONS:-}" = true ] \
+        || fail 'UNAPPROVED_HOST: GITHUB_ACTIONS=true is required'
+    [ -f "${ephemeral_marker}" ] \
+        || fail "UNAPPROVED_HOST: ephemeral runner marker missing path=${ephemeral_marker}"
+    ephemeral_admitted=1
+}
+
+assert_fixture_docker_shim() {
+    local fixture_root="$1" docker_command
+    local resolved_root resolved_fake_bin resolved_docker
+
+    command -v realpath >/dev/null 2>&1 \
+        || fail 'HOST_GUARD_UNAVAILABLE: realpath'
+    docker_command="$(command -v docker 2>/dev/null)" \
+        || fail 'MISSING_PREREQUISITE: docker'
+    resolved_root="$(realpath -e -- "${fixture_root}")" \
+        || fail "UNAPPROVED_TEST_DOCKER: fixture root is not real path=${fixture_root}"
+    resolved_fake_bin="$(realpath -e -- "${fixture_root%/}/.test-bin")" \
+        || fail "UNAPPROVED_TEST_DOCKER: fixture fake-bin missing root=${resolved_root}"
+    resolved_docker="$(realpath -e -- "${docker_command}")" \
+        || fail "UNAPPROVED_TEST_DOCKER: Docker command is not real path=${docker_command}"
+    [ "${resolved_fake_bin}" != "${resolved_root}" ] \
+        || fail "UNAPPROVED_TEST_DOCKER: fixture fake-bin is not a child path=${resolved_fake_bin}"
+    case "${resolved_fake_bin}/" in
+        "${resolved_root}/"*) ;;
+        *) fail "UNAPPROVED_TEST_DOCKER: fixture fake-bin escapes root path=${resolved_fake_bin}" ;;
+    esac
+    [ "${resolved_docker}" = "${resolved_fake_bin}/docker" ] \
+        || fail "UNAPPROVED_TEST_DOCKER: Docker command is outside fixture fake-bin path=${resolved_docker}"
 }
 
 configure_run_identity() {
@@ -410,7 +444,7 @@ case "${1:-}" in
     --audit-argv)
         [ "$#" -ge 4 ] || fail 'USAGE: --audit-argv FIXTURE_ROOT RUN_ID ARGV...'
         assert_safe_host "$2"
-        assert_ephemeral_slot "$2"
+        assert_fixture_ephemeral_slot "$2"
         configure_run_identity "$3"
         shift 3
         audit_docker_argv "$@"
@@ -420,7 +454,7 @@ case "${1:-}" in
     --audit-systemd-spec)
         [ "$#" -eq 3 ] || fail 'USAGE: --audit-systemd-spec FIXTURE_ROOT RUN_ID'
         assert_safe_host "$2"
-        assert_ephemeral_slot "$2"
+        assert_fixture_ephemeral_slot "$2"
         configure_run_identity "$3"
         make_systemd_argv "${test_image}" "${systemd_container}"
         audit_docker_argv "${systemd_argv[@]}"
@@ -430,7 +464,7 @@ case "${1:-}" in
     --audit-lifecycle-argv)
         [ "$#" -eq 3 ] || fail 'USAGE: --audit-lifecycle-argv FIXTURE_ROOT RUN_ID'
         assert_safe_host "$2"
-        assert_ephemeral_slot "$2"
+        assert_fixture_ephemeral_slot "$2"
         configure_run_identity "$3"
         lifecycle_commands=(
             'info --format {{json .}}'
@@ -460,14 +494,15 @@ case "${1:-}" in
     --check-host-guard)
         [ "$#" -eq 2 ] || fail 'USAGE: --check-host-guard FIXTURE_ROOT'
         assert_safe_host "$2"
-        assert_ephemeral_slot "$2"
+        assert_fixture_ephemeral_slot "$2"
         echo "session-authority host-guard: PASS host=${guard_hostname} ephemeral_slot=true"
         exit 0
         ;;
     --check-docker-probe)
         [ "$#" -eq 2 ] || fail 'USAGE: --check-docker-probe FIXTURE_ROOT'
         assert_safe_host "$2"
-        assert_ephemeral_slot "$2"
+        assert_fixture_ephemeral_slot "$2"
+        assert_fixture_docker_shim "$2"
         for command_name in docker python3; do
             command -v "${command_name}" >/dev/null 2>&1 \
                 || fail "MISSING_PREREQUISITE: ${command_name}"
@@ -504,7 +539,7 @@ esac
 # The interactive guard is deliberately first. Nothing may query Docker until
 # the host is both non-graphical and a one-job ephemeral Actions runner.
 assert_safe_host /
-assert_ephemeral_slot /
+assert_real_ephemeral_slot
 
 for command_name in docker git python3 sha256sum; do
     command -v "${command_name}" >/dev/null 2>&1 \

@@ -14,9 +14,11 @@ remount_helper="${root}/tests/session-authority-systemd/remount-cgroup-systemd"
 workflow="${root}/.github/workflows/session-authority-systemd.yml"
 precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditions.py"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
-fake_bin="${tmp}/bin"
 fake_root="${tmp}/host"
+fake_bin="${fake_root}/.test-bin"
 fake_unapproved_root="${tmp}/unapproved-host"
+sentinel_bin="${tmp}/sentinel-bin"
+sentinel_log="${tmp}/sentinel-docker-calls"
 call_log="${tmp}/docker-calls"
 df_counter="${tmp}/df-counter"
 stdout_log="${tmp}/stdout"
@@ -30,6 +32,7 @@ trap cleanup EXIT
 
 mkdir -p \
     "${fake_bin}" \
+    "${sentinel_bin}" \
     "${fake_root}/etc/pocketforge" \
     "${fake_root}/tmp/.X11-unix" \
     "${fake_root}/run/user" \
@@ -38,6 +41,7 @@ mkdir -p \
 printf 'PF_RUNNER_USER=runner\n' >"${fake_root}/etc/pocketforge/ephemeral-runner.conf"
 : >"${call_log}"
 : >"${df_counter}"
+: >"${sentinel_log}"
 
 cat >"${fake_bin}/hostname" <<'EOF'
 #!/usr/bin/env bash
@@ -230,7 +234,14 @@ PY
 esac
 EOF
 
-chmod +x "${fake_bin}"/*
+cat >"${sentinel_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sentinel=%s\n' "$*" >>"${DOCKER_SENTINEL_LOG:?}"
+exit 97
+EOF
+
+chmod +x "${fake_bin}"/* "${sentinel_bin}/docker"
 
 reset_logs() {
     : >"${call_log}"
@@ -408,6 +419,94 @@ live_owner_base=(
     --security-opt apparmor=unconfined
     --cap-add SYS_ADMIN
 )
+
+run_fixture_mode_with_sentinel() {
+    env \
+        BASH_ENV=/dev/null \
+        PATH="${sentinel_bin}:${fake_bin}:/usr/bin:/bin" \
+        GITHUB_ACTIONS=true \
+        GITHUB_RUN_ID=missing \
+        GITHUB_RUN_ATTEMPT=missing \
+        DOCKER_CALL_LOG="${call_log}" \
+        DOCKER_SENTINEL_LOG="${sentinel_log}" \
+        FAKE_DF_COUNTER="${df_counter}" \
+        FAKE_HOSTNAME=mm-eph-build-0 \
+        FAKE_GRAPHICAL=0 \
+        FAKE_DISPLAY_MANAGER=0 \
+        FAKE_DISPLAY_PROCESS=0 \
+        bash "$@"
+}
+
+# Complete inventory of caller-controlled fixture-root modes. A marker under
+# that root may admit pure guard/argv checks, but an external PATH Docker must
+# never be invoked. --check-docker-probe must reject it before its first call.
+fixture_root_modes=(
+    harness-audit-argv
+    harness-audit-systemd-spec
+    harness-audit-lifecycle-argv
+    harness-check-host-guard
+    harness-check-docker-probe
+    probe-audit-run-fixture
+)
+for fixture_mode in "${fixture_root_modes[@]}"; do
+    reset_logs
+    : >"${sentinel_log}"
+    case "${fixture_mode}" in
+        harness-audit-argv)
+            fixture_command=(
+                "${harness}" --audit-argv "${fake_root}" fixture-table
+                info --format '{{json .}}'
+            )
+            ;;
+        harness-audit-systemd-spec)
+            fixture_command=(
+                "${harness}" --audit-systemd-spec "${fake_root}" fixture-table
+            )
+            ;;
+        harness-audit-lifecycle-argv)
+            fixture_command=(
+                "${harness}" --audit-lifecycle-argv "${fake_root}" fixture-table
+            )
+            ;;
+        harness-check-host-guard)
+            fixture_command=("${harness}" --check-host-guard "${fake_root}")
+            ;;
+        harness-check-docker-probe)
+            fixture_command=("${harness}" --check-docker-probe "${fake_root}")
+            ;;
+        probe-audit-run-fixture)
+            fixture_command=(
+                "${probe}" --audit-run-fixture "${fake_root}"
+                baseline-systemd "${probe_audit_container}"
+                "${probe_run_base[@]}" "${probe_audit_image}" /sbin/init
+            )
+            ;;
+        *) exit 2 ;;
+    esac
+    if run_fixture_mode_with_sentinel "${fixture_command[@]}" \
+        >"${stdout_log}" 2>"${stderr_log}"; then
+        fixture_status=0
+    else
+        fixture_status=$?
+    fi
+    [ ! -s "${sentinel_log}" ] || {
+        echo "session-authority systemd-safety: FAIL: fixture-root mode called external Docker mode=${fixture_mode}" >&2
+        exit 1
+    }
+    if [ "${fixture_mode}" = harness-check-docker-probe ]; then
+        [ "${fixture_status}" -ne 0 ] || {
+            echo 'session-authority systemd-safety: FAIL: external Docker passed fixture shim admission' >&2
+            exit 1
+        }
+        grep -Fq 'UNAPPROVED_TEST_DOCKER: Docker command is outside fixture fake-bin' \
+            "${stderr_log}" || exit 1
+    else
+        [ "${fixture_status}" -eq 0 ] || {
+            echo "session-authority systemd-safety: FAIL: pure fixture-root mode failed mode=${fixture_mode}" >&2
+            exit 1
+        }
+    fi
+done
 
 expect_probe_admitted_audit_only() {
     local profile="$1"
@@ -783,6 +882,8 @@ done
 grep -Fq 'GITHUB_ACTIONS:-' "${harness}" || exit 1
 grep -Fq '/etc/pocketforge/ephemeral-runner.conf' "${harness}" || exit 1
 grep -Fq 'OWNER DECISION (2026-09-28)' "${harness}" || exit 1
+grep -Fq 'assert_real_ephemeral_slot' "${harness}" || exit 1
+grep -Fq 'assert_fixture_docker_shim "$2"' "${harness}" || exit 1
 [ "$(grep -Fc -- '--cap-add SYS_ADMIN' "${harness}")" -eq 1 ] || exit 1
 [ "$(grep -Fc -- '--security-opt apparmor=unconfined' "${harness}")" -eq 1 ] || exit 1
 grep -Fq "runs-on: [self-hosted, pf-builder-vm]" "${workflow}" || exit 1
@@ -933,4 +1034,4 @@ fi
     'BUILD_CACHE_USAGE_DRIFT:leftover_ids=stuck-new;missing_ids=none' ] || exit 1
 unset FAKE_CACHE_STUCK_ID FAKE_CACHE_RECORDS
 
-echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused run_allowlist=ok probe_host_cgroup_bind=refused-zero-docker probe_fixture=audit-only probe_argv_audit=shared probe_matrix=approved-only docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after cache_baseline=exact cache_parent_graph=child-first cache_leftover_ids=reported argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker getty_masks=5 runtime=fake-docker'
+echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok fixture_root_modes=external-docker-refused owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused run_allowlist=ok probe_host_cgroup_bind=refused-zero-docker probe_fixture=audit-only probe_argv_audit=shared probe_matrix=approved-only docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after cache_baseline=exact cache_parent_graph=child-first cache_leftover_ids=reported argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker getty_masks=5 runtime=fake-docker'
