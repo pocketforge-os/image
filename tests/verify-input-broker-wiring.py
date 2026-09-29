@@ -166,5 +166,9 @@ for forbidden in ("pf-input-broker", "libpocketforge", "platform-inputs", "PF_DE
 workflow = (ROOT / ".github/workflows/session-authority-systemd.yml").read_text()
 assert "rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/**" in workflow
 assert "rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf" in workflow
+# The harness runs a fixture shell; an edit to the real unit must re-run it and pass
+# the fixture-parity check (bd tsp-3rd3.12).
+assert "      - rootfs-overlay/etc/systemd/system/pf-shell-selected.service\n" in workflow
+assert "tests/verify-session-authority-shell-fixture.py" in workflow
 
 print("PASS default-app input wiring (units, cross-file paths, open-only Dockerfile, doc drift)")

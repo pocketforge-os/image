@@ -6,14 +6,22 @@
 # pocketforge-placeholder.service too: only one is enabled at build-time
 # (see scripts/build-rootfs.sh — the enable symlink is swapped there).
 #
-# CLEAN fb0 HANDOFF — same pattern as pocketforge-placeholder.service:
-#   Conflicts= and After= pocketforge-boot-animator.service declared HERE on
-#   the unit being STARTED. systemd enforces the STARTED unit's Conflicts=
-#   ("starting the former stops the latter" — the reliable direction proven
-#   by tsp-ikk0.11), so activating this service SIGTERMs the animator, which
-#   holds its last frame and exits 0 (tsp-3rd3.6); After= orders our start
-#   behind that stop — exactly ONE fb0 writer at all times, no pan-fight
-#   (root cause tsp-7kpp). Our first present replaces the held frame.
+# CLEAN fb0 HANDOFF (bd tsp-3rd3.12) — the same pattern as pf-shell-selected.service
+# (its header has the full reasoning) and pocketforge-placeholder.service:
+#   The animator is deliberately NOT in Conflicts=. This unit is enabled into
+#   the SAME boot transaction as the animator, and a Conflicts= there makes
+#   systemd delete the animator's start job, so it would never run. Instead:
+#   - After=pocketforge-boot-animator.service orders our start behind the
+#     animator's start;
+#   - ExecStartPre=-+/bin/systemctl stop pocketforge-boot-animator.service
+#     stops it synchronously right before ExecStart (SIGTERM: the animator
+#     holds its last frame and exits 0, tsp-3rd3.6) — exactly ONE fb0 writer
+#     at all times, no pan-fight (root cause tsp-7kpp). Our first present
+#     replaces the held frame;
+#   - RuntimeDirectory=pocketforge-panel-owner/%N marks the panel as owned, so
+#     a later start of the animator is a skip (its
+#     ConditionDirectoryNotEmpty=!/run/pocketforge-panel-owner) instead of a
+#     second writer.
 
 [Unit]
 Description=PocketForge MVP menu (3-entry LRADC-navigable launcher)
@@ -21,13 +29,15 @@ Documentation=https://github.com/pocketforge-os/image/tree/main/apps/pocketforge
 DefaultDependencies=no
 After=sysinit.target local-fs.target multi-user.target pocketforge-boot-animator.service dev-fb0.device
 Requires=dev-fb0.device
-Conflicts=pocketforge-boot-animator.service pocketforge-placeholder.service shutdown.target
+Conflicts=pocketforge-placeholder.service shutdown.target
 Before=shutdown.target
 ConditionPathExists=/dev/fb0
 
 [Service]
 Type=simple
+ExecStartPre=-+/bin/systemctl stop pocketforge-boot-animator.service
 ExecStart=/opt/pocketforge/bin/pocketforge-menu
+RuntimeDirectory=pocketforge-panel-owner/%N
 KillSignal=SIGTERM
 TimeoutStopSec=2s
 Restart=on-failure

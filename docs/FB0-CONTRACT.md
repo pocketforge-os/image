@@ -27,6 +27,30 @@ same animator binary in `--first-frame` mode to paint frame 000 at first light,
 and kills and reaps it before `switch_root` (`boards/tsp/initrd/init`, FIRST
 LIGHT; `tsp-3rd3.7`). No systemd unit can start before that reap.
 
+**The boot-enabled panel owner** is `pf-shell-selected` (MainUI), or the menu or
+placeholder on those variants. It hands off from the animator **at start time,
+not by `Conflicts=`** (`tsp-3rd3.12`). The animator (`basic.target.wants`) and
+the owner (`multi-user.target.wants`) are started by ONE boot transaction. An
+owner-side `Conflicts=pocketforge-boot-animator.service` puts a stop job for the
+animator into that transaction, and systemd resolves the start/stop pair by
+deleting the animator's start. With that `Conflicts=`, the animator never ran
+on any owner image.
+
+Instead, each owner:
+
+- orders `After=` the animator's start;
+- stops the animator synchronously as its last `ExecStartPre=`
+  (`-+/bin/systemctl stop ...`: SIGTERM, hold, exit), so the MainUI waits for
+  that stop and never for the animation;
+- holds `RuntimeDirectory=pocketforge-panel-owner/%N` while it runs.
+
+The animator's `ConditionDirectoryNotEmpty=!/run/pocketforge-panel-owner` then
+makes any later `systemctl start pocketforge-boot-animator` a skip while an
+owner holds the panel: the animator yields, and it neither stops the owner nor
+writes alongside it. Never add a `Conflicts=` on the animator to a unit enabled
+at boot. `tests/test-panel-owner-boot-handoff.py` proves all of this on the real
+boot transaction (`systemd --test`) and in a live systemd run.
+
 **If your app is a systemd unit**, declare:
 
 ```ini
