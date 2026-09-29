@@ -7,12 +7,14 @@ import fcntl
 import grp
 import json
 import os
+import signal
 import socket
 import stat
 import struct
 import subprocess
+import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -235,9 +237,9 @@ def wait_for_app_exit(scope: SessionEventScope, expected_state: str) -> None:
 
 
 def assert_start_and_exit(
-    exit_code: int, expected_state: str
+    mode: int | str, expected_state: str
 ) -> tuple[SessionEventScope, int]:
-    MODE.write_text(f"{exit_code}\n")
+    MODE.write_text(f"{mode}\n")
     before_invocations = invocation_count()
     previous_owner_pid = owner_pid()
     require(previous_owner_pid > 0, "selected owner did not start before launch")
@@ -1152,6 +1154,212 @@ def assert_crash_self_driven_to_recovery_then_late_ack(order: GrabOrder) -> str:
     return scope.session_id
 
 
+# --- tsp-f3fm.222: SIGKILL (Result=signal) and abort (Result=core-dump) each end Crash + Idle ---
+
+# The fixture caps RLIMIT_CORE at this bound (fixture CORE_LIMIT_BYTES); a probe that
+# reports more is refused before its crash counts.
+CORE_LIMIT_BYTES = 1024 * 1024
+# systemd's ExecMainCode is the main process's SIGCHLD si_code.
+CLD_KILLED = "2"
+CLD_DUMPED = "3"
+
+
+@dataclass(frozen=True)
+class CrashObservation:
+    """What one ended session left behind, read after the driver's acknowledgement."""
+
+    systemd_result: str
+    crash_summaries: tuple[str, ...]
+    returned: int
+    receipt: Any
+    phase: str
+
+
+def expected_outcome(systemd_result: str) -> tuple[Any, tuple[str, ...], int]:
+    """(history receipt, crash summaries, Returned count) owed for an app unit Result.
+
+    A clean stop is Returned. Every other Result is Crash{"systemd result: <value>"}:
+    runtime 7536aa1f pf-session-authority lifecycle() maps inactive+success to
+    InactiveSuccess and anything else to InactiveFailure with that summary.
+    """
+    if systemd_result == "success":
+        return "Returned", (), 1
+    summary = f"systemd result: {systemd_result}"
+    return {"Crash": {"summary": summary}}, (summary,), 0
+
+
+def crash_receipt_violations(observed: CrashObservation, expected_result: str) -> list[str]:
+    """Every way the observation differs from what expected_result owes; empty when it matches."""
+    receipt, summaries, returned = expected_outcome(expected_result)
+    violations = []
+    if observed.systemd_result != expected_result:
+        violations.append(f"systemd_result={observed.systemd_result!r}!={expected_result!r}")
+    if len(observed.crash_summaries) != len(summaries) or not all(
+        want in got for want, got in zip(summaries, observed.crash_summaries)
+    ):
+        violations.append(f"crash_events={list(observed.crash_summaries)}!={list(summaries)}")
+    if observed.returned != returned:
+        violations.append(f"returned_events={observed.returned}!={returned}")
+    if observed.receipt != receipt:
+        violations.append(f"receipt={compact(observed.receipt)}!={compact(receipt)}")
+    if observed.phase != "Idle":
+        violations.append(f"phase={observed.phase}!=Idle")
+    return violations
+
+
+def observe_ended_session(scope: SessionEventScope, systemd_result: str) -> CrashObservation:
+    final_events = events()
+    return CrashObservation(
+        systemd_result=systemd_result,
+        crash_summaries=tuple(
+            str(event.get("summary", "")) for _, event in session_events(final_events, scope, "crash")
+        ),
+        returned=len(session_events(final_events, scope, "returned")),
+        receipt=history_entry(scope.session_id)["receipt"],
+        phase=phase_summary()[0],
+    )
+
+
+def finish_crash_case(
+    order: GrabOrder,
+    scope: SessionEventScope,
+    label: str,
+    expected_result: str,
+    expected_code: str,
+    expected_status: str,
+    details: str,
+) -> str:
+    """Read systemd's verdict, acknowledge presentation as the shell would, then require the
+    Crash receipt, phase Idle, and that the same observation REFUSES a Success expectation."""
+    result = property_value(APP_UNIT, "Result")
+    code = property_value(APP_UNIT, "ExecMainCode")
+    status = property_value(APP_UNIT, "ExecMainStatus")
+    assert_no_terminal_before_presentation(scope)
+    observed_ack = rpc({"method": "observe", "observation": {"kind": "presentation_acknowledged"}})
+    require(observed_ack.get("result") == "ok", f"presentation acknowledgement failed: {observed_ack}")
+    observed = observe_ended_session(scope, result)
+    violations = crash_receipt_violations(observed, expected_result)
+    negative = crash_receipt_violations(observed, "success")
+    evidence(
+        f"{label} session={scope.session_id} app_result={result} exec_main_code={code} "
+        f"exec_main_status={status} crash_events={len(observed.crash_summaries)} "
+        f"returned_events={observed.returned} receipt={compact(observed.receipt)} "
+        f"phase={observed.phase} {details} "
+        f"negative_control_expect_success={'rejected' if negative else 'ACCEPTED'} "
+        f"negative_control_violations={';'.join(negative).replace(' ', '_') or 'none'}"
+    )
+    require(
+        code == expected_code and status == expected_status,
+        f"{label}: ExecMainCode/Status={code}/{status}, want {expected_code}/{expected_status}",
+    )
+    require(not violations, f"{label}: {violations}")
+    require(negative, f"negative control: {label} observation satisfied a Success expectation")
+    require(
+        unit_is_active(OWNER_UNIT),
+        f"selected owner inactive after the {label} receipt for {scope.session_id}",
+    )
+    order.checkpoint(scope.session_id)
+    return scope.session_id
+
+
+def assert_sigkill_crash(order: GrabOrder) -> str:
+    """(a) The app is killed with the exact S6b command, `systemctl kill -s KILL`:
+    systemd reports Result=signal and the authority owes Crash{"systemd result: signal"}."""
+    require(phase_summary()[0] == "Idle", f"authority busy before SIGKILL case: {authority_state()['phase']}")
+    previous_owner = owner_pid()
+    before_invocations = invocation_count()
+    scope = launch_held("hold")
+    killed = command("systemctl", "kill", "-s", "KILL", APP_UNIT, check=False)
+    require(killed.returncode == 0, f"systemctl kill -s KILL failed: {killed.stderr.strip()}")
+    wait_for_app_exit(scope, "failed")
+    wait_for(lambda: not unit_is_active(BROKER_UNIT), f"{BROKER_UNIT} to stop after {scope.session_id}")
+    require(owner_pid() not in (0, previous_owner), f"owner not re-activated after {scope.session_id}")
+    invocations = invocation_count() - before_invocations
+    require(invocations == 1, f"SIGKILL launch invocation count: {invocations}")
+    return finish_crash_case(
+        order, scope, "sigkill_crash", "signal", CLD_KILLED, str(int(signal.SIGKILL)),
+        f"kill_command=systemctl_kill_-s_KILL invocations={invocations}",
+    )
+
+
+def assert_abort_crash(order: GrabOrder) -> str:
+    """(b) The app aborts (`kill -ABRT $$` in the unit's main process): systemd reports
+    Result=core-dump and the authority owes Crash{"systemd result: core-dump"}.
+
+    The fixture bounds the core before it runs: coredump_filter 0 (no process memory),
+    RLIMIT_CORE <= CORE_LIMIT_BYTES, working directory = its state directory in this
+    container. Any core file the dump leaves there is measured and removed.
+    """
+    require(phase_summary()[0] == "Idle", f"authority busy before abort case: {authority_state()['phase']}")
+    stale_cores = sorted(path.name for path in APP_STATE.glob("core*"))
+    require(not stale_cores, f"core files present before the abort case: {stale_cores}")
+    PROBE.unlink(missing_ok=True)
+    before_invocations = invocation_count()
+    scope, _ = assert_start_and_exit("abort", "failed")
+    invocations = invocation_count() - before_invocations
+    require(invocations == 1, f"abort launch invocation count: {invocations}")
+    probe = json.loads(PROBE.read_text())
+    core_files = sorted(APP_STATE.glob("core*"))
+    core_bytes = [path.stat().st_size for path in core_files]
+    for path in core_files:
+        path.unlink()
+    pattern = str(probe.get("core_pattern", ""))
+    destination = "pipe" if pattern.startswith("|") else "file"
+    details = (
+        f"core_pattern_kind={destination} coredump_filter={probe.get('coredump_filter')} "
+        f"core_limit={compact(probe.get('core_limit'))} "
+        f"core_limit_inherited={compact(probe.get('core_limit_inherited'))} "
+        f"core_files_in_state={len(core_files)} core_bytes={compact(core_bytes)} "
+        f"core_pattern={pattern.replace(' ', '_') or 'unread'} invocations={invocations}"
+    )
+    require(
+        probe.get("coredump_filter") == "00000000",
+        f"abort fixture did not clear coredump_filter: {details}",
+    )
+    require(
+        isinstance(probe.get("core_limit"), list)
+        and all(0 <= int(value) <= CORE_LIMIT_BYTES for value in probe["core_limit"]),
+        f"abort fixture RLIMIT_CORE exceeds {CORE_LIMIT_BYTES}: {details}",
+    )
+    require(all(size <= CORE_LIMIT_BYTES for size in core_bytes), f"core exceeds the bound: {details}")
+    return finish_crash_case(
+        order, scope, "abort_crash", "core-dump", CLD_DUMPED, str(int(signal.SIGABRT)), details,
+    )
+
+
+def self_test() -> None:
+    """Hermetic negative control for crash_receipt_violations (no systemd needed).
+
+    A model of the runtime classifier and a deliberately broken stub that treats a
+    signal or a core dump as a clean stop each produce the observation the real
+    authority would; the checker must accept the first and reject the second.
+    """
+
+    def correct(result: str) -> CrashObservation:
+        receipt, summaries, returned = expected_outcome(result)
+        return CrashObservation(result, summaries, returned, receipt, "Idle")
+
+    def broken(result: str) -> CrashObservation:
+        return CrashObservation(result, (), 1, "Returned", "Idle")
+
+    lines = []
+    for result in ("signal", "core-dump", "exit-code"):
+        require(not crash_receipt_violations(correct(result), result), f"self-test: correct {result} refused")
+        wrong_stub = crash_receipt_violations(broken(result), result)
+        require(wrong_stub, f"self-test: broken classifier stub passed for {result}")
+        expect_success = crash_receipt_violations(correct(result), "success")
+        require(expect_success, f"self-test: {result} observation satisfied a Success expectation")
+        stalled = replace(correct(result), phase="Restoring")
+        require(crash_receipt_violations(stalled, result), f"self-test: non-Idle phase passed for {result}")
+        lines.append(
+            f"{result}:correct=accepted,broken_stub=rejected({len(wrong_stub)}),"
+            f"expect_success=rejected({len(expect_success)}),non_idle=rejected"
+        )
+    require(not crash_receipt_violations(correct("success"), "success"), "self-test: clean stop refused")
+    print(f"session-authority crash-classification self-test: PASS {' '.join(lines)}", flush=True)
+
+
+
 def main() -> None:
     require(Path("/proc/1/comm").read_text().strip() == "systemd", "PID 1 is not systemd")
     require(command("uname", "-m").stdout.strip() == "x86_64", "container is not x86_64")
@@ -1183,6 +1391,8 @@ def main() -> None:
     crash_invocations = invocation_count() - before_crash_invocations
     require(crash_invocations == 1, f"crash launch invocation count: {crash_invocations}")
     order.checkpoint(crash_session)
+    sigkill_crash_session = assert_sigkill_crash(order)
+    abort_crash_session = assert_abort_crash(order)
 
     print(
         "evidence: "
@@ -1202,7 +1412,8 @@ def main() -> None:
     exit_mid_session = assert_broker_exit_mid_session_never_traps(order)
     evidence(
         f"grab_order {assert_grab_timeline(order)} "
-        f"sessions={clean_session},{self_driven_session},{crash_session},{graceful_session},r4-probe,"
+        f"sessions={clean_session},{self_driven_session},{crash_session},{sigkill_crash_session},"
+        f"{abort_crash_session},{graceful_session},r4-probe,"
         f"{sigkill_session},"
         f"{exit_mid_session} "
         f"broker_failure_session={broker_failure_session} "
@@ -1213,6 +1424,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--self-test"]:
+        try:
+            self_test()
+        except TestFailure as error:
+            raise SystemExit(f"crash-classification self-test failed: {error}") from error
+        raise SystemExit(0)
     try:
         main()
     except (OSError, subprocess.SubprocessError, TestFailure, ValueError) as error:

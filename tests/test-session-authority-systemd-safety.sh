@@ -882,6 +882,41 @@ for b4_check in 'R4 GATE FAILED' 'def assert_grab_timeline' 'def assert_broker_f
         exit 1
     }
 done
+# tsp-f3fm.222: SIGKILL (Result=signal) and abort (Result=core-dump) each end in a
+# Crash receipt and phase Idle, with a same-run negative control and a bounded core.
+for crash_check in 'def assert_sigkill_crash' 'def assert_abort_crash' \
+    '"systemctl", "kill", "-s", "KILL", APP_UNIT' 'negative_control_expect_success=' \
+    'crash_receipt_violations(observed, "success")' 'sigkill_crash_session = assert_sigkill_crash(order)' \
+    'abort_crash_session = assert_abort_crash(order)' 'probe.get("coredump_filter") == "00000000"'; do
+    grep -Fq -- "${crash_check}" "${driver}" || {
+        echo "session-authority systemd-safety: FAIL: driver lost crash-result check ${crash_check}" >&2
+        exit 1
+    }
+done
+crash_fixture="${root}/tests/session-authority-systemd/fixture"
+for crash_fixture_check in 'Path("/proc/self/coredump_filter").write_text("0\n")' \
+    'resource.setrlimit(resource.RLIMIT_CORE, (core_limit, core_limit))' 'os.chdir(state)' \
+    'os.execv("/bin/sh", ["sh", "-c", "kill -ABRT $$"])'; do
+    grep -Fq -- "${crash_fixture_check}" "${crash_fixture}" || {
+        echo "session-authority systemd-safety: FAIL: fixture lost abort bound ${crash_fixture_check}" >&2
+        exit 1
+    }
+done
+[ "$(sed -n 's/^CORE_LIMIT_BYTES = //p' "${driver}")" = "$(sed -n 's/^CORE_LIMIT_BYTES = //p' "${crash_fixture}")" ] || {
+    echo 'session-authority systemd-safety: FAIL: driver and fixture CORE_LIMIT_BYTES differ' >&2
+    exit 1
+}
+crash_self_test="$(python3 "${driver}" --self-test)"
+grep -Eq '^session-authority crash-classification self-test: PASS signal:correct=accepted,broken_stub=rejected' \
+    <<<"${crash_self_test}" || exit 1
+# Negative control: a checker that accepts everything must fail its own self-test.
+sed 's/^    return violations$/    return []/' "${driver}" >"${tmp}/accept-all-drive.py"
+! cmp -s "${driver}" "${tmp}/accept-all-drive.py" || exit 1
+if python3 "${tmp}/accept-all-drive.py" --self-test >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: an accept-all crash checker passed the self-test' >&2
+    exit 1
+fi
+grep -Fq 'self-test: broken classifier stub passed for signal' "${stderr_log}" || exit 1
 for b4_input in fake-input-broker fake-shell capabilities.toml 10-app-session.conf 10-input-broker.conf; do
     grep -Fq "${b4_input}" "${harness}" || exit 1
 done

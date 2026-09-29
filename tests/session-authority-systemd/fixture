@@ -4,7 +4,15 @@
 Modes (from /run/pocketforge/fixture-exit-code, written by drive.py):
   <digits>     sleep 2 s, then exit with that status (clean / crash cases);
   hold         run until stopped; SIGTERM has its default action (graceful SafeReturn);
-  ignore-term  ignore SIGTERM so systemd must SIGKILL at TimeoutStopSec=2s (R4).
+  ignore-term  ignore SIGTERM so systemd must SIGKILL at TimeoutStopSec=2s (R4);
+  abort        sleep 2 s, then die of SIGABRT with a bounded core (tsp-f3fm.222).
+               Before anything observable the fixture sets its coredump_filter to 0
+               (the core holds ELF notes, registers and the vdso, never process
+               memory), caps RLIMIT_CORE at CORE_LIMIT_BYTES, and moves into its own
+               state directory. A file core_pattern therefore writes a small core
+               inside this ephemeral container; a pipe core_pattern receives the same
+               small core, which fits a pipe buffer. The main process then execs
+               /bin/sh to run `kill -ABRT $$`, so the unit's MainPID is what dumps.
 Each start records what the sandbox actually gives the app: the launch environment,
 whether the broker acquire socket is reachable, and whether the authority socket is.
 """
@@ -14,11 +22,16 @@ from __future__ import annotations
 import errno
 import json
 import os
+import resource
 import signal
 import socket
 import stat
 import time
 from pathlib import Path
+
+
+# drive.py holds the same bound and refuses a probe that reports more.
+CORE_LIMIT_BYTES = 1024 * 1024
 
 
 def connect(path: str) -> str:
@@ -37,6 +50,12 @@ def main() -> int:
     if mode == "ignore-term":
         # Before anything observable: once the probe exists, a stop must need SIGKILL.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    elif mode == "abort":
+        inherited_core_limit = resource.getrlimit(resource.RLIMIT_CORE)
+        Path("/proc/self/coredump_filter").write_text("0\n")
+        _, hard = inherited_core_limit
+        core_limit = CORE_LIMIT_BYTES if hard == resource.RLIM_INFINITY else min(CORE_LIMIT_BYTES, hard)
+        resource.setrlimit(resource.RLIMIT_CORE, (core_limit, core_limit))
     elif not (mode.isdigit() or mode == "hold"):
         raise SystemExit(f"fixture: unknown mode {mode!r}")
     with open(state / "invocations", "a", encoding="utf-8") as handle:
@@ -58,12 +77,24 @@ def main() -> int:
         "authority_mode": authority_mode,
         "uid": os.getuid(),
     }
+    if mode == "abort":
+        probe["coredump_filter"] = Path("/proc/self/coredump_filter").read_text().strip()
+        probe["core_limit_inherited"] = list(inherited_core_limit)
+        probe["core_limit"] = list(resource.getrlimit(resource.RLIMIT_CORE))
+        try:  # Diagnostic only; the bound above never depends on it.
+            probe["core_pattern"] = Path("/proc/sys/kernel/core_pattern").read_text().strip()
+        except OSError as error:
+            probe["core_pattern"] = "unreadable:" + errno.errorcode.get(error.errno or 0, "error")
     (state / "probe.json.tmp").write_text(json.dumps(probe, sort_keys=True) + "\n")
     os.replace(state / "probe.json.tmp", state / "probe.json")
 
     if mode.isdigit():
         time.sleep(2)
         return int(mode)
+    if mode == "abort":
+        time.sleep(2)
+        os.chdir(state)
+        os.execv("/bin/sh", ["sh", "-c", "kill -ABRT $$"])
     while True:
         time.sleep(1)
 
