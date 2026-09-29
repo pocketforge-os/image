@@ -240,7 +240,8 @@ def make_root(ctx, case, init_text):
         os.makedirs(os.path.join(root, "t/sys/class/vtconsole/vtcon1"))
         write(os.path.join(root, "t/sys/class/vtconsole/vtcon1/name"), "(M) frame buffer device\n")
         write(os.path.join(root, "t/sys/class/vtconsole/vtcon1/bind"), "1\n")
-        write(os.path.join(root, "t/sys/class/graphics/fbcon/rotate"), "3\n")
+        write(os.path.join(root, "t/sys/class/graphics/fbcon/rotate"),
+              case.get("fbcon_rotate", "1") + "\n")
     write(os.path.join(root, "t/kmsg"), "")
     os.mkfifo(os.path.join(root, "t/hang.fifo"))
     payload = case.get("payload", "absent")
@@ -281,7 +282,8 @@ def run_init(ctx, shell, case, init_text=None, timeout=20.0):
         "FAKEFB_GEOM": ",".join(str(v) for v in (*case.get("geom", G_DRM)[:4], 32,
                                                  case.get("geom", G_DRM)[4])),
         "FAKEFB_ID": "sun4i-drmdrmfb",
-        "FAKEFB_DRM": case.get("drm", "prop:Left Side Up"),
+        # The TSP panel DT rotation = <90> publishes Right Side Up (fbcon rotate 1).
+        "FAKEFB_DRM": case.get("drm", "prop:Right Side Up"),
         "FAKEFB_REDIRECT": "/sys=/t/sys;/dev/kmsg=/t/kmsg",
     }
     if case.get("fake_d"):
@@ -429,14 +431,29 @@ def c_absent(res, label):
 def c_paint(res, label):
     f = check_boot(res, label)
     expect(res.reaped_rc() == 0, f, f"{label}: reaped rc={res.reaped_rc()} (want 0)")
-    want = ('pf-boot-splash: first-frame presented src=first-frame rotation=ROTATE_90 '
-            'orientation="Left Side Up" source=drm-connector pan=ok')
+    want = ('pf-boot-splash: first-frame presented src=first-frame rotation=ROTATE_270 '
+            'orientation="Right Side Up" source=drm-connector pan=ok')
     expect(len(res.kmsg) == 1 and want in res.kmsg[0], f,
            f"{label}: kmsg {res.kmsg!r} (want exactly one first-frame marker)")
     expect(any(e.split()[1:2] == ["pan"] for e in res.events), f,
            f"{label}: no pan in fakefb events")
     expect(res.helper_log and "--first-frame --frames-dir /lib/pocketforge-first-frame"
            in res.helper_log[0], f, f"{label}: helper argv {res.helper_log!r}")
+    return f
+
+
+# The retired DT rotation = <270> (Left Side Up, fbcon rotate 3): the marker must
+# follow the connector, which proves the hook reads the orientation rather than
+# assuming the device's value.
+@case("paint-left-side-up", payload="real", fb_delay=0.10, root_delay=0.8,
+      drm="prop:Left Side Up", fbcon_rotate="3")
+def c_paint_left(res, label):
+    f = check_boot(res, label)
+    expect(res.reaped_rc() == 0, f, f"{label}: reaped rc={res.reaped_rc()} (want 0)")
+    want = ('pf-boot-splash: first-frame presented src=first-frame rotation=ROTATE_90 '
+            'orientation="Left Side Up" source=drm-connector pan=ok')
+    expect(len(res.kmsg) == 1 and want in res.kmsg[0], f,
+           f"{label}: kmsg {res.kmsg!r} (want exactly one first-frame marker)")
     return f
 
 
