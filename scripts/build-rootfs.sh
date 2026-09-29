@@ -1317,18 +1317,22 @@ install -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/71-pocketforge-fb.rul
 # BEFORE mmdebstrap in the outer script and exported via PF_ANIMATOR_BIN;
 # see "Cross-compile the boot animator" below. stb_image.h is vendored
 # (public domain, single header) so only libc/libm are linked.
-ANIMATOR_SRC="/work/src/apps/pocketforge-boot-animator"
 install -d "${ROOTFS}/opt/pocketforge/bin"
 install -m 0755 "${PF_ANIMATOR_BIN}" "${ROOTFS}/opt/pocketforge/bin/pocketforge-boot-animator"
 echo "[customize] Animator installed: $(du -h "${PF_ANIMATOR_BIN}" | awk '{print $1}') stripped"
 
-# Frame assets (48× 1280×720 RGBA PNG, ~5.5 MiB). Frame 000 is byte-identical
-# to the u-boot static logo (sha ed689555…) so the u-boot → animator handoff
-# is seamless by construction.
+# Frame assets (bd tsp-3rd3.6): frame 000 is the full 1280×720 frame, byte-
+# identical to the u-boot static logo (sha ed689555…); frames 001..047 are the
+# build-time crops of the one rectangle that changes (see "Crop the boot
+# animation frames" in the outer script), ~1.6 MiB instead of ~5.5 MiB. The
+# sha256 manifest is installed beside the frames and checked here.
 echo "[customize] Installing boot animation frame set..."
 install -d "${ROOTFS}/opt/pocketforge/boot-anim/frames"
-install -m 0644 "${ANIMATOR_SRC}/frames/"frame-*.png \
+install -m 0644 "${PF_ANIM_FRAMES_DIR}/frames/"frame-*.png \
     "${ROOTFS}/opt/pocketforge/boot-anim/frames/"
+install -m 0644 "${PF_ANIM_FRAMES_DIR}/frames.sha256" \
+    "${ROOTFS}/opt/pocketforge/boot-anim/frames.sha256"
+( cd "${ROOTFS}/opt/pocketforge/boot-anim" && sha256sum -c --strict --quiet frames.sha256 )
 # Provenance stamp: pin frame-000's sha so a rootfs drift on the u-boot handoff
 # frame is caught by grep-in-image tests.
 sha256sum "${ROOTFS}/opt/pocketforge/boot-anim/frames/frame-000.png" \
@@ -1798,6 +1802,21 @@ echo "  Cross-compiling pocketforge-boot-animator (aarch64)..."
 echo "    -> $(du -h "${PF_ANIMATOR_BIN}" | awk '{print $1}') stripped"
 export PF_ANIMATOR_BIN
 
+# ---- Crop the boot animation frames (bd: tsp-3rd3.6) ------------------------
+# Frames 001..047 differ from frame 000 only inside one rectangle; crop them to
+# it (the position rides each PNG's oFFs chunk) so the animator decodes and
+# blits ~9 % of the scene per tick. Deterministic (stdlib zlib, pinned by this
+# container); the tool recomposes every crop over frame 000 and fails the build
+# unless it reproduces the committed frame exactly. frame-000.png is copied
+# byte-for-byte.
+PF_ANIM_FRAMES_DIR="${WORK}/boot-anim"
+echo "  Cropping boot animation frames..."
+python3 "${ANIMATOR_SRC_DIR}/tools/crop_frames.py" \
+    --src "${ANIMATOR_SRC_DIR}/frames" \
+    --out "${PF_ANIM_FRAMES_DIR}/frames" \
+    --manifest "${PF_ANIM_FRAMES_DIR}/frames.sha256"
+export PF_ANIM_FRAMES_DIR
+
 # ---- Cross-compile the throwaway placeholder screen (bd: tsp-147u.21) -------
 # THROWAWAY / proof-of-life: a static post-boot screen that supersedes the boot
 # animator (see apps/pocketforge-placeholder). Same deterministic cross-compile
@@ -1839,9 +1858,10 @@ echo "    -> $(du -h "${PF_MENU_BIN}" | awk '{print $1}') stripped"
 export PF_MENU_BIN
 else
     PF_ANIMATOR_BIN=""
+    PF_ANIM_FRAMES_DIR=""
     PF_PLACEHOLDER_BIN=""
     PF_MENU_BIN=""
-    export PF_ANIMATOR_BIN PF_PLACEHOLDER_BIN PF_MENU_BIN
+    export PF_ANIMATOR_BIN PF_ANIM_FRAMES_DIR PF_PLACEHOLDER_BIN PF_MENU_BIN
     echo "  Display UI build NOT-SHIPPED (display_pipeline=none)"
 fi
 
@@ -1879,7 +1899,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \

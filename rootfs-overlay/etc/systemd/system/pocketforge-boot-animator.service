@@ -1,45 +1,44 @@
-# pocketforge-boot-animator.service — kernel-handoff fb0 boot animator.
+# pocketforge-boot-animator.service — fb0 boot animator.
 #
-# The moment the kernel registers /dev/fb0 (via the 71-pocketforge-fb.rules
-# udev tag → dev-fb0.device), this unit starts the animator: it mmaps fb0,
-# unbinds the framebuffer console (so kernel text cannot bleed through
-# between frames), and blits the tsp-3rd3.2 48-frame ember-sweep set at
-# 16 fps — frame 000 is byte-identical to the u-boot static logo, so the
-# u-boot → animator handoff is seamless by construction.
+# Paints the tsp-3rd3.2 48-frame ember-sweep set on /dev/fb0 at 16 fps. On
+# the open 7.x kernel (DRM fbdev) it rotates the 1280x720 scene by the DSI
+# connector's "panel orientation" (kernel meaning; it paints nothing if that
+# cannot be read); on the vendor 4.9 disp2 fb it keeps the pre-port pan path.
+# It unbinds the framebuffer console by name first, so console text cannot
+# bleed through. See apps/pocketforge-boot-animator/README.md.
 #
-# The animator runs until a successor UI activates
-# pocketforge-splash-handoff.target: Conflicts= on that target makes systemd
-# stop the animator, which clears fb0 to black on SIGTERM and exits 0.
-# Today (no MainUI yet) NOTHING activates that target — the animator loops
-# forever, which is the correct "no MainUI yet" behavior: the splash IS
-# the state until a successor UI ships. The v5 combined image's first cut
-# shipped an over-aggressive `pocketforge-splash-handoff-default.service`
-# oneshot that fired 500ms after multi-user.target and killed the animator
-# at Duration=1.687s (before the intro even finished looping). That
-# oneshot has been DELETED; a successor UI declares Requires=/After= on
-# pocketforge-splash-handoff.target itself and the boot ordering hands off
-# automatically.
+# The animator runs until a successor takes fb0: pf-shell-selected (MainUI),
+# the menu/placeholder, or a foreground app via pocketforge-foreground.target
+# all declare Conflicts= on it, so systemd stops it first. On SIGTERM it HOLDS
+# the last frame (no clear) and exits 0; the successor's first present
+# replaces the whole buffer, so there is no black gap (bd tsp-3rd3.6, design
+# note section 3.5; supersedes the tsp-3rd3.4 clear-to-black contract).
+# With no successor it loops forever: the splash IS the state until then.
 #
-# Ordering rationale:
-#   - Wants=/After=dev-fb0.device — same as the retired fb-clear unit.
-#   - Before=basic.target          — pull start FORWARD off multi-user.target
-#                                    so the animator draws during boot, not
-#                                    after login. DefaultDependencies=no plus
-#                                    an explicit After=sysinit.target avoids
-#                                    circular ordering.
-#   - Conflicts=pocketforge-splash-handoff.target
+# Ordering rationale (bd tsp-3rd3.6):
+#   - DefaultDependencies=no and RequiresMountsFor= the frame set ONLY: it
+#     starts as soon as PID 1 can reach its files. /dev/fb0 is a devtmpfs
+#     node from kernel ~2.7 s; it no longer waits for udev coldplug to tag
+#     dev-fb0.device (kernel ~6.7 s), nor for sysinit.target.
+#   - ConditionPathExists=/dev/fb0: no fb, no animator (a skip, not a fail).
+#   - Before=basic.target: pulled in early, never after login.
+#   - Nothing may wait for it: Type=simple, and it asks for no one else.
+#   - Nice=10 and the lowest best-effort I/O priority: under boot load it
+#     drops frames (its schedule is absolute) instead of delaying boot.
+#     Budget: after frame 000 only the 266x307 changed region is decoded
+#     and blitted per tick (hermetic --measure test).
+#   - Conflicts=pocketforge-splash-handoff.target pocketforge-foreground.target
 #                                  — one systemctl start = one clean stop.
 #
-# bd: tsp-3rd3.4 (supersedes pocketforge-fb-clear / bd tsp-ooe)
+# bd: tsp-3rd3.4 (supersedes pocketforge-fb-clear / bd tsp-ooe), tsp-3rd3.6
 
 [Unit]
-Description=PocketForge boot animator (fb0 kernel-handoff splash)
+Description=PocketForge boot animator (fb0 splash)
 Documentation=https://github.com/pocketforge-os/image/tree/main/apps/pocketforge-boot-animator
 DefaultDependencies=no
-After=sysinit.target dev-fb0.device local-fs.target
-Wants=dev-fb0.device
+RequiresMountsFor=/opt/pocketforge/boot-anim/frames
 Before=basic.target
-# Two takeover seams stop the animator (both SIGTERM → clear fb0 → exit 0):
+# Two takeover seams stop the animator (both SIGTERM → hold last frame → exit 0):
 #   - pocketforge-splash-handoff.target — the PERMANENT successor-UI handoff
 #     (a future MainUI activates it once; the animator does not return).
 #   - pocketforge-foreground.target — the TRANSIENT foreground-app slot
@@ -66,15 +65,16 @@ Type=simple
 # drop-in + daemon-reload back to clean. tsp-3rd3.4 acceptance script does
 # this end-to-end.
 ExecStart=/opt/pocketforge/bin/pocketforge-boot-animator
-# systemd default KillSignal=SIGTERM is exactly the handoff contract; the
-# animator's SIGTERM handler clears fb0 to black and exits 0. A 2s timeout
-# is plenty for the clear+munmap.
+# systemd default KillSignal=SIGTERM is exactly the handoff contract: the
+# animator holds its last frame, unmaps fb0 and exits 0 within milliseconds.
 KillSignal=SIGTERM
 TimeoutStopSec=2s
 Restart=no
 # The animator is small and non-critical — keep the memory guardrail modest.
 MemoryMax=32M
-Nice=-5
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 
 [Install]
 WantedBy=basic.target
