@@ -27,6 +27,11 @@ name: hermetic tests
 #     harness; fails closed with MISSING_PREREQUISITE without a real `docker`
 #     binary. Already covered by its own dedicated workflow,
 #     .github/workflows/session-authority-systemd.yml.
+#   - tests/test-initrd-first-frame.sh -- fully hermetic (no docker, no
+#     network) and reliably green in every interactive dev-worktree run, but
+#     its "crash" case raced on this workflow's first real run on
+#     [self-hosted, pf-builder-vm] (reaped rc=137, wanted 139 -- see tsp-7854q).
+#     Excluded until tsp-7854q lands; re-add it there.
 #
 # tests/test-session-authority-systemd-safety.sh IS included below: it fakes
 # docker entirely (a fixture `docker` binary on PATH) and is genuinely
@@ -62,7 +67,13 @@ jobs:
     timeout-minutes: 30
     steps:
       # SHA-pinned (org Actions policy sha_pinning_required=true; bare @v4 = startup_failure)
+      # fetch-depth: 0 (full history): tests/test-boot-animator.sh diffs against a
+      # pinned historical commit (BASELINE_COMMIT, apps/pocketforge-boot-animator/
+      # tests/test_animator.py) via `git show <sha>:path`, which a shallow default
+      # checkout cannot resolve (verified: exit 128 on this workflow's first CI run).
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
 
       - name: Run hermetic tests/*.sh
         run: |
@@ -79,7 +90,6 @@ jobs:
             tests/test-default-app-rootfs.sh
             tests/test-dockerfile-pf-transforms.sh
             tests/test-hwprobe-variant-stage.sh
-            tests/test-initrd-first-frame.sh
             tests/test-initrd-selfflash-watchdog.sh
             tests/test-kernel-build-identity.sh
             tests/test-kernel-module-form.sh
