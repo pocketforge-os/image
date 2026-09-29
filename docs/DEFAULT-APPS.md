@@ -469,9 +469,14 @@ Logs use a parseable one-line shape with JSON-escaped values:
 
 ```text
 pf-session-authorityd: launch_refused reason=<code> item_id=<json-string>
+pf-session-authorityd: launch_refused reason=busy item_id=<json-string> phase=<phase>
+pf-session-authorityd: lifecycle_failure reason=<code> item_id=<json-string> detail=<json-string>
 pf-app-launch: launch_refused reason=<code> item_id=<json-string>
 pf-shell: platform_contract_fallback reason=<code> path=<json-string>
 ```
+
+`<phase>` is one of `idle`, `starting`, `running`, `stopping_gracefully`, `force_stopping`,
+`restoring`, `recovery_required` (tsp-f3fm.219; see the amendment below).
 
 The codes are API-stable diagnostics:
 
@@ -481,6 +486,7 @@ The codes are API-stable diagnostics:
 | descriptor | `descriptor_missing`, `descriptor_not_regular`, `descriptor_symlink`, `descriptor_parse`, `descriptor_invalid`, `descriptor_id_mismatch`, `launch_missing` |
 | executable | `launch_exec_invalid`, `exec_missing`, `exec_not_regular`, `exec_symlink`, `exec_escape`, `exec_not_executable`, `exec_io` |
 | platform/app compatibility | `runtime_family_mismatch`, `runtime_abi_mismatch`, `platform_version_mismatch`, `unsupported_capability`, `platform_contract_missing`, `platform_contract_invalid` |
+| session | `busy` (a launch while a session is active or its restoration is pending; still `RejectedBusy`, never queued) |
 | backend/lifecycle | `systemd_start_failed`, `systemd_state_unknown`, `app_exit_failed`, `target_not_released`, `owner_not_active`, `presentation_not_acknowledged` |
 | shell platform file | `missing`, `read`, `parse`, `schema`, `invalid_family`, `invalid_abi`, `invalid_platform_version`, `invalid_capability`, `duplicate_capability`, `unsorted_capabilities` |
 
@@ -956,3 +962,76 @@ After=pf-input-broker.service
   launcher-vendored crate.
 - Any of this on A133 vendor/default or A523. The broker, library and descriptor are
   A133-open-only, like the rest of the default-app mechanism.
+
+## Amendment: restoration never wedges silently (`tsp-f3fm.219`)
+
+Bench boots P2 and P3 of `tsp-f3fm.215` found two stalls:
+- P3: after Poolsuite failed at start, the authority sat at
+  `Restoring{…, Crash, rung: PresentationAcknowledged}` for minutes. Every later launch was
+  dropped with no log line.
+- P2: the same session stalled at `UnitInactive`.
+
+The causes:
+- The ladder advanced only on client RPCs, and on device no client drives it while the shell
+  is absent.
+- The final rung had no deadline.
+- The restarted shell replayed the ended session's `Starting`/`Running`, entered a frameless
+  Running presentation and never sent its one-shot acknowledgement.
+- Busy refusals were not logged.
+
+Runtime pocketforge-os/runtime#103 (merge `7536aa1f5af76f0220b582ee68e29e254251fd76`) and
+launcher pocketforge-os/launcher#146 change the contract as follows.
+
+### Authority (runtime)
+
+- **Self-driven tick.** `pf-session-authorityd` runs its reconcile and deadline tick at least
+  once per second with no client RPC. Connection I/O runs on bounded per-connection threads
+  (at most 16, with a 5 s read and write timeout), and only complete requests reach the
+  authority. A silent, partial or non-reading client therefore cannot delay a tick. Crash and
+  exit detection and every restoration rung advance without a shell. A running app costs one
+  systemd snapshot per tick.
+- **No replay of ended sessions.** `Events` never delivers `Starting`/`Running` for a session
+  that has ended. Pending sequences and client cursors are unchanged, and there is no wire
+  change.
+- **Presentation deadline.** The `PresentationAcknowledged` rung has a 10 s deadline. It is
+  armed when the rung is entered, and re-armed for a full 10 s after an authority restart. On
+  expiry the authority:
+  - records `RecoveryRequired` with reason
+    `presentation_not_acknowledged: presentation not acknowledged within 10000 ms`;
+  - publishes it;
+  - logs `lifecycle_failure reason=presentation_not_acknowledged`;
+  - keeps the owed receipt in the persisted phase (`pending_receipt`).
+- **New transition, the only self-healing recovery.** A late
+  `Observe{presentation_acknowledged}` while in
+  `RecoveryRequired{presentation_not_acknowledged…}` completes the ladder to `Idle`. It writes
+  the owed receipt to history and publishes `ObservationComplete` and the terminal receipt.
+  Every other `RecoveryRequired` reason stays terminal. History receipts are still written
+  only at `Idle`.
+- **Busy is refused and logged, never queued.** A launch while not `Idle` returns
+  `RejectedBusy` and logs `launch_refused reason=busy item_id=<json-string> phase=<phase>`.
+
+### Shell (launcher)
+
+- A shell whose latest history entry has ended with its receipt owed discards replayed or
+  stale `Starting`/`Running` and presents Home. This is re-applied on every history refresh.
+- The presentation acknowledgement is re-evaluated on every loop step, not once at startup.
+  It is sent when restoration is pending, the shell has presented and still shows a frame, and
+  that session has not been acknowledged. The authority's `InvalidObservation` (not yet at the
+  rung) is retried every 250 ms.
+- `RecoveryRequired{presentation_not_acknowledged…}` is non-terminal for the shell: it keeps
+  Home and acknowledges. Every other reason keeps the frameless, terminal behaviour.
+
+### Evidence
+
+- The real-systemd harness case `assert_crash_self_driven_to_recovery_then_late_ack` covers
+  it. After the launch RPC nothing talks to the authority. The case asserts that the authority
+  reaches the presentation rung on its own tick, records
+  `RecoveryRequired{presentation_not_acknowledged}` within the deadline plus slack with its
+  journal line, and refuses and logs a launch while it waits. A late acknowledgement then
+  reaches `Idle` with the Crash receipt in history.
+- Existing cases are adjusted where the contract changed:
+  - the session-scoping negative control now asserts that the ended sessions' `Running` is
+    durable but not delivered;
+  - the broker exit-before-READY case's 30 s watch now ends in the recoverable timeout, which
+    its late acknowledgement completes.
+- The device check rides `tsp-f3fm.215`.

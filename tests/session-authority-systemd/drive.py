@@ -39,6 +39,11 @@ BROKER_ATTEMPTS = GRAB / "broker-attempts"
 CONTROL_DROPIN = Path("/run/systemd/system/pf-input-broker.service.d/99-control-restart-on-failure.conf")
 UINPUT = Path("/dev/uinput")
 DESCRIPTOR = "/usr/share/pocketforge/devices/a133/capabilities.toml"
+# tsp-f3fm.219 (runtime#103): the authority ticks itself once per second and gives the
+# restored shell this long to acknowledge presentation before RecoveryRequired.
+PRESENTATION_DEADLINE_S = 10.0
+DEADLINE_SLACK_S = 4.0
+PRESENTATION_TIMEOUT_PREFIX = "presentation_not_acknowledged:"
 
 
 class TestFailure(RuntimeError):
@@ -276,9 +281,16 @@ def assert_start_and_exit(
 
 def assert_crash_scope_empty_before_launch() -> SessionEventScope:
     durable = events()
+    # The ended sessions' Running is still durable in the authority's pending log (this
+    # client never acknowledges), but runtime#103 R1 never delivers Starting/Running for a
+    # session that has ended: a restarted shell must not replay a dead app as Running.
     require(
-        any(event.get("event") == "running" for _, event in durable),
-        "negative control requires a durable Running event from the clean session",
+        any(entry.get("event") == "ObservedRunning" for entry in authority_state()["pending"]),
+        "negative control requires a durable Running event from an ended session",
+    )
+    require(
+        not any(event.get("event") in ("starting", "running") for _, event in durable),
+        f"R1: Starting/Running delivered for an ended session while Idle: {durable}",
     )
     expected_crash_scope = SessionEventScope(
         session_id=f"session-{authority_state()['next_session']}",
@@ -763,14 +775,22 @@ def compact(value: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
 
 
+def waiting_on_presentation(scope: SessionEventScope) -> bool:
+    """The authority waits on this session's presentation acknowledgement: at the rung, or
+    after the rung's deadline in the one recovery a late acknowledgement completes."""
+    name, payload = phase_summary()
+    if payload.get("session_id") != scope.session_id:
+        return False
+    if name == "Restoring":
+        return payload.get("rung") == "PresentationAcknowledged"
+    return name == "RecoveryRequired" and str(payload.get("reason", "")).startswith(
+        PRESENTATION_TIMEOUT_PREFIX
+    )
+
+
 def acknowledge_and_read_receipt(scope: SessionEventScope) -> Any:
     """Acknowledge presentation only when the authority is waiting for exactly that."""
-    name, payload = phase_summary()
-    if not (
-        name == "Restoring"
-        and payload.get("session_id") == scope.session_id
-        and payload.get("rung") == "PresentationAcknowledged"
-    ):
+    if not waiting_on_presentation(scope):
         return None
     observed = rpc({"method": "observe", "observation": {"kind": "presentation_acknowledged"}})
     require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
@@ -856,15 +876,19 @@ def assert_broker_exit_before_ready_never_traps() -> str:
         f"shell/broker ping-pong in 30 s: {watch} restored_pid={restored_pid}",
     )
     require(not violations, f"grab model conflicts: {violations}")
+    # The 30 s watch outlasts the presentation deadline and nothing acknowledges during it,
+    # so the self-driven authority must have recorded the recoverable timeout (runtime#103).
     require(
-        phase_name == "Restoring" and payload.get("session_id") == scope.session_id
-        and payload.get("rung") == "PresentationAcknowledged",
-        f"authority stalled: phase={authority_state()['phase']}",
+        phase_name == "RecoveryRequired" and payload.get("session_id") == scope.session_id
+        and str(payload.get("reason", "")).startswith(PRESENTATION_TIMEOUT_PREFIX)
+        and "systemd_start_failed" in compact(payload.get("pending_receipt")),
+        f"authority did not time out the presentation rung: phase={authority_state()['phase']}",
     )
     require(
         isinstance(receipt, dict) and "systemd_start_failed" in receipt.get("Crash", {}).get("summary", ""),
         f"receipt is not a systemd_start_failed Crash: {receipt}",
     )
+    require(phase_summary()[0] == "Idle", f"late acknowledgement did not complete: {authority_state()['phase']}")
     require(not session_events(events(), scope, "returned"), "broker exit before READY published Returned")
     return scope.session_id
 
@@ -1018,6 +1042,116 @@ def assert_grab_timeline(order: GrabOrder) -> str:
     )
 
 
+# --- tsp-f3fm.219 (I3): a crash with no client drives itself to a recoverable timeout ---
+
+
+def authority_journal() -> str:
+    return command("journalctl", "--unit", AUTHORITY_UNIT, "--no-pager", "--output", "cat").stdout
+
+
+def assert_crash_self_driven_to_recovery_then_late_ack(order: GrabOrder) -> str:
+    """After the launch RPC, NOTHING talks to the authority: the fake shell sends no RPC and
+    the driver only reads systemd and authority.json. The authority's own tick must observe
+    the crash, walk the restoration ladder to the presentation rung, record
+    RecoveryRequired{presentation_not_acknowledged} within deadline + slack with its
+    lifecycle_failure line, and refuse (and log) a launch while it waits. A late driver
+    acknowledgement then completes the ladder to Idle with the Crash receipt in history.
+    On runtime 0955d8a8 (no tick) the authority never leaves Running here.
+    """
+    require(phase_summary()[0] == "Idle", f"authority busy before I3: {authority_state()['phase']}")
+    MODE.write_text("23\n")
+    before_invocations = invocation_count()
+    previous_owner = owner_pid()
+    require(previous_owner > 0, "selected owner did not start before I3 launch")
+    scope = launch()
+    launched = time.monotonic()
+    # From here until RecoveryRequired: no RPC of any kind.
+    wait_for(lambda: invocation_count() == before_invocations + 1, f"fixture invocation for {scope.session_id}")
+    wait_for(
+        lambda: property_value(APP_UNIT, "ActiveState") == "failed",
+        f"{APP_UNIT} to fail for {scope.session_id}",
+    )
+    wait_for(lambda: not unit_is_active(TARGET_UNIT), f"{TARGET_UNIT} to release for {scope.session_id}")
+    wait_for(
+        lambda: unit_is_active(OWNER_UNIT) and owner_pid() not in (0, previous_owner),
+        f"{OWNER_UNIT} to be re-activated for {scope.session_id}",
+    )
+    wait_for(lambda: not unit_is_active(BROKER_UNIT), f"{BROKER_UNIT} to stop after {scope.session_id}")
+    wait_for_owner_grab(scope.session_id)
+
+    def at_rung() -> bool:
+        name, payload = phase_summary()
+        return (
+            name == "Restoring"
+            and payload.get("session_id") == scope.session_id
+            and payload.get("rung") == "PresentationAcknowledged"
+        )
+
+    wait_for(at_rung, f"the self-driven tick to reach the presentation rung for {scope.session_id}")
+    reached_rung = time.monotonic()
+    wait_for(
+        lambda: phase_summary()[0] == "RecoveryRequired",
+        f"RecoveryRequired within {PRESENTATION_DEADLINE_S}+{DEADLINE_SLACK_S}s of the rung",
+        timeout=PRESENTATION_DEADLINE_S + DEADLINE_SLACK_S,
+    )
+    recovery_s = time.monotonic() - reached_rung
+    name, payload = phase_summary()
+    require(payload.get("session_id") == scope.session_id, f"RecoveryRequired for another session: {payload}")
+    require(
+        str(payload.get("reason", "")).startswith(PRESENTATION_TIMEOUT_PREFIX),
+        f"RecoveryRequired reason is not the presentation timeout: {payload}",
+    )
+    require(
+        payload.get("pending_receipt") == {"Crash": {"summary": "systemd result: exit-code"}},
+        f"owed Crash receipt not kept for the late acknowledgement: {payload}",
+    )
+    require(
+        recovery_s >= PRESENTATION_DEADLINE_S - 1.0,
+        f"presentation deadline expired early: {recovery_s:.2f}s after the rung",
+    )
+    failure_line = (
+        "lifecycle_failure reason=presentation_not_acknowledged "
+        f"item_id={json.dumps(APP_ID)}"
+    )
+    require(failure_line in authority_journal(), f"journal lacks {failure_line!r}")
+
+    # RPCs are allowed again. The receipt is not truthful yet: nothing terminal was published.
+    pending_events = events()
+    require(
+        len(session_events(pending_events, scope, "recovery_required")) == 1,
+        f"RecoveryRequired publication count for {scope.session_id}: {pending_events}",
+    )
+    require(not session_events(pending_events, scope, "crash"), "Crash published before acknowledgement")
+    require(history_entry(scope.session_id)["receipt"] is None, "history terminal before acknowledgement")
+    busy = rpc({"method": "launch", "item_id": APP_ID})
+    require(busy.get("result") == "rejected_busy", f"launch while recovery pending: {busy}")
+    busy_line = (
+        f"launch_refused reason=busy item_id={json.dumps(APP_ID)} phase=recovery_required"
+    )
+    require(busy_line in authority_journal(), f"journal lacks {busy_line!r}")
+    require(invocation_count() == before_invocations + 1, "the refused launch started the app")
+
+    observed = rpc({"method": "observe", "observation": {"kind": "presentation_acknowledged"}})
+    require(observed.get("result") == "ok", f"late presentation acknowledgement failed: {observed}")
+    require(phase_summary()[0] == "Idle", f"late acknowledgement did not reach Idle: {authority_state()['phase']}")
+    final_events = events()
+    crashes = session_events(final_events, scope, "crash")
+    require(len(crashes) == 1, f"Crash publication count for {scope.session_id}: {crashes}")
+    receipt = history_entry(scope.session_id)["receipt"]
+    require(
+        isinstance(receipt, dict) and receipt.get("Crash", {}).get("summary") == "systemd result: exit-code",
+        f"late acknowledgement did not persist the Crash receipt: {receipt}",
+    )
+    order.checkpoint(scope.session_id)
+    evidence(
+        f"self_driven_recovery session={scope.session_id} launch_to_rung_s={reached_rung - launched:.2f} "
+        f"rung_to_recovery_required_s={recovery_s:.2f} deadline_s={PRESENTATION_DEADLINE_S:.0f} "
+        "rpcs_between_launch_and_recovery=0 lifecycle_failure_logged=yes busy_refusal_logged=yes "
+        "late_ack=Idle receipt=Crash(systemd result: exit-code)"
+    )
+    return scope.session_id
+
+
 def main() -> None:
     require(Path("/proc/1/comm").read_text().strip() == "systemd", "PID 1 is not systemd")
     require(command("uname", "-m").stdout.strip() == "x86_64", "container is not x86_64")
@@ -1043,6 +1177,7 @@ def main() -> None:
     clean_invocations = invocation_count() - before_clean_invocations
     require(clean_invocations == 1, f"clean launch invocation count: {clean_invocations}")
     order.checkpoint(clean_session)
+    self_driven_session = assert_crash_self_driven_to_recovery_then_late_ack(order)
     before_crash_invocations = invocation_count()
     crash_session = assert_crash_exit()
     crash_invocations = invocation_count() - before_crash_invocations
@@ -1067,7 +1202,8 @@ def main() -> None:
     exit_mid_session = assert_broker_exit_mid_session_never_traps(order)
     evidence(
         f"grab_order {assert_grab_timeline(order)} "
-        f"sessions={clean_session},{crash_session},{graceful_session},r4-probe,{sigkill_session},"
+        f"sessions={clean_session},{self_driven_session},{crash_session},{graceful_session},r4-probe,"
+        f"{sigkill_session},"
         f"{exit_mid_session} "
         f"broker_failure_session={broker_failure_session} "
         f"broker_exit_before_ready_session={exit_before_ready_session} "
