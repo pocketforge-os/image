@@ -1,0 +1,40 @@
+# =============================================================================
+# pocketforge-audio-defaults.service: speaker-path mixer defaults (sun4i-codec)
+# =============================================================================
+# Installed only on open-kernel profiles (kernel-sunxi-6.x / kernel-sunxi-7.x)
+# by scripts/install-alsa-config.sh. The mainline sun4i-codec card resets its
+# speaker path to muted. This oneshot unmutes it and sets the stock vendor
+# levels from /usr/share/pocketforge/alsa/mixer-defaults.sun4i-codec.
+#
+# Install target: sound.target, for hotplug activation. udev starts
+# sound.target when a sound card appears (systemd.special(7)), and
+# sound.target Wants this unit through the [Install] symlink. The unit runs
+# only once a card exists; a boot where the codec never probes does not run
+# it and does not leave a failed unit. multi-user.target would run it on every
+# boot, racing the codec module probe.
+#
+# Ordering: NOT After=sound.target. A target orders itself after the units it
+# Wants (systemd.target(5)), so sound.target is reached only after the
+# defaults are applied. Ordering this unit after its own install target is
+# redundant; systemd only suppresses the would-be loop by special case
+# (unit_add_default_target_dependency, "Don't create loops"). The script waits
+# for the Codec card itself. It is ordered after Debian's alsa-restore and
+# alsa-state units (also wanted by sound.target) so alsactl's restore at boot
+# cannot overwrite these values; the script also runs `udevadm settle` for the
+# udev-run restore (90-alsa-restore.rules).
+# tests/test-alsa-config.sh checks the unit with systemd-analyze verify, and
+# checks that no install target appears in After=.
+#
+# bd: tsp-f3fm.220
+# =============================================================================
+[Unit]
+Description=PocketForge: speaker-path mixer defaults for the sun4i-codec card
+After=alsa-restore.service alsa-state.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/pocketforge/audio-defaults.sh
+
+[Install]
+WantedBy=sound.target

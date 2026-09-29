@@ -43,6 +43,11 @@ case "${PF_GPU_MODEL}" in
 esac
 PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
 PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
+# The profile's kernel.repo selects the ALSA card configuration inside the
+# customize hook (scripts/install-alsa-config.sh, bd tsp-f3fm.220). It is not
+# required here so fixture runs that stop before the hook keep working; the
+# installer fails the real build when it is empty or unknown.
+PF_KERNEL_REPO="${PF_KERNEL_REPO:-}"
 declare -a KERNEL_REQUIRED_MODULE_LIST=()
 
 is_a133_open_7x_gpu_device() {
@@ -816,191 +821,13 @@ echo "[customize] owned wpa_supplicant installed at /sbin/wpa_supplicant (aarch6
 # --- Config files ------------------------------------------------------------
 echo "[customize] Writing config files..."
 
-# /etc/asound.conf — verbatim from stock (hardware-firmware-probes.md §12)
-cat > "${ROOTFS}/etc/asound.conf" << 'ASOUND_EOF'
-# A133
-# audiocodec
-# ac107
-
-ctl.!default {
-    type hw
-    card audiocodec
-}
-
-pcm.!default {
-    type asym
-    playback.pcm "Playback"
-    capture.pcm "CaptureAc107"
-}
-
-pcm.Playback {
-    type plug
-    slave.pcm {
-        type softvol
-        slave.pcm PlaybackDmix
-        control {
-            name "Soft Volume Master"
-            card audiocodec
-        }
-        min_dB -51.0
-        max_dB 0.0
-        resolution 256
-    }
-}
-
-pcm.PlaybackDmix {
-    type plug
-    slave.pcm {
-        type dmix
-        ipc_key 1111
-        ipc_perm 0666
-        slave {
-            pcm "hw:audiocodec,0"
-            format S16_LE
-            rate 48000
-            period_size 1024
-            periods 4
-        }
-    }
-}
-
-pcm.Capture {
-    type hw
-    card audiocodec
-}
-
-pcm.CaptureAc107 {
-    type hw
-    card sndac10710036
-}
-
-pcm.CaptureDsnoop {
-    type plug
-    slave.pcm {
-        type dsnoop
-        ipc_key 1111
-        ipc_perm 0666
-        slave {
-            pcm "hw:sndac10710036"
-            format S16_LE
-            rate 16000
-            period_size 1024
-            periods 4
-        }
-    }
-}
-
-pcm.PlaybackHpoutSpeaker {
-    type hooks
-    slave.pcm "PlaybackDmix"
-    hooks.0 {
-        type ctl_elems
-        hook_args [
-            {
-                name "HpSpeaker Switch"
-                optional true
-                value 1
-            }
-        ]
-    }
-}
-
-pcm.PlaybackLineoutSpeaker {
-    type hooks
-    slave.pcm "PlaybackDmix"
-    hooks.0 {
-        type ctl_elems
-        hook_args [
-            {
-                name "LINEOUT Output Select"
-                optional true
-                value 1
-            }
-            {
-                name "LINEOUT Switch"
-                optional true
-                value 1
-            }
-            {
-                name "LINEOUT volume"
-                optional true
-                value 20
-            }
-        ]
-    }
-}
-
-pcm.CaptureMic {
-    type hooks
-    slave.pcm "CaptureAc107"
-    hooks.0 {
-        type ctl_elems
-        hook_args [
-            {
-                name "Channel 1 PGA Gain"
-                optional true
-                value 20
-            }
-            {
-                name "Channel 2 PGA Gain"
-                optional true
-                value 20
-            }
-        ]
-    }
-}
-
-pcm.CaptureReference {
-    type hooks
-    slave.pcm "Capture"
-    hooks.0 {
-        type ctl_elems
-        hook_args [
-            {
-                name "ADCL Input MIC1 Boost Switch"
-                optional true
-                value 1
-            }
-            {
-                name "ADCR Input MIC2 Boost Switch"
-                optional true
-                value 1
-            }
-            {
-                name "MIC1 gain volume"
-                optional true
-                value 0
-            }
-            {
-                name "MIC2 gain volume"
-                optional true
-                value 0
-            }
-        ]
-    }
-}
-
-pcm.CaptureAec {
-    type plug
-    slave.pcm {
-        type multi
-        slaves {
-            a { pcm "CaptureMic" channels 2 }
-            b { pcm "CaptureReference" channels 2 }
-        }
-        bindings {
-            0 { slave a channel 0 }
-            1 { slave a channel 1 }
-            2 { slave b channel 0 }
-            3 { slave b channel 1 }
-        }
-    }
-    ttable.0.0 1
-    ttable.1.1 1
-    ttable.2.2 1
-    ttable.3.3 1
-}
-ASOUND_EOF
+# /etc/asound.conf — chosen by the profile's KERNEL family, not the GPU model
+# (bd tsp-f3fm.220). The vendor 4.9 kernel's codec card is "audiocodec" and
+# keeps the stock file byte for byte (hardware-firmware-probes.md §12); the
+# open 6.x/7.x kernels expose the sun4i-codec card "Codec" and also get
+# boot-time speaker-path mixer defaults. An empty or unknown kernel repo fails
+# the build. Sources: device-config/alsa/, tests/test-alsa-config.sh.
+/work/src/scripts/install-alsa-config.sh "${PF_KERNEL_REPO}" "${ROOTFS}" /work/src
 
 # /etc/pocketforge/display-env.sh — central display/env (build-int §12.4)
 install -d "${ROOTFS}/etc/pocketforge"
@@ -1900,7 +1727,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_KERNEL_REPO=${PF_KERNEL_REPO} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \

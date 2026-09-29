@@ -1,0 +1,23 @@
+# Controls of the mainline sun4i-codec card "Codec" as bound for the A133
+# ("allwinner,sun50i-a133-codec" -> H616 card, "H616 Audio Codec"), read from
+# the driver source at the kernel pin below (bd tsp-f3fm.220).
+#   repo:   pocketforge-os/kernel-sunxi-6.x
+#   commit: 6ccb87902144babc2838b03840c0413bf0941ab4  (platform.lock kernel-sunxi-6.x pin)
+#   file:   sound/soc/sunxi/sun4i-codec.c
+# Complete for this card: the H616 codec component controls (plain and DAPM
+# mixer/mux) plus the card's one pin switch. The TSP DTS's aux speaker amp
+# (simple-audio-amplifier with only enable-gpios) adds no controls.
+# Names as ALSA shows them: the mixer switches are shared by Left/Right Mixer
+# (SOC_MIXER_ARRAY over one array), so soc-dapm names them without a widget
+# prefix. A mux control takes the widget name. SOC_DAPM_PIN_SWITCH("Speaker")
+# appends " Switch".
+# Re-derive: git show 6ccb87902144babc2838b03840c0413bf0941ab4:sound/soc/sunxi/sun4i-codec.c | sed -n '1067,1068p;1887,1921p;1964,1966p'
+# Columns (TAB-separated): name, kind, spec, source line
+#   int <min> <max> | bool | enum <item>|<item>...
+DAC Playback Volume	int	0 63	sun4i-codec.c:1888
+Line Out Playback Volume	int	0 31	sun4i-codec.c:1891
+Line Out Playback Switch	bool	-	sun4i-codec.c:1895
+DAC Playback Switch	bool	-	sun4i-codec.c:1902
+DAC Reversed Playback Switch	bool	-	sun4i-codec.c:1906
+Line Out Source Playback Route	enum	Stereo|Mono Differential	sun4i-codec.c:1919 (items :1067-1068)
+Speaker Switch	bool	-	sun4i-codec.c:1965

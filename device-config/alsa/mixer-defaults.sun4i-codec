@@ -1,0 +1,32 @@
+# Boot-time mixer defaults for the sun4i-codec card "Codec" (bd tsp-f3fm.220).
+# Applied by /usr/lib/pocketforge/audio-defaults.sh (pocketforge-audio-defaults.service)
+# as `amixer -c Codec cset name=<NAME> <VALUE>` for each `NAME=VALUE` line.
+# A single value with no comma applies to every channel of a stereo control.
+#
+# Every NAME must exist in the open driver. tests/test-alsa-config.sh checks
+# each NAME and VALUE against tests/fixtures/alsa/sun4i-codec-controls.*.tsv,
+# which are taken from the driver source at each kernel pin.
+#
+# Speaker path on the TSP (sun50i-a133-pocketforge-tsp.dts &codec routing):
+#   DAC -> Left/Right Mixer ("DAC Playback Switch") -> "Line Out Source
+#   Playback Route" -> Line Out ("Line Out Playback Switch"/"Volume") ->
+#   LINEOUT -> Speaker Amp (simple-audio-amplifier, enable PH6) -> Speaker
+#   ("Speaker Switch" pin switch).
+# Every gate is a register whose reset value is off, except the digital
+# volume and the pin switch; all are set explicitly so boot state never depends
+# on reset values or on what alsactl restored.
+#
+# Levels match the stock vendor boot values for the same registers
+# (kernel-sunxi-4.9 pocketforge_tsp.dts codec node: digital_vol = <0x00>,
+# lineout_vol = <0x1a>):
+#   DAC Playback Volume 63 = DVOL register 0 (the control is inverted), 0 dB.
+#   Line Out Playback Volume 26 = -7.5 dB (TLV: 2..31 is -43.5 dB + 1.5 dB/step).
+# User-facing volume stays the softvol "Soft Volume Master" control from
+# asound.conf, which this file does not touch.
+DAC Playback Volume=63
+DAC Playback Switch=on
+DAC Reversed Playback Switch=off
+Line Out Source Playback Route=Stereo
+Line Out Playback Volume=26
+Line Out Playback Switch=on
+Speaker Switch=on
