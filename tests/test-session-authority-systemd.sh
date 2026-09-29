@@ -42,7 +42,8 @@ build_cache_df_before=
 build_cache_df_after=
 run_scope_peak_bytes=0
 build_cache_records_removed=0
-allow_full_cache_prune=0
+build_cache_leftover_ids=
+build_cache_missing_ids=
 docker_run_profile=owner-exception
 run_scope=
 docker_root=
@@ -77,6 +78,8 @@ fail_recorded_or() {
 
 # shellcheck source=tests/session-authority-systemd/docker-argv-audit.sh
 source "${fixtures}/docker-argv-audit.sh"
+# shellcheck source=tests/session-authority-systemd/build-cache-audit.sh
+source "${fixtures}/build-cache-audit.sh"
 
 assert_safe_host() {
     local fixture_root="${1:-/}"
@@ -271,11 +274,8 @@ print_argv() {
     printf '\n'
 }
 
-capture_build_cache_ids() {
-    local destination="$1"
-    docker_checked buildx du --format '{{.ID}}' 2>/dev/null \
-        | awk 'NF { sub(/[*]$/, "", $1); print $1 }' \
-        | sort -u >"${destination}"
+build_cache_docker() {
+    docker_checked "$@"
 }
 
 capture_docker_system_df() {
@@ -314,7 +314,7 @@ print("\t".join(str(info[key]) for key in (
 cleanup() {
     local status=$? receipt_result receipt_reason scope_removed=false
     local container_status image_status labeled_containers labeled_images
-    local cache_current cache_created cache_remaining cache_id attempt
+    local attempt
     trap - EXIT INT TERM
     cleanup_active=1
     set +e
@@ -345,40 +345,11 @@ cleanup() {
             failure_reason='RESOURCE_CLEANUP_AUDIT_FAILED'
         fi
 
-        cache_current="${run_scope}/build-cache-current"
-        cache_created="${run_scope}/build-cache-created"
-        cache_remaining="${run_scope}/build-cache-remaining"
         if [ -s "${run_scope}/build-cache-before" ] || [ -f "${run_scope}/build-cache-before" ]; then
-            if capture_build_cache_ids "${cache_current}"; then
-                comm -13 "${run_scope}/build-cache-before" "${cache_current}" >"${cache_created}"
-                build_cache_records_removed="$(awk 'NF { count++ } END { print count + 0 }' "${cache_created}")"
-                while IFS= read -r cache_id; do
-                    [ -n "${cache_id}" ] || continue
-                    docker_checked buildx prune --force --filter "id=${cache_id}" \
-                        >/dev/null 2>&1 || cleanup_failed=1
-                done <"${cache_created}"
-                if [ ! -s "${run_scope}/build-cache-before" ] \
-                    && [ "${build_cache_df_before}" = \
-                        'Build_Cache=total:0,active:0,size:0B,reclaimable:0B' ]; then
-                    allow_full_cache_prune=1
-                    docker_checked buildx prune --force --all \
-                        >/dev/null 2>&1 || cleanup_failed=1
-                    allow_full_cache_prune=0
-                fi
-                if capture_build_cache_ids "${cache_current}.after"; then
-                    comm -13 "${run_scope}/build-cache-before" \
-                        "${cache_current}.after" >"${cache_remaining}"
-                    if [ -s "${cache_remaining}" ]; then
-                        cleanup_failed=1
-                        failure_reason='BUILD_CACHE_CLEANUP_FAILED'
-                    fi
-                else
-                    cleanup_failed=1
-                    failure_reason='BUILD_CACHE_AUDIT_FAILED'
-                fi
-            else
+            if ! cleanup_run_build_cache "${run_scope}/build-cache-before" \
+                "${run_scope}/build-cache-cleanup"; then
                 cleanup_failed=1
-                failure_reason='BUILD_CACHE_AUDIT_FAILED'
+                failure_reason="$(build_cache_drift_reason)"
             fi
         fi
     fi
@@ -398,7 +369,7 @@ cleanup() {
         done
         if [ "${build_cache_df_after}" != "${build_cache_df_before}" ]; then
             cleanup_failed=1
-            failure_reason='BUILD_CACHE_USAGE_DRIFT'
+            failure_reason="$(build_cache_drift_reason)"
         fi
     fi
 
@@ -420,7 +391,10 @@ cleanup() {
     else
         receipt_result=FAIL
         receipt_reason="${failure_reason:-UNEXPECTED_EXIT_${status}}"
-        receipt_reason="${receipt_reason%%:*}"
+        case "${receipt_reason}" in
+            BUILD_CACHE_USAGE_DRIFT:*) ;;
+            *) receipt_reason="${receipt_reason%%:*}" ;;
+        esac
         status=1
     fi
 
@@ -470,7 +444,7 @@ case "${1:-}" in
             "image inspect ${test_image}"
             "image ls --quiet --filter label=${run_label}"
             "image rm --force ${test_image}"
-            'buildx du --format {{.ID}}'
+            'buildx du --format json'
             'buildx prune --force --filter id=fixture-cache-id'
         )
         make_systemd_argv "${test_image}" "${systemd_container}"
@@ -567,7 +541,7 @@ build_cache_df_before="$(extract_build_cache_df "${docker_system_df_before}")" \
     || fail 'DOCKER_DISK_USAGE_UNREADABLE: build-cache total missing'
 run_started=1
 
-capture_build_cache_ids "${run_scope}/build-cache-before" \
+capture_build_cache_records "${run_scope}/build-cache-before" \
     || fail_recorded_or 'BUILD_CACHE_AUDIT_UNAVAILABLE: docker buildx du failed'
 cleanup_docker_resources=1
 

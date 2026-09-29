@@ -393,7 +393,18 @@ audit_docker_argv() {
             esac
             ;;
         buildx)
-            if [ "${argv[1]-}" = prune ]; then
+            if [ "${argv[1]-}" = du ]; then
+                if [ "${#argv[@]}" -ne 4 ] \
+                    || [ "${argv[2]-}" != --format ] \
+                    || [ "${argv[3]-}" != json ]; then
+                    fail 'UNSCOPED_CONTAINER_ARGV: build-cache audit is not exact JSON listing'
+                fi
+            elif [ "${argv[1]-}" = prune ]; then
+                if [ "${#argv[@]}" -ne 5 ] \
+                    || [ "${argv[2]-}" != --force ] \
+                    || [ "${argv[3]-}" != --filter ]; then
+                    fail 'UNSCOPED_CONTAINER_ARGV: build-cache prune argv drifted'
+                fi
                 value=
                 for ((index = 0; index < ${#argv[@]}; index++)); do
                     if [ "${argv[index]}" = --filter ]; then
@@ -402,14 +413,7 @@ audit_docker_argv() {
                 done
                 case "${value}" in
                     id=*) ;;
-                    *)
-                        if [ "${allow_full_cache_prune}" -eq 1 ] \
-                            && argv_has --all "${argv[@]}"; then
-                            :
-                        else
-                            fail 'UNSCOPED_CONTAINER_ARGV: build-cache prune lacks record id'
-                        fi
-                        ;;
+                    *) fail 'UNSCOPED_CONTAINER_ARGV: build-cache prune lacks record id' ;;
                 esac
                 argv_has --force "${argv[@]}" \
                     || fail 'UNSCOPED_CONTAINER_ARGV: build-cache prune is interactive'

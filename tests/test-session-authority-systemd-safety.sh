@@ -9,6 +9,7 @@ probe="${root}/tests/probe-session-authority-docker-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
 argv_audit="${root}/tests/session-authority-systemd/docker-argv-audit.sh"
 probe_diagnostics="${root}/tests/session-authority-systemd/probe-diagnostics.sh"
+build_cache_audit="${root}/tests/session-authority-systemd/build-cache-audit.sh"
 remount_helper="${root}/tests/session-authority-systemd/remount-cgroup-systemd"
 workflow="${root}/.github/workflows/session-authority-systemd.yml"
 precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditions.py"
@@ -152,8 +153,57 @@ case "${1:-}" in
         ;;
     buildx)
         case "${2:-}" in
-            du) ;;
-            prune) ;;
+            du)
+                if [ -n "${FAKE_CACHE_RECORDS:-}" ]; then
+                    [ "${3:-}" = --format ] && [ "${4:-}" = json ] || exit 2
+                    while IFS= read -r record; do
+                        [ -z "${record}" ] || printf '%s\n' "${record}"
+                    done <"${FAKE_CACHE_RECORDS}"
+                    if [ -n "${FAKE_CACHE_DU_COUNTER:-}" ]; then
+                        count=0
+                        [ ! -s "${FAKE_CACHE_DU_COUNTER}" ] \
+                            || count="$(<"${FAKE_CACHE_DU_COUNTER}")"
+                        count=$((count + 1))
+                        printf '%s\n' "${count}" >"${FAKE_CACHE_DU_COUNTER}"
+                        if [ "${count}" -eq 1 ] \
+                            && [ -n "${FAKE_CACHE_LATE_RECORD:-}" ]; then
+                            printf '%s\n' "${FAKE_CACHE_LATE_RECORD}" \
+                                >>"${FAKE_CACHE_RECORDS}"
+                        fi
+                    fi
+                fi
+                ;;
+            prune)
+                if [ -n "${FAKE_CACHE_RECORDS:-}" ]; then
+                    cache_id=
+                    previous=
+                    for argument in "$@"; do
+                        if [ "${previous}" = --filter ]; then
+                            cache_id="${argument#id=}"
+                        fi
+                        previous="${argument}"
+                    done
+                    [ -n "${cache_id}" ] || exit 2
+                    python3 - "${FAKE_CACHE_RECORDS}" "${cache_id}" \
+                        "${FAKE_CACHE_STUCK_ID:-}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+target = sys.argv[2]
+stuck = sys.argv[3]
+records = [json.loads(line) for line in path.read_text().splitlines() if line]
+if target == stuck or any(target in record.get("Parents", []) for record in records):
+    raise SystemExit(0)
+path.write_text("".join(
+    json.dumps(record, separators=(",", ":")) + "\n"
+    for record in records
+    if record.get("ID") != target
+))
+PY
+                fi
+                ;;
             *) exit 2 ;;
         esac
         ;;
@@ -657,6 +707,7 @@ expect_rejected device-mount "${safe_run[@]}" \
     --mount type=bind,source=/dev/console,target=/console \
     "${audit_image}" /usr/local/libexec/remount-cgroup-systemd
 expect_rejected unscoped-full-cache-prune buildx prune --force --all
+expect_rejected flattened-cache-audit buildx du --format '{{.ID}}'
 
 reset_logs
 run_fake --audit-lifecycle-argv "${fake_root}" "${audit_id}" \
@@ -798,8 +849,11 @@ grep -Fq 'source "${root}/tests/session-authority-systemd/probe-diagnostics.sh"'
 [ "$(grep -Fh 'collect_failed_units_and_cgroup "${name}"' \
     "${probe}" "${probe_diagnostics}" | wc -l)" -eq 2 ] || exit 1
 [ "$(grep -Fc 'candidate_diagnostics_reason' "${probe}")" -eq 2 ] || exit 1
-grep -Fq 'docker buildx prune --force --all' "${probe}" || exit 1
-grep -Fq 'allow_full_cache_prune=1' "${harness}" || exit 1
+! grep -Fq 'buildx prune --force --all' \
+    "${probe}" "${harness}" "${build_cache_audit}" || exit 1
+grep -Fq 'source "${fixtures}/build-cache-audit.sh"' "${harness}" || exit 1
+grep -Fq 'source "${root}/tests/session-authority-systemd/build-cache-audit.sh"' \
+    "${probe}" || exit 1
 ! grep -Fq 'reason="boot_failed_$(docker logs' "${probe}" || exit 1
 grep -Fq "grep -E '^(systemd-docker-probe:|probe_)'" "${workflow}" || exit 1
 grep -Fq "needs.probe.outputs.candidate_e == 'pass'" "${workflow}" || exit 1
@@ -810,4 +864,73 @@ grep -Fqx 'CMD ["/sbin/init"]' "${probe_recipe}" || exit 1
 grep -Fq 'candidate_e=${candidate_e_result} adopted=${adopted} owner_exception=${owner_exception}' \
     "${probe}" || exit 1
 
-echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused run_allowlist=ok probe_host_cgroup_bind=refused-zero-docker probe_fixture=audit-only probe_argv_audit=shared probe_matrix=approved-only docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker getty_masks=5 runtime=fake-docker'
+# Exercise the shared cache reconciler without a Docker daemon. The baseline is
+# deliberately non-empty. The run adds a child of a protected baseline record
+# plus a new parent/child chain whose lexical order makes the old one-pass
+# ID-only cleanup attempt the parent first and leak it.
+cache_state="${tmp}/cache-records.jsonl"
+cache_before="${tmp}/cache-before.tsv"
+cache_after="${tmp}/cache-after.tsv"
+cache_expected_prunes="${tmp}/cache-expected-prunes"
+cache_du_counter="${tmp}/cache-du-counter"
+export FAKE_CACHE_RECORDS="${cache_state}"
+build_cache_docker() {
+    DOCKER_CALL_LOG="${call_log}" "${fake_bin}/docker" "$@"
+}
+build_cache_cleanup_pause() {
+    :
+}
+# shellcheck source=tests/session-authority-systemd/build-cache-audit.sh
+source "${build_cache_audit}"
+printf '%s\n' \
+    '{"ID":"base-parent","Parents":["base-root"]}' \
+    '{"ID":"base-root","Parents":[]}' >"${cache_state}"
+capture_build_cache_records "${cache_before}"
+printf '%s\n' \
+    '{"ID":"base-parent","Parents":["base-root"]}' \
+    '{"ID":"base-root","Parents":[]}' \
+    '{"ID":"a-new-parent","Parents":["base-parent"]}' \
+    '{"ID":"z-new-child","Parents":["a-new-parent"]}' \
+    '{"ID":"m-new-baseline-child","Parents":["base-parent"]}' \
+    >"${cache_state}"
+export FAKE_CACHE_DU_COUNTER="${cache_du_counter}"
+export FAKE_CACHE_LATE_RECORD='{"ID":"late-new","Parents":["base-root"]}'
+reset_logs
+cleanup_run_build_cache "${cache_before}" "${tmp}/cache-cleanup"
+capture_build_cache_records "${cache_after}"
+cmp -s "${cache_before}" "${cache_after}" || {
+    echo 'session-authority systemd-safety: FAIL: cache cleanup did not restore exact baseline IDs' >&2
+    exit 1
+}
+[ "${build_cache_records_removed}" -eq 4 ] || exit 1
+[ -z "${build_cache_leftover_ids}" ] || exit 1
+[ -z "${build_cache_missing_ids}" ] || exit 1
+printf '%s\n' \
+    'cmd=buildx prune --force --filter id=z-new-child' \
+    'cmd=buildx prune --force --filter id=a-new-parent' \
+    'cmd=buildx prune --force --filter id=m-new-baseline-child' \
+    'cmd=buildx prune --force --filter id=late-new' \
+    >"${cache_expected_prunes}"
+grep -F 'cmd=buildx prune ' "${call_log}" | cmp -s - "${cache_expected_prunes}" \
+    || exit 1
+! grep -Fq 'id=base-parent' "${call_log}" || exit 1
+! grep -Fq -- '--all' "${call_log}" || exit 1
+unset FAKE_CACHE_DU_COUNTER FAKE_CACHE_LATE_RECORD
+
+# A deliberately unprunable run-owned record must fail exact set equality and
+# carry the leftover ID in the machine-readable failure reason.
+printf '%s\n' \
+    '{"ID":"base-parent","Parents":["base-root"]}' \
+    '{"ID":"base-root","Parents":[]}' \
+    '{"ID":"stuck-new","Parents":["base-parent"]}' \
+    >"${cache_state}"
+export FAKE_CACHE_STUCK_ID=stuck-new
+if cleanup_run_build_cache "${cache_before}" "${tmp}/cache-stuck"; then
+    echo 'session-authority systemd-safety: FAIL: leftover cache record passed exact audit' >&2
+    exit 1
+fi
+[ "$(build_cache_drift_reason)" = \
+    'BUILD_CACHE_USAGE_DRIFT:leftover_ids=stuck-new;missing_ids=none' ] || exit 1
+unset FAKE_CACHE_STUCK_ID FAKE_CACHE_RECORDS
+
+echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused run_allowlist=ok probe_host_cgroup_bind=refused-zero-docker probe_fixture=audit-only probe_argv_audit=shared probe_matrix=approved-only docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after cache_baseline=exact cache_parent_graph=child-first cache_leftover_ids=reported argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker getty_masks=5 runtime=fake-docker'
