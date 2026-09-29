@@ -15,14 +15,15 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# tsp-f3fm.217 moves runtime alone: runtime#102 (merged 2ad0ca76 -> 0955d8a8) changed only
-# pf-input-decode, pf-input-broker, pf-input-collect, pf-collect-ui, Cargo.lock and
-# the vendor lock, none of which the launcher vendors, so launcher 96feb08c stays
-# the co-pin. The previous image guard accepted (2ad0ca76, 96feb08c); the new guard
-# refuses the old runtime and the pre-#145 launcher 1e5a3d97, and an older one.
-expected_runtime=0955d8a83ee59df89eaba79ffee9e99e4f52384c
-expected_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
-old_runtime=2ad0ca76efc984ad80a167759cfcf23657fb0c78
+# tsp-f3fm.219 moves runtime and launcher together: runtime#103 (merged 0955d8a8 ->
+# 7536aa1f) changed the vendored pf-session-authority (self-driven tick, presentation
+# deadline, ended-session replay filter, logged busy refusals), and launcher#146
+# (merged 96feb08c -> 7a2b792d) re-vendors exactly that tree. The previous image guard
+# accepted (0955d8a8, 96feb08c). The new guard refuses the old runtime, the old
+# launcher (whose vendored authority differs from 7536aa1f), and older launchers.
+expected_runtime=7536aa1f5af76f0220b582ee68e29e254251fd76
+expected_launcher=7a2b792d0813fc8fb5c2915bdc00ef976b0cc986
+old_runtime=0955d8a83ee59df89eaba79ffee9e99e4f52384c
 old_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
 pre145_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
 older_launcher=bb8c9bc8c9ea15238d08cfee5376049bf67cf855
@@ -40,14 +41,17 @@ old_guard_accepts() {
 }
 
 # Each guard accepts exactly its own (runtime, launcher) pair: the new image
-# refuses the old runtime, the pre-#145 launcher and an older launcher; the old
-# image refuses the new runtime. So the lock must move image and runtime together.
+# refuses the old runtime, the old launcher, the pre-#145 launcher and an older
+# launcher; the old image refuses the new runtime and the new launcher. So the lock
+# must move image, runtime and launcher together.
 new_guard_accepts "$expected_runtime" "$expected_launcher"
 ! new_guard_accepts "$old_runtime" "$expected_launcher"
+! new_guard_accepts "$expected_runtime" "$old_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre145_launcher"
 ! new_guard_accepts "$expected_runtime" "$older_launcher"
 old_guard_accepts "$old_runtime" "$old_launcher"
 ! old_guard_accepts "$expected_runtime" "$old_launcher"
+! old_guard_accepts "$old_runtime" "$expected_launcher"
 ! old_guard_accepts "$old_runtime" "$pre145_launcher"
 ! old_guard_accepts "$old_runtime" "$older_launcher"
 
