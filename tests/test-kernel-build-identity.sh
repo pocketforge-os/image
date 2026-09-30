@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Execute the exact Dockerfile kernel heredoc with a tiny hermetic Kbuild stand-in.
-# The stand-in models Linux 7.2's init/Makefile UTS_VERSION rule while keeping
-# KERNELRELEASE, module placement, and vermagic observable and independent.
+# The stand-in models both Linux 6.x+'s generated utsversion.h and Linux 4.9's
+# generated compile.h while keeping KERNELRELEASE, module placement, and
+# vermagic observable and independent.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,9 +28,27 @@ case " $* " in
     : >drivers/gpu/drm/imagination/powervr.ko
     : >Module.symvers
     : >System.map
-    uts="#${KBUILD_BUILD_VERSION:-1} SMP PREEMPT_DYNAMIC ${KBUILD_BUILD_TIMESTAMP}"
+    build_version=${KBUILD_BUILD_VERSION:-1}
+    case "${FAKE_UTS_LAYOUT:-6x}" in
+      compile-missing-token|uts-missing-token) build_version=1 ;;
+    esac
+    uts="#${build_version} SMP PREEMPT_DYNAMIC ${KBUILD_BUILD_TIMESTAMP}"
     uts="$(printf '%s' "$uts" | cut -b -64)"
-    printf '#define UTS_VERSION "%s"\n' "$uts" >include/generated/utsversion.h
+    case "${FAKE_UTS_LAYOUT:-6x}" in
+      6x)
+        printf '#define UTS_VERSION "%s"\n' "$uts" >include/generated/utsversion.h
+        ;;
+      4.9|compile-missing-token)
+        printf '#define UTS_VERSION "%s"\n' "$uts" >include/generated/compile.h
+        ;;
+      uts-missing-token)
+        printf '#define UTS_VERSION "%s"\n' "$uts" >include/generated/utsversion.h
+        printf '#define UTS_VERSION "#%s fallback must not be used"\n' \
+          "${KBUILD_BUILD_VERSION}" >include/generated/compile.h
+        ;;
+      neither) ;;
+      *) printf 'unknown FAKE_UTS_LAYOUT: %s\n' "$FAKE_UTS_LAYOUT" >&2; exit 2 ;;
+    esac
     ;;
   *" modules_install "*)
     modroot=
@@ -59,7 +78,7 @@ other_sha=0123456789abcdef0123456789abcdef01234567
 krel=7.2.0-pocketforge
 
 run_kernel_stage() {
-  local label=$1 sha=${2-__unset__} staged_sha=${3-__unset__}
+  local label=$1 sha=${2-__unset__} staged_sha=${3-__unset__} uts_layout=${4-6x}
   local work="${scratch}/${label}"
   mkdir -p "${work}/kernel" "${work}/out"
   if [[ $staged_sha != __unset__ ]]; then
@@ -68,7 +87,7 @@ run_kernel_stage() {
   sed "s#/work/kernel#${work}/kernel#g; s#/out#${work}/out#g" \
     "${scratch}/kernel-heredoc.sh" >"${work}/run.sh"
   local -a env_args=(
-    "PATH=${scratch}/bin:${PATH}" "FAKE_KREL=${krel}"
+    "PATH=${scratch}/bin:${PATH}" "FAKE_KREL=${krel}" "FAKE_UTS_LAYOUT=${uts_layout}"
     PF_KERNEL_REPO=kernel-sunxi-7.x PF_KERNEL_DEFCONFIG=fixture_defconfig
     PF_KERNEL_DTB=fixture.dtb PF_TOOLCHAIN_GCC_VERSION=14.2.0
     PF_KERNEL_SOURCE_DATE_EPOCH=1790512830 SOURCE_DATE_EPOCH=1790512830
@@ -98,9 +117,15 @@ test "$other_uts" != "$locked_uts"
 test "$(cat "${scratch}/other/out/build/kernel.release")" = "$krel"
 test -d "${scratch}/other/out/lib/modules/${krel}"
 
+run_kernel_stage linux49 "$locked_sha" "$locked_sha" 4.9
+linux49_uts="$(sed -n 's/^#define UTS_VERSION "\(.*\)"$/\1/p' \
+  "${scratch}/linux49/kernel/include/generated/compile.h")"
+[[ $linux49_uts == "#${locked_sha:0:12} "* ]]
+test ! -e "${scratch}/linux49/kernel/include/generated/utsversion.h"
+
 expect_rejected() {
-  local label=$1 sha=${2-__unset__} staged_sha=${3-__unset__}
-  if run_kernel_stage "$label" "$sha" "$staged_sha"; then
+  local label=$1 sha=${2-__unset__} staged_sha=${3-__unset__} uts_layout=${4-6x}
+  if run_kernel_stage "$label" "$sha" "$staged_sha" "$uts_layout"; then
     printf 'FAIL: kernel identity case %s was accepted\n' "$label" >&2
     exit 1
   fi
@@ -111,4 +136,25 @@ expect_rejected uppercase 6D86D65EFAA275EB18C810C531C19EC6249D85B5 6D86D65EFAA27
 expect_rejected nonhex 6d86d65efaa275eb18c810c531c19ec6249d85bz 6d86d65efaa275eb18c810c531c19ec6249d85bz
 expect_rejected unresolved "$locked_sha" "$other_sha"
 
-printf 'PASS: lock-resolved SHA drives UTS_VERSION while release, module path, and vermagic stay fixed\n'
+expect_uts_rejected() {
+  local label=$1 uts_layout=$2 expected=$3
+  if run_kernel_stage "$label" "$locked_sha" "$locked_sha" "$uts_layout"; then
+    printf 'FAIL: kernel UTS identity case %s was accepted\n' "$label" >&2
+    exit 1
+  fi
+  grep -Fx "$expected" "${scratch}/${label}/stdout" >/dev/null \
+    || {
+      printf 'FAIL: kernel UTS identity case %s failed for the wrong reason:\n' "$label" >&2
+      tail -n 8 "${scratch}/${label}/stdout" >&2
+      tail -n 8 "${scratch}/${label}/stderr" >&2
+      exit 1
+    }
+}
+expect_uts_rejected uts-neither neither \
+  'kernel UTS identity FAIL: no generated UTS_VERSION header'
+expect_uts_rejected compile-missing-token compile-missing-token \
+  'kernel UTS identity FAIL: KBUILD_BUILD_VERSION missing from UTS_VERSION'
+expect_uts_rejected uts-missing-token uts-missing-token \
+  'kernel UTS identity FAIL: KBUILD_BUILD_VERSION missing from UTS_VERSION'
+
+printf 'PASS: lock-resolved SHA drives UTS_VERSION across 4.9 and 6.x layouts while release, module path, and vermagic stay fixed\n'

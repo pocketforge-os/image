@@ -231,7 +231,13 @@ dts="$(find arch/arm64/boot/dts -name "${PF_KERNEL_DTB%.dtb}.dts" -print -quit)"
 [ -n "$dts" ] || { echo "DTB source ${PF_KERNEL_DTB%.dtb}.dts not found under arch/arm64/boot/dts"; exit 1; }
 dtb_target="${dts#arch/arm64/boot/dts/}"; dtb_target="${dtb_target%.dts}.dtb"
 make -j"$(nproc)" Image modules "${dtb_target}"
-grep -Fq "#${KBUILD_BUILD_VERSION} " include/generated/utsversion.h \
+# Linux 6.1+ generates utsversion.h; the 4.9 tree keeps UTS_VERSION in
+# compile.h. Prefer the newer header when both exist so it cannot be bypassed.
+uts_header=include/generated/utsversion.h
+[ -f "${uts_header}" ] || uts_header=include/generated/compile.h
+[ -f "${uts_header}" ] \
+  || { echo "kernel UTS identity FAIL: no generated UTS_VERSION header"; exit 1; }
+grep -Fq "#${KBUILD_BUILD_VERSION} " "${uts_header}" \
   || { echo "kernel UTS identity FAIL: KBUILD_BUILD_VERSION missing from UTS_VERSION"; exit 1; }
 
 # --- Stage artifacts: Image + DTB + /lib/modules + Module.symvers ----------------------
