@@ -1707,7 +1707,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "ca22de0ed3cec46c73f2de44aa6e570e109695d8" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "ab9fb7fde36e633add69b94c36bf1213f7cff5d9" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fourteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
