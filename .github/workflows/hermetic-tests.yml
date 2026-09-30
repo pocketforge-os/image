@@ -122,6 +122,7 @@ jobs:
             tests/test-sdl-kmsdrm-sysroot.sh
             tests/test-session-authority-systemd-safety.sh
             tests/test-userdata-partition.sh
+            tests/test-uboot-logo.sh
             tests/test-usbnet-bench-role.sh
             tests/test-usbnet-bench-rootfs.sh
           )
