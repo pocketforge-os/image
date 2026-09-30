@@ -85,6 +85,51 @@ fi
 grep -F 'target_abi=debian-bookworm' "$dockerfile" >/dev/null
 grep -F 'build/check-rootfs-abi.sh' "$customize" >/dev/null
 grep -F 'GPU_UM_MESA_DIR' "$customize" >/dev/null
+
+# G11 (tsp-mc9m.41.924.23): the on-disk shader cache is enabled, with zstd
+# compression, in the TARGET aarch64 cross stage (gpu-um-build) ONLY. Mesa
+# requires zlib or zstd whenever shader-cache is enabled (gpu-um-tsp
+# meson.build:1738-1742: "Shader Cache requires compression"); the native
+# x86_64 precompiler stage (mesa_clc/pco_clc/vtn_bindgen2 -- host-only
+# generators, never linked into the on-device driver) must stay untouched.
+native_precompiler_block="$(awk '
+    found && /^FROM / { exit }
+    found { print }
+    index($0, "AS gpu-um-native-precompilers") { found = 1; print; next }
+' "$dockerfile")"
+[ -n "$native_precompiler_block" ] || {
+    echo 'gpu-um-native-precompilers stage not found' >&2
+    exit 1
+}
+printf '%s\n' "$native_precompiler_block" | grep -F -- '-Dshader-cache=disabled' >/dev/null
+printf '%s\n' "$native_precompiler_block" | grep -F -- '-Dzstd=disabled' >/dev/null
+
+# shellcheck disable=SC2016 # Dockerfile stage alias is intentionally literal.
+target_stage_block="$(awk '
+    found && /^FROM / { exit }
+    found { print }
+    index($0, "AS gpu-um-build") { found = 1; print; next }
+' "$dockerfile")"
+[ -n "$target_stage_block" ] || {
+    echo 'gpu-um-build stage not found' >&2
+    exit 1
+}
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dshader-cache=enabled' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dzstd=enabled' >/dev/null
+# The cross sysroot needs the aarch64 zstd headers/.pc file for meson's
+# `dependency('libzstd', required: get_option('zstd'))` to resolve; the
+# runtime library (libzstd1) is already in rootfs-packages.txt.
+printf '%s\n' "$target_stage_block" | grep -F 'libzstd-dev:arm64' >/dev/null
+# Mesa's own runtime default is 1 GiB when MESA_SHADER_CACHE_MAX_SIZE is unset
+# (src/util/disk_cache.c). This device's rootfs partition is sized to
+# content+25% headroom with a 1024 MiB floor (scripts/build-rootfs.sh, "Size
+# the ext4 image"), so an unbounded cache could alone consume the entire
+# free-space margin. Bake a much smaller ceiling, in the same tier as the
+# device's other on-disk caps (rootfs-overlay/etc/systemd/journald.conf.d/
+# pocketforge-{release,dev}.conf: 16M/50M, "to avoid filling the rootfs
+# partition"), as the build-time default via Mesa's own meson option -- still
+# overridable at runtime via MESA_SHADER_CACHE_MAX_SIZE with no rebuild.
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dshader-cache-max-size=64M' >/dev/null
 # The open-model install block is shared by release and dev construction. Keep
 # the production probe outside every POCKETFORGE_VARIANT conditional.
 probe_install_block="$(sed -n '/# Open Mesa GLES\/EGL\/GBM userspace/,/open Mesa: userspace install verified/p' "$customize")"
