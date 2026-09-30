@@ -15,16 +15,17 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# tsp-f3fm.219 moves runtime and launcher together: runtime#103 (merged 0955d8a8 ->
-# 7536aa1f) changed the vendored pf-session-authority (self-driven tick, presentation
-# deadline, ended-session replay filter, logged busy refusals), and launcher#146
-# (merged 96feb08c -> 7a2b792d) re-vendors exactly that tree. The previous image guard
-# accepted (0955d8a8, 96feb08c). The new guard refuses the old runtime, the old
-# launcher (whose vendored authority differs from 7536aa1f), and older launchers.
+# tsp-f3fm.221 moves the launcher alone: launcher#147 (merged 7a2b792d -> d26dfa11)
+# changed only pf-shell and pf-shell-core (the first A after a Menu return launches);
+# its vendored runtime crates are byte-identical to 7a2b792d's, so runtime 7536aa1f
+# stays the co-pin. The previous image guard accepted (7536aa1f, 7a2b792d). The new
+# guard refuses the old launcher (it drops the first A after a return), the pre-#146
+# launcher, older launchers and the pre-tsp-f3fm.219 runtime 0955d8a8.
 expected_runtime=7536aa1f5af76f0220b582ee68e29e254251fd76
-expected_launcher=7a2b792d0813fc8fb5c2915bdc00ef976b0cc986
-old_runtime=0955d8a83ee59df89eaba79ffee9e99e4f52384c
-old_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
+expected_launcher=d26dfa1162e601100c3a18956b5ce4a2ddc7427f
+old_launcher=7a2b792d0813fc8fb5c2915bdc00ef976b0cc986
+prior_runtime=0955d8a83ee59df89eaba79ffee9e99e4f52384c
+pre146_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
 pre145_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
 older_launcher=bb8c9bc8c9ea15238d08cfee5376049bf67cf855
 
@@ -37,23 +38,25 @@ new_guard_accepts() {
     test "$1" = "$runtime_guard" && test "$2" = "$launcher_guard"
 }
 old_guard_accepts() {
-    test "$1" = "$old_runtime" && test "$2" = "$old_launcher"
+    test "$1" = "$expected_runtime" && test "$2" = "$old_launcher"
 }
 
 # Each guard accepts exactly its own (runtime, launcher) pair: the new image
-# refuses the old runtime, the old launcher, the pre-#145 launcher and an older
-# launcher; the old image refuses the new runtime and the new launcher. So the lock
-# must move image, runtime and launcher together.
+# refuses the old launcher, the pre-#146, pre-#145 and older launchers, and the
+# pre-tsp-f3fm.219 runtime; the old image refuses the new launcher. So the lock must
+# move image and launcher together.
 new_guard_accepts "$expected_runtime" "$expected_launcher"
-! new_guard_accepts "$old_runtime" "$expected_launcher"
 ! new_guard_accepts "$expected_runtime" "$old_launcher"
+! new_guard_accepts "$prior_runtime" "$expected_launcher"
+! new_guard_accepts "$expected_runtime" "$pre146_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre145_launcher"
 ! new_guard_accepts "$expected_runtime" "$older_launcher"
-old_guard_accepts "$old_runtime" "$old_launcher"
-! old_guard_accepts "$expected_runtime" "$old_launcher"
-! old_guard_accepts "$old_runtime" "$expected_launcher"
-! old_guard_accepts "$old_runtime" "$pre145_launcher"
-! old_guard_accepts "$old_runtime" "$older_launcher"
+old_guard_accepts "$expected_runtime" "$old_launcher"
+! old_guard_accepts "$expected_runtime" "$expected_launcher"
+! old_guard_accepts "$prior_runtime" "$old_launcher"
+! old_guard_accepts "$expected_runtime" "$pre146_launcher"
+! old_guard_accepts "$expected_runtime" "$pre145_launcher"
+! old_guard_accepts "$expected_runtime" "$older_launcher"
 
 grep -F -- '--no-default-features -p pf-shell' "$dockerfile" >/dev/null
 if grep -E 'cargo build .*--features[ =][^#]*(desktop-sim)' "$dockerfile"; then
