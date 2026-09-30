@@ -382,7 +382,25 @@ if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
     mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${KERNEL_IMAGE}"   "::/Image"
     mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${DTB_FILE}"       "::/dtb.bin"
     mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${WORK}/initrd.gz" "::/initrd.gz"
-    echo "  boot-resource: owned-SPL boot payload staged on FAT p4 (mmc 0:4) — Image ($(stat -c%s "${KERNEL_IMAGE}") B), dtb.bin ($(stat -c%s "${DTB_FILE}") B), initrd.gz ($(stat -c%s "${WORK}/initrd.gz") B)"
+
+    # u-boot-tsp-a133#51 scans out a native portrait framebuffer mounted as a
+    # landscape panel, so its logo asset is the animator's pinned first frame
+    # pre-rotated 90 degrees clockwise. The converter accepts only those exact
+    # PNG bytes and emits a deterministic bottom-up 24-bpp BI_RGB bitmap.
+    UBOOT_LOGO_SOURCE="${SRC_DIR}/apps/pocketforge-boot-animator/frames/frame-000.png"
+    UBOOT_LOGO_BMP="${WORK}/pocketforge-logo.bmp"
+    STAGED_UBOOT_LOGO_BMP="${WORK}/staged-pocketforge-logo.bmp"
+    python3 "${TOOLS_DIR}/make-uboot-logo.py" "${UBOOT_LOGO_SOURCE}" "${UBOOT_LOGO_BMP}"
+    python3 "${TOOLS_DIR}/make-uboot-logo.py" --verify "${UBOOT_LOGO_SOURCE}" "${UBOOT_LOGO_BMP}"
+    mmd -i "${GENIMAGE_INPUT}/boot-resource.vfat" "::/boot"
+    mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${UBOOT_LOGO_BMP}" "::/boot/pocketforge-logo.bmp"
+    # Read back and verify the FAT copy, not merely the pre-staging temporary.
+    # A malformed, compressed, misoriented or partial staged bitmap fails here.
+    mcopy -o -i "${GENIMAGE_INPUT}/boot-resource.vfat" \
+        "::/boot/pocketforge-logo.bmp" "${STAGED_UBOOT_LOGO_BMP}"
+    python3 "${TOOLS_DIR}/make-uboot-logo.py" --verify \
+        "${UBOOT_LOGO_SOURCE}" "${STAGED_UBOOT_LOGO_BMP}"
+    echo "  boot-resource: owned-SPL boot payload staged on FAT p4 (mmc 0:4) — Image ($(stat -c%s "${KERNEL_IMAGE}") B), dtb.bin ($(stat -c%s "${DTB_FILE}") B), initrd.gz ($(stat -c%s "${WORK}/initrd.gz") B), boot/pocketforge-logo.bmp ($(stat -c%s "${UBOOT_LOGO_BMP}") B)"
 fi
 
 # tsp-myp1.5 (charger-boot logo): vendor u-boot 2018.05 chooses splash by boot
@@ -504,12 +522,9 @@ if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
         exit 1
     fi
     echo "  SPL: OWNED u-boot-sunxi-with-spl.bin verified @0x20000 (${SPL_LEN} B, sha ${OWNED_SPL_SHA})"
-    FAT_LIST="$(mdir -b -i "${GENIMAGE_INPUT}/boot-resource.vfat" ::/ 2>/dev/null || true)"
-    for bf in Image dtb.bin initrd.gz; do
-        printf '%s\n' "${FAT_LIST}" | grep -qiE "(^|/)${bf}\$" \
-            || { echo "FATAL: owned-spl: FAT p4 boot-resource is missing ${bf} (the owned u-boot booti's it from mmc 0:4)" >&2; exit 1; }
-    done
-    echo "  boot-resource p4: owned-SPL booti payload verified (Image, dtb.bin, initrd.gz present)"
+    python3 "${TOOLS_DIR}/verify-owned-spl-fat.py" \
+        "${GENIMAGE_INPUT}/boot-resource.vfat"
+    echo "  boot-resource p4: owned-SPL payload verified (Image, dtb.bin, initrd.gz, boot/pocketforge-logo.bmp present)"
 fi
 
 # ---- step 6: compress + checksum -------------------------------------------
