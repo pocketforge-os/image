@@ -173,7 +173,7 @@ of 2026-09-29 this is from kernel source; device confirmation is pending in
 - pf-framehost reads that property with the same kernel meaning from runtime
   `2ad0ca76` (runtime#101), which launcher `96feb08c` (launcher#145) vendors. The
   image's build guards now require runtime `7536aa1f` (tsp-f3fm.219) and launcher
-  `d26dfa11` (tsp-f3fm.221), which carry the same pf-framehost. Launcher `1e5a3d97` and older read it
+  `ca22de0e` (tsp-f3fm.223), which carry the same pf-framehost. Launcher `1e5a3d97` and older read it
   180° apart.
   Physical truth is owned by `tsp-c2b70c69022327ff5fee`, and convergence by
   `tsp-mc9m.60.21.3`.
