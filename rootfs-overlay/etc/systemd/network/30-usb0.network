@@ -1,0 +1,31 @@
+# =============================================================================
+# 30-usb0.network -- dev bench USB network, DUT half of usbnet contract v1
+# =============================================================================
+# bd: tsp-mc9m.41.984.34.2. DEV VARIANT ONLY (see usbnet-bench.sh).
+#
+# usb0 is the CDC-NCM gadget that pocketforge-usbnet-bench.service binds while
+# the DUT is attached to pf-node-01. The node (tsp-mc9m.41.984.34.3) is the
+# gateway and DHCP server on an IPv4-only /30 and NATs to its uplink.
+#
+# Match both the name and the u_ether driver ("g_ether" for every u_ether
+# netdev), so a host-side USB NIC that happens to be named usb0 is never
+# configured here.
+#
+# The route metric is worse than wlan0's (networkd's DHCPv4 default, 1024), so
+# a dev image with WiFi keeps its WiFi default route. RequiredForOnline=no keeps
+# network-online.target independent of the bench cable.
+# =============================================================================
+[Match]
+Name=usb0
+Driver=g_ether
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+DHCP=ipv4
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+[DHCPv4]
+RouteMetric=2048

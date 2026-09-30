@@ -1,0 +1,7 @@
+# 80-pocketforge-usbnet-bench.rules -- dev images only (bd tsp-mc9m.41.984.34.2).
+# Re-evaluate the bench USB0 role whenever the AXP717 USB supply reports a
+# change, which it does on VBUS plug and unplug (axp20x_usb_power IRQ ->
+# power_supply_changed). The unit is a oneshot that reads the gate afresh and
+# does nothing once the role has latched. SYSTEMD_WANTS would act only when the
+# device first appears, not on change events, so this starts the unit directly.
+ACTION=="change", SUBSYSTEM=="power_supply", KERNEL=="axp20x-usb", RUN+="/usr/bin/systemctl --no-block start pocketforge-usbnet-bench.service"

@@ -33,6 +33,11 @@ name: hermetic tests
 #     [self-hosted, pf-builder-vm] (reaped rc=137, wanted 139 -- see tsp-7854q).
 #     Excluded until tsp-7854q lands; re-add it there.
 #
+# tests/test-usbnet-bench-role.sh (tsp-mc9m.41.984.34.2) runs the production
+# USB0 role script in the same kind of unprivileged bwrap view (read-only root,
+# fake /sys and /run) and records its writes with inotify; it exits BLOCKED (75)
+# without bwrap or inotify, which fails this job.
+#
 # tests/test-open-gpu-gate-ordering.sh (tsp-3rd3.18) also uses the runner's own
 # systemd binaries. `systemd --test` only computes the boot transaction and
 # executes nothing; systemd-fstab-generator writes to a tmpdir. Both run without
@@ -117,6 +122,8 @@ jobs:
             tests/test-sdl-kmsdrm-sysroot.sh
             tests/test-session-authority-systemd-safety.sh
             tests/test-userdata-partition.sh
+            tests/test-usbnet-bench-role.sh
+            tests/test-usbnet-bench-rootfs.sh
           )
           failed=0
           for t in "${tests[@]}"; do

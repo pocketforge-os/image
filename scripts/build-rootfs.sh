@@ -510,6 +510,36 @@ install_open_gpu_module_options() {
     echo "[customize] PowerVR: /etc/modprobe.d/powervr-a133-open-7x-gpu.conf (options powervr exp_hw_support=1) for ${PF_DEVICE_ID}"
 }
 
+# Dev bench USB network, usbnet contract v1 (bd tsp-mc9m.41.984.34.2): a CDC-NCM
+# gadget on USB0 that switches the port to peripheral only while external VBUS
+# is present. Installed ONLY for VARIANT=dev on kernel-sunxi-7.x, the kernel
+# whose MUSB/phy role path and NCM function it was designed against. Every other
+# combination ships none of it, and scripts/verify-rootfs-usbnet-bench.py
+# enforces both directions on the extracted rootfs of every build.
+# Usage: install_usbnet_bench ROOTFS VARIANT KERNEL_REPO SRC
+install_usbnet_bench() {
+    local rootfs="$1" variant="$2" kernel_repo="$3" src="$4"
+    local overlay="${src}/rootfs-overlay"
+    local unit=pocketforge-usbnet-bench.service
+    if [ "${variant}" != dev ] || [ "${kernel_repo}" != kernel-sunxi-7.x ]; then
+        echo "[customize] usbnet bench: NOT-SHIPPED (variant=${variant} kernel=${kernel_repo:-<none>})"
+        return 0
+    fi
+    install -d "${rootfs}/usr/lib/pocketforge" "${rootfs}/etc/systemd/network" \
+        "${rootfs}/etc/udev/rules.d" "${rootfs}/etc/systemd/system/usb-gadget.target.wants"
+    install -m 0755 "${overlay}/usr/lib/pocketforge/usbnet-bench.sh" \
+        "${rootfs}/usr/lib/pocketforge/usbnet-bench.sh"
+    install -m 0644 "${overlay}/etc/systemd/system/${unit}" \
+        "${rootfs}/etc/systemd/system/${unit}"
+    install -m 0644 "${overlay}/etc/udev/rules.d/80-pocketforge-usbnet-bench.rules" \
+        "${rootfs}/etc/udev/rules.d/80-pocketforge-usbnet-bench.rules"
+    install -m 0644 "${overlay}/etc/systemd/network/30-usb0.network" \
+        "${rootfs}/etc/systemd/network/30-usb0.network"
+    ln -sf "/etc/systemd/system/${unit}" \
+        "${rootfs}/etc/systemd/system/usb-gadget.target.wants/${unit}"
+    echo "[customize] dev: usbnet bench installed (usbnet contract v1: ${unit} via usb-gadget.target, 30-usb0.network, VBUS udev rule)"
+}
+
 # Debian gives its locally re-signed regulatory database a higher alternatives
 # priority than the kernel.org-signed copy.  The PocketForge kernel trusts the
 # upstream sforshee/wens certificates, not Debian's signing key, so select both
@@ -1546,6 +1576,10 @@ if [ "${VARIANT}" = "dev" ]; then
     chroot "${ROOTFS}" systemctl enable ssh-keygen-firstboot.service
     chroot "${ROOTFS}" systemctl enable ssh.service
     echo "[customize] dev: build-time SSH host keys removed; first-boot keygen and ssh.service enabled"
+
+    # Dev: bench USB network (usbnet contract v1). The function itself refuses
+    # anything but dev on kernel-sunxi-7.x; see its definition above.
+    install_usbnet_bench "${ROOTFS}" "${VARIANT}" "${PF_KERNEL_REPO}" /work/src
 elif [ "${VARIANT}" = "release" ] && [ "${PF_GPU_MODEL}" != "none" ] && [ "${PF_HAS_DISPLAY}" = 1 ]; then
     # Release: strip libSDL3 + future supervisor binary
     if command -v aarch64-none-linux-gnu-strip >/dev/null 2>&1; then
@@ -1751,6 +1785,15 @@ mkdir -p "${ROOTFS_EXTRACTED}"
 
 # Extract the rootfs tar
 tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
+
+# The dev bench USB network (bd tsp-mc9m.41.984.34.2) switches USB0's role, so
+# it must never ship in a release rootfs. Verify both directions on what will
+# actually be assembled: absent (by path, name, enablement link and content
+# digest) unless VARIANT=dev on kernel-sunxi-7.x, and then present, exact and
+# enabled.
+python3 "${SRC_DIR}/scripts/verify-rootfs-usbnet-bench.py" \
+    --variant "${VARIANT}" --kernel-repo "${PF_KERNEL_REPO}" \
+    --src "${SRC_DIR}" "${ROOTFS_EXTRACTED}"
 
 # Fail the build before ext4 assembly if DHCP DNS cannot reach libc. This is a
 # structural image check; lease population itself is verified on tsp-f956's boot.

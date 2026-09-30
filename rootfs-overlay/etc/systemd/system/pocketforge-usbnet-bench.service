@@ -1,0 +1,33 @@
+# =============================================================================
+# pocketforge-usbnet-bench.service -- dev-image bench USB network (usbnet v1)
+# =============================================================================
+# bd: tsp-mc9m.41.984.34.2. DEV VARIANT ONLY: scripts/build-rootfs.sh installs
+# it only for VARIANT=dev on kernel-sunxi-7.x, and
+# scripts/verify-rootfs-usbnet-bench.py fails any other rootfs containing it.
+#
+# Switches USB0 to peripheral and binds a CDC-NCM gadget (1d6b:0104) only while
+# external VBUS is present and the DUT's own usb0-vbus boost is off. The gate,
+# the mechanism and the failure semantics are in the script's header.
+#
+# Started by usb-gadget.target when the MUSB UDC appears, and again by
+# 80-pocketforge-usbnet-bench.rules on every AXP717 USB supply change (VBUS
+# plug/unplug). No RemainAfterExit, so every start re-evaluates the gate. The
+# role latches in /run after a switch, so later starts write nothing.
+# =============================================================================
+[Unit]
+Description=PocketForge dev bench USB network (USB0 CDC-NCM gadget, external VBUS only)
+RequiresMountsFor=/sys/kernel/config
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/pocketforge/usbnet-bench.sh
+RuntimeDirectory=pocketforge-usbnet-bench
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=30s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=usb-gadget.target
