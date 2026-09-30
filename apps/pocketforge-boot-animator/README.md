@@ -85,7 +85,7 @@ This bead does **not** decide which way is physically upright:
 - pf-framehost used to map the same property 180° apart. runtime#101
   (runtime `2ad0ca76`, tsp-mc9m.60.21.3) moved it to this table, and
   launcher#145 (launcher `96feb08c`) re-vendors it. This image's build guards
-  now require runtime `7536aa1f` (tsp-f3fm.219) and launcher `d26dfa11` (tsp-f3fm.221), which
+  now require runtime `7536aa1f` (tsp-f3fm.219) and launcher `ca22de0e` (tsp-f3fm.223), which
   carry the same pf-framehost (`build/Dockerfile.pf`). The tests report, for
   information, whether the transcribed pf-framehost table agrees with the
   kernel. The device check is gated in tsp-3rd3.10.

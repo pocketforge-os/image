@@ -100,7 +100,7 @@ def kernel_placement(prop_name):
 # report only. lib.rs:374-395 maps the property to the kernel's fbcon hint and
 # then to clockwise degrees (FB_ROTATE_CW -> 90, FB_ROTATE_CCW -> 270), and
 # lib.rs:318-331 maps buffer (x, y) -> scene (u, v). The image's launcher guard
-# requires launcher d26dfa11 (tsp-f3fm.221), whose vendored pf-framehost is
+# requires launcher ca22de0e (tsp-f3fm.223), whose vendored pf-framehost is
 # byte-identical to 96feb08c's, so it carries it. Launcher 1e5a3d97 and older
 # carried the pre-#101 table, which had Left and Right Side Up swapped (180
 # degrees from the kernel).
