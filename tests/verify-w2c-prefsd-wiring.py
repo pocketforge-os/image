@@ -49,10 +49,11 @@ launcher_guard = re.findall(
     dockerfile,
     flags=re.MULTILINE,
 )
-assert launcher_guard == ["ab9fb7fde36e633add69b94c36bf1213f7cff5d9"], (
-    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher ab9fb7fd, "
+assert launcher_guard == ["1ef9671afdd687d53f61a91e92c51da9fb614293"], (
+    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher 1ef9671a, "
     f"found: {launcher_guard}"
 )
+assert "ab9fb7fde36e633add69b94c36bf1213f7cff5d9" not in dockerfile
 assert "ca22de0ed3cec46c73f2de44aa6e570e109695d8" not in dockerfile
 assert "d26dfa1162e601100c3a18956b5ce4a2ddc7427f" not in dockerfile
 assert "7a2b792d0813fc8fb5c2915bdc00ef976b0cc986" not in dockerfile
