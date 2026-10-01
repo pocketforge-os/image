@@ -15,18 +15,19 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# tsp-f3fm.227 moves the launcher alone: launcher#149 (merged ca22de0e -> ab9fb7fd)
-# changed only pf-shell and pf-shell-core (the first-run sheet owns D-pad focus over
-# an inert backdrop; hat taps survive slow frames and SYN_DROPPED); its vendored
-# runtime crates are byte-identical to ca22de0e's, so runtime 7536aa1f stays the
-# co-pin. The previous image guard accepted (7536aa1f, ca22de0e). The new guard
-# refuses the old launcher (its first-run sheet leaks D-pad focus to Home), the
-# pre-#148 launcher (it ignores the d-pad hat), the pre-#147 launcher (it drops the
-# first A after a return), the pre-#146, pre-#145 and older launchers, and the
+# tsp-op5a.439 moves the launcher alone: launcher#150 (merged ab9fb7fd -> 1ef9671a)
+# maps L1/R1 to cyclic top-level room switching without escaping first-run, modal
+# or sub-screen ownership, and restores held shoulder actions after SYN_DROPPED.
+# Its vendored runtime crates are byte-identical to ab9fb7fd's, so runtime
+# 7536aa1f stays the co-pin. The previous image guard accepted (7536aa1f,
+# ab9fb7fd). The new guard refuses the old launcher, the pre-#149 launcher, the
+# pre-#148 launcher (it ignores the d-pad hat), the pre-#147 launcher (it drops
+# the first A after a return), the pre-#146, pre-#145 and older launchers, and the
 # pre-tsp-f3fm.219 runtime 0955d8a8.
 expected_runtime=7536aa1f5af76f0220b582ee68e29e254251fd76
-expected_launcher=ab9fb7fde36e633add69b94c36bf1213f7cff5d9
-old_launcher=ca22de0ed3cec46c73f2de44aa6e570e109695d8
+expected_launcher=1ef9671afdd687d53f61a91e92c51da9fb614293
+old_launcher=ab9fb7fde36e633add69b94c36bf1213f7cff5d9
+pre149_launcher=ca22de0ed3cec46c73f2de44aa6e570e109695d8
 pre148_launcher=d26dfa1162e601100c3a18956b5ce4a2ddc7427f
 pre147_launcher=7a2b792d0813fc8fb5c2915bdc00ef976b0cc986
 prior_runtime=0955d8a83ee59df89eaba79ffee9e99e4f52384c
@@ -47,12 +48,13 @@ old_guard_accepts() {
 }
 
 # Each guard accepts exactly its own (runtime, launcher) pair: the new image
-# refuses the old launcher, the pre-#148, pre-#147, pre-#146, pre-#145 and older
-# launchers, and the pre-tsp-f3fm.219 runtime; the old image refuses the new
-# launcher. So the lock must move image and launcher together.
+# refuses the old launcher, the pre-#149, pre-#148, pre-#147, pre-#146, pre-#145
+# and older launchers, and the pre-tsp-f3fm.219 runtime; the old image refuses
+# the new launcher. So the lock must move image and launcher together.
 new_guard_accepts "$expected_runtime" "$expected_launcher"
 ! new_guard_accepts "$expected_runtime" "$old_launcher"
 ! new_guard_accepts "$prior_runtime" "$expected_launcher"
+! new_guard_accepts "$expected_runtime" "$pre149_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre148_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre147_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre146_launcher"
@@ -61,6 +63,7 @@ new_guard_accepts "$expected_runtime" "$expected_launcher"
 old_guard_accepts "$expected_runtime" "$old_launcher"
 ! old_guard_accepts "$expected_runtime" "$expected_launcher"
 ! old_guard_accepts "$prior_runtime" "$old_launcher"
+! old_guard_accepts "$expected_runtime" "$pre149_launcher"
 ! old_guard_accepts "$expected_runtime" "$pre148_launcher"
 ! old_guard_accepts "$expected_runtime" "$pre147_launcher"
 ! old_guard_accepts "$expected_runtime" "$pre146_launcher"
