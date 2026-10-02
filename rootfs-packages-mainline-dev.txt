@@ -4,3 +4,11 @@
 # out of both closed images and release images.
 
 libdrm-tests
+
+# Cedrus strict-decode tooling. Pinned Debian snapshot 20260601T000000Z:
+# v4l-utils ships v4l2-ctl; tools ships gst-launch/gst-inspect; base ships
+# videoconvert; bad ships h264parse and the stateless V4L2 codec plugin.
+v4l-utils
+gstreamer1.0-tools
+gstreamer1.0-plugins-base
+gstreamer1.0-plugins-bad
