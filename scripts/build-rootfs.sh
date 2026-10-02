@@ -1839,6 +1839,16 @@ mke2fs -t ext4 \
     -m 0 \
     "${USERDATA_EXT4}" ${EXT4_SIZE_BLOCKS}
 
+# Cedrus strict-decode userspace is an open-GPU development diagnostic only.
+# Inspect the final filesystem bytes mountlessly so staging-tree presence cannot
+# mask a missing, non-executable, or unrecorded prerequisite in userdata.ext4.
+if [ "${PF_GPU_MODEL}" = "open" ] && [ "${VARIANT}" = "dev" ]; then
+    python3 "${SRC_DIR}/scripts/verify-rootfs-vpu-tooling.py" \
+        --gpu-model "${PF_GPU_MODEL}" \
+        --variant "${VARIANT}" \
+        "${USERDATA_EXT4}"
+fi
+
 EXT4_SIZE="$(stat -c%s "${USERDATA_EXT4}")"
 EXT4_SHA="$(sha256sum "${USERDATA_EXT4}" | cut -d' ' -f1)"
 

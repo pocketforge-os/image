@@ -21,11 +21,30 @@ for package in cpufrequtils i2c-tools iperf3 usbutils; do
 done
 
 packages "${MAINLINE_DEV_PACKAGES}" | grep -Fxq libdrm-tests
-for shared_list in "${SHARED_PACKAGES}" "${SHARED_DEV_PACKAGES}" "${MAINLINE_PACKAGES}"; do
-    if packages "${shared_list}" | grep -Fxq libdrm-tests; then
-        echo "FAIL: libdrm-tests leaked into ${shared_list}" >&2
+for package in \
+    v4l-utils \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-bad; do
+    count="$(packages "${MAINLINE_DEV_PACKAGES}" | awk -v expected="${package}" \
+        '$0 == expected { count++ } END { print count + 0 }')"
+    if [ "${count}" -ne 1 ]; then
+        echo "FAIL: expected ${package} exactly once in ${MAINLINE_DEV_PACKAGES}, found ${count}" >&2
         exit 1
     fi
+done
+for shared_list in "${SHARED_PACKAGES}" "${SHARED_DEV_PACKAGES}" "${MAINLINE_PACKAGES}"; do
+    for package in \
+        libdrm-tests \
+        v4l-utils \
+        gstreamer1.0-tools \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-bad; do
+        if packages "${shared_list}" | grep -Fxq "${package}"; then
+            echo "FAIL: ${package} leaked into ${shared_list}" >&2
+            exit 1
+        fi
+    done
 done
 
 # evtest reads current ABS axis values (EVIOCGABS, via its header) so pf-gamepad
@@ -60,4 +79,4 @@ grep -Fq 'if [ "${PF_GPU_MODEL}" = "open" ] && [ "${VARIANT}" = "dev" ]; then' "
 # shellcheck disable=SC2016
 grep -Fq 'PKG_LIST="${PKG_LIST},${MAINLINE_DEV_PKGS}"' "${BUILDER}"
 
-echo "PASS: open A133 packages are scoped correctly, including hardware probes and open+dev-only libdrm-tests"
+echo "PASS: open A133 packages are scoped correctly, including open+dev-only libdrm-tests and Cedrus tooling"

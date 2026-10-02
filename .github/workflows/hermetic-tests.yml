@@ -119,6 +119,7 @@ jobs:
             tests/test-rootfs-dns.sh
             tests/test-rootfs-fallback-profile.sh
             tests/test-rootfs-firmware.sh
+            tests/test-rootfs-vpu-tooling.sh
             tests/test-sdl-kmsdrm-sysroot.sh
             tests/test-session-authority-systemd-safety.sh
             tests/test-userdata-partition.sh
