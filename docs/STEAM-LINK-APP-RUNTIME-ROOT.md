@@ -371,10 +371,11 @@ manifests:
 | Preserved vendor archive | 32,086,587 bytes |
 
 The QEMU harness verifies the descriptor, receipt, squashfs digest, stored
-platform manifest, and platform tree before execution. It extracts the
-verified squashfs into private measurement scratch, copies the platform tree
-there, recomputes and verifies the copy's manifest, and executes only those
-private inputs. Unprivileged bubblewrap provides the sandbox-equivalent: a
+platform manifest, and platform tree before execution. It copies the squashfs
+into private measurement scratch, verifies that private copy against the
+descriptor and receipt, and extracts only that copy. It also copies the
+platform tree there, recomputes and verifies the copy's manifest, and executes
+only those private inputs. Unprivileged bubblewrap provides the sandbox-equivalent: a
 read-only extracted root, a separately read-only verified platform mount,
 private `/dev`, `/tmp` and `/proc`, fresh per-run state, and no Steam
 credentials. The host QEMU executable is mounted inside the ephemeral `/tmp`;
@@ -407,9 +408,9 @@ Squashfs extraction used unsquashfs 4.6.1
 
 | Median (n=5 each) | Direct RB2g sysroot | App root | App root minus baseline |
 | --- | ---: | ---: | ---: |
-| Startup | 1,613.1 ms | 1,684.7 ms | +71.6 ms |
-| RSS | 114,044 KiB | 102,580 KiB | -11,464 KiB |
-| PSS | 110,768 KiB | 99,304 KiB | -11,464 KiB |
+| Startup | 1,603.3 ms | 1,608.2 ms | +4.9 ms |
+| RSS | 114,076 KiB | 102,584 KiB | -11,492 KiB |
+| PSS | 110,804 KiB | 99,313 KiB | -11,491 KiB |
 
 There is no observed positive RSS/PSS cost attributable to duplicated
 app-root libraries in this host-QEMU probe; the measured delta is negative

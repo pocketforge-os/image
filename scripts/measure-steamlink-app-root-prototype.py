@@ -454,6 +454,10 @@ def main() -> int:
             check=True,
         )
         vendor = work / "steamlink"
+        private_root_image = work / "steam-link.root.verified.raw"
+        shutil.copyfile(prototype / "steam-link.root.raw", private_root_image)
+        if sha256(private_root_image) != receipt.get("app_root_sha256"):
+            raise SystemExit("FATAL: private app root copy differs from prototype receipt")
         app_root = work / "app-root-verified"
         subprocess.run(
             [
@@ -461,7 +465,7 @@ def main() -> int:
                 "-no-progress",
                 "-d",
                 str(app_root),
-                str(prototype / "steam-link.root.raw"),
+                str(private_root_image),
             ],
             check=True,
             stdout=subprocess.DEVNULL,
@@ -505,7 +509,7 @@ def main() -> int:
         "measurement_class": "QEMU/host-development; not A133 performance",
         "startup_marker": STARTUP_MARKER.decode("ascii"),
         "method": (
-            "verified squashfs extraction and verified private platform copy; "
+            "verified private squashfs copy/extraction and verified private platform copy; "
             "alternating variant order; fresh state; host network; offscreen Qt; "
             "sample 100 ms after marker"
         ),
