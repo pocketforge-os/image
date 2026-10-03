@@ -236,15 +236,47 @@ def resource_paths(
     return [str(item) for item in value]
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path, missing_reason: str = "runtime_root_missing") -> str:
     digest = hashlib.sha256()
     try:
         with path.open("rb") as handle:
             while chunk := handle.read(1024 * 1024):
                 digest.update(chunk)
     except OSError as error:
-        refuse("runtime_root_missing", str(error))
+        refuse(missing_reason, str(error))
     return digest.hexdigest()
+
+
+def platform_manifest_digest(platform_root: Path) -> str:
+    """Recompute the builder's canonical manifest over the installed tree."""
+    lines: list[str] = []
+    try:
+        entries = sorted(
+            platform_root.rglob("*"),
+            key=lambda path: path.relative_to(platform_root).as_posix(),
+        )
+    except OSError as error:
+        refuse("platform_runtime_missing", str(error))
+    for path in entries:
+        relative = path.relative_to(platform_root).as_posix()
+        if relative == ".manifest-sha256":
+            continue
+        if path.is_symlink():
+            refuse(
+                "platform_runtime_digest_mismatch",
+                f"platform runtime contains a symlink: {relative}",
+            )
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            refuse(
+                "platform_runtime_digest_mismatch",
+                f"platform runtime contains a non-regular object: {relative}",
+            )
+        lines.append(
+            f"{sha256_file(path, 'platform_runtime_missing')}  {relative}\n"
+        )
+    return hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()
 
 
 def require_artifacts(
@@ -270,6 +302,11 @@ def require_artifacts(
             f"platform runtime is absent or not a directory: {platform_root}",
         )
     identity = platform_root / ".manifest-sha256"
+    if not identity.is_file() or identity.is_symlink():
+        refuse(
+            "platform_runtime_missing",
+            f"platform runtime identity is absent or not a regular file: {identity}",
+        )
     try:
         recorded = identity.read_text(encoding="ascii").strip()
     except (OSError, UnicodeError) as error:
@@ -278,6 +315,11 @@ def require_artifacts(
         refuse(
             "platform_runtime_digest_mismatch",
             f"platform runtime identity differs: {platform_root}",
+        )
+    if platform_manifest_digest(platform_root) != platform_digest:
+        refuse(
+            "platform_runtime_digest_mismatch",
+            f"platform runtime content differs: {platform_root}",
         )
 
 

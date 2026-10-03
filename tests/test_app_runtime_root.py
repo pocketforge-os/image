@@ -18,7 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 RENDERER = ROOT / "scripts" / "render-app-runtime-root.py"
 ROOT_CONTENT = b"hermetic runtime root fixture\n"
 DIGEST = "sha256:" + hashlib.sha256(ROOT_CONTENT).hexdigest()
-PLATFORM_VERSION = "sha256:" + "2" * 64
+PLATFORM_CONTENT = b"hermetic platform runtime fixture\n"
+PLATFORM_PATH = "usr/lib/aarch64-linux-gnu/libplatform.so"
+PLATFORM_MANIFEST = (
+    f"{hashlib.sha256(PLATFORM_CONTENT).hexdigest()}  {PLATFORM_PATH}\n".encode()
+)
+PLATFORM_VERSION = "sha256:" + hashlib.sha256(PLATFORM_MANIFEST).hexdigest()
 
 
 def manifest(*, root: bool = True, capabilities: tuple[str, ...] = ()) -> str:
@@ -103,6 +108,9 @@ class RendererTest(unittest.TestCase):
             / f"sha256-{PLATFORM_VERSION.removeprefix('sha256:')}"
         )
         platform_path.mkdir(parents=True)
+        platform_content = platform_path / PLATFORM_PATH
+        platform_content.parent.mkdir(parents=True)
+        platform_content.write_bytes(PLATFORM_CONTENT)
         (platform_path / ".manifest-sha256").write_text(
             PLATFORM_VERSION.removeprefix("sha256:") + "\n", encoding="ascii"
         )
@@ -301,6 +309,14 @@ class RendererTest(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
         identity.write_text("0" * 64 + "\n", encoding="ascii")
+        result = self.render(manifest(), expect=65)
+        self.assertIn("reason=platform_runtime_digest_mismatch", result.stderr)
+        self.assertFalse(self.output.exists())
+
+        identity.write_text(
+            PLATFORM_VERSION.removeprefix("sha256:") + "\n", encoding="ascii"
+        )
+        (platform_path / PLATFORM_PATH).write_bytes(b"changed platform fixture\n")
         result = self.render(manifest(), expect=65)
         self.assertIn("reason=platform_runtime_digest_mismatch", result.stderr)
         self.assertFalse(self.output.exists())

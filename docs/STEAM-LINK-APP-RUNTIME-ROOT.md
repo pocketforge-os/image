@@ -167,7 +167,11 @@ version is the SHA-256 of a sorted `SHA256  relative/path` manifest; the
 content-addressed directory contains a matching immutable identity marker.
 Neither identity is a mutable symlink or package version label. Installers
 verify the descriptor, regular-file/directory types, ownership, mode, digest,
-and platform manifest before making a descriptor visible.
+and platform manifest before making a descriptor visible. Before rendering a
+unit, the source-owned contract prototype also recomputes that canonical
+manifest over every regular platform file (excluding the identity marker) and
+refuses symlinks, special objects, or a content mismatch. A marker alone is
+not accepted as proof of the installed tree.
 
 Compatibility requires all of the following:
 
@@ -366,12 +370,20 @@ manifests:
 | Platform-runtime unpacked tree | 115,605,944 bytes, shared rather than charged to the app root |
 | Preserved vendor archive | 32,086,587 bytes |
 
-The QEMU harness uses unprivileged bubblewrap as the sandbox-equivalent: a
-read-only root, a separately read-only platform mount, private `/dev`, `/tmp`
-and `/proc`, fresh per-run state, and no Steam credentials. Both the direct
-RB2g-sysroot baseline and app-root variant reach the bounded marker
+The QEMU harness verifies the descriptor, receipt, squashfs digest, stored
+platform manifest, and platform tree before execution. It extracts the
+verified squashfs into private measurement scratch, copies the platform tree
+there, recomputes and verifies the copy's manifest, and executes only those
+private inputs. Unprivileged bubblewrap provides the sandbox-equivalent: a
+read-only extracted root, a separately read-only verified platform mount,
+private `/dev`, `/tmp` and `/proc`, fresh per-run state, and no Steam
+credentials. The host QEMU executable is mounted inside the ephemeral `/tmp`;
+the extracted root is not changed to add a harness executable. Both the
+direct RB2g-sysroot baseline and app-root variant reach the bounded marker
 `Connected to Remote Client service`. Every process group is terminated and
-reaped after the sample.
+reaped after the sample. An altered-platform negative control, made by
+changing a copied library while retaining its original manifest, refuses
+before extraction or execution.
 
 ## Measurements
 
@@ -390,12 +402,14 @@ The measured host used QEMU 8.2.2
 (`e4f8d99e9ff69c3cefffab71cee358ce2af1ecba1282d04c3eeb44ef76f5a71e`)
 and bubblewrap 0.9.0
 (`e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71`).
+Squashfs extraction used unsquashfs 4.6.1
+(`b305985eb764b6d0ef757571e3e44044ebf71c827c4263efe576e9e14b4abcfb`).
 
 | Median (n=5 each) | Direct RB2g sysroot | App root | App root minus baseline |
 | --- | ---: | ---: | ---: |
-| Startup | 1,796.5 ms | 1,795.1 ms | -1.4 ms |
-| RSS | 114,088 KiB | 102,620 KiB | -11,468 KiB |
-| PSS | 110,825 KiB | 99,348 KiB | -11,477 KiB |
+| Startup | 1,613.1 ms | 1,684.7 ms | +71.6 ms |
+| RSS | 114,044 KiB | 102,580 KiB | -11,464 KiB |
+| PSS | 110,768 KiB | 99,304 KiB | -11,464 KiB |
 
 There is no observed positive RSS/PSS cost attributable to duplicated
 app-root libraries in this host-QEMU probe; the measured delta is negative
@@ -443,8 +457,9 @@ ownership, or A133 performance.
 - host root and platform runtime write refusal with only per-app state
   persistent;
 - invalid schema/digest/library metadata, incompatible platform identity,
-  unsupported capability, missing inventory, missing artifacts, and changed
-  artifact identities.
+  unsupported capability, missing inventory, missing artifacts, changed
+  artifact identities, and changed platform content behind an unchanged
+  identity marker.
 
 The baseline negative control was run from a fresh archive of the exact image
 `origin/main` SHA named above, with only the candidate test module copied in:

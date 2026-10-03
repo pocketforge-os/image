@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 
 
 VENDOR_ARCHIVE_SHA256 = (
@@ -36,19 +37,60 @@ def sha256(path: Path) -> str:
 
 
 def require_file(path: Path, description: str) -> None:
-    if not path.is_file():
+    if not path.is_file() or path.is_symlink():
         raise SystemExit(f"FATAL: {description} is missing: {path}")
 
 
-def tool_version(path: Path) -> str:
+def require_directory(path: Path, description: str) -> None:
+    if not path.is_dir() or path.is_symlink():
+        raise SystemExit(f"FATAL: {description} is missing: {path}")
+
+
+def tool_version(path: Path, flag: str = "--version") -> str:
     result = subprocess.run(
-        [str(path), "--version"],
-        check=True,
+        [str(path), flag],
+        check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
     )
-    return result.stdout.splitlines()[0]
+    lines = result.stdout.splitlines()
+    if not lines:
+        raise SystemExit(f"FATAL: tool emitted no version: {path}")
+    return lines[0]
+
+
+def canonical_platform_manifest(platform_root: Path) -> bytes:
+    lines: list[str] = []
+    for path in sorted(
+        platform_root.rglob("*"),
+        key=lambda item: item.relative_to(platform_root).as_posix(),
+    ):
+        relative = path.relative_to(platform_root).as_posix()
+        if path.is_symlink():
+            raise SystemExit(
+                f"FATAL: platform runtime contains a symlink: {relative}"
+            )
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise SystemExit(
+                f"FATAL: platform runtime contains a non-regular object: {relative}"
+            )
+        lines.append(f"{sha256(path)}  {relative}\n")
+    return "".join(lines).encode("utf-8")
+
+
+def read_root_descriptor(path: Path) -> dict[str, object]:
+    try:
+        descriptor = tomllib.loads(path.read_text(encoding="utf-8"))
+        runtime = descriptor["runtime"]
+        root = runtime["root"]  # type: ignore[index]
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as error:
+        raise SystemExit(f"FATAL: malformed prototype descriptor: {error}") from error
+    if not isinstance(root, dict):
+        raise SystemExit("FATAL: prototype descriptor runtime.root is not a table")
+    return root
 
 
 def read_receipt(path: Path) -> dict[str, str]:
@@ -185,47 +227,48 @@ def base_bwrap() -> list[str]:
 
 
 def app_root_command(
-    prototype: Path, qemu: Path, state: Path, host_resolv: Path
+    app_root: Path,
+    platform_root: Path,
+    qemu: Path,
+    state: Path,
+    host_resolv: Path,
 ) -> list[str]:
     app = "/opt/pocketforge/apps/org.pocketforge.steamlink"
+    state_root = "/var/lib/pocketforge/apps/org.pocketforge.steamlink"
     return base_bwrap() + [
-        "--bind",
-        str(prototype / "app-root"),
+        "--ro-bind",
+        str(app_root),
         "/",
         "--ro-bind",
-        str(prototype / "platform-runtime"),
+        str(platform_root),
         "/run/pocketforge/platform-runtime",
-        "--ro-bind",
-        str(qemu),
-        "/qemu",
         "--ro-bind",
         str(host_resolv),
         "/etc/resolv.conf",
-        "--dir",
-        "/state",
         "--bind",
         str(state),
-        "/state",
+        state_root,
         "--proc",
         "/proc",
         "--dev",
         "/dev",
         "--tmpfs",
         "/tmp",
-        "--remount-ro",
-        "/",
+        "--ro-bind",
+        str(qemu),
+        "/tmp/qemu-aarch64-static",
         "--setenv",
         "HOME",
-        "/state/home",
+        f"{state_root}/home",
         "--setenv",
         "XDG_CONFIG_HOME",
-        "/state/config",
+        f"{state_root}/config",
         "--setenv",
         "XDG_CACHE_HOME",
-        "/state/cache",
+        f"{state_root}/cache",
         "--setenv",
         "XDG_DATA_HOME",
-        "/state/data",
+        f"{state_root}/data",
         "--setenv",
         "QT_PLUGIN_PATH",
         f"{app}/Qt-5.14.1/plugins",
@@ -244,7 +287,7 @@ def app_root_command(
         "--setenv",
         "SSL_CERT_FILE",
         "/etc/ssl/certs/ca-certificates.crt",
-        "/qemu",
+        "/tmp/qemu-aarch64-static",
         "-L",
         "/",
         f"{app}/bin/shell",
@@ -354,7 +397,7 @@ def main() -> int:
     if args.runs < 1:
         parser.error("--runs must be positive")
 
-    for tool in ("bwrap", "qemu-aarch64-static", "tar"):
+    for tool in ("bwrap", "qemu-aarch64-static", "tar", "unsquashfs"):
         if shutil.which(tool) is None:
             raise SystemExit(f"FATAL: required tool is unavailable: {tool}")
 
@@ -364,19 +407,23 @@ def main() -> int:
     sysroot = args.qemu_dir / "sysroot"
     qemu = Path(shutil.which("qemu-aarch64-static") or "")
     bwrap = Path(shutil.which("bwrap") or "")
+    unsquashfs = Path(shutil.which("unsquashfs") or "")
     host_resolv = Path("/etc/resolv.conf").resolve()
     for path, description in (
         (receipt_path, "prototype receipt"),
         (prototype / "steam-link.root.raw", "app root image"),
         (prototype / "app.toml", "prototype descriptor"),
+        (prototype / "platform-runtime.manifest", "platform runtime manifest"),
         (archive, "preserved vendor archive"),
         (qemu, "QEMU static binary"),
         (bwrap, "bubblewrap binary"),
+        (unsquashfs, "unsquashfs binary"),
         (host_resolv, "host resolver file"),
     ):
         require_file(path, description)
     if not sysroot.is_dir():
         raise SystemExit(f"FATAL: preserved sysroot is missing: {sysroot}")
+    require_directory(prototype / "platform-runtime", "platform runtime tree")
     if sha256(archive) != VENDOR_ARCHIVE_SHA256:
         raise SystemExit("FATAL: preserved vendor archive digest mismatch")
 
@@ -385,6 +432,20 @@ def main() -> int:
         raise SystemExit("FATAL: prototype receipt has no non-A133 measurement label")
     if sha256(prototype / "steam-link.root.raw") != receipt.get("app_root_sha256"):
         raise SystemExit("FATAL: app root image differs from prototype receipt")
+    root_descriptor = read_root_descriptor(prototype / "app.toml")
+    if root_descriptor.get("digest") != f"sha256:{receipt.get('app_root_sha256')}":
+        raise SystemExit("FATAL: descriptor root digest differs from prototype receipt")
+    if root_descriptor.get("platform-runtime-version") != (
+        f"sha256:{receipt.get('platform_runtime_sha256')}"
+    ):
+        raise SystemExit("FATAL: descriptor platform digest differs from prototype receipt")
+    expected_platform_manifest = (prototype / "platform-runtime.manifest").read_bytes()
+    if hashlib.sha256(expected_platform_manifest).hexdigest() != receipt.get(
+        "platform_runtime_sha256"
+    ):
+        raise SystemExit("FATAL: platform manifest differs from prototype receipt")
+    if canonical_platform_manifest(prototype / "platform-runtime") != expected_platform_manifest:
+        raise SystemExit("FATAL: platform runtime tree differs from its manifest")
 
     with tempfile.TemporaryDirectory(prefix="pf-steamlink-measure-") as raw:
         work = Path(raw)
@@ -393,6 +454,22 @@ def main() -> int:
             check=True,
         )
         vendor = work / "steamlink"
+        app_root = work / "app-root-verified"
+        subprocess.run(
+            [
+                str(unsquashfs),
+                "-no-progress",
+                "-d",
+                str(app_root),
+                str(prototype / "steam-link.root.raw"),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        platform_root = work / "platform-runtime-verified"
+        shutil.copytree(prototype / "platform-runtime", platform_root, symlinks=True)
+        if canonical_platform_manifest(platform_root) != expected_platform_manifest:
+            raise SystemExit("FATAL: copied platform runtime differs from its manifest")
         baseline_runs: list[dict[str, object]] = []
         root_runs: list[dict[str, object]] = []
         variants = {
@@ -409,7 +486,9 @@ def main() -> int:
                 if name == "baseline":
                     command = command_factory(sysroot, vendor, qemu, state, host_resolv)
                 else:
-                    command = command_factory(prototype, qemu, state, host_resolv)
+                    command = command_factory(
+                        app_root, platform_root, qemu, state, host_resolv
+                    )
                 result = run_once(command, work / f"{name}-{index}.stderr", args.timeout)
                 results.append(result)
                 print(
@@ -426,6 +505,7 @@ def main() -> int:
         "measurement_class": "QEMU/host-development; not A133 performance",
         "startup_marker": STARTUP_MARKER.decode("ascii"),
         "method": (
+            "verified squashfs extraction and verified private platform copy; "
             "alternating variant order; fresh state; host network; offscreen Qt; "
             "sample 100 ms after marker"
         ),
@@ -441,6 +521,10 @@ def main() -> int:
             "bubblewrap": {
                 "version": tool_version(bwrap),
                 "sha256": sha256(bwrap),
+            },
+            "unsquashfs": {
+                "version": tool_version(unsquashfs, "-version"),
+                "sha256": sha256(unsquashfs),
             },
         },
         "runs_per_variant": args.runs,
