@@ -194,7 +194,7 @@ device_green = "direct-DRM-startup-with-features-disabled"
 [[g0_gaps]]
 id = "M-packaging"
 name = "source-built-reproducible-gamescope"
-bead = "tsp-0c9b666ac3daca7d5aed"
+bead = "tsp-op5a.440.1"
 owner = "COMPOSITOR"
 source_state = "RED"
 offline_green = "two-build-byte-and-SBOM-check"

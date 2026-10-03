@@ -149,6 +149,11 @@ require(gaps["M-semaphore"]["owner"] == "GPUCAP",
 for gap_id in ("L", "M-rotation", "S", "M-packaging"):
     require(gaps[gap_id]["owner"] == "COMPOSITOR",
             f"{gap_id} must remain COMPOSITOR-owned")
+require(gaps["M-packaging"]["bead"] == "tsp-op5a.440.1",
+        "Gamescope M-packaging must remain owned by tsp-op5a.440.1")
+fallback_only_beads = {"tsp-0c9b666ac3daca7d5aed"}
+require(fallback_only_beads.isdisjoint(gap["bead"] for gap in gaps.values()),
+        "a fallback-only bead cannot satisfy a Gamescope G0 gap")
 require(gaps["L"]["dependency_owner"] == "GPUCAP"
         and gaps["M-rotation"]["dependency_owner"] == "GPUCAP",
         "Gamescope patches lost GPUCAP capability dependencies")

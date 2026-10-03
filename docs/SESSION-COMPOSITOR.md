@@ -204,8 +204,10 @@ Five gaps are therefore blocking, not optional optimizations:
 The existing work-order mapping is L `tsp-fc58886d2e6d2d6a9589`, M semaphore
 `tsp-e6a8dcfcd86fd80e96a1`, M rotation `tsp-b25264113c4580010832`, S
 `tsp-2fee73c5e3fc363beede`, and M packaging
-`tsp-0c9b666ac3daca7d5aed`. GPUCAP child IDs are dependencies when its owner
-posts exact receipts; they are not replaced here.
+`tsp-op5a.440.1`. The Weston/Pixman packaging bead
+`tsp-0c9b666ac3daca7d5aed` is fallback-only and cannot satisfy a G0 gap. GPUCAP
+child IDs are dependencies when its owner posts exact receipts; they are not
+replaced here.
 
 | ID / size | RED source fact at exact pins | Required patch and source test | G1 proof |
 | --- | --- | --- | --- |
