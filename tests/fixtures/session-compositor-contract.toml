@@ -1,0 +1,298 @@
+schema = 2
+evidence_date = "2026-10-03"
+design_state = "G0"
+implementation_gate = "blocked-until-g0-gaps-and-g1-device-bench"
+device_claims = "UNPROVEN"
+qemu_scope = "logic-only"
+
+[pins.gamescope]
+source = "https://github.com/ValveSoftware/gamescope.git"
+commit = "5fb8dce4a09d0a68d097b9faf9513782106bc843"
+tree = "74d70414bbbbe4f3f009ecd3cf6a3a07bfdccf27"
+license = "BSD-2-Clause"
+license_sha256 = "907dd845489cd09c25f18b6819f476805285e2adcad8c099e3506260023e9e5f"
+
+[pins.gamescope.gitlinks]
+reshade = "696b14cd6006ae9ca174e6164450619ace043283"
+libdisplay_info = "47a5590e9c4eb35d67651b8c05a55f1a48259329"
+libliftoff = "8b08dc1c14fd019cc90ddabe34ad16596b0691f4"
+openvr = "ff87f683f41fe26cc9353dd9d9d7028357fd8e1a"
+vkroots = "5106d8a0df95de66cc58dc1ea37e69c99afc9540"
+wlroots = "88a869855742281c98c22cab9641b317b8d065ef"
+spirv_headers = "d790ced752b5bfc06b6988baadef6eb2d16bdf96"
+
+[pins.gamescope.wraps]
+glm = "0af55ccecd98d4e5a8d1fad7de25ba429d60e863"
+stb = "5736b15f7ea0ffb08dd38af21067c314d6a3aae9"
+
+[pins.mesa_pvr]
+commit = "eac0a8f445924f0db592352412eb48c9ad39040e"
+tree = "4fa710967870d01e6130d85795c4e0bb45906a01"
+platforms = []
+
+[pins.a133_kernel_audit]
+commit = "40ea8fd9dcaeb9526b8032038f1dc820216d7959"
+status = "audit-baseline-repin-at-g1"
+
+[pins.weston_fallback]
+version = "14.0.2"
+commit = "015b3b4d4c05da44a22349ea6e651d1a8f678c59"
+tree = "a247d7edd31594ac2974390ccba76b7fe0a0c1f1"
+activated_by = "G1-A133-primary-fail-only"
+
+[pins.pixman_fallback]
+version = "0.42.2"
+commit = "37216a32839f59e8dcaa4c3951b3fcfc3f07852c"
+tree = "63108dee63862b0af0645b42119f73eacfa21c5f"
+use = "rarely-changing-UI-only"
+
+[admitted_repositories]
+image = "652b0b3a63781d54fc8ec8ce11a63fc70d5dc8a6"
+runtime = "7536aa1f5af76f0220b582ee68e29e254251fd76"
+launcher = "e27f2c45271fb6b9d695b36c0163e7ade051583a"
+
+[session]
+runtime_dir = "/run/pocketforge/session"
+wayland_socket = "/run/pocketforge/session/wayland-0"
+environment_file = "/run/pocketforge/session/environment"
+xauthority_file = "/run/pocketforge/session/Xauthority"
+abi = 1
+app_unit_template = "pf-app@.service"
+app_descriptor = "app.toml"
+authority = "pf-session-authority"
+input_broker = "pf-input-broker"
+client_protocol = "xdg-shell"
+socket_collision_policy = "refuse"
+environment_publish = "temp-fsync-rename"
+generation_on_restart = true
+
+[capability_schema]
+source_glob = "platform/devices/<id>/capabilities.toml"
+staged_glob = "/usr/share/pocketforge/devices/<id>/capabilities.toml"
+launcher_app_vocabulary_unchanged = true
+screen_fields = [
+  "native_mode",
+  "composition_tier",
+  "plane_count",
+  "plane_modifiers",
+  "plane_alpha",
+  "plane_zpos",
+  "kms_rotations",
+  "gpu_composition",
+  "vulkan_level",
+]
+
+[ownership]
+gpucap = "Mesa-PVR-and-kernel-capability-fixes-and-evidence"
+compositor = "Gamescope-staging-rotation-present-gating-packaging-and-qualification-plan"
+cx_deputy = "device-bench3-pf-bench-inflight-GPU-fixes-and-pin-windows"
+mesa_worker_from_compositor = false
+platform_lock_moves_under_sealed_bench = false
+
+[[device_tiers]]
+id = "projector-256m"
+memory_min_mib = 256
+memory_max_mib = 256
+composition_tier = "plane-only"
+display_owner = "lightweight-plane-owner"
+plane_count_min = 2
+plane_roles = ["video", "osd"]
+overlay_behavior = "freeze-client-last-buffer"
+gpu_composition = false
+pixman = "rare-static-fallback"
+vulkan_level = "none"
+
+[[device_tiers]]
+id = "a133-1g"
+memory_min_mib = 1024
+memory_max_mib = 1024
+composition_tier = "planes-first"
+display_owner = "gamescope-candidate"
+failover_owner = "lightweight-plane-owner"
+plane_count = 4
+plane_modifier = "LINEAR"
+plane_alpha = true
+plane_zpos = true
+kms_rotations = ["normal"]
+native_width = 720
+native_height = 1280
+logical_width = 1280
+logical_height = 720
+gpu = "PowerVR-GE8300"
+gpu_composition = false
+vulkan_level = "1.2-unproven"
+qualification = "G1"
+
+[[device_tiers]]
+id = "real-gpu-8-12g"
+memory_min_mib = 8192
+memory_max_mib = 12288
+composition_tier = "gpu"
+display_owner = "gamescope"
+gpu_composition = true
+vulkan_level = "1.2-or-newer"
+plane_policy = "opportunistic"
+
+[input]
+physical_gamepad_owner = "pf-input-broker"
+transport = "uinput-SCM_RIGHTS"
+menu_owner = "pf-input-broker"
+menu_action = "SafeReturn"
+menu_forwarded_to_client = false
+gamescope_opens_physical_gamepad = false
+gamescope_opens_broker_gamepad = false
+overlay_route = "broker-sanitized-exclusive"
+dual_delivery = false
+
+[xwayland]
+opt_in_per_app = true
+filesystem_socket_projected = true
+abstract_socket_forbidden = true
+tcp_forbidden = true
+xauthority_required = true
+host_x11_directory_projected = false
+
+[[g0_gaps]]
+id = "L"
+name = "optimal-composition-to-linear-scanout-staging"
+bead = "tsp-fc58886d2e6d2d6a9589"
+owner = "COMPOSITOR"
+dependency_owner = "GPUCAP"
+source_state = "RED"
+offline_green = "lavapipe-copy-and-format-tests"
+device_green = "PVR-composite-linear-scanout"
+
+[[g0_gaps]]
+id = "M-semaphore"
+name = "PVR-opaque-timeline-semaphore-fd"
+bead = "tsp-e6a8dcfcd86fd80e96a1"
+owner = "GPUCAP"
+source_state = "RED"
+coordination = "gpu-um-tsp-review-and-pin-without-CX-DEPUTY-disturbance"
+offline_green = "Mesa-Vulkan-CTS-and-fd-roundtrip"
+device_green = "Gamescope-import-export-wait-signal"
+
+[[g0_gaps]]
+id = "M-rotation"
+name = "Vulkan-final-portrait-rotation"
+bead = "tsp-b25264113c4580010832"
+owner = "COMPOSITOR"
+dependency_owner = "GPUCAP"
+source_state = "RED"
+offline_green = "asymmetric-pattern-lavapipe"
+device_green = "720x1280-KMS-rotation-normal"
+
+[[g0_gaps]]
+id = "S"
+name = "direct-DRM-present-id-wait-feature-gating"
+bead = "tsp-2fee73c5e3fc363beede"
+owner = "COMPOSITOR"
+source_state = "RED"
+offline_green = "fake-capability-matrix"
+device_green = "direct-DRM-startup-with-features-disabled"
+
+[[g0_gaps]]
+id = "M-packaging"
+name = "source-built-reproducible-gamescope"
+bead = "tsp-0c9b666ac3daca7d5aed"
+owner = "COMPOSITOR"
+source_state = "RED"
+offline_green = "two-build-byte-and-SBOM-check"
+device_green = "installed-artifact-provenance"
+
+[g1]
+prerequisites = ["pf-bench", "gpucap-receipts", "sealed-exact-pin-manifest"]
+
+[g1.primary]
+device = "A133-GE8300"
+mode = "720x1280@60"
+buffer = "pre-rotated-720x1280-XRGB8888-LINEAR"
+buffer_transform = "normal"
+kms_rotation = "normal"
+duration_seconds = 120
+warmup_seconds = 10
+overlay_toggles = 100
+required_app_plane_stability = true
+forced_composite_allowed = false
+
+[g1.primary.thresholds]
+mean_fps_min = 59.0
+mean_fps_max = 61.0
+p99_frame_interval_ms_max = 20.0
+frame_intervals_over_33_34_ms_max = 0
+failed_atomic_commits_max = 0
+gamescope_composite_dispatches_max = 0
+gamescope_staging_copies_max = 0
+gamescope_cpu_percent_one_core_mean_max = 5.0
+gamescope_cpu_percent_one_core_p99_max = 10.0
+gpu_busy_delta_percentage_points_max = 2.0
+gpu_faults_max = 0
+guilty_lockups_max = 0
+
+[g1.primary.collectors]
+plane_state = "/sys/kernel/debug/dri/0/state"
+drm_trace = "drm_atomic_commit,drm_vblank_event"
+gamescope_trace = "bDoComposite,layer-count,composite-dispatch,staging-copy"
+frame_timing = "presented-vblank-sequence-and-monotonic-timestamp"
+process_cpu = "pidstat-1s"
+gpu_faults = "journalctl-kernel-PVR-fault-signatures"
+rotation = "external-camera-asymmetric-marker"
+
+[g1.secondary]
+path = "forced-full-GPU-composition-optimal-to-linear-staging-final-rotation"
+duration_seconds = 600
+warmup_seconds = 10
+estimate_gib_per_second_low = 1.06
+estimate_gib_per_second_high = 1.15
+
+[g1.secondary.thresholds]
+mean_fps_min = 59.0
+mean_fps_max = 61.0
+p99_frame_interval_ms_max = 20.0
+frame_intervals_over_33_34_ms_max = 0
+gamescope_cpu_percent_one_core_mean_max = 35.0
+gamescope_cpu_percent_one_core_p99_max = 75.0
+gpu_busy_percent_max = 75.0
+measured_dram_gib_per_second_delta_max = 1.50
+measured_dram_fraction_of_sustainable_max = 0.50
+gpu_faults_max = 0
+guilty_lockups_max = 0
+
+[g1.memory]
+gamescope_pss_mib_max = 128
+xwayland_pss_mib_max = 96
+client_pss_mib_max = 128
+combined_pss_mib_max = 384
+combined_rss_mib_max = 512
+system_memavailable_mib_min = 192
+sample_period_seconds = 1
+
+[recovery]
+authority_may_restart = false
+input_broker_may_restart = false
+client_kill_first = true
+compositor_restart_max_per_incident = 1
+recovery_ui_deadline_seconds = 3
+session_generation_increment = 1
+restart_storm_forbidden = true
+intentional_device_fault_injection = false
+
+[g2]
+order = [
+  "pf-shell-client",
+  "session-socket-contract",
+  "input-and-system-keys",
+  "gamescope-external-overlay",
+  "steam-link-handoff",
+]
+
+[estimates.a133_720x1280_60]
+pixels_per_frame = 921600
+pixels_per_second = 55296000
+rgba_bytes_per_frame = 3686400
+one_layer_read_write_bytes_per_second = 442368000
+two_layer_lower_bound_bytes_per_second = 663552000
+bilinear_lower_bound_bytes_per_second = 1105920000
+staging_copy_increment_bytes_per_second = 442368000
+one_layer_plus_staging_lower_bound_bytes_per_second = 884736000
+measurement = false

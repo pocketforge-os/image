@@ -67,6 +67,7 @@ test-dockerfile-pf-transforms:
 	@python3 tests/verify-owned-spl-layout-gate.py
 	@tests/test-launcher-runtime-contract.sh
 	@tests/test-session-authority-systemd-safety.sh
+	@tests/test-session-compositor-contract.sh
 	@python3 -B tests/test-reproducible-assembly.py
 
 test-kernel-build-identity:
