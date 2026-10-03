@@ -242,4 +242,32 @@ grep -F '/tmp/ffconf.XXXXXXXX' "${builder}" >/dev/null
 awk_length='length($0) == 6'
 grep -F "${awk_length}" "${builder}" >/dev/null
 
+# Exercise the producer's fail-closed lock admission before any source fetch.
+# platform#267 moved the selected profile's kernel/UAPI source to this commit;
+# a matching image lock advances to the deliberately absent receipt, while a
+# stale image lock fails here with PF_FFMPEG_UAPI_SHA drift.
+mkdir -p "${scratch}/contract-kernel"
+if (
+    # shellcheck disable=SC1091
+    . "${root}/build/platform-runtimes/steamlink-ffmpeg59/v1/source.lock"
+    export SOURCE_DATE_EPOCH=0
+    export PF_FFMPEG_DEBIAN_VERSION="${FFMPEG_DEBIAN_VERSION}"
+    export PF_FFMPEG_DSC_SHA256="${FFMPEG_DSC_SHA256}"
+    export PF_FFMPEG_ORIG_SHA256="${FFMPEG_ORIG_SHA256}"
+    export PF_FFMPEG_ORIG_ASC_SHA256="${FFMPEG_ORIG_ASC_SHA256}"
+    export PF_FFMPEG_DEBIAN_SHA256="${FFMPEG_DEBIAN_SHA256}"
+    export PF_FFMPEG_PATCH_SERIES_SHA256="${PATCH_SERIES_SHA256}"
+    export PF_FFMPEG_UAPI_SHA=a75bf257f2ecb4d6cff7e2a921b77d24ebecbbb7
+    "${builder}" "${scratch}/contract-out" "${scratch}/contract-kernel"
+) >"${scratch}/contract.log" 2>&1; then
+    echo 'FAIL: lock admission reached a missing kernel receipt without failing' >&2
+    exit 1
+fi
+if ! grep -Fxq 'steamlink-ffmpeg59: kernel UAPI source receipt missing' \
+        "${scratch}/contract.log"; then
+    cat "${scratch}/contract.log" >&2
+    echo 'FAIL: platform runtime UAPI lock did not reach the receipt gate' >&2
+    exit 1
+fi
+
 echo 'PASS: steamlink FFmpeg 59 runtime isolation/collision/rollback contract'
