@@ -401,7 +401,7 @@ and a 720x1280 LINEAR scanout staging image. Thresholds:
 This bandwidth estimate is analytical, not a measurement. At 720x1280x60
 there are 921,600 pixels/frame and 55,296,000 pixels/s. One RGBA read+write is
 442,368,000 B/s lower bound; one layer plus a staging copy is 884,736,000 B/s
-lower bound and approximately 1.06–1.15 GiB/s after 20–30% overhead. Two-layer
+lower bound and approximately 0.99–1.07 GiB/s after 20–30% overhead. Two-layer
 read+output is 663,552,000 B/s lower bound; bilinear four-tap read+write is
 1,105,920,000 B/s lower bound. These exclude client rendering, display fetch,
 cache/tiling effects, fences, and ALU. `pf-bench` records measured memory

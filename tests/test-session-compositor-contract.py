@@ -207,6 +207,9 @@ secondary = data["g1"]["secondary"]
 require(secondary["duration_seconds"] == 600
         and secondary["path"].startswith("forced-full-GPU-composition"),
         "secondary composition plan changed")
+require((secondary["estimate_gib_per_second_low"],
+         secondary["estimate_gib_per_second_high"]) == (0.99, 1.07),
+        "secondary binary-GiB estimate changed")
 st = secondary["thresholds"]
 require(st["measured_dram_gib_per_second_delta_max"] == 1.50
         and st["measured_dram_fraction_of_sustainable_max"] == 0.50,

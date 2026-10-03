@@ -242,8 +242,8 @@ rotation = "external-camera-asymmetric-marker"
 path = "forced-full-GPU-composition-optimal-to-linear-staging-final-rotation"
 duration_seconds = 600
 warmup_seconds = 10
-estimate_gib_per_second_low = 1.06
-estimate_gib_per_second_high = 1.15
+estimate_gib_per_second_low = 0.99
+estimate_gib_per_second_high = 1.07
 
 [g1.secondary.thresholds]
 mean_fps_min = 59.0
