@@ -64,8 +64,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: hermetic-tests-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   hermetic-tests:
@@ -85,6 +85,12 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
+
+      - name: Test CI producer policy guard
+        run: python3 scripts/tests/ci-producer-policy-test.py
+
+      - name: Enforce CI producer policy
+        run: python3 scripts/ci-producer-policy.py --root . --default-branch main
 
       - name: Run hermetic tests/*.sh
         run: |
