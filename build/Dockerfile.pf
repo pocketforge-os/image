@@ -61,6 +61,7 @@ ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.
 # availability is an independent required profile fact; it deliberately has no default.
 ARG PF_GPU_MODEL=ddk
 ARG PF_DISPLAY_PIPELINE
+ARG PF_STEAMLINK_FFMPEG59_MODE=not-shipped
 
 # The image variant is declared globally so the dev-only producer selectors cannot
 # drift from the variant passed to the rootfs and assemble stages. Release selects
@@ -1313,6 +1314,60 @@ cat /out/.pf-runtime-provenance
 RUNTIME
 
 # =============================================================================
+# platform-runtime-steamlink-ffmpeg59 — isolated Steam Link FFmpeg ABI payload.
+# Only a133-open-7x-gpu selects v1. Every other profile resolves the empty,
+# provenance-bearing NOT-SHIPPED producer. The v1 producer consumes the same
+# exact kernel archive as the kernel build, and build.sh rejects any UAPI receipt
+# other than the independently locked kernel-7.2 SHA.
+# =============================================================================
+FROM ${PF_CONTAINER} AS platform-runtime-steamlink-ffmpeg59-not-shipped
+RUN mkdir -p /out && printf '%s\n' 'mode=not-shipped' > /out/NOT-SHIPPED
+
+FROM ${PF_CONTAINER} AS platform-runtime-steamlink-ffmpeg59-v1
+ARG PF_FFMPEG_DEBIAN_VERSION
+ARG PF_FFMPEG_DSC_SHA256
+ARG PF_FFMPEG_ORIG_SHA256
+ARG PF_FFMPEG_ORIG_ASC_SHA256
+ARG PF_FFMPEG_DEBIAN_SHA256
+ARG PF_FFMPEG_PATCH_SERIES_SHA256
+ARG PF_FFMPEG_UAPI_SHA
+ARG SOURCE_DATE_EPOCH
+COPY --from=image-src build/platform-runtimes/steamlink-ffmpeg59/v1 /work/runtime-definition
+COPY --from=kernel-src . /work/kernel-uapi
+RUN <<'STEAMLINK_FFMPEG59'
+set -eux
+# These are build/test dependencies only. The pinned build-container apt sources
+# point at the frozen Bookworm snapshot; none of these bytes reach /out.
+apt-get update
+apt-get install -y --no-install-recommends abigail-tools gcc-aarch64-linux-gnu rsync
+/work/runtime-definition/build.sh /out /work/kernel-uapi
+dpkg-query -W -f='${binary:Package}=${Version}\n' \
+  abigail-tools binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu libdrm-dev:arm64 libudev-dev:arm64 rsync \
+  | LC_ALL=C sort \
+  > /out/usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1/reports/toolchain-packages.txt
+chmod 0444 /out/usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1/reports/toolchain-packages.txt
+# Bind the runtime and every corresponding-source byte into one manifest. The
+# rootfs installer verifies it before its first copy.
+payload_manifest=/out/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1/metadata/payload.sha256
+(cd /out && find \
+  usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1 \
+  usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1 \
+  -type f ! -path '*/metadata/payload.sha256' -print0 \
+  | LC_ALL=C sort -z | xargs -0 sha256sum) > "${payload_manifest}"
+chmod 0444 "${payload_manifest}"
+# Normalize every payload mtime after the final provenance file is written so
+# two clean transforms admit a deterministic archive/hash comparison.
+find /out -depth -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+STEAMLINK_FFMPEG59
+
+FROM platform-runtime-steamlink-ffmpeg59-${PF_STEAMLINK_FFMPEG59_MODE} AS platform-runtime-steamlink-ffmpeg59
+
+# Stable read-only producer boundary for consumers and component-repro checks.
+# Its filesystem is exactly the payload contract, without build-container files.
+FROM scratch AS platform-runtime-steamlink-ffmpeg59-export
+COPY --from=platform-runtime-steamlink-ffmpeg59 /out /
+
+# =============================================================================
 # sdl-static — static AArch64 SDL used only to link pf-hwprobe.
 # sim owns the static configuration/toolchain. The already staged, lock-pinned
 # libsdl3-sunxifb archive supplies SDL source so this stage never clones/fetches.
@@ -1777,6 +1832,7 @@ ARG PF_VENDOR_MANIFEST_SHA
 ARG PF_CAR_SHA256
 ARG PF_UBOOT_SHA=
 ARG PF_TFA_SHA=
+ARG PF_STEAMLINK_FFMPEG59_MODE=not-shipped
 ARG PF_ODYSSEY_CAPTURE=
 ARG APT_SNAPSHOT_DATE
 ARG SOURCE_DATE_EPOCH
@@ -1804,6 +1860,7 @@ COPY --from=hwprobe /out            /work/hwprobe
 COPY --from=poolsuite /out           /work/poolsuite
 COPY --from=recovery /out           /work/recovery
 COPY --from=launcher /out           /work/launcher
+COPY --from=platform-runtime-steamlink-ffmpeg59 /out /work/platform-runtime
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -1822,6 +1879,7 @@ case "${PF_SOC}" in
       GPU_UM_MESA_DIR=/work/gpu-um-mesa OUT_DIR=/out \
       RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher HWPROBE_DIR=/work/hwprobe \
       POOLSUITE_DIR=/work/poolsuite \
+      PLATFORM_RUNTIME_DIR=/work/platform-runtime \
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \

@@ -117,6 +117,7 @@ RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-de
 LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 POOLSUITE_DIR="${POOLSUITE_DIR:-/work/poolsuite}"
+PLATFORM_RUNTIME_DIR="${PLATFORM_RUNTIME_DIR:-/work/platform-runtime}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/tsp"
 
@@ -184,6 +185,7 @@ echo "  gpu-km-tsp: ${GPU_KM_TSP_DIR}"
 echo "  libsdl3:   ${LIBSDL3_DIR}"
 echo "  hwprobe:   ${HWPROBE_DIR}"
 echo "  poolsuite: ${POOLSUITE_DIR}"
+echo "  platform runtime: ${PLATFORM_RUNTIME_DIR}"
 echo "  out:       ${OUT_DIR}"
 echo "========================================================================"
 
@@ -1785,6 +1787,13 @@ mkdir -p "${ROOTFS_EXTRACTED}"
 
 # Extract the rootfs tar
 tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
+
+# Platform runtime payloads are installed only after mmdebstrap extraction.
+# This keeps them outside apt/dpkg ownership and lets the installer enforce the
+# immutable versioned namespace, collision refusal, safe links, and no-global-
+# loader rule against the filesystem that will actually be assembled.
+"${SRC_DIR}/scripts/install-platform-runtime.sh" \
+    "${PLATFORM_RUNTIME_DIR}" "${ROOTFS_EXTRACTED}"
 
 # The dev bench USB network (bd tsp-mc9m.41.984.34.2) switches USB0's role, so
 # it must never ship in a release rootfs. Verify both directions on what will
