@@ -22,8 +22,10 @@ libavcodec 59 59.37.100
 libavutil 57 57.28.100
 libswresample 4 4.7.100
 EOF
-    (cd "${runtime}/lib/aarch64-linux-gnu" && sha256sum -- ./*.so.*.*.* | sort) \
-        > "${runtime}/metadata/libraries.sha256"
+    for full in "${runtime}/lib/aarch64-linux-gnu"/*.so.*.*.*; do
+        base="$(basename "${full}")"
+        printf '%s  %s\n' "$(sha256sum "${full}" | cut -d' ' -f1)" "${base}"
+    done | sort > "${runtime}/metadata/libraries.sha256"
     printf '%s\n' 'schema_version = 1' 'runtime_id = "steamlink-ffmpeg59"' \
         > "${runtime}/metadata/runtime.toml"
     printf '%s\n' source > "${source}/README.md"
@@ -113,8 +115,14 @@ make_fixture "${bad_library_manifest}"
 bad_runtime="${bad_library_manifest}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1"
 chmod u+w "${bad_runtime}/metadata/libraries.sha256" \
     "${bad_runtime}/metadata/payload.sha256"
-printf '%064d  ./libavcodec.so.59.37.100\n' 0 \
-    > "${bad_runtime}/metadata/libraries.sha256"
+{
+    printf '%064d  libavcodec.so.59.37.100\n' 0
+    for library in libavutil.so.57.28.100 libswresample.so.4.7.100; do
+        printf '%s  %s\n' \
+            "$(sha256sum "${bad_runtime}/lib/aarch64-linux-gnu/${library}" | cut -d' ' -f1)" \
+            "${library}"
+    done
+} > "${bad_runtime}/metadata/libraries.sha256"
 (cd "${bad_library_manifest}" && find \
     usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1 \
     usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1 \
@@ -130,6 +138,33 @@ fi
 grep -F 'library hash verification failed' "${scratch}/bad-library.err" >/dev/null
 [ ! -e "${bad_library_root}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1" ]
 [ ! -e "${bad_library_root}/usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1" ]
+
+missing_libraries="${scratch}/missing-libraries"
+make_fixture "${missing_libraries}"
+missing_runtime="${missing_libraries}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1"
+missing_libdir="${missing_runtime}/lib/aarch64-linux-gnu"
+chmod u+w "${missing_libdir}" "${missing_runtime}/metadata/libraries.sha256" \
+    "${missing_runtime}/metadata/payload.sha256"
+rm "${missing_libdir}"/*.so.*.*.*
+printf '%s\n' unrelated > "${missing_libdir}/unrelated.txt"
+(cd "${missing_libdir}" && sha256sum unrelated.txt) \
+    > "${missing_runtime}/metadata/libraries.sha256"
+(cd "${missing_libraries}" && find \
+    usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1 \
+    usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1 \
+    -type f ! -path '*/metadata/payload.sha256' -print0 \
+    | LC_ALL=C sort -z | xargs -0 sha256sum) > "${missing_runtime}/metadata/payload.sha256"
+chmod -R a-w "${missing_libraries}"
+missing_libraries_root="${scratch}/missing-libraries-root"
+if "${installer}" "${missing_libraries}" "${missing_libraries_root}" \
+        2>"${scratch}/missing-libraries.err"; then
+    echo 'FAIL: payload-authenticated missing runtime libraries were accepted' >&2
+    exit 1
+fi
+grep -F 'unexpected library manifest entry unrelated.txt' \
+    "${scratch}/missing-libraries.err" >/dev/null
+[ ! -e "${missing_libraries_root}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1" ]
+[ ! -e "${missing_libraries_root}/usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1" ]
 
 symlinked_runtime="${scratch}/symlinked-runtime"
 make_fixture "${symlinked_runtime}"

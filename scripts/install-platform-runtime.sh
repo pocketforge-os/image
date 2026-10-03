@@ -69,6 +69,31 @@ done
     >/dev/null || die "payload hash verification failed"
 
 libdir="${producer}/${runtime_rel}/lib/aarch64-linux-gnu"
+library_manifest="${producer}/${runtime_rel}/metadata/libraries.sha256"
+library_count=0
+library_mask=0
+while read -r digest library extra; do
+    if [ -n "${extra:-}" ] || [ "${#digest}" -ne 64 ]; then
+        die "invalid library manifest layout"
+    fi
+    case "${digest}" in *[!0-9a-f]*) die "invalid library manifest digest" ;; esac
+    case "${library}" in
+        libavcodec.so.59.37.100) library_bit=1 ;;
+        libavutil.so.57.28.100) library_bit=2 ;;
+        libswresample.so.4.7.100) library_bit=4 ;;
+        *) die "unexpected library manifest entry ${library}" ;;
+    esac
+    [ "$((library_mask & library_bit))" -eq 0 ] \
+        || die "duplicate library manifest entry ${library}"
+    if [ ! -f "${libdir}/${library}" ] || [ -L "${libdir}/${library}" ]; then
+        die "missing regular runtime library ${library}"
+    fi
+    library_mask=$((library_mask | library_bit))
+    library_count=$((library_count + 1))
+done < "${library_manifest}"
+if [ "${library_count}" -ne 3 ] || [ "${library_mask}" -ne 7 ]; then
+    die "library manifest does not name the required runtime libraries"
+fi
 (cd "${libdir}" && sha256sum -c ../../metadata/libraries.sha256) \
     >/dev/null || die "library hash verification failed"
 while read -r soname target; do
