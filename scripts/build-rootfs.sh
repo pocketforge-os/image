@@ -118,6 +118,7 @@ LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 POOLSUITE_DIR="${POOLSUITE_DIR:-/work/poolsuite}"
 PLATFORM_RUNTIME_DIR="${PLATFORM_RUNTIME_DIR:-/work/platform-runtime}"
+PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE:-not-shipped}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/tsp"
 
@@ -1793,7 +1794,8 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
 # immutable versioned namespace, collision refusal, safe links, and no-global-
 # loader rule against the filesystem that will actually be assembled.
 "${SRC_DIR}/scripts/install-platform-runtime.sh" \
-    "${PLATFORM_RUNTIME_DIR}" "${ROOTFS_EXTRACTED}"
+    "${PLATFORM_RUNTIME_DIR}" "${ROOTFS_EXTRACTED}" \
+    "${PF_STEAMLINK_FFMPEG59_MODE}"
 
 # The dev bench USB network (bd tsp-mc9m.41.984.34.2) switches USB0's role, so
 # it must never ship in a release rootfs. Verify both directions on what will

@@ -1880,6 +1880,7 @@ case "${PF_SOC}" in
       RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher HWPROBE_DIR=/work/hwprobe \
       POOLSUITE_DIR=/work/poolsuite \
       PLATFORM_RUNTIME_DIR=/work/platform-runtime \
+      PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE}" \
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \

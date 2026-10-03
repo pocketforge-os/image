@@ -3,15 +3,30 @@ set -euo pipefail
 
 producer="${1:?usage: install-platform-runtime.sh PRODUCER ROOTFS}"
 rootfs="${2:?usage: install-platform-runtime.sh PRODUCER ROOTFS}"
+mode="${3:-v1}"
 runtime_rel=usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1
 source_rel=usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1
 
 die() { echo "platform-runtime install: $*" >&2; exit 1; }
 
-if [ -f "${producer}/NOT-SHIPPED" ]; then
-    [ ! -e "${producer}/${runtime_rel}" ] || die "NOT-SHIPPED producer also contains a runtime"
-    exit 0
-fi
+case "${mode}" in
+    not-shipped)
+        # Direct rootfs tests do not materialize Docker's marker-only stage.
+        # Absence is valid only under the explicit NOT-SHIPPED selector.
+        if [ ! -e "${producer}" ] && [ ! -L "${producer}" ]; then
+            exit 0
+        fi
+        [ -f "${producer}/NOT-SHIPPED" ] || die "NOT-SHIPPED marker missing"
+        [ ! -e "${producer}/${runtime_rel}" ] \
+            || die "NOT-SHIPPED producer also contains a runtime"
+        [ ! -e "${producer}/${source_rel}" ] \
+            || die "NOT-SHIPPED producer also contains corresponding source"
+        exit 0
+        ;;
+    v1) ;;
+    *) die "unsupported mode ${mode}" ;;
+esac
+[ ! -e "${producer}/NOT-SHIPPED" ] || die "v1 producer contains NOT-SHIPPED marker"
 [ -d "${producer}/${runtime_rel}" ] || die "runtime payload missing"
 [ -d "${producer}/${source_rel}" ] || die "corresponding source missing"
 [ -f "${producer}/${runtime_rel}/metadata/runtime.toml" ] || die "runtime manifest missing"

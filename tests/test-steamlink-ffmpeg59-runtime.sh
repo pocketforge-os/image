@@ -110,7 +110,18 @@ grep -F 'payload hash verification failed' "${scratch}/corrupt.err" >/dev/null
 
 mkdir -p "${scratch}/not-shipped" "${scratch}/empty-root"
 printf '%s\n' 'mode=not-shipped' > "${scratch}/not-shipped/NOT-SHIPPED"
-"${installer}" "${scratch}/not-shipped" "${scratch}/empty-root"
+"${installer}" "${scratch}/not-shipped" "${scratch}/empty-root" not-shipped
+"${installer}" "${scratch}/missing" "${scratch}/empty-root" not-shipped
+if "${installer}" "${scratch}/missing" "${scratch}/empty-root" v1 \
+        2>"${scratch}/selected-missing.err"; then
+    echo 'FAIL: selected v1 accepted a missing producer' >&2; exit 1
+fi
+grep -F 'runtime payload missing' "${scratch}/selected-missing.err" >/dev/null
+if "${installer}" "${scratch}/not-shipped" "${scratch}/empty-root" v1 \
+        2>"${scratch}/selector-mismatch.err"; then
+    echo 'FAIL: v1 accepted a NOT-SHIPPED producer' >&2; exit 1
+fi
+grep -F 'v1 producer contains NOT-SHIPPED marker' "${scratch}/selector-mismatch.err" >/dev/null
 
 grep -F 'AS platform-runtime-steamlink-ffmpeg59-v1' "${dockerfile}" >/dev/null
 grep -F 'AS platform-runtime-steamlink-ffmpeg59-not-shipped' "${dockerfile}" >/dev/null
@@ -121,6 +132,8 @@ grep -F "${selector}" "${dockerfile}" >/dev/null
 grep -F 'AS platform-runtime-steamlink-ffmpeg59-export' "${dockerfile}" >/dev/null
 grep -F 'COPY --from=platform-runtime-steamlink-ffmpeg59 /out /' "${dockerfile}" >/dev/null
 grep -F 'COPY --from=platform-runtime-steamlink-ffmpeg59 /out /work/platform-runtime' "${dockerfile}" >/dev/null
+# shellcheck disable=SC2016
+grep -F 'PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE}"' "${dockerfile}" >/dev/null
 if find "${root}/build/platform-runtimes/steamlink-ffmpeg59" \
         \( -name app.toml -o -name '*.service' \) -print | grep -q .; then
     echo 'FAIL: platform payload duplicated app-runtime ownership' >&2; exit 1
