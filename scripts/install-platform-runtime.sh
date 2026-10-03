@@ -64,15 +64,9 @@ done
 (cd "${producer}" && sha256sum -c "${runtime_rel}/metadata/payload.sha256") \
     >/dev/null || die "payload hash verification failed"
 
-for rel in "${runtime_rel}" "${source_rel}"; do
-    src="${producer}/${rel}"
-    dst="${rootfs}/${rel}"
-    mkdir -p "${dst%/*}"
-    cp -a "${src}" "${dst}"
-done
-
-libdir="${rootfs}/${runtime_rel}/lib/aarch64-linux-gnu"
-(cd "${libdir}" && sha256sum -c ../../metadata/libraries.sha256)
+libdir="${producer}/${runtime_rel}/lib/aarch64-linux-gnu"
+(cd "${libdir}" && sha256sum -c ../../metadata/libraries.sha256) \
+    >/dev/null || die "library hash verification failed"
 while read -r soname target; do
     if [ ! -L "${libdir}/${soname}" ] \
             || [ "$(readlink "${libdir}/${soname}")" != "${target}" ]; then
@@ -85,3 +79,10 @@ libswresample.so.4 libswresample.so.4.7.100
 EOF
 [ ! -e "${rootfs}/etc/ld.so.conf.d/steamlink-ffmpeg59.conf" ] \
     || die "global loader configuration is forbidden"
+
+for rel in "${runtime_rel}" "${source_rel}"; do
+    src="${producer}/${rel}"
+    dst="${rootfs}/${rel}"
+    mkdir -p "${dst%/*}"
+    cp -a "${src}" "${dst}"
+done

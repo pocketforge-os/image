@@ -108,6 +108,29 @@ fi
 grep -F 'payload hash verification failed' "${scratch}/corrupt.err" >/dev/null
 [ ! -e "${scratch}/corrupt-root/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1" ]
 
+bad_library_manifest="${scratch}/bad-library-manifest"
+make_fixture "${bad_library_manifest}"
+bad_runtime="${bad_library_manifest}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1"
+chmod u+w "${bad_runtime}/metadata/libraries.sha256" \
+    "${bad_runtime}/metadata/payload.sha256"
+printf '%064d  ./libavcodec.so.59.37.100\n' 0 \
+    > "${bad_runtime}/metadata/libraries.sha256"
+(cd "${bad_library_manifest}" && find \
+    usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1 \
+    usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1 \
+    -type f ! -path '*/metadata/payload.sha256' -print0 \
+    | LC_ALL=C sort -z | xargs -0 sha256sum) > "${bad_runtime}/metadata/payload.sha256"
+chmod -R a-w "${bad_library_manifest}"
+bad_library_root="${scratch}/bad-library-root"
+if "${installer}" "${bad_library_manifest}" "${bad_library_root}" \
+        2>"${scratch}/bad-library.err"; then
+    echo 'FAIL: payload-authenticated malformed library manifest was accepted' >&2
+    exit 1
+fi
+grep -F 'library hash verification failed' "${scratch}/bad-library.err" >/dev/null
+[ ! -e "${bad_library_root}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1" ]
+[ ! -e "${bad_library_root}/usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1" ]
+
 mkdir -p "${scratch}/not-shipped" "${scratch}/empty-root"
 printf '%s\n' 'mode=not-shipped' > "${scratch}/not-shipped/NOT-SHIPPED"
 "${installer}" "${scratch}/not-shipped" "${scratch}/empty-root" not-shipped
