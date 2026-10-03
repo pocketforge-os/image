@@ -11,13 +11,6 @@ die() { echo "steamlink-ffmpeg59: $*" >&2; exit 1; }
 
 out="${1:?usage: build.sh OUT KERNEL_UAPI_TREE}"
 kernel_tree="${2:?usage: build.sh OUT KERNEL_UAPI_TREE}"
-# FFmpeg embeds its complete configure command in libavutil. A random build
-# directory would therefore make all three linked libraries non-reproducible.
-# This stage-private absolute path is fixed and fail-closed on a dirty caller.
-work=/work/pf-steamlink-ffmpeg59-v1
-[ ! -e "${work}" ] || die "fixed build directory already exists: ${work}"
-mkdir "${work}"
-trap 'rm -rf "${work}"' EXIT
 
 require_equal() { [ "$2" = "$3" ] || die "$1 drift: got '$2', want '$3'"; }
 
@@ -34,6 +27,14 @@ require_equal PF_FFMPEG_UAPI_SHA "${PF_FFMPEG_UAPI_SHA:?}" "${KERNEL_UAPI_SHA}"
 
 [ -f "${kernel_tree}/.pf-source-revision" ] || die "kernel UAPI source receipt missing"
 require_equal kernel-uapi-receipt "$(cat "${kernel_tree}/.pf-source-revision")" "${KERNEL_UAPI_SHA}"
+
+# FFmpeg embeds its complete configure command in libavutil. A random build
+# directory would therefore make all three linked libraries non-reproducible.
+# This stage-private absolute path is fixed and fail-closed on a dirty caller.
+work=/work/pf-steamlink-ffmpeg59-v1
+[ ! -e "${work}" ] || die "fixed build directory already exists: ${work}"
+mkdir "${work}"
+trap 'rm -rf "${work}"' EXIT
 
 src_objects="${work}/source-objects"
 mkdir -p "${src_objects}"
