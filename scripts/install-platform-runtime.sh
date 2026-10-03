@@ -27,8 +27,12 @@ case "${mode}" in
     *) die "unsupported mode ${mode}" ;;
 esac
 [ ! -e "${producer}/NOT-SHIPPED" ] || die "v1 producer contains NOT-SHIPPED marker"
-[ -d "${producer}/${runtime_rel}" ] || die "runtime payload missing"
-[ -d "${producer}/${source_rel}" ] || die "corresponding source missing"
+if [ ! -d "${producer}/${runtime_rel}" ] || [ -L "${producer}/${runtime_rel}" ]; then
+    die "runtime payload missing or symlinked"
+fi
+if [ ! -d "${producer}/${source_rel}" ] || [ -L "${producer}/${source_rel}" ]; then
+    die "corresponding source missing or symlinked"
+fi
 [ -f "${producer}/${runtime_rel}/metadata/runtime.toml" ] || die "runtime manifest missing"
 [ -f "${producer}/${runtime_rel}/metadata/libraries.sha256" ] || die "library hash manifest missing"
 [ -f "${producer}/${runtime_rel}/metadata/payload.sha256" ] || die "payload hash manifest missing"

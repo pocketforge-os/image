@@ -131,6 +131,40 @@ grep -F 'library hash verification failed' "${scratch}/bad-library.err" >/dev/nu
 [ ! -e "${bad_library_root}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1" ]
 [ ! -e "${bad_library_root}/usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1" ]
 
+symlinked_runtime="${scratch}/symlinked-runtime"
+make_fixture "${symlinked_runtime}"
+symlinked_runtime_parent="${symlinked_runtime}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59"
+chmod u+w "${symlinked_runtime_parent}"
+mv "${symlinked_runtime_parent}/v1" "${symlinked_runtime_parent}/alternate"
+ln -s alternate "${symlinked_runtime_parent}/v1"
+chmod a-w "${symlinked_runtime_parent}"
+symlinked_runtime_root="${scratch}/symlinked-runtime-root"
+if "${installer}" "${symlinked_runtime}" "${symlinked_runtime_root}" \
+        2>"${scratch}/symlinked-runtime.err"; then
+    echo 'FAIL: symlinked runtime payload root was accepted' >&2
+    exit 1
+fi
+grep -F 'runtime payload missing or symlinked' "${scratch}/symlinked-runtime.err" >/dev/null
+[ ! -e "${symlinked_runtime_root}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1" ]
+[ ! -e "${symlinked_runtime_root}/usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1" ]
+
+symlinked_source="${scratch}/symlinked-source"
+make_fixture "${symlinked_source}"
+symlinked_source_parent="${symlinked_source}/usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59"
+chmod u+w "${symlinked_source_parent}"
+mv "${symlinked_source_parent}/v1" "${symlinked_source_parent}/alternate"
+ln -s alternate "${symlinked_source_parent}/v1"
+chmod a-w "${symlinked_source_parent}"
+symlinked_source_root="${scratch}/symlinked-source-root"
+if "${installer}" "${symlinked_source}" "${symlinked_source_root}" \
+        2>"${scratch}/symlinked-source.err"; then
+    echo 'FAIL: symlinked corresponding-source root was accepted' >&2
+    exit 1
+fi
+grep -F 'corresponding source missing or symlinked' "${scratch}/symlinked-source.err" >/dev/null
+[ ! -e "${symlinked_source_root}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1" ]
+[ ! -e "${symlinked_source_root}/usr/share/pocketforge/corresponding-source/steamlink-ffmpeg59/v1" ]
+
 mkdir -p "${scratch}/not-shipped" "${scratch}/empty-root"
 printf '%s\n' 'mode=not-shipped' > "${scratch}/not-shipped/NOT-SHIPPED"
 "${installer}" "${scratch}/not-shipped" "${scratch}/empty-root" not-shipped
