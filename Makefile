@@ -54,7 +54,10 @@ generate-wifi-config:
 	fi
 
 # ---- hermetic build-file tests ----------------------------------------------
-.PHONY: test-dockerfile-pf-transforms test-kernel-build-identity
+.PHONY: test-app-runtime-root test-dockerfile-pf-transforms test-kernel-build-identity
+test-app-runtime-root:
+	@tests/test-app-runtime-root.sh
+
 test-dockerfile-pf-transforms:
 	@tests/test-dockerfile-pf-transforms.sh
 	@tests/test-initrd-selfflash-watchdog.sh
@@ -89,6 +92,7 @@ help:
 	@echo "  its host-side fetch-blobs/warm-cache/update-manifest helpers were removed in tsp-7xe)."
 	@echo ""
 	@echo "  Dev helpers:"
+	@echo "    test-app-runtime-root          Test proposed app-root rendering/isolation (no network)"
 	@echo "    generate-wifi-config  Stage boards/tsp/boot-resource/wifi.txt from PF_WIFI_PSK/keyring"
 	@echo "    test-dockerfile-pf-transforms  Test Dockerfile source transforms (no Docker/network)"
 	@echo "    test-kernel-build-identity    Test pinned kernel UTS identity (no Docker/network)"
