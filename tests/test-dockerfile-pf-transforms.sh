@@ -47,3 +47,14 @@ grep -q '^  rm -f /etc/apt/preferences.d/50mesa-snapshot$' "$fixture"
 printf 'PASS: Dockerfile preserves conditional cleanup bodies and strips only the LLVM key EXIT trap\n'
 
 python3 "$root/build/tests/test_gpu_um_toolchain_drift.py"
+
+gpu_um_negative="$tmpdir/gpu-um-source-pin-negative.log"
+if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \
+  --source-sha 0dc9d15a >"$gpu_um_negative" 2>&1; then
+  printf 'FAIL: gpu-um toolchain guard accepted the superseded source identity\n' >&2
+  exit 1
+fi
+grep -Fx \
+  "FAIL: source pin: expected '0dc9d15a', got 'fd904962ec4726d038cf5b5e895598ac48081cce'" \
+  "$gpu_um_negative" >/dev/null
+printf 'PASS: gpu-um toolchain guard rejects a superseded source identity\n'

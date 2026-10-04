@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 ARM64_DESTINATION = "/etc/apt/sources.list.d/ubuntu-arm64.sources"
+PINNED_GPU_UM_SHA = "fd904962ec4726d038cf5b5e895598ac48081cce"
 
 
 def stage(text: str, alias: str) -> str:
@@ -81,6 +82,17 @@ def arm64_stanza(text: str) -> list[str]:
     return values[first : last + 1]
 
 
+def fixture_source_sha(text: str) -> str:
+    match = re.search(
+        r"(?m)^# Vendored from gpu-um-tsp docker/Dockerfile\.ge8300-mesa-cross "
+        r"at ([0-9a-f]{8}|[0-9a-f]{40})\.$",
+        text,
+    )
+    if not match:
+        raise ValueError("gpu-um-tsp fixture source identity not found")
+    return match.group(1)
+
+
 def fail(name: str, expected: object, actual: object) -> None:
     print(f"FAIL: {name}: expected {expected!r}, got {actual!r}", file=sys.stderr)
 
@@ -92,14 +104,17 @@ def main() -> int:
     parser.add_argument(
         "--fixture",
         type=Path,
-        default=root / "build/tests/fixtures/gpu-um-toolchain-0dc9d15a.Dockerfile",
+        default=root / "build/tests/fixtures/gpu-um-toolchain-fd904962.Dockerfile",
     )
+    parser.add_argument("--source-sha", default=PINNED_GPU_UM_SHA)
     args = parser.parse_args()
 
     try:
         actual = stage(args.dockerfile.read_text(), "gpu-um-toolchain")
-        expected = stage(args.fixture.read_text(), "toolchain")
+        fixture_text = args.fixture.read_text()
+        expected = stage(fixture_text, "toolchain")
         checks = [
+            ("source pin", args.source_sha, fixture_source_sha(fixture_text)),
             ("base image", base_image(expected), base_image(actual)),
             ("sed strip expression", sed_strip(expected), sed_strip(actual)),
         ]
@@ -133,7 +148,10 @@ def main() -> int:
 
     if failed:
         return 1
-    print("PASS: gpu-um-toolchain matches pinned gpu-um-tsp 0dc9d15a load-bearing lines")
+    print(
+        "PASS: gpu-um-toolchain matches pinned gpu-um-tsp "
+        f"{args.source_sha} load-bearing lines"
+    )
     return 0
 
 
