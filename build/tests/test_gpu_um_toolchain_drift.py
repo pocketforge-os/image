@@ -93,6 +93,17 @@ def fixture_source_sha(text: str) -> str:
     return match.group(1)
 
 
+def dockerfile_source_sha(text: str) -> str:
+    match = re.search(
+        r"(?m)^# docker/Dockerfile\.ge8300-mesa-cross "
+        r"at ([0-9a-f]{8}|[0-9a-f]{40})\. Do NOT add$",
+        text,
+    )
+    if not match:
+        raise ValueError("gpu-um-tsp live source identity not found")
+    return match.group(1)
+
+
 def fail(name: str, expected: object, actual: object) -> None:
     print(f"FAIL: {name}: expected {expected!r}, got {actual!r}", file=sys.stderr)
 
@@ -110,11 +121,13 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        actual = stage(args.dockerfile.read_text(), "gpu-um-toolchain")
+        dockerfile_text = args.dockerfile.read_text()
+        actual = stage(dockerfile_text, "gpu-um-toolchain")
         fixture_text = args.fixture.read_text()
         expected = stage(fixture_text, "toolchain")
         checks = [
-            ("source pin", args.source_sha, fixture_source_sha(fixture_text)),
+            ("live source pin", args.source_sha, dockerfile_source_sha(dockerfile_text)),
+            ("fixture source pin", args.source_sha, fixture_source_sha(fixture_text)),
             ("base image", base_image(expected), base_image(actual)),
             ("sed strip expression", sed_strip(expected), sed_strip(actual)),
         ]
@@ -150,7 +163,7 @@ def main() -> int:
         return 1
     print(
         "PASS: gpu-um-toolchain matches pinned gpu-um-tsp "
-        f"{args.source_sha} load-bearing lines"
+        f"{args.source_sha} live annotation and load-bearing lines"
     )
     return 0
 

@@ -55,6 +55,9 @@ if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \
   exit 1
 fi
 grep -Fx \
-  "FAIL: source pin: expected '0dc9d15a', got 'fd904962ec4726d038cf5b5e895598ac48081cce'" \
+  "FAIL: live source pin: expected '0dc9d15a', got 'fd904962ec4726d038cf5b5e895598ac48081cce'" \
   "$gpu_um_negative" >/dev/null
-printf 'PASS: gpu-um toolchain guard rejects a superseded source identity\n'
+grep -Fx \
+  "FAIL: fixture source pin: expected '0dc9d15a', got 'fd904962ec4726d038cf5b5e895598ac48081cce'" \
+  "$gpu_um_negative" >/dev/null
+printf 'PASS: gpu-um toolchain guard rejects superseded live and fixture source identities\n'
