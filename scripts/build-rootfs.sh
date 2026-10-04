@@ -119,6 +119,8 @@ HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 POOLSUITE_DIR="${POOLSUITE_DIR:-/work/poolsuite}"
 PLATFORM_RUNTIME_DIR="${PLATFORM_RUNTIME_DIR:-/work/platform-runtime}"
 PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE:-not-shipped}"
+GAMESCOPE_DIR="${GAMESCOPE_DIR:-/work/gamescope-package}"
+PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE:-not-shipped}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/tsp"
 
@@ -157,6 +159,41 @@ if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
     fi
 fi
 export SOURCE_DATE_EPOCH
+
+PF_GAMESCOPE_IDENTITY_SHA256=""
+case "${PF_GAMESCOPE_MODE}" in
+    not-shipped)
+        [ ! -e "${GAMESCOPE_DIR}/usr/bin/gamescope" ] || {
+            echo "FATAL: not-shipped Gamescope producer contains a binary" >&2
+            exit 1
+        }
+        ;;
+    g1)
+        [ "${PF_DEVICE_ID}" = "a133-open-7x-gpu" ] || {
+            echo "FATAL: Gamescope g1 package is restricted to a133-open-7x-gpu" >&2
+            exit 1
+        }
+        [ -x "${GAMESCOPE_DIR}/usr/bin/gamescope" ] || {
+            echo "FATAL: Gamescope g1 package binary is missing" >&2
+            exit 1
+        }
+        [ -f "${GAMESCOPE_DIR}/usr/share/pocketforge/gamescope-build-id" ] || {
+            echo "FATAL: Gamescope g1 installed identity is missing" >&2
+            exit 1
+        }
+        [ -f "${GAMESCOPE_DIR}/usr/share/licenses/gamescope/gamescope-LICENSE" ] || {
+            echo "FATAL: Gamescope g1 licence is missing" >&2
+            exit 1
+        }
+        PF_GAMESCOPE_IDENTITY_SHA256="$(sha256sum \
+            "${GAMESCOPE_DIR}/usr/share/pocketforge/gamescope-build-id" | cut -d' ' -f1)"
+        ;;
+    *)
+        echo "FATAL: PF_GAMESCOPE_MODE must be not-shipped or g1" >&2
+        exit 2
+        ;;
+esac
+export PF_GAMESCOPE_IDENTITY_SHA256
 
 # Load committed UUIDs
 # shellcheck disable=SC1091 # BOARD_DIR is configurable; the build validates the file.
@@ -222,6 +259,15 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     MAINLINE_PKGS="$(grep -v '^\s*#' "${PKG_MAINLINE_FILE}" | grep -v '^\s*$' | tr '\n' ',' | sed 's/,$//')"
     PKG_LIST="${PKG_LIST},${MAINLINE_PKGS}"
     echo "  gpu_model=open: added mainline conformance packages (${MAINLINE_PKGS})"
+fi
+
+# The G1 compositor runtime is profile-scoped so all unrelated image package
+# lists remain byte-for-byte unchanged. Xwayland is an explicit product input,
+# not an implicit recommendation or a runtime download.
+if [ "${PF_GAMESCOPE_MODE}" = "g1" ]; then
+    GAMESCOPE_RUNTIME_PKGS="libavif15 libcap2 libdecor-0-0 liblcms2-2 libliftoff0 libluajit-5.1-2 libpipewire-0.3-0 libpixman-1-0 libseat1 libsdl2-2.0-0 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxmu6 libxrender1 libxres1 libxtst6 libxxf86vm1 xwayland"
+    PKG_LIST="${PKG_LIST},$(printf '%s' "${GAMESCOPE_RUNTIME_PKGS}" | tr ' ' ',')"
+    echo "  gamescope=g1: added compositor/Xwayland runtime closure (${GAMESCOPE_RUNTIME_PKGS})"
 fi
 
 if [ "${PF_GPU_MODEL}" = "open" ] && [ "${VARIANT}" = "dev" ]; then
@@ -435,6 +481,39 @@ cat >> "${CUSTOMIZE_SCRIPT}" << 'CUSTOMIZE_EOF'
 ROOTFS="$1"
 
 echo "[customize] Starting PocketForge rootfs customization..."
+
+case "${PF_GAMESCOPE_MODE}" in
+    not-shipped) ;;
+    g1)
+        [ "${PF_DEVICE_ID}" = "a133-open-7x-gpu" ] || {
+            echo "FATAL: refusing Gamescope package on ${PF_DEVICE_ID}" >&2
+            exit 1
+        }
+        test "$(od -An -tx1 -j18 -N2 "${GAMESCOPE_DIR}/usr/bin/gamescope" | tr -d ' ')" = b700
+        install -d "${ROOTFS}/usr"
+        cp -a "${GAMESCOPE_DIR}/." "${ROOTFS}/"
+        cmp "${GAMESCOPE_DIR}/usr/share/pocketforge/gamescope-build-id" \
+            "${ROOTFS}/usr/share/pocketforge/gamescope-build-id"
+        test "$(sha256sum "${ROOTFS}/usr/share/pocketforge/gamescope-build-id" | cut -d' ' -f1)" = \
+            "${PF_GAMESCOPE_IDENTITY_SHA256}"
+        test -x "${ROOTFS}/usr/bin/Xwayland"
+        GAMESCOPE_RUNTIME_CLOSURE="$(
+            chroot "${ROOTFS}" /lib/ld-linux-aarch64.so.1 --list /usr/bin/gamescope
+        )"
+        printf '%s\n' "${GAMESCOPE_RUNTIME_CLOSURE}"
+        if printf '%s\n' "${GAMESCOPE_RUNTIME_CLOSURE}" | grep -F 'not found'; then
+            echo "FATAL: Gamescope dynamic runtime closure is incomplete" >&2
+            exit 1
+        fi
+        if [ "${POCKETFORGE_VARIANT:-dev}" != dev ] &&
+            [ -e "${ROOTFS}/opt/pocketforge/gamescope-diagnostics" ]; then
+            echo "FATAL: Gamescope diagnostic assets appeared in a non-dev rootfs" >&2
+            exit 1
+        fi
+        echo "[customize] Gamescope: AArch64 binary, Xwayland, runtime closure, licences and identity verified"
+        ;;
+    *) echo "FATAL: invalid Gamescope mode in customize hook" >&2; exit 2 ;;
+esac
 
 open_gpu_library_is_usable() {
     local candidate=$1
@@ -1768,7 +1847,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_KERNEL_REPO=${PF_KERNEL_REPO} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_KERNEL_REPO=${PF_KERNEL_REPO} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} GAMESCOPE_DIR=${GAMESCOPE_DIR} PF_GAMESCOPE_MODE=${PF_GAMESCOPE_MODE} PF_GAMESCOPE_IDENTITY_SHA256=${PF_GAMESCOPE_IDENTITY_SHA256} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \

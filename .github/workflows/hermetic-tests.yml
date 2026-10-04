@@ -102,6 +102,7 @@ jobs:
             tests/test-default-app-platform.sh
             tests/test-default-app-rootfs.sh
             tests/test-dockerfile-pf-transforms.sh
+            tests/test-gamescope-package-path.sh
             tests/test-hwprobe-variant-stage.sh
             tests/test-initrd-selfflash-watchdog.sh
             tests/test-kernel-build-identity.sh
