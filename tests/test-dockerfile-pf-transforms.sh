@@ -48,16 +48,25 @@ printf 'PASS: Dockerfile preserves conditional cleanup bodies and strips only th
 
 python3 "$root/build/tests/test_gpu_um_toolchain_drift.py"
 
-gpu_um_negative="$tmpdir/gpu-um-source-pin-negative.log"
+target_gpu_um_sha=1d8056548b79b236e45d3ba0b0dec94a25660930
+stale_gpu_um_sha=fd904962ec4726d038cf5b5e895598ac48081cce
+stale_dockerfile="$tmpdir/gpu-um-stale.Dockerfile"
+stale_fixture="$tmpdir/gpu-um-stale-fixture.Dockerfile"
+sed "s/$target_gpu_um_sha/$stale_gpu_um_sha/g" "$dockerfile" >"$stale_dockerfile"
+sed "s/$target_gpu_um_sha/$stale_gpu_um_sha/g" \
+  "$root/build/tests/fixtures/gpu-um-toolchain-1d805654.Dockerfile" >"$stale_fixture"
+
+gpu_um_stale="$tmpdir/gpu-um-stale-source-pin.log"
 if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \
-  --source-sha 0dc9d15a >"$gpu_um_negative" 2>&1; then
-  printf 'FAIL: gpu-um toolchain guard accepted the superseded source identity\n' >&2
+  --dockerfile "$stale_dockerfile" \
+  --fixture "$stale_fixture" >"$gpu_um_stale" 2>&1; then
+  printf 'FAIL: gpu-um toolchain guard accepted stale live and fixture identities\n' >&2
   exit 1
 fi
 grep -Fx \
-  "FAIL: live source pin: expected '0dc9d15a', got 'fd904962ec4726d038cf5b5e895598ac48081cce'" \
-  "$gpu_um_negative" >/dev/null
+  "FAIL: live source pin: expected '$target_gpu_um_sha', got '$stale_gpu_um_sha'" \
+  "$gpu_um_stale" >/dev/null
 grep -Fx \
-  "FAIL: fixture source pin: expected '0dc9d15a', got 'fd904962ec4726d038cf5b5e895598ac48081cce'" \
-  "$gpu_um_negative" >/dev/null
-printf 'PASS: gpu-um toolchain guard rejects superseded live and fixture source identities\n'
+  "FAIL: fixture source pin: expected '$target_gpu_um_sha', got '$stale_gpu_um_sha'" \
+  "$gpu_um_stale" >/dev/null
+printf 'PASS: gpu-um toolchain guard rejects stale live and fixture source identities\n'
