@@ -14,8 +14,9 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
-from typing import Iterable
+from typing import Callable
 
 
 SHA1_RE = re.compile(r"[0-9a-f]{40}")
@@ -35,10 +36,77 @@ RECEIPT_FILES = {
     ".pf-gamescope-admission.json",
     ".pf-gamescope-materialization.json",
 }
+AARCH64_CROSS_FILE_BYTES = b"""[binaries]
+c = 'aarch64-linux-gnu-gcc'
+cpp = 'aarch64-linux-gnu-g++'
+ar = 'aarch64-linux-gnu-gcc-ar'
+strip = 'aarch64-linux-gnu-strip'
+pkg-config = '/work/aarch64-pkg-config'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true
+"""
 
 
 class PackageInputError(ValueError):
     """An exact source, provenance, architecture, or profile gate failed."""
+
+
+def _normalize_cross_file_bytes(value: bytes) -> bytes:
+    try:
+        text = value.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise PackageInputError("Gamescope Meson cross-file must be UTF-8") from error
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.endswith("\n"):
+        normalized += "\n"
+    return normalized.encode("utf-8")
+
+
+@dataclass(frozen=True)
+class MesonSetupConfiguration:
+    source: Path
+    build_dir: Path
+    cross_file: Path
+    cross_file_bytes: bytes = AARCH64_CROSS_FILE_BYTES
+    buildtype: str = "release"
+    prefix: str = "/usr"
+    auto_features: str = "enabled"
+    wrap_mode: str = "nodownload"
+
+    def normalized_cross_file_bytes(self) -> bytes:
+        return _normalize_cross_file_bytes(self.cross_file_bytes)
+
+    def argv(self) -> tuple[str, ...]:
+        return (
+            "meson", "setup", str(self.build_dir), str(self.source),
+            "--cross-file", str(self.cross_file),
+            f"--wrap-mode={self.wrap_mode}",
+            f"--buildtype={self.buildtype}",
+            f"--prefix={self.prefix}",
+            f"--auto-features={self.auto_features}",
+        )
+
+    def cross_file_digest(self) -> str:
+        return hashlib.sha256(self.normalized_cross_file_bytes()).hexdigest()
+
+    def canonical_bytes(self) -> bytes:
+        payload = {
+            "schema": "pocketforge.gamescope-meson-setup/v1",
+            "argv": list(self.argv()),
+            "cross_file_sha256": self.cross_file_digest(),
+        }
+        return (json.dumps(payload, sort_keys=True, separators=(",", ":")) +
+                "\n").encode("utf-8")
+
+    def digest(self) -> str:
+        return hashlib.sha256(self.canonical_bytes()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -322,12 +390,8 @@ def validate_source(source: Path, expected: ExpectedSource) -> ValidatedSource:
     )
 
 
-def _options_digest(options: Iterable[str]) -> str:
-    canonical = "".join(f"{option}\n" for option in sorted(options))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def render_identity(validated: ValidatedSource, *, meson_options: Iterable[str],
+def render_identity(validated: ValidatedSource, *,
+                    meson_configuration: MesonSetupConfiguration,
                     target_arch: str) -> str:
     if target_arch != "aarch64":
         raise PackageInputError(f"Gamescope target architecture is not aarch64: {target_arch}")
@@ -341,7 +405,8 @@ def render_identity(validated: ValidatedSource, *, meson_options: Iterable[str],
         f"staging_head={expected.staging_head}",
         f"rotation_head={expected.rotation_head}",
         f"patch_series_sha256={expected.patch_series_sha256}",
-        f"meson_options_sha256={_options_digest(meson_options)}",
+        f"meson_options_sha256={meson_configuration.digest()}",
+        f"meson_cross_file_sha256={meson_configuration.cross_file_digest()}",
         f"dependency_manifest_sha256={expected.dependency_manifest_sha256}",
         f"admission_receipt_sha256={validated.admission_receipt_sha256}",
         f"source_tree_sha256={validated.source_tree_sha256}",
@@ -355,6 +420,24 @@ def render_identity(validated: ValidatedSource, *, meson_options: Iterable[str],
         f"dependency.{dependency.name}.{dependency.revision[:12]}={dependency.revision}"
                  for dependency in validated.dependencies)
     return "\n".join(lines) + "\n"
+
+
+def configure_build(source: Path, expected: ExpectedSource, *, build_dir: Path,
+                    cross_file: Path, identity_out: Path,
+                    runner: Callable[..., object] = subprocess.run) -> None:
+    validated = validate_source(source, expected)
+    configuration = MesonSetupConfiguration(
+        source=source, build_dir=build_dir, cross_file=cross_file)
+    if configuration.wrap_mode != "nodownload":
+        raise PackageInputError(
+            "Gamescope Meson setup must use --wrap-mode=nodownload")
+    normalized_cross_file = configuration.normalized_cross_file_bytes()
+    cross_file.parent.mkdir(parents=True, exist_ok=True)
+    cross_file.write_bytes(normalized_cross_file)
+    runner(configuration.argv(), check=True)
+    identity = render_identity(
+        validated, meson_configuration=configuration, target_arch="aarch64")
+    identity_out.write_text(identity, encoding="utf-8")
 
 
 def install_licenses(source: Path, validated: ValidatedSource, output: Path) -> None:
@@ -421,18 +504,27 @@ def _expected_from_args(args: argparse.Namespace) -> ExpectedSource:
     )
 
 
+def _add_expected_source_args(parser: argparse.ArgumentParser) -> None:
+    for option in ("upstream-base", "integrated-head", "present-head", "staging-head",
+                   "rotation-head", "patch-series-sha256",
+                   "dependency-manifest-sha256", "source-tree-sha256",
+                   "license-sha256"):
+        parser.add_argument(f"--{option}", required=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
     validate = subparsers.add_parser("validate-source")
     validate.add_argument("--source", type=Path, required=True)
-    for option in ("upstream-base", "integrated-head", "present-head", "staging-head",
-                   "rotation-head", "patch-series-sha256",
-                   "dependency-manifest-sha256", "source-tree-sha256",
-                   "license-sha256"):
-        validate.add_argument(f"--{option}", required=True)
-    validate.add_argument("--meson-option", action="append", default=[])
-    validate.add_argument("--identity-out", type=Path, required=True)
+    _add_expected_source_args(validate)
+
+    configure = subparsers.add_parser("configure-build")
+    configure.add_argument("--source", type=Path, required=True)
+    configure.add_argument("--build-dir", type=Path, required=True)
+    configure.add_argument("--cross-file", type=Path, required=True)
+    configure.add_argument("--identity-out", type=Path, required=True)
+    _add_expected_source_args(configure)
 
     elf = subparsers.add_parser("verify-elf")
     elf.add_argument("header", type=Path)
@@ -440,19 +532,17 @@ def main(argv: list[str] | None = None) -> int:
     licenses = subparsers.add_parser("install-licenses")
     licenses.add_argument("--source", type=Path, required=True)
     licenses.add_argument("--output", type=Path, required=True)
-    for option in ("upstream-base", "integrated-head", "present-head", "staging-head",
-                   "rotation-head", "patch-series-sha256",
-                   "dependency-manifest-sha256", "source-tree-sha256",
-                   "license-sha256"):
-        licenses.add_argument(f"--{option}", required=True)
+    _add_expected_source_args(licenses)
 
     args = parser.parse_args(argv)
     try:
         if args.command == "validate-source":
-            validated = validate_source(args.source, _expected_from_args(args))
-            identity = render_identity(
-                validated, meson_options=args.meson_option, target_arch="aarch64")
-            args.identity_out.write_text(identity, encoding="utf-8")
+            validate_source(args.source, _expected_from_args(args))
+        elif args.command == "configure-build":
+            configure_build(
+                args.source, _expected_from_args(args),
+                build_dir=args.build_dir, cross_file=args.cross_file,
+                identity_out=args.identity_out)
         elif args.command == "verify-elf":
             text = (sys.stdin.read() if str(args.header) == "-" else
                     args.header.read_text(encoding="utf-8"))
@@ -460,7 +550,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             validated = validate_source(args.source, _expected_from_args(args))
             install_licenses(args.source, validated, args.output)
-    except (OSError, PackageInputError) as error:
+    except (OSError, PackageInputError, subprocess.CalledProcessError) as error:
         print(f"gamescope-package: {error}", file=sys.stderr)
         return 1
     return 0

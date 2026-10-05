@@ -1835,38 +1835,16 @@ common_args="--source /work/gamescope \
 --dependency-manifest-sha256 ${PF_GAMESCOPE_DEPENDENCY_MANIFEST_SHA256} \
 --source-tree-sha256 ${PF_GAMESCOPE_SOURCE_TREE_SHA256} \
 --license-sha256 ${PF_GAMESCOPE_LICENSE_SHA256}"
-python3 "${validator}" validate-source ${common_args} \
-  --meson-option buildtype=release \
-  --meson-option auto_features=enabled \
-  --meson-option upstream_tests=enabled \
-  --meson-option wrap_mode=nodownload \
-  --identity-out /work/gamescope-build-id
-cat > /work/aarch64.ini <<'CROSS'
-[binaries]
-c = 'aarch64-linux-gnu-gcc'
-cpp = 'aarch64-linux-gnu-g++'
-ar = 'aarch64-linux-gnu-gcc-ar'
-strip = 'aarch64-linux-gnu-strip'
-pkg-config = '/work/aarch64-pkg-config'
-
-[host_machine]
-system = 'linux'
-cpu_family = 'aarch64'
-cpu = 'aarch64'
-endian = 'little'
-
-[properties]
-needs_exe_wrapper = true
-CROSS
 cat > /work/aarch64-pkg-config <<'PKGCONFIG'
 #!/bin/sh
 export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 exec pkg-config "$@"
 PKGCONFIG
 chmod 0755 /work/aarch64-pkg-config
-meson setup /work/gamescope/build-aarch64 /work/gamescope \
-  --cross-file /work/aarch64.ini --wrap-mode=nodownload \
-  --buildtype=release --prefix=/usr --auto-features=enabled
+python3 "${validator}" configure-build ${common_args} \
+  --build-dir /work/gamescope/build-aarch64 \
+  --cross-file /work/aarch64.ini \
+  --identity-out /work/gamescope-build-id
 ninja -C /work/gamescope/build-aarch64
 DESTDIR=/out ninja -C /work/gamescope/build-aarch64 install
 readelf -h /out/usr/bin/gamescope | python3 "${validator}" verify-elf -

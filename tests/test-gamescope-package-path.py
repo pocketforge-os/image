@@ -151,15 +151,14 @@ class GamescopePackagePathTest(unittest.TestCase):
 
     def test_positive_source_and_identity(self) -> None:
         validated = gp.validate_source(self.source, self.expected)
+        meson_configuration = gp.MesonSetupConfiguration(
+            source=Path("/work/gamescope"),
+            build_dir=Path("/work/gamescope/build-aarch64"),
+            cross_file=Path("/work/aarch64.ini"),
+        )
         identity = gp.render_identity(
             validated,
-            meson_options=(
-                "avif_screenshots=disabled", "benchmark=disabled",
-                "drm_backend=enabled", "enable_openvr_support=false",
-                "enable_tests=false", "input_emulation=disabled",
-                "pipewire=disabled", "rt_cap=disabled", "sdl2_backend=enabled",
-                "wrap_mode=nodownload",
-            ),
+            meson_configuration=meson_configuration,
             target_arch="aarch64",
         )
         parsed = gp.parse_identity(identity)
@@ -168,6 +167,8 @@ class GamescopePackagePathTest(unittest.TestCase):
         self.assertEqual(parsed["dependency_manifest_sha256"], self.manifest_sha)
         self.assertEqual(parsed["source_tree_sha256"],
                          self.expected.source_tree_sha256)
+        self.assertEqual(parsed["meson_cross_file_sha256"],
+                         meson_configuration.cross_file_digest())
         self.assertEqual(parsed["target_arch"], "aarch64")
         self.assertEqual(parsed["dependency.dep00.000000000000"],
                          f"{1:040x}")
@@ -178,6 +179,75 @@ class GamescopePackagePathTest(unittest.TestCase):
         licenses = Path(self.temp.name) / "licenses"
         gp.install_licenses(self.source, validated, licenses)
         self.assertEqual(len(list(licenses.iterdir())), 34)
+
+    def test_meson_identity_tracks_exact_setup_argv_and_cross_file(self) -> None:
+        base = gp.MesonSetupConfiguration(
+            source=Path("/work/gamescope"),
+            build_dir=Path("/work/gamescope/build-aarch64"),
+            cross_file=Path("/work/aarch64.ini"),
+        )
+        self.assertIn("--wrap-mode=nodownload", base.argv())
+        self.assertIn("--buildtype=release", base.argv())
+        self.assertIn("--prefix=/usr", base.argv())
+        self.assertIn("--auto-features=enabled", base.argv())
+        self.assertNotIn("upstream_tests=enabled", base.canonical_bytes().decode())
+
+        variants = (
+            gp.MesonSetupConfiguration(
+                source=base.source, build_dir=base.build_dir,
+                cross_file=base.cross_file, buildtype="debug"),
+            gp.MesonSetupConfiguration(
+                source=base.source, build_dir=base.build_dir,
+                cross_file=base.cross_file, prefix="/opt/pocketforge"),
+            gp.MesonSetupConfiguration(
+                source=base.source, build_dir=base.build_dir,
+                cross_file=base.cross_file, auto_features="disabled"),
+            gp.MesonSetupConfiguration(
+                source=base.source, build_dir=base.build_dir,
+                cross_file=base.cross_file, wrap_mode="forcefallback"),
+            gp.MesonSetupConfiguration(
+                source=base.source, build_dir=base.build_dir,
+                cross_file=Path("/work/alternate-aarch64.ini")),
+            gp.MesonSetupConfiguration(
+                source=base.source, build_dir=base.build_dir,
+                cross_file=base.cross_file,
+                cross_file_bytes=base.cross_file_bytes + b"# changed\n"),
+        )
+        for variant in variants:
+            with self.subTest(argv=variant.argv()):
+                self.assertNotEqual(base.digest(), variant.digest())
+        with self.assertRaises(TypeError):
+            gp.MesonSetupConfiguration(
+                source=base.source, build_dir=base.build_dir,
+                cross_file=base.cross_file,
+                upstream_tests="enabled",  # type: ignore[call-arg]
+            )
+
+    def test_configure_build_uses_one_configuration_for_setup_and_identity(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def runner(argv: tuple[str, ...], *, check: bool) -> None:
+            self.assertTrue(check)
+            calls.append(argv)
+
+        build_dir = Path(self.temp.name) / "build-aarch64"
+        cross_file = Path(self.temp.name) / "aarch64.ini"
+        identity_out = Path(self.temp.name) / "gamescope-build-id"
+        configuration = gp.MesonSetupConfiguration(
+            source=self.source, build_dir=build_dir, cross_file=cross_file)
+        gp.configure_build(
+            self.source, self.expected,
+            build_dir=build_dir,
+            cross_file=cross_file,
+            identity_out=identity_out,
+            runner=runner,
+        )
+
+        self.assertEqual(calls, [configuration.argv()])
+        self.assertEqual(cross_file.read_bytes(),
+                         configuration.normalized_cross_file_bytes())
+        identity = gp.parse_identity(identity_out.read_text(encoding="utf-8"))
+        self.assertEqual(identity["meson_options_sha256"], configuration.digest())
 
     def test_dependency_license_bundle_drift_is_rejected(self) -> None:
         bundle = next((self.source / ".pf-source-licenses").iterdir())
@@ -282,10 +352,15 @@ class GamescopePackagePathTest(unittest.TestCase):
             "ARG PF_GAMESCOPE_SOURCE_TREE_SHA256",
             "COPY --from=gamescope-src . /work/gamescope",
             "--source-tree-sha256 ${PF_GAMESCOPE_SOURCE_TREE_SHA256}",
+            "configure-build ${common_args}",
             "--wrap-mode=nodownload",
             "COPY --from=gamescope /out /work/gamescope-package",
         ):
             self.assertIn(required, dockerfile, required)
+        self.assertNotIn("--meson-option", dockerfile)
+        self.assertNotIn("upstream_tests=enabled", dockerfile)
+        self.assertNotIn("cat > /work/aarch64.ini", dockerfile)
+        self.assertNotIn("meson setup /work/gamescope/build-aarch64", dockerfile)
         self.assertNotIn("wrap-mode=forcefallback", dockerfile)
         self.assertNotIn("gamescope-deps", dockerfile)
         self.assertNotIn("prime-meson-sources.sh", dockerfile)
