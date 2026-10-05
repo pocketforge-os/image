@@ -1200,7 +1200,7 @@ def expected_outcome(systemd_result: str) -> tuple[Any, tuple[str, ...], int]:
     """(history receipt, crash summaries, Returned count) owed for an app unit Result.
 
     A clean stop is Returned. Every other Result is Crash{"systemd result: <value>"}:
-    runtime 7536aa1f pf-session-authority lifecycle() maps inactive+success to
+    runtime 1dd87ecc pf-session-authority lifecycle() maps inactive+success to
     InactiveSuccess and anything else to InactiveFailure with that summary.
     """
     if systemd_result == "success":

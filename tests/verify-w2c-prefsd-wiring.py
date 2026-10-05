@@ -34,8 +34,8 @@ runtime_guard = re.findall(
     dockerfile,
     flags=re.MULTILINE,
 )
-assert runtime_guard == ["7536aa1f5af76f0220b582ee68e29e254251fd76"], (
-    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 7536aa1f, "
+assert runtime_guard == ["1dd87ecc2952584a7ef1473c5dcb872662b7c0cb"], (
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 1dd87ecc, "
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
@@ -43,6 +43,7 @@ assert "0589fcfa959dca9150563ef0ed18d7d44b420dc5" not in dockerfile
 assert "d75beedfb1203b329801a777803dff1ae8d5da1c" not in dockerfile
 assert "2ad0ca76efc984ad80a167759cfcf23657fb0c78" not in dockerfile
 assert "0955d8a83ee59df89eaba79ffee9e99e4f52384c" not in dockerfile
+assert "7536aa1f5af76f0220b582ee68e29e254251fd76" not in dockerfile
 launcher_guard = re.findall(
     r'^\[ "\$\{PF_LAUNCHER_SHA\}" = "([0-9a-f]{40})" \] '
     r'\|\| \{ echo "FATAL: F13 launcher pin drift: \$\{PF_LAUNCHER_SHA\}"; exit 1; \}$',

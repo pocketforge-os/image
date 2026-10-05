@@ -48,7 +48,7 @@ use = "rarely-changing-UI-only"
 
 [admitted_repositories]
 image = "652b0b3a63781d54fc8ec8ce11a63fc70d5dc8a6"
-runtime = "7536aa1f5af76f0220b582ee68e29e254251fd76"
+runtime = "1dd87ecc2952584a7ef1473c5dcb872662b7c0cb"
 launcher = "e27f2c45271fb6b9d695b36c0163e7ade051583a"
 
 [session]

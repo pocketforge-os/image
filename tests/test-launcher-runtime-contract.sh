@@ -18,19 +18,21 @@ grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 # tsp-op5a.439 moves the launcher alone: launcher#150 (merged ab9fb7fd -> 1ef9671a)
 # maps L1/R1 to cyclic top-level room switching without escaping first-run, modal
 # or sub-screen ownership, and restores held shoulder actions after SYN_DROPPED.
-# Its vendored runtime crates are byte-identical to ab9fb7fd's, so runtime
-# 7536aa1f stays the co-pin. The previous image guard accepted (7536aa1f,
-# ab9fb7fd). The new guard refuses the old launcher, the pre-#149 launcher, the
+# Its vendored runtime crates are byte-identical to ab9fb7fd's. Runtime#104
+# 1dd87ecc adds fresh-store durable initial state without changing those vendored
+# crates. The previous image guard accepted (7536aa1f, 1ef9671a). The new guard
+# refuses that prior runtime, the old launcher, the pre-#149 launcher, the
 # pre-#148 launcher (it ignores the d-pad hat), the pre-#147 launcher (it drops
 # the first A after a return), the pre-#146, pre-#145 and older launchers, and the
 # pre-tsp-f3fm.219 runtime 0955d8a8.
-expected_runtime=7536aa1f5af76f0220b582ee68e29e254251fd76
+expected_runtime=1dd87ecc2952584a7ef1473c5dcb872662b7c0cb
 expected_launcher=1ef9671afdd687d53f61a91e92c51da9fb614293
 old_launcher=ab9fb7fde36e633add69b94c36bf1213f7cff5d9
 pre149_launcher=ca22de0ed3cec46c73f2de44aa6e570e109695d8
 pre148_launcher=d26dfa1162e601100c3a18956b5ce4a2ddc7427f
 pre147_launcher=7a2b792d0813fc8fb5c2915bdc00ef976b0cc986
-prior_runtime=0955d8a83ee59df89eaba79ffee9e99e4f52384c
+prior_runtime=7536aa1f5af76f0220b582ee68e29e254251fd76
+older_runtime=0955d8a83ee59df89eaba79ffee9e99e4f52384c
 pre146_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
 pre145_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
 older_launcher=bb8c9bc8c9ea15238d08cfee5376049bf67cf855
@@ -44,7 +46,7 @@ new_guard_accepts() {
     test "$1" = "$runtime_guard" && test "$2" = "$launcher_guard"
 }
 old_guard_accepts() {
-    test "$1" = "$expected_runtime" && test "$2" = "$old_launcher"
+    test "$1" = "$prior_runtime" && test "$2" = "$expected_launcher"
 }
 
 # Each guard accepts exactly its own (runtime, launcher) pair: the new image
@@ -54,21 +56,23 @@ old_guard_accepts() {
 new_guard_accepts "$expected_runtime" "$expected_launcher"
 ! new_guard_accepts "$expected_runtime" "$old_launcher"
 ! new_guard_accepts "$prior_runtime" "$expected_launcher"
+! new_guard_accepts "$older_runtime" "$expected_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre149_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre148_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre147_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre146_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre145_launcher"
 ! new_guard_accepts "$expected_runtime" "$older_launcher"
-old_guard_accepts "$expected_runtime" "$old_launcher"
+old_guard_accepts "$prior_runtime" "$expected_launcher"
 ! old_guard_accepts "$expected_runtime" "$expected_launcher"
+! old_guard_accepts "$older_runtime" "$expected_launcher"
 ! old_guard_accepts "$prior_runtime" "$old_launcher"
-! old_guard_accepts "$expected_runtime" "$pre149_launcher"
-! old_guard_accepts "$expected_runtime" "$pre148_launcher"
-! old_guard_accepts "$expected_runtime" "$pre147_launcher"
-! old_guard_accepts "$expected_runtime" "$pre146_launcher"
-! old_guard_accepts "$expected_runtime" "$pre145_launcher"
-! old_guard_accepts "$expected_runtime" "$older_launcher"
+! old_guard_accepts "$prior_runtime" "$pre149_launcher"
+! old_guard_accepts "$prior_runtime" "$pre148_launcher"
+! old_guard_accepts "$prior_runtime" "$pre147_launcher"
+! old_guard_accepts "$prior_runtime" "$pre146_launcher"
+! old_guard_accepts "$prior_runtime" "$pre145_launcher"
+! old_guard_accepts "$prior_runtime" "$older_launcher"
 
 grep -F -- '--no-default-features -p pf-shell' "$dockerfile" >/dev/null
 if grep -E 'cargo build .*--features[ =][^#]*(desktop-sim)' "$dockerfile"; then

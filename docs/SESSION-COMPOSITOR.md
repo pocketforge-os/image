@@ -79,7 +79,7 @@ tag, branch, subproject HEAD, or unrecorded patch fails G0.
 | Repository/evidence | Exact object at admission | Use |
 | --- | --- | --- |
 | image `origin/main` | `652b0b3a63781d54fc8ec8ce11a63fc70d5dc8a6` | design base; re-check before handoff |
-| runtime | `7536aa1f5af76f0220b582ee68e29e254251fd76` | authority and input-broker contract; read-only linked worktree |
+| runtime | `1dd87ecc2952584a7ef1473c5dcb872662b7c0cb` | authority and input-broker contract; read-only linked worktree |
 | launcher | `e27f2c45271fb6b9d695b36c0163e7ade051583a` | single app path; read-only linked worktree |
 | Mesa/PVR | commit `eac0a8f445924f0db592352412eb48c9ad39040e`, tree `4fa710967870d01e6130d85795c4e0bb45906a01` | current driver target; separately reviewed/pinned |
 | A133 kernel audit | `40ea8fd9dcaeb9526b8032038f1dc820216d7959` | plane/no-rotation baseline; re-pin the actual G1 kernel |
