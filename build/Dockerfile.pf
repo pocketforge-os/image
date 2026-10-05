@@ -62,6 +62,7 @@ ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.
 ARG PF_GPU_MODEL=ddk
 ARG PF_DISPLAY_PIPELINE
 ARG PF_STEAMLINK_FFMPEG59_MODE=not-shipped
+ARG PF_GAMESCOPE_MODE=not-shipped
 
 # The image variant is declared globally so the dev-only producer selectors cannot
 # drift from the variant passed to the rootfs and assemble stages. Release selects
@@ -1800,6 +1801,71 @@ LAUNCHEROPEN
 FROM launcher-${PF_GPU_MODEL} AS launcher
 
 # =============================================================================
+# gamescope — exact G1 compositor package. The selected producer consumes only
+# a platform-staged, admission-checked materialized source context. Source
+# validation runs before Meson; setup is always offline/no-download and retains
+# the source revision's upstream feature and test defaults.
+# =============================================================================
+FROM ${PF_CONTAINER} AS gamescope-not-shipped
+RUN install -d /out
+
+FROM ${PF_CONTAINER} AS gamescope-g1
+ARG PF_GAMESCOPE_UPSTREAM_BASE
+ARG PF_GAMESCOPE_SHA
+ARG PF_GAMESCOPE_PRESENT_HEAD
+ARG PF_GAMESCOPE_STAGING_HEAD
+ARG PF_GAMESCOPE_ROTATION_HEAD
+ARG PF_GAMESCOPE_PATCH_SERIES_SHA256
+ARG PF_GAMESCOPE_DEPENDENCY_MANIFEST_SHA256
+ARG PF_GAMESCOPE_SOURCE_TREE_SHA256
+ARG PF_GAMESCOPE_LICENSE_SHA256
+ARG PF_GAMESCOPE_DIAGNOSTICS=0
+COPY --from=gamescope-src . /work/gamescope
+COPY --from=image-src scripts/gamescope_package.py /work/image/scripts/gamescope_package.py
+RUN <<'GAMESCOPE'
+set -eux
+validator=/work/image/scripts/gamescope_package.py
+common_args="--source /work/gamescope \
+--upstream-base ${PF_GAMESCOPE_UPSTREAM_BASE} \
+--integrated-head ${PF_GAMESCOPE_SHA} \
+--present-head ${PF_GAMESCOPE_PRESENT_HEAD} \
+--staging-head ${PF_GAMESCOPE_STAGING_HEAD} \
+--rotation-head ${PF_GAMESCOPE_ROTATION_HEAD} \
+--patch-series-sha256 ${PF_GAMESCOPE_PATCH_SERIES_SHA256} \
+--dependency-manifest-sha256 ${PF_GAMESCOPE_DEPENDENCY_MANIFEST_SHA256} \
+--source-tree-sha256 ${PF_GAMESCOPE_SOURCE_TREE_SHA256} \
+--license-sha256 ${PF_GAMESCOPE_LICENSE_SHA256}"
+cat > /work/aarch64-pkg-config <<'PKGCONFIG'
+#!/bin/sh
+export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+exec pkg-config "$@"
+PKGCONFIG
+chmod 0755 /work/aarch64-pkg-config
+python3 "${validator}" configure-build ${common_args} \
+  --build-dir /work/gamescope/build-aarch64 \
+  --cross-file /work/aarch64.ini \
+  --identity-out /work/gamescope-build-id
+ninja -C /work/gamescope/build-aarch64
+DESTDIR=/out ninja -C /work/gamescope/build-aarch64 install
+readelf -h /out/usr/bin/gamescope | python3 "${validator}" verify-elf -
+install -D -m 0644 /work/gamescope-build-id \
+  /out/usr/share/pocketforge/gamescope-build-id
+python3 "${validator}" install-licenses ${common_args} \
+  --output /out/usr/share/licenses/gamescope
+case "${PF_GAMESCOPE_DIAGNOSTICS}" in
+  0) ;;
+  1)
+    install -d /out/opt/pocketforge/gamescope-diagnostics
+    find /work/gamescope/build-aarch64 -path '*/tests/*' -type f -perm /111 \
+      -exec install -m 0755 {} /out/opt/pocketforge/gamescope-diagnostics/ \;
+    ;;
+  *) echo 'gamescope package: PF_GAMESCOPE_DIAGNOSTICS must be 0 or 1' >&2; exit 2 ;;
+esac
+GAMESCOPE
+
+FROM gamescope-${PF_GAMESCOPE_MODE} AS gamescope
+
+# =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
 # rootfs-packages-<id>.txt (tsp-1dl.4.5 unifies the two forked build-rootfs scripts).
 # Composes the kernel modules + GPU .ko + libSDL3 + owned wpa_supplicant + fetched firmware.
@@ -1833,6 +1899,7 @@ ARG PF_CAR_SHA256
 ARG PF_UBOOT_SHA=
 ARG PF_TFA_SHA=
 ARG PF_STEAMLINK_FFMPEG59_MODE=not-shipped
+ARG PF_GAMESCOPE_MODE=not-shipped
 ARG PF_ODYSSEY_CAPTURE=
 ARG APT_SNAPSHOT_DATE
 ARG SOURCE_DATE_EPOCH
@@ -1861,6 +1928,7 @@ COPY --from=poolsuite /out           /work/poolsuite
 COPY --from=recovery /out           /work/recovery
 COPY --from=launcher /out           /work/launcher
 COPY --from=platform-runtime-steamlink-ffmpeg59 /out /work/platform-runtime
+COPY --from=gamescope /out /work/gamescope-package
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -1880,7 +1948,9 @@ case "${PF_SOC}" in
       RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher HWPROBE_DIR=/work/hwprobe \
       POOLSUITE_DIR=/work/poolsuite \
       PLATFORM_RUNTIME_DIR=/work/platform-runtime \
+      GAMESCOPE_DIR=/work/gamescope-package \
       PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE}" \
+      PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE}" \
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \

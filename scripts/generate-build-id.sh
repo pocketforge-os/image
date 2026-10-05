@@ -55,6 +55,9 @@ identity="$({
     printf 'car=%s\n' "${PF_CAR_SHA256}"
     printf 'uboot=%s\n' "${PF_UBOOT_SHA:-}"
     printf 'tfa=%s\n' "${PF_TFA_SHA:-}"
+    if [ -n "${PF_GAMESCOPE_IDENTITY_SHA256:-}" ]; then
+        printf 'gamescope_identity=%s\n' "${PF_GAMESCOPE_IDENTITY_SHA256}"
+    fi
 } | sha256sum | cut -d' ' -f1)"
 
 printf 'device=%s build=%.12s\n' "${PF_DEVICE_ID}" "${identity}"

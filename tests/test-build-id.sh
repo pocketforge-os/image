@@ -24,6 +24,14 @@ first="$(${generator})"
 second="$(${generator})"
 [ "${first}" = "${second}" ] || { echo "FAIL: identical inputs differed" >&2; exit 1; }
 
+PF_GAMESCOPE_IDENTITY_SHA256="$(printf 'gamescope fixture\n' | sha256sum | cut -d' ' -f1)"
+export PF_GAMESCOPE_IDENTITY_SHA256
+with_gamescope="$(${generator})"
+[ "${first}" != "${with_gamescope}" ] \
+    || { echo "FAIL: Gamescope package identity did not affect image build-id" >&2; exit 1; }
+PF_GAMESCOPE_IDENTITY_SHA256=
+export PF_GAMESCOPE_IDENTITY_SHA256
+
 PF_KERNEL_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export PF_KERNEL_SHA
 different="$(${generator})"
@@ -44,4 +52,5 @@ case "${first}" in
     *) echo "FAIL: build-id is not a single cat-readable line: ${first}" >&2; exit 1 ;;
 esac
 
-printf 'PASS identical=%s\nPASS different=%s\n' "${first}" "${different}"
+printf 'PASS identical=%s\nPASS different=%s\nPASS gamescope=%s\n' \
+    "${first}" "${different}" "${with_gamescope}"

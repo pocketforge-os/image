@@ -25,6 +25,51 @@ if [ "$(grep -Fxc "${rootfs_marker}" "${hook}")" -ne 1 ]; then
 fi
 prelude_end="$(grep -Fnx "${rootfs_marker}" "${hook}" | cut -d: -f1)"
 
+# Legacy/direct consumers execute the separately generated hook without any of
+# the newer Gamescope environment.  Exercise the real hook prefix through its
+# Gamescope gate: omission selects not-shipped, while explicit invalid and g1
+# cross-device modes remain fail-closed.
+gamescope_boundary="${scratch}/gamescope-boundary.sh"
+awk '{ print }
+     /^case "\$\{PF_GAMESCOPE_MODE\}" in$/ { in_gamescope = 1; next }
+     in_gamescope && /^esac$/ { exit }' "${hook}" > "${gamescope_boundary}"
+printf 'printf '\''gamescope-mode=%%s\n'\'' "$PF_GAMESCOPE_MODE"\n' \
+    >> "${gamescope_boundary}"
+
+legacy_root="${scratch}/legacy-root"
+mkdir -p "${legacy_root}"
+legacy_status=0
+env -i PATH="${PATH}" TMPDIR="${scratch}" \
+    bash "${gamescope_boundary}" "${legacy_root}" \
+    > "${scratch}/gamescope-legacy.out" 2> "${scratch}/gamescope-legacy.err" \
+    || legacy_status=$?
+if [ "${legacy_status}" -ne 0 ]; then
+    cat "${scratch}/gamescope-legacy.err" >&2
+    echo "FAIL: generated hook rejected an omitted Gamescope environment (status ${legacy_status})" >&2
+    exit 1
+fi
+grep -Fx 'gamescope-mode=not-shipped' "${scratch}/gamescope-legacy.out" >/dev/null
+[ ! -s "${scratch}/gamescope-legacy.err" ]
+
+if env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=invalid \
+    bash "${gamescope_boundary}" "${legacy_root}" \
+    > "${scratch}/gamescope-invalid.out" 2> "${scratch}/gamescope-invalid.err"; then
+    echo 'FAIL: generated hook accepted an invalid explicit Gamescope mode' >&2
+    exit 1
+fi
+grep -F 'invalid Gamescope mode in customize hook' \
+    "${scratch}/gamescope-invalid.err" >/dev/null
+
+if env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=g1 \
+    PF_DEVICE_ID=legacy-direct \
+    bash "${gamescope_boundary}" "${legacy_root}" \
+    > "${scratch}/gamescope-g1-device.out" 2> "${scratch}/gamescope-g1-device.err"; then
+    echo 'FAIL: generated hook accepted Gamescope g1 on a legacy device' >&2
+    exit 1
+fi
+grep -F 'refusing Gamescope package on legacy-direct' \
+    "${scratch}/gamescope-g1-device.err" >/dev/null
+
 # 1. A function that build-rootfs.sh (or a library it sources) defines and the
 # hook calls must also be defined in the hook: the hook is a separate process.
 hook_code="${scratch}/hook-code.sh"
