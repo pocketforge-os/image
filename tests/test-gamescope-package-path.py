@@ -17,12 +17,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import gamescope_package as gp  # noqa: E402
 
 
-BASE = "79399f4b34b5571ba5b03f61c4717eaf93ff75b3"
-HEAD = "1b55348e5ec40caf46528103ff2b9291422f13c1"
+BASE = "bb2ddfc8b1091d6c4d0133b1ea9dcd2494b69ab9"
+HEAD = "7a8b81ff6401fc18e6778c93f29f0e4309683385"
 PRESENT = "b1d220453331e28554d938f060156abfeb504757"
 STAGING = "a5b1f4697a13e671f9e8bfd108c3003987ca1fa4"
 ROTATION = "eb3ae2c705326b0c6535ea99ee233c17a170ace4"
-PATCHES = "bcf1ee23703ad096371a41f6d4fe83c696d4c3803716ba98839213bf7e65d8ea"
+PATCHES = "adcd0dbe6f047727f7f4226347b31167eecbd6cceaefb24de91f4d7e7e4d5d44"
 
 
 class GamescopePackagePathTest(unittest.TestCase):
@@ -35,19 +35,73 @@ class GamescopePackagePathTest(unittest.TestCase):
         (self.source / "LICENSE").write_text("BSD-2-Clause fixture\n", encoding="utf-8")
         self.license_sha = hashlib.sha256(
             (self.source / "LICENSE").read_bytes()).hexdigest()
-        self.manifest = self.source / ".github" / "meson-sources.lock"
+        self.manifest = self.source / ".github" / "pocketforge-source-closure.tsv"
+        header = "\t".join(gp.MANIFEST_FIELDS)
+        rows = []
+        # 31 materialized Git edges, 29 distinct Git pins, and three distinct
+        # snapshots reproduce the landed 34-edge/32-pin closure shape.
+        projects = [f"dep{index:02d}" for index in range(29)] + ["dep00", "dep01"]
+        for index, project in enumerate(projects):
+            revision = f"{int(project[3:]) + 1:040x}"
+            license_bytes = f"licence for {project}\n".encode()
+            license_sha = hashlib.sha256(license_bytes).hexdigest()
+            bundle = self.source / ".pf-source-licenses" / (
+                f"{project}-{revision[:12]}-LICENSE")
+            bundle.parent.mkdir(exist_ok=True)
+            bundle.write_bytes(license_bytes)
+            rows.append(self.manifest_row(
+                edge_id=f"edge-{index:02d}", project=project,
+                revision=revision, kind="gitlink",
+                path=f"subprojects/{project}-{index:02d}",
+                license_sha=license_sha,
+            ))
+        for index in range(3):
+            project = f"snapshot{index}"
+            revision = f"{100 + index:040x}"
+            license_bytes = f"licence for {project}\n".encode()
+            license_sha = hashlib.sha256(license_bytes).hexdigest()
+            bundle = self.source / ".pf-source-licenses" / (
+                f"{project}-{revision[:12]}-LICENSE")
+            bundle.write_bytes(license_bytes)
+            rows.append(self.manifest_row(
+                edge_id=f"snapshot-{index}", project=project,
+                revision=revision, kind="vendored-snapshot",
+                path=f"thirdparty/{project}.hpp", license_sha=license_sha,
+            ))
         self.manifest.write_text(
-            "# gamescope-meson-sources-v2\n"
-            "libliftoff\tgitlink\t8b08dc1c14fd019cc90ddabe34ad16596b0691f4\t"
-            "libliftoff.tar.gz\tlibliftoff\t" + "1" * 64 + "\t"
-            "https://github.com/pocketforge-os/libliftoff/archive/"
-            "8b08dc1c14fd019cc90ddabe34ad16596b0691f4.tar.gz\t"
-            "subprojects/libliftoff\tLICENSE\t" + "2" * 64 + "\n",
-            encoding="utf-8",
-        )
+            "# gamescope-source-closure-v1\n" + header + "\n" +
+            "\n".join(rows) + "\n", encoding="utf-8")
         self.manifest_sha = hashlib.sha256(self.manifest.read_bytes()).hexdigest()
         self.receipt = self.source / ".pf-gamescope-source.json"
-        self.write_receipt()
+        source_tree_sha = gp._source_tree_sha256(self.source)
+        self.admission = self.source / ".pf-gamescope-admission.json"
+        self.admission.write_text(json.dumps({
+            "schema": "gamescope-source-admission-v1",
+            "gamescope_head": HEAD,
+            "manifest_sha256": self.manifest_sha,
+            "projects": [],
+            "validated_edges": 34,
+            "verified_project_pins": 32,
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self.materialization = self.source / ".pf-gamescope-materialization.json"
+        self.materialization.write_text(json.dumps({
+            "schema": "gamescope-source-materialization-v1",
+            "gamescope_head": HEAD,
+            "generated_root_wrap_aliases": 2,
+            "manifest_sha256": self.manifest_sha,
+            "materialized_git_inputs": 31,
+            "normalized_gitlink_urls": 19,
+            "source_tree_sha256": source_tree_sha,
+            "verified_materialized_locator_targets": 33,
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self.write_receipt(
+            dependency_manifest_sha256=self.manifest_sha,
+            admission_receipt_sha256=hashlib.sha256(
+                self.admission.read_bytes()).hexdigest(),
+            materialization_receipt_sha256=hashlib.sha256(
+                self.materialization.read_bytes()).hexdigest(),
+            source_tree_sha256=source_tree_sha,
+        )
         self.expected = gp.ExpectedSource(
             upstream_base=BASE,
             integrated_head=HEAD,
@@ -58,6 +112,25 @@ class GamescopePackagePathTest(unittest.TestCase):
             dependency_manifest_sha256=self.manifest_sha,
             license_sha256=self.license_sha,
         )
+
+    @staticmethod
+    def manifest_row(*, edge_id: str, project: str, revision: str,
+                     kind: str, path: str, license_sha: str) -> str:
+        values = {
+            "schema": "1", "edge_id": edge_id, "parent_id": "gamescope",
+            "project_id": project, "path": path, "kind": kind,
+            "upstream_url": f"https://example.invalid/{project}.git",
+            "upstream_revision": revision, "declared_url": "-",
+            "locator_revision": revision,
+            "pf_url": f"https://github.com/pocketforge-os/{project}.git",
+            "pf_revision": revision, "tree_oid": revision,
+            "content_sha256": "-", "license_path": "LICENSE",
+            "license_sha256": license_sha, "selectors": "native,aarch64",
+            "tests": "fixture", "patch_status": "exact",
+            "transform_receipt": "-", "fork_history_proof": "-",
+            "fork_pin_ref": "refs/heads/pocketforge",
+        }
+        return "\t".join(values[field] for field in gp.MANIFEST_FIELDS)
 
     def write_receipt(self, **changes: object) -> None:
         data: dict[str, object] = {
@@ -93,9 +166,21 @@ class GamescopePackagePathTest(unittest.TestCase):
         self.assertEqual(parsed["patch_series_sha256"], PATCHES)
         self.assertEqual(parsed["dependency_manifest_sha256"], self.manifest_sha)
         self.assertEqual(parsed["target_arch"], "aarch64")
-        self.assertEqual(parsed["dependency.libliftoff"],
-                         "8b08dc1c14fd019cc90ddabe34ad16596b0691f4")
+        self.assertEqual(parsed["dependency.dep00.000000000000"],
+                         f"{1:040x}")
+        self.assertEqual(parsed["dependency_edges"], "34")
+        self.assertEqual(parsed["dependency_project_pins"], "32")
+        self.assertEqual(parsed["verified_locator_targets"], "33")
         gp.verify_installed_identity(identity, identity)
+        licenses = Path(self.temp.name) / "licenses"
+        gp.install_licenses(self.source, validated, licenses)
+        self.assertEqual(len(list(licenses.iterdir())), 34)
+
+    def test_dependency_license_bundle_drift_is_rejected(self) -> None:
+        bundle = next((self.source / ".pf-source-licenses").iterdir())
+        bundle.write_text("drift\n", encoding="utf-8")
+        with self.assertRaisesRegex(gp.PackageInputError, "licence bundle digest"):
+            gp.validate_source(self.source, self.expected)
 
     def test_missing_context_and_head_are_rejected(self) -> None:
         with self.assertRaisesRegex(gp.PackageInputError, "context is missing"):
@@ -116,8 +201,8 @@ class GamescopePackagePathTest(unittest.TestCase):
     def test_upstream_fetch_and_dependency_drift_are_rejected(self) -> None:
         original = self.manifest.read_text(encoding="utf-8")
         self.manifest.write_text(
-            original.replace("https://github.com/pocketforge-os/libliftoff",
-                             "https://gitlab.freedesktop.org/emersion/libliftoff"),
+            original.replace("https://github.com/pocketforge-os/dep00",
+                             "https://gitlab.freedesktop.org/example/dep00"),
             encoding="utf-8",
         )
         drifted = gp.ExpectedSource(**{
@@ -169,6 +254,8 @@ class GamescopePackagePathTest(unittest.TestCase):
         ):
             self.assertIn(required, dockerfile, required)
         self.assertNotIn("wrap-mode=forcefallback", dockerfile)
+        self.assertNotIn("gamescope-deps", dockerfile)
+        self.assertNotIn("prime-meson-sources.sh", dockerfile)
 
 
 if __name__ == "__main__":

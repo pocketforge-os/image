@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from dataclasses import dataclass
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import sys
 from typing import Iterable
 
@@ -20,6 +23,18 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}")
 POCKETFORGE_SOURCE_PREFIX = "https://github.com/pocketforge-os/"
 SOURCE_SCHEMA = "pocketforge.gamescope-source/v1"
 IDENTITY_SCHEMA = "pocketforge.gamescope-build/v1"
+MANIFEST_FIELDS = (
+    "schema", "edge_id", "parent_id", "project_id", "path", "kind",
+    "upstream_url", "upstream_revision", "declared_url", "locator_revision",
+    "pf_url", "pf_revision", "tree_oid", "content_sha256", "license_path",
+    "license_sha256", "selectors", "tests", "patch_status",
+    "transform_receipt", "fork_history_proof", "fork_pin_ref",
+)
+RECEIPT_FILES = {
+    ".pf-gamescope-source.json",
+    ".pf-gamescope-admission.json",
+    ".pf-gamescope-materialization.json",
+}
 
 
 class PackageInputError(ValueError):
@@ -43,15 +58,26 @@ class ValidatedSource:
     expected: ExpectedSource
     source_url: str
     dependencies: tuple["Dependency", ...]
+    source_tree_sha256: str
+    admission_receipt_sha256: str
+    validated_edges: int
+    verified_project_pins: int
+    verified_locator_targets: int
 
 
 @dataclass(frozen=True)
 class Dependency:
     name: str
     revision: str
-    meson_path: str
+    source_path: str
     license_path: str
     license_sha256: str
+
+
+def _license_bundle_path(source: Path, dependency: Dependency) -> Path:
+    return source / ".pf-source-licenses" / (
+        f"{dependency.name}-{dependency.revision[:12]}-"
+        f"{Path(dependency.license_path).name}")
 
 
 def _sha256(path: Path) -> str:
@@ -81,49 +107,104 @@ def _load_receipt(source: Path) -> dict[str, object]:
     return data
 
 
-def _parse_dependency_manifest(path: Path) -> tuple[Dependency, ...]:
+def _parse_dependency_manifest(path: Path) -> tuple[tuple[Dependency, ...], int]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError as error:
         raise PackageInputError(
             "tsp-op5a.440.7 dependency manifest is missing") from error
-    dependencies: list[Dependency] = []
-    seen: set[str] = set()
-    for line_number, line in enumerate(lines, start=1):
-        if not line or line.startswith("#"):
-            continue
-        fields = line.split("\t")
-        if len(fields) != 10:
-            raise PackageInputError(
-                f"dependency manifest row {line_number} has {len(fields)} fields, expected 10")
-        (name, kind, revision, archive_filename, archive_root, archive_sha,
-         archive_url, meson_path, license_path, license_sha) = fields
-        if not re.fullmatch(r"[a-z0-9][a-z0-9+_.-]*", name) or name in seen:
-            raise PackageInputError(f"dependency manifest name is invalid or duplicated: {name}")
-        if kind not in {"gitlink", "wrap-file"}:
-            raise PackageInputError(f"dependency {name} has unsupported source kind {kind}")
-        _require_sha(revision, SHA1_RE, f"dependency {name} revision")
-        _require_sha(archive_sha, SHA256_RE, f"dependency {name} archive digest")
-        _require_sha(license_sha, SHA256_RE, f"dependency {name} licence digest")
-        if ("/" in archive_filename or "/" in archive_root or
+    lines = raw.splitlines()
+    if not lines or lines[0] != "# gamescope-source-closure-v1":
+        raise PackageInputError("dependency manifest schema marker mismatch")
+    reader = csv.DictReader(io.StringIO("\n".join(lines[1:])), dialect="excel-tab")
+    if tuple(reader.fieldnames or ()) != MANIFEST_FIELDS:
+        raise PackageInputError("dependency manifest header mismatch")
+    dependencies: dict[tuple[str, str], Dependency] = {}
+    seen_edges: set[str] = set()
+    edge_count = 0
+    for line_number, row in enumerate(reader, start=3):
+        if None in row or any(value is None for value in row.values()):
+            raise PackageInputError(f"dependency manifest row {line_number} has invalid fields")
+        name = row["project_id"]
+        kind = row["kind"]
+        revision = row["pf_revision"]
+        source_path = row["path"][:-5] if kind == "wrap-git" else row["path"]
+        license_path = row["license_path"]
+        license_sha = row["license_sha256"]
+        edge_id = row["edge_id"]
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+            raise PackageInputError(f"dependency project id is invalid: {name}")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", edge_id) or edge_id in seen_edges:
+            raise PackageInputError(f"dependency edge id is invalid or duplicated: {edge_id}")
+        if kind not in {"gitlink", "wrap-git", "vendored-snapshot"}:
+            raise PackageInputError(f"dependency {edge_id} has unsupported source kind {kind}")
+        for label in ("upstream_revision", "locator_revision", "pf_revision", "tree_oid"):
+            _require_sha(row[label], SHA1_RE, f"dependency {edge_id} {label}")
+        _require_sha(license_sha, SHA256_RE, f"dependency {edge_id} licence digest")
+        if (source_path.startswith("/") or ".." in source_path.split("/") or
                 license_path.startswith("/") or ".." in license_path.split("/")):
-            raise PackageInputError(f"dependency {name} has unsafe archive metadata")
-        if not archive_url.startswith(POCKETFORGE_SOURCE_PREFIX):
+            raise PackageInputError(f"dependency {edge_id} has unsafe source metadata")
+        if not row["pf_url"].startswith(POCKETFORGE_SOURCE_PREFIX):
             raise PackageInputError(
-                f"dependency {name} has non-PocketForge source URL: {archive_url}")
-        if not meson_path.startswith("subprojects/"):
-            raise PackageInputError(f"dependency {name} has invalid Meson path")
-        dependencies.append(Dependency(
-            name=name,
-            revision=revision,
-            meson_path=meson_path,
-            license_path=license_path,
-            license_sha256=license_sha,
-        ))
-        seen.add(name)
+                f"dependency {edge_id} has non-PocketForge source URL: {row['pf_url']}")
+        key = (name, revision)
+        dependency = Dependency(name, revision, source_path, license_path, license_sha)
+        previous = dependencies.get(key)
+        if previous is not None and (
+                previous.license_path != dependency.license_path or
+                previous.license_sha256 != dependency.license_sha256):
+            raise PackageInputError(f"dependency {name}@{revision} has inconsistent licence data")
+        dependencies.setdefault(key, dependency)
+        seen_edges.add(edge_id)
+        edge_count += 1
     if not dependencies:
         raise PackageInputError("tsp-op5a.440.7 dependency manifest is empty")
-    return tuple(sorted(dependencies, key=lambda dependency: dependency.name))
+    return tuple(dependencies[key] for key in sorted(dependencies)), edge_count
+
+
+def _source_tree_sha256(source: Path) -> str:
+    records: list[str] = []
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source).as_posix()
+        if relative in RECEIPT_FILES or relative.startswith(".pf-source-licenses/"):
+            continue
+        mode = stat.S_IMODE(path.lstat().st_mode)
+        if path.is_symlink():
+            digest = hashlib.sha256(os.readlink(path).encode()).hexdigest()
+            type_name = "symlink"
+        elif path.is_file():
+            digest = _sha256(path)
+            type_name = "file"
+        else:
+            continue
+        records.append(f"{relative}\t{type_name}\t{mode:o}\t{digest}\n")
+    return hashlib.sha256("".join(records).encode()).hexdigest()
+
+
+def _load_materialization_receipt(source: Path) -> tuple[dict[str, object], str]:
+    path = source / ".pf-gamescope-materialization.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise PackageInputError("Gamescope materialization receipt is missing") from error
+    except (OSError, json.JSONDecodeError) as error:
+        raise PackageInputError(f"Gamescope materialization receipt is invalid: {error}") from error
+    if not isinstance(data, dict):
+        raise PackageInputError("Gamescope materialization receipt is not an object")
+    return data, _sha256(path)
+
+
+def _load_admission_receipt(source: Path) -> tuple[dict[str, object], str]:
+    path = source / ".pf-gamescope-admission.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise PackageInputError("Gamescope admission receipt is missing") from error
+    except (OSError, json.JSONDecodeError) as error:
+        raise PackageInputError(f"Gamescope admission receipt is invalid: {error}") from error
+    if not isinstance(data, dict):
+        raise PackageInputError("Gamescope admission receipt is not an object")
+    return data, _sha256(path)
 
 
 def validate_source(source: Path, expected: ExpectedSource) -> ValidatedSource:
@@ -173,13 +254,67 @@ def validate_source(source: Path, expected: ExpectedSource) -> ValidatedSource:
     if _sha256(license_path) != expected.license_sha256:
         raise PackageInputError("Gamescope licence digest mismatch")
 
-    manifest = source / ".github" / "meson-sources.lock"
+    manifest = source / ".github" / "pocketforge-source-closure.tsv"
     if not manifest.is_file():
         raise PackageInputError("tsp-op5a.440.7 dependency manifest is missing")
     if _sha256(manifest) != expected.dependency_manifest_sha256:
         raise PackageInputError("Gamescope dependency manifest digest mismatch")
-    dependencies = _parse_dependency_manifest(manifest)
-    return ValidatedSource(expected, str(source_url), dependencies)
+    dependencies, edge_count = _parse_dependency_manifest(manifest)
+
+    admission, admission_sha256 = _load_admission_receipt(source)
+    if admission.get("schema") != "gamescope-source-admission-v1":
+        raise PackageInputError("Gamescope admission receipt schema mismatch")
+    if admission.get("gamescope_head") != expected.integrated_head:
+        raise PackageInputError("Gamescope admitted integration head mismatch")
+    if admission.get("manifest_sha256") != expected.dependency_manifest_sha256:
+        raise PackageInputError("Gamescope admitted dependency manifest mismatch")
+    if admission.get("validated_edges") != 34 or admission.get("verified_project_pins") != 32:
+        raise PackageInputError("Gamescope admission closure count mismatch")
+
+    materialization, materialization_sha256 = _load_materialization_receipt(source)
+    if materialization.get("schema") != "gamescope-source-materialization-v1":
+        raise PackageInputError("Gamescope materialization receipt schema mismatch")
+    if materialization.get("gamescope_head") != expected.integrated_head:
+        raise PackageInputError("Gamescope materialized integration head mismatch")
+    if materialization.get("manifest_sha256") != expected.dependency_manifest_sha256:
+        raise PackageInputError("Gamescope materialized dependency manifest mismatch")
+    source_tree_sha256 = _require_sha(
+        materialization.get("source_tree_sha256"), SHA256_RE,
+        "materialized source_tree_sha256")
+    if _source_tree_sha256(source) != source_tree_sha256:
+        raise PackageInputError("Gamescope materialized source-tree digest mismatch")
+    project_pins = len(dependencies)
+    receipt_counts = {
+        "materialized_git_inputs": 31,
+        "generated_root_wrap_aliases": 2,
+        "verified_materialized_locator_targets": 33,
+    }
+    for key, wanted in receipt_counts.items():
+        if materialization.get(key) != wanted:
+            raise PackageInputError(f"Gamescope materialization {key} mismatch")
+    if edge_count != 34 or project_pins != 32:
+        raise PackageInputError("Gamescope dependency closure count mismatch")
+    for dependency in dependencies:
+        bundled_license = _license_bundle_path(source, dependency)
+        if not bundled_license.is_file():
+            raise PackageInputError(
+                f"dependency {dependency.name} licence bundle is missing")
+        if _sha256(bundled_license) != dependency.license_sha256:
+            raise PackageInputError(
+                f"dependency {dependency.name} licence bundle digest mismatch")
+    if data.get("dependency_manifest_sha256") != expected.dependency_manifest_sha256:
+        raise PackageInputError("Gamescope source receipt dependency manifest mismatch")
+    if data.get("admission_receipt_sha256") != admission_sha256:
+        raise PackageInputError("Gamescope source receipt admission digest mismatch")
+    if data.get("materialization_receipt_sha256") != materialization_sha256:
+        raise PackageInputError("Gamescope source receipt materialization digest mismatch")
+    if data.get("source_tree_sha256") != source_tree_sha256:
+        raise PackageInputError("Gamescope source receipt source-tree digest mismatch")
+    return ValidatedSource(
+        expected, str(source_url), dependencies, source_tree_sha256, admission_sha256,
+        edge_count, project_pins,
+        int(materialization["verified_materialized_locator_targets"]),
+    )
 
 
 def _options_digest(options: Iterable[str]) -> str:
@@ -203,10 +338,16 @@ def render_identity(validated: ValidatedSource, *, meson_options: Iterable[str],
         f"patch_series_sha256={expected.patch_series_sha256}",
         f"meson_options_sha256={_options_digest(meson_options)}",
         f"dependency_manifest_sha256={expected.dependency_manifest_sha256}",
+        f"admission_receipt_sha256={validated.admission_receipt_sha256}",
+        f"source_tree_sha256={validated.source_tree_sha256}",
+        f"dependency_edges={validated.validated_edges}",
+        f"dependency_project_pins={validated.verified_project_pins}",
+        f"verified_locator_targets={validated.verified_locator_targets}",
         f"gamescope_license_sha256={expected.license_sha256}",
         "target_arch=aarch64",
     ]
-    lines.extend(f"dependency.{dependency.name}={dependency.revision}"
+    lines.extend(
+        f"dependency.{dependency.name}.{dependency.revision[:12]}={dependency.revision}"
                  for dependency in validated.dependencies)
     return "\n".join(lines) + "\n"
 
@@ -216,22 +357,15 @@ def install_licenses(source: Path, validated: ValidatedSource, output: Path) -> 
     shutil.copyfile(source / "LICENSE", output / "gamescope-LICENSE")
     os.chmod(output / "gamescope-LICENSE", 0o644)
     for dependency in validated.dependencies:
-        if dependency.meson_path.endswith(".wrap"):
-            dependency_root = source / "subprojects" / dependency.name
-        else:
-            dependency_root = source / dependency.meson_path
-        license_source = dependency_root / dependency.license_path
-        if not license_source.is_file():
-            raise PackageInputError(
-                f"dependency {dependency.name} licence is missing after offline setup")
-        if _sha256(license_source) != dependency.license_sha256:
-            raise PackageInputError(f"dependency {dependency.name} licence digest mismatch")
-        destination = output / f"{dependency.name}-{Path(dependency.license_path).name}"
+        license_source = _license_bundle_path(source, dependency)
+        destination = output / (
+            f"{dependency.name}-{dependency.revision[:12]}-"
+            f"{Path(dependency.license_path).name}")
         shutil.copyfile(license_source, destination)
         os.chmod(destination, 0o644)
-    shutil.copyfile(source / ".github" / "meson-sources.lock",
-                    output / "meson-sources.lock")
-    os.chmod(output / "meson-sources.lock", 0o644)
+    shutil.copyfile(source / ".github" / "pocketforge-source-closure.tsv",
+                    output / "pocketforge-source-closure.tsv")
+    os.chmod(output / "pocketforge-source-closure.tsv", 0o644)
 
 
 def parse_identity(identity: str) -> dict[str, str]:

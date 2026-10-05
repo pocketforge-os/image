@@ -1802,9 +1802,8 @@ FROM launcher-${PF_GPU_MODEL} AS launcher
 
 # =============================================================================
 # gamescope — exact G1 compositor package. The selected producer consumes only
-# platform-staged source and dependency-cache contexts. Source validation runs
-# before Meson so an unmaterialized fork-all closure is reported as the owned
-# tsp-op5a.440.7 prerequisite; setup is always offline/no-download and retains
+# a platform-staged, admission-checked materialized source context. Source
+# validation runs before Meson; setup is always offline/no-download and retains
 # the source revision's upstream feature and test defaults.
 # =============================================================================
 FROM ${PF_CONTAINER} AS gamescope-not-shipped
@@ -1821,7 +1820,6 @@ ARG PF_GAMESCOPE_DEPENDENCY_MANIFEST_SHA256
 ARG PF_GAMESCOPE_LICENSE_SHA256
 ARG PF_GAMESCOPE_DIAGNOSTICS=0
 COPY --from=gamescope-src . /work/gamescope
-COPY --from=gamescope-deps . /work/gamescope-dependency-cache
 COPY --from=image-src scripts/gamescope_package.py /work/image/scripts/gamescope_package.py
 RUN <<'GAMESCOPE'
 set -eux
@@ -1841,13 +1839,6 @@ python3 "${validator}" validate-source ${common_args} \
   --meson-option upstream_tests=enabled \
   --meson-option wrap_mode=nodownload \
   --identity-out /work/gamescope-build-id
-test -x /work/gamescope/.github/scripts/prime-meson-sources.sh || {
-  echo 'gamescope package: tsp-op5a.440.7 offline dependency primer is missing' >&2
-  exit 1
-}
-PF_MESON_CACHE_OFFLINE=1 \
-  MESON_SOURCE_CACHE_ROOT=/work/gamescope-dependency-cache \
-  /work/gamescope/.github/scripts/prime-meson-sources.sh --offline
 cat > /work/aarch64.ini <<'CROSS'
 [binaries]
 c = 'aarch64-linux-gnu-gcc'
