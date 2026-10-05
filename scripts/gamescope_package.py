@@ -50,6 +50,7 @@ class ExpectedSource:
     rotation_head: str
     patch_series_sha256: str
     dependency_manifest_sha256: str
+    source_tree_sha256: str
     license_sha256: str
 
 
@@ -218,6 +219,7 @@ def validate_source(source: Path, expected: ExpectedSource) -> ValidatedSource:
         ("rotation_head", expected.rotation_head, SHA1_RE),
         ("patch_series_sha256", expected.patch_series_sha256, SHA256_RE),
         ("dependency_manifest_sha256", expected.dependency_manifest_sha256, SHA256_RE),
+        ("source_tree_sha256", expected.source_tree_sha256, SHA256_RE),
         ("license_sha256", expected.license_sha256, SHA256_RE),
     ):
         _require_sha(value, pattern, label)
@@ -283,6 +285,9 @@ def validate_source(source: Path, expected: ExpectedSource) -> ValidatedSource:
         "materialized source_tree_sha256")
     if _source_tree_sha256(source) != source_tree_sha256:
         raise PackageInputError("Gamescope materialized source-tree digest mismatch")
+    if source_tree_sha256 != expected.source_tree_sha256:
+        raise PackageInputError(
+            "Gamescope platform-locked source-tree digest mismatch")
     project_pins = len(dependencies)
     receipt_counts = {
         "materialized_git_inputs": 31,
@@ -411,6 +416,7 @@ def _expected_from_args(args: argparse.Namespace) -> ExpectedSource:
         rotation_head=args.rotation_head,
         patch_series_sha256=args.patch_series_sha256,
         dependency_manifest_sha256=args.dependency_manifest_sha256,
+        source_tree_sha256=args.source_tree_sha256,
         license_sha256=args.license_sha256,
     )
 
@@ -422,7 +428,8 @@ def main(argv: list[str] | None = None) -> int:
     validate.add_argument("--source", type=Path, required=True)
     for option in ("upstream-base", "integrated-head", "present-head", "staging-head",
                    "rotation-head", "patch-series-sha256",
-                   "dependency-manifest-sha256", "license-sha256"):
+                   "dependency-manifest-sha256", "source-tree-sha256",
+                   "license-sha256"):
         validate.add_argument(f"--{option}", required=True)
     validate.add_argument("--meson-option", action="append", default=[])
     validate.add_argument("--identity-out", type=Path, required=True)
@@ -435,7 +442,8 @@ def main(argv: list[str] | None = None) -> int:
     licenses.add_argument("--output", type=Path, required=True)
     for option in ("upstream-base", "integrated-head", "present-head", "staging-head",
                    "rotation-head", "patch-series-sha256",
-                   "dependency-manifest-sha256", "license-sha256"):
+                   "dependency-manifest-sha256", "source-tree-sha256",
+                   "license-sha256"):
         licenses.add_argument(f"--{option}", required=True)
 
     args = parser.parse_args(argv)

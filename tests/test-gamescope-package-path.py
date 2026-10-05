@@ -110,6 +110,7 @@ class GamescopePackagePathTest(unittest.TestCase):
             rotation_head=ROTATION,
             patch_series_sha256=PATCHES,
             dependency_manifest_sha256=self.manifest_sha,
+            source_tree_sha256=source_tree_sha,
             license_sha256=self.license_sha,
         )
 
@@ -165,6 +166,8 @@ class GamescopePackagePathTest(unittest.TestCase):
         self.assertEqual(parsed["integrated_head"], HEAD)
         self.assertEqual(parsed["patch_series_sha256"], PATCHES)
         self.assertEqual(parsed["dependency_manifest_sha256"], self.manifest_sha)
+        self.assertEqual(parsed["source_tree_sha256"],
+                         self.expected.source_tree_sha256)
         self.assertEqual(parsed["target_arch"], "aarch64")
         self.assertEqual(parsed["dependency.dep00.000000000000"],
                          f"{1:040x}")
@@ -181,6 +184,34 @@ class GamescopePackagePathTest(unittest.TestCase):
         bundle.write_text("drift\n", encoding="utf-8")
         with self.assertRaisesRegex(gp.PackageInputError, "licence bundle digest"):
             gp.validate_source(self.source, self.expected)
+
+    def test_self_consistent_tree_and_receipt_rewrite_is_externally_rejected(self) -> None:
+        locked_tree = gp._source_tree_sha256(self.source)
+        locked_expected = gp.ExpectedSource(**{
+            **self.expected.__dict__,
+            "source_tree_sha256": locked_tree,
+        })
+        (self.source / "meson.build").write_text(
+            "project('tampered-gamescope')\n", encoding="utf-8")
+        tampered_tree = gp._source_tree_sha256(self.source)
+        self.assertNotEqual(tampered_tree, locked_tree)
+
+        materialization = json.loads(self.materialization.read_text(encoding="utf-8"))
+        materialization["source_tree_sha256"] = tampered_tree
+        self.materialization.write_text(
+            json.dumps(materialization, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        source_receipt = json.loads(self.receipt.read_text(encoding="utf-8"))
+        source_receipt["source_tree_sha256"] = tampered_tree
+        source_receipt["materialization_receipt_sha256"] = hashlib.sha256(
+            self.materialization.read_bytes()).hexdigest()
+        self.receipt.write_text(
+            json.dumps(source_receipt, sort_keys=True) + "\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(
+                gp.PackageInputError, "platform-locked source-tree digest mismatch"):
+            gp.validate_source(self.source, locked_expected)
 
     def test_missing_context_and_head_are_rejected(self) -> None:
         with self.assertRaisesRegex(gp.PackageInputError, "context is missing"):
@@ -248,7 +279,9 @@ class GamescopePackagePathTest(unittest.TestCase):
         dockerfile = (ROOT / "build" / "Dockerfile.pf").read_text(encoding="utf-8")
         for required in (
             "FROM gamescope-${PF_GAMESCOPE_MODE} AS gamescope",
+            "ARG PF_GAMESCOPE_SOURCE_TREE_SHA256",
             "COPY --from=gamescope-src . /work/gamescope",
+            "--source-tree-sha256 ${PF_GAMESCOPE_SOURCE_TREE_SHA256}",
             "--wrap-mode=nodownload",
             "COPY --from=gamescope /out /work/gamescope-package",
         ):

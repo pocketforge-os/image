@@ -1817,6 +1817,7 @@ ARG PF_GAMESCOPE_STAGING_HEAD
 ARG PF_GAMESCOPE_ROTATION_HEAD
 ARG PF_GAMESCOPE_PATCH_SERIES_SHA256
 ARG PF_GAMESCOPE_DEPENDENCY_MANIFEST_SHA256
+ARG PF_GAMESCOPE_SOURCE_TREE_SHA256
 ARG PF_GAMESCOPE_LICENSE_SHA256
 ARG PF_GAMESCOPE_DIAGNOSTICS=0
 COPY --from=gamescope-src . /work/gamescope
@@ -1832,6 +1833,7 @@ common_args="--source /work/gamescope \
 --rotation-head ${PF_GAMESCOPE_ROTATION_HEAD} \
 --patch-series-sha256 ${PF_GAMESCOPE_PATCH_SERIES_SHA256} \
 --dependency-manifest-sha256 ${PF_GAMESCOPE_DEPENDENCY_MANIFEST_SHA256} \
+--source-tree-sha256 ${PF_GAMESCOPE_SOURCE_TREE_SHA256} \
 --license-sha256 ${PF_GAMESCOPE_LICENSE_SHA256}"
 python3 "${validator}" validate-source ${common_args} \
   --meson-option buildtype=release \
