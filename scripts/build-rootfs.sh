@@ -479,6 +479,10 @@ CUSTOMIZE_SCRIPT="${WORK}/customize-hook.sh"
 write_customize_hook_prelude > "${CUSTOMIZE_SCRIPT}"
 cat >> "${CUSTOMIZE_SCRIPT}" << 'CUSTOMIZE_EOF'
 ROOTFS="$1"
+# The generated hook is also executed directly by legacy/profile fixtures.
+# Keep omission fail-closed as the source-free producer instead of relying on
+# the outer build-rootfs environment to define this newer selector.
+PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE:-not-shipped}"
 
 echo "[customize] Starting PocketForge rootfs customization..."
 
