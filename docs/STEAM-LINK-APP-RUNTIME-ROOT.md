@@ -47,7 +47,7 @@ The following evidence was read at the exact fetched `origin/main` commits on
   existing `[runtime]` pin, while `docs/APP-DESCRIPTOR.md:47-59` points parser
   and public-capability authority back to runtime/platform rather than image.
 
-### Runtime `7536aa1f5af76f0220b582ee68e29e254251fd76`
+### Runtime `1dd87ecc2952584a7ef1473c5dcb872662b7c0cb`
 
 - `crates/pf-app-manifest/src/lib.rs:13-31` fixes the production app root and
   current capability vocabulary. `crates/pf-app-manifest/src/lib.rs:66-128`

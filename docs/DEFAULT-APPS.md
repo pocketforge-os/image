@@ -979,11 +979,14 @@ The causes:
   Running presentation and never sent its one-shot acknowledgement.
 - Busy refusals were not logged.
 
-Runtime pocketforge-os/runtime#103 (merge `7536aa1f5af76f0220b582ee68e29e254251fd76`) and
-launcher pocketforge-os/launcher#146 change the contract as follows.
+Runtime pocketforge-os/runtime#104 (merge `1dd87ecc2952584a7ef1473c5dcb872662b7c0cb`,
+superseding runtime#103) and launcher pocketforge-os/launcher#146 change the contract as follows.
 
 ### Authority (runtime)
 
+- **Durable idle state at startup.** A fresh store contains the default idle
+  `authority.json` before the daemon publishes its socket. Valid existing state is preserved;
+  corrupt or unwritable state still fails closed.
 - **Self-driven tick.** `pf-session-authorityd` runs its reconcile and deadline tick at least
   once per second with no client RPC. Connection I/O runs on bounded per-connection threads
   (at most 16, with a 5 s read and write timeout), and only complete requests reach the
