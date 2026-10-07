@@ -257,7 +257,7 @@ if (
     export PF_FFMPEG_ORIG_ASC_SHA256="${FFMPEG_ORIG_ASC_SHA256}"
     export PF_FFMPEG_DEBIAN_SHA256="${FFMPEG_DEBIAN_SHA256}"
     export PF_FFMPEG_PATCH_SERIES_SHA256="${PATCH_SERIES_SHA256}"
-    export PF_FFMPEG_UAPI_SHA=a75bf257f2ecb4d6cff7e2a921b77d24ebecbbb7
+    export PF_FFMPEG_UAPI_SHA=671e7090246a6ae9d347a70e2b3952b7819f937d
     "${builder}" "${scratch}/contract-out" "${scratch}/contract-kernel"
 ) >"${scratch}/contract.log" 2>&1; then
     echo 'FAIL: lock admission reached a missing kernel receipt without failing' >&2
