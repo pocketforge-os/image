@@ -28,10 +28,11 @@ test "$(grep -Fc 'scripts/verify-open-gpu-tools.sh' "$builder")" -eq 2
 producer="$scratch/producer"
 positive="$scratch/positive"
 mkdir -p \
-    "$producer/usr/local/lib/dri" \
+    "$producer/usr/local/lib" \
     "$producer/usr/local/share/vulkan/icd.d" \
     "$positive/usr/local/lib/dri" \
     "$positive/usr/local/share/vulkan/icd.d" \
+    "$positive/usr/share/pocketforge" \
     "$positive/usr/share/vulkan/icd.d" \
     "$positive/usr/bin" \
     "$positive/var/lib/dpkg"
@@ -45,13 +46,15 @@ for artifact in \
     printf 'owned gpu-um-tsp artifact: %s\n' "$artifact" \
         >"$producer/usr/local/lib/$artifact"
 done
-printf '%s\n' 'owned gpu-um-tsp artifact: zink_dri.so' \
-    >"$producer/usr/local/lib/dri/zink_dri.so"
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
     >"$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+printf '%s\n' 'gpu-um-tsp@1d8056548b79b236e45d3ba0b0dec94a25660930 (open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
+    >"$producer/.pf-gpu-um-provenance"
 cp -a "$producer/usr/local/." "$positive/usr/local/"
 cp "$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
     "$positive/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+cp "$producer/.pf-gpu-um-provenance" \
+    "$positive/usr/share/pocketforge/gpu-um-mesa-provenance"
 
 cat >"$positive/var/lib/dpkg/status" <<'EOF'
 Package: pocketforge-open-gpu-stack
@@ -144,6 +147,71 @@ fi
 grep -Fq 'gpu-um-tsp artifact hash mismatch: usr/local/lib/libEGL.so.1.0.0' \
     "$scratch/negative-hash.err"
 
+negative_provenance_hash="$scratch/negative-provenance-hash"
+cp -a "$positive" "$negative_provenance_hash"
+printf '%s\n' 'changed provenance' >> \
+    "$negative_provenance_hash/usr/share/pocketforge/gpu-um-mesa-provenance"
+if PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$negative_provenance_hash" "$producer" \
+    >"$scratch/negative-provenance-hash.out" 2>"$scratch/negative-provenance-hash.err"; then
+    echo 'FAIL: changed gpu-um-tsp provenance negative control was accepted' >&2
+    exit 1
+fi
+grep -Fq 'gpu-um-tsp provenance hash mismatch:' \
+    "$scratch/negative-provenance-hash.err"
+
+negative_provenance_missing="$scratch/negative-provenance-missing"
+cp -a "$positive" "$negative_provenance_missing"
+rm "$negative_provenance_missing/usr/share/pocketforge/gpu-um-mesa-provenance"
+if PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$negative_provenance_missing" "$producer" \
+    >"$scratch/negative-provenance-missing.out" 2>"$scratch/negative-provenance-missing.err"; then
+    echo 'FAIL: missing rootfs gpu-um-tsp provenance negative control was accepted' >&2
+    exit 1
+fi
+grep -Fq 'rootfs gpu-um-tsp provenance is missing or not a regular file' \
+    "$scratch/negative-provenance-missing.err"
+
+negative_provenance_link="$scratch/negative-provenance-link"
+cp -a "$positive" "$negative_provenance_link"
+rm "$negative_provenance_link/usr/share/pocketforge/gpu-um-mesa-provenance"
+ln -s ../../local/lib/libgallium_dri.so \
+    "$negative_provenance_link/usr/share/pocketforge/gpu-um-mesa-provenance"
+if PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$negative_provenance_link" "$producer" \
+    >"$scratch/negative-provenance-link.out" 2>"$scratch/negative-provenance-link.err"; then
+    echo 'FAIL: symlinked rootfs gpu-um-tsp provenance negative control was accepted' >&2
+    exit 1
+fi
+grep -Fq 'rootfs gpu-um-tsp provenance is missing or not a regular file' \
+    "$scratch/negative-provenance-link.err"
+
+negative_producer_missing="$scratch/negative-producer-missing"
+cp -a "$producer" "$negative_producer_missing"
+rm "$negative_producer_missing/.pf-gpu-um-provenance"
+if PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$positive" "$negative_producer_missing" \
+    >"$scratch/negative-producer-missing.out" 2>"$scratch/negative-producer-missing.err"; then
+    echo 'FAIL: missing producer gpu-um-tsp provenance negative control was accepted' >&2
+    exit 1
+fi
+grep -Fq 'gpu-um-tsp producer provenance is missing or not a regular file' \
+    "$scratch/negative-producer-missing.err"
+
+negative_provenance_identity="$scratch/negative-provenance-identity"
+negative_producer_identity="$scratch/negative-producer-identity"
+cp -a "$positive" "$negative_provenance_identity"
+cp -a "$producer" "$negative_producer_identity"
+printf '%s\n' 'gpu-um-tsp@1d8056548b79b236e45d3ba0b0dec94a25660930 (unknown stack)' \
+    >"$negative_producer_identity/.pf-gpu-um-provenance"
+cp "$negative_producer_identity/.pf-gpu-um-provenance" \
+    "$negative_provenance_identity/usr/share/pocketforge/gpu-um-mesa-provenance"
+if PF_ROOTFS_LDD="$ldd_stub" "$verifier" \
+    "$negative_provenance_identity" "$negative_producer_identity" \
+    >"$scratch/negative-provenance-identity.out" \
+    2>"$scratch/negative-provenance-identity.err"; then
+    echo 'FAIL: non-Zink gpu-um-tsp provenance negative control was accepted' >&2
+    exit 1
+fi
+grep -Fq 'gpu-um-tsp producer provenance does not identify the GE8300 Zink stack' \
+    "$scratch/negative-provenance-identity.err"
+
 negative_icd="$scratch/negative-icd-rootfs"
 cp -a "$positive" "$negative_icd"
 printf '%s\n' '{"ICD":{"library_path":"/usr/lib/aarch64-linux-gnu/libvulkan_lvp.so"}}' \
@@ -193,7 +261,8 @@ expect_rejection negative-boundary-link "$negative_boundary_link" \
     'GPU driver discovery boundary reached through symlink:'
 
 # Cover both Mesa's Debian multiarch directory and gpu-um-tsp's copied DRI
-# directory. Only the already hash-checked local zink_dri.so is accepted.
+# directory. The pinned producer installs its unified Zink megadriver at
+# /usr/local/lib/libgallium_dri.so, so no per-driver DRI payload is accepted.
 dri_boundary_number=0
 for boundary in $($artifact_policy --print-mesa-dri-boundaries) usr/local/lib/dri; do
     dri_boundary_number=$((dri_boundary_number + 1))
@@ -206,4 +275,11 @@ for boundary in $($artifact_policy --print-mesa-dri-boundaries) usr/local/lib/dr
         'foreign Mesa DRI driver:'
 done
 
-echo "open-gpu-tools-test=PASS positive=owned-stack negative=installed-mesa-vulkan-drivers,changed-hash,foreign-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"
+negative_zink_alias="$scratch/negative-zink-alias"
+cp -a "$positive" "$negative_zink_alias"
+printf '%s\n' 'unowned zink alias' \
+    >"$negative_zink_alias/usr/local/lib/dri/zink_dri.so"
+expect_rejection negative-zink-alias "$negative_zink_alias" \
+    'foreign Mesa DRI driver:'
+
+echo "open-gpu-tools-test=PASS positive=owned-stack negative=installed-mesa-vulkan-drivers,changed-hash,changed-provenance,missing-rootfs-provenance,missing-producer-provenance,symlinked-provenance,non-zink-provenance,foreign-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries,foreign-zink-alias icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"

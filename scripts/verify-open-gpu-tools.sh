@@ -67,11 +67,28 @@ for artifact in \
     usr/local/lib/libGLESv2.so.2.0.0 \
     usr/local/lib/libgbm.so.1.0.0 \
     usr/local/lib/libgallium_dri.so \
-    usr/local/lib/dri/zink_dri.so \
     usr/local/lib/libvulkan_powervr_mesa.so \
     usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json; do
     verify_owned_artifact "$artifact"
 done
+
+# gpu-um-tsp's pinned Mesa builds Zink into one unified Gallium DRI
+# megadriver; it does not install a per-driver zink_dri.so alias. Bind that
+# actual producer identity to the rootfs alongside the megadriver hash.
+producer_provenance="${producer}/.pf-gpu-um-provenance"
+rootfs_provenance="${rootfs}/usr/share/pocketforge/gpu-um-mesa-provenance"
+[ -f "$producer_provenance" ] && [ ! -L "$producer_provenance" ] \
+    || fatal 'gpu-um-tsp producer provenance is missing or not a regular file'
+[ -f "$rootfs_provenance" ] && [ ! -L "$rootfs_provenance" ] \
+    || fatal 'rootfs gpu-um-tsp provenance is missing or not a regular file'
+producer_provenance_hash=$(sha256sum "$producer_provenance" | awk '{ print $1 }')
+rootfs_provenance_hash=$(sha256sum "$rootfs_provenance" | awk '{ print $1 }')
+[ "$producer_provenance_hash" = "$rootfs_provenance_hash" ] \
+    || fatal "gpu-um-tsp provenance hash mismatch: producer=${producer_provenance_hash} rootfs=${rootfs_provenance_hash}"
+grep -Eq '^gpu-um-tsp@[0-9a-f]{40} \(open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink\)$' \
+    "$producer_provenance" \
+    || fatal 'gpu-um-tsp producer provenance does not identify the GE8300 Zink stack'
+echo "open-gpu-stack provenance=PASS driver=zink artifact=libgallium_dri.so sha256=${rootfs_provenance_hash}"
 
 canonical_icd=usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json
 producer_icd="${producer}/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
@@ -133,12 +150,8 @@ for boundary in $mesa_dri_boundaries; do
         fatal "Mesa DRI discovery boundary is not a directory: /${boundary}"
     fi
     [ -d "$directory" ] || continue
-    case "$boundary" in
-        usr/local/lib/dri) allowed=zink_dri.so ;;
-        *) allowed=__no_owned_dri_driver_at_this_boundary__ ;;
-    esac
     foreign_dri=$(find "$directory" -mindepth 1 -maxdepth 1 \
-        \( -type f -o -type l \) -name '*_dri.so*' ! -name "$allowed" -print -quit)
+        \( -type f -o -type l \) -name '*_dri.so*' -print -quit)
     [ -z "$foreign_dri" ] \
         || fatal "foreign Mesa DRI driver: ${foreign_dri#"${rootfs}"}"
 done

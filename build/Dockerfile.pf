@@ -793,9 +793,10 @@ cat /src/.pf-gpu-um-provenance
 GPUUMBUILD
 
 # --- 5/5 gpu-um-mesa-open: the consumable artifact — /out/usr/local is the FULL DESTDIR
-# install tree (Zink DRI under lib/dri, libEGL/libgbm/libGLESv2, the Vulkan ICD .so + its
-# ICD JSON under share/vulkan/icd.d) exactly as C1's acceptance criteria require: a real
-# `meson install` tree, never a hand-picked .so subset.
+# install tree (Zink in the unified libgallium_dri.so megadriver,
+# libEGL/libgbm/libGLESv2, the Vulkan ICD .so + its ICD JSON under
+# share/vulkan/icd.d) exactly as gpu-um-tsp emits it: a real `meson install`
+# tree, never a hand-picked .so subset.
 FROM scratch AS gpu-um-mesa-open
 COPY --from=gpu-um-build /mesa-source-commit /mesa-source-commit
 COPY --from=gpu-um-build /toolchain-packages.txt /toolchain-packages.txt
