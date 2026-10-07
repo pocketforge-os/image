@@ -169,14 +169,22 @@ list_dependencies() {
     fi
 }
 
+binary_embeds_soname() {
+    LC_ALL=C grep -aF "$2" "$1" >/dev/null
+}
+
+owned_egl_witness=0
+owned_gles_witness=0
+vulkan_loader_witness=0
+
 for binary in \
-    glmark2-es2-drm \
-    glmark2-es2-wayland \
-    glmark2-es2 \
     eglinfo \
     es2gears_wayland \
     es2gears_x11 \
     kmscube \
+    glmark2-es2-drm \
+    glmark2-es2-wayland \
+    glmark2-es2 \
     vkcube \
     vkcube-wayland \
     vulkaninfo; do
@@ -190,12 +198,19 @@ for binary in \
         && fatal "dynamic dependency is not found: ${binary_path}"
 
     owned_bindings=0
+    binding_mode=direct
     for soname in libEGL.so.1 libGLESv2.so.2 libgbm.so.1; do
         resolved=$(printf '%s\n' "$closure" | awk -v wanted="$soname" \
             '$1 == wanted && $2 == "=>" { print $3; exit }')
         [ -n "$resolved" ] || continue
         case "$resolved" in
-            /usr/local/lib/*) owned_bindings=$((owned_bindings + 1)) ;;
+            /usr/local/lib/*)
+                owned_bindings=$((owned_bindings + 1))
+                case "$soname" in
+                    libEGL.so.1) owned_egl_witness=1 ;;
+                    libGLESv2.so.2) owned_gles_witness=1 ;;
+                esac
+                ;;
             *) fatal "${binary_path} resolves ${soname} outside gpu-um-tsp: ${resolved}" ;;
         esac
     done
@@ -203,13 +218,42 @@ for binary in \
         eglinfo|es2gears_wayland|es2gears_x11|kmscube)
             [ "$owned_bindings" -gt 0 ] \
                 || fatal "${binary_path} has no dynamic binding to gpu-um-tsp EGL/GLES/GBM"
+            binding_mode=direct-owned
             ;;
-        vkcube|vkcube-wayland|vulkaninfo)
+        glmark2-es2-drm)
+            [ "$owned_bindings" -gt 0 ] \
+                || fatal "${binary_path} has no dynamic binding to gpu-um-tsp GBM"
+            binding_mode=direct-owned
+            ;;
+        glmark2-es2-wayland|glmark2-es2)
+            [ "$owned_egl_witness" -eq 1 ] && [ "$owned_gles_witness" -eq 1 ] \
+                || fatal "${binary_path} has no same-rootfs owned EGL/GLES resolution witness"
+            for soname in libEGL.so.1 libGLESv2.so.2; do
+                binary_embeds_soname "${rootfs}${binary_path}" "$soname" \
+                    || fatal "${binary_path} does not declare runtime loading of ${soname}"
+            done
+            binding_mode=runtime-owned-egl-gles
+            ;;
+        vkcube|vkcube-wayland)
             printf '%s\n' "$closure" | grep -Fq 'libvulkan.so.1' \
                 || fatal "${binary_path} does not bind the Vulkan loader"
+            vulkan_loader_witness=1
+            binding_mode=direct-vulkan-loader
+            ;;
+        vulkaninfo)
+            if printf '%s\n' "$closure" | grep -Fq 'libvulkan.so.1'; then
+                vulkan_loader_witness=1
+                binding_mode=direct-vulkan-loader
+            else
+                [ "$vulkan_loader_witness" -eq 1 ] \
+                    || fatal "${binary_path} has no same-rootfs Vulkan loader resolution witness"
+                binary_embeds_soname "${rootfs}${binary_path}" libvulkan.so.1 \
+                    || fatal "${binary_path} does not declare runtime loading of libvulkan.so.1"
+                binding_mode=runtime-vulkan-loader
+            fi
             ;;
     esac
-    echo "open-gpu-tool=PASS binary=${binary_path} owned_bindings=${owned_bindings}"
+    echo "open-gpu-tool=PASS binary=${binary_path} binding_mode=${binding_mode} owned_bindings=${owned_bindings}"
     printf '%s\n' "$closure"
 done
 
