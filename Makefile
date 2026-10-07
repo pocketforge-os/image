@@ -59,6 +59,7 @@ test-app-runtime-root:
 	@tests/test-app-runtime-root.sh
 
 test-dockerfile-pf-transforms:
+	@tests/test-a133-cma-bootargs.sh
 	@tests/test-dockerfile-pf-transforms.sh
 	@tests/test-initrd-selfflash-watchdog.sh
 	@tests/test-poolsuite-variant-stage.sh

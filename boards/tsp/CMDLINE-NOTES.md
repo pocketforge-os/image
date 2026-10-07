@@ -1,6 +1,6 @@
 # Kernel Command Line — TrimUI Smart Pro (tsp)
 
-Canonical cmdline lives in `cmdline.txt` (this directory). Consumed by `abootimg --create` via `$(cat image/boards/tsp/cmdline.txt)` — never inlined as a shell string.
+The Linux 7.x cmdline lives in `cmdline.txt` (this directory). The image build selects it by `PF_KERNEL_REPO` and consumes it with `abootimg --create`. `cmdline-vendor-4.9.txt` preserves the previous vendor-era argument string, including its 64 MiB CMA override, so the shipped 4.9 line is unchanged.
 
 The file uses `abootimg`'s `-c` config format: `cmdline=<kernel args>` (the `cmdline=` prefix is required by `abootimg`; it is not passed to the kernel).
 
@@ -41,9 +41,13 @@ Set the kernel console log level to 8 (KERN_DEBUG — all messages). This ensure
 
 M1.E hardening may dial this down to `4` (KERN_WARNING) or `5` (KERN_NOTICE) for the release variant. Keep `8` for the dev variant.
 
-### `cma=64M`
+### `cma=64M` (vendor 4.9 only)
 
-Reserve a 64 MiB Contiguous Memory Allocator pool. The vendor kernel uses this for DMA-coherent buffer allocations by the Allwinner Display Engine 2.0 (`dc_sunxi.ko`), the PowerVR GPU (`pvrsrvkm.ko`), and the Cedar VPU (`/dev/cedar_dev`). The vendor stock cmdline uses the same value. Reducing this below 64 MiB risks display engine panics or GPU allocation failures.
+The vendor 4.9 command line retains this 64 MiB override in `cmdline-vendor-4.9.txt`. It is deliberately absent from the open Linux 7.x command line, both TG5040 U-Boot defaults, and the 7.x image's environment partitions.
+
+Linux 7.x treats the Odyssey DTB's 128 MiB `vpu-cma` reserved-memory pool as the CMA authority. In `kernel/dma/contiguous.c:509-512`, a command-line `cma=` causes a `linux,cma-default` DT node to be skipped. Cedrus subsequently calls `of_reserved_mem_device_init()` and aborts its probe on that reservation failure in `drivers/staging/media/sunxi/cedrus/cedrus_hw.c:269-273`. Removing the override lets the DT-owned pool register and remain available to Cedrus.
+
+The image build checks the final selected cmdline, the generated owned-U-Boot configuration when present, the shipped environment image, and the shipped DTB together. A `cma=` source is rejected whenever that DTB declares `linux,cma-default`; malformed or partially readable inputs also fail the build.
 
 ### `gpt=1`
 
@@ -89,9 +93,9 @@ Verified: the stock boot log shows `disp_reserve` appearing in `/proc/cmdline` e
 
 ## Format notes
 
-- `cmdline.txt` uses `abootimg`'s `-c` config format: `cmdline=<args>`. The `cmdline=` prefix is consumed by `abootimg` and does NOT appear in the kernel's `/proc/cmdline`.
-- The file has no trailing newline (verified: `wc -l` reports 0 lines; `wc -c` reports the expected byte count).
-- The build step reads it via shell substitution: `abootimg --create boot.img -k Image -r initrd.img -c "$(cat image/boards/tsp/cmdline.txt)" -p 0x800 -b 0x40000000`.
+- Both cmdline files use `abootimg`'s `-c` config format: `cmdline=<args>`. The `cmdline=` prefix is consumed by `abootimg` and does NOT appear in the kernel's `/proc/cmdline`.
+- The build selects `cmdline.txt` for `kernel-sunxi-7.x`; other existing A133 profiles select `cmdline-vendor-4.9.txt` to preserve their prior bytes.
+- The selected file is passed to `abootimg --create` with `-c "$(cat "${CMDLINE_FILE}")"`.
 - At runtime, `/proc/cmdline` will contain our arguments plus any U-Boot-injected arguments (e.g., `disp_reserve`, `lcd`, `androidboot.*`). The combined set is what the kernel and initrd see.
 
 ## References

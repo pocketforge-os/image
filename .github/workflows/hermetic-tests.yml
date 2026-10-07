@@ -90,6 +90,7 @@ jobs:
         run: |
           set -uo pipefail
           tests=(
+            tests/test-a133-cma-bootargs.sh
             tests/test-alsa-config.sh
             tests/test-app-runtime-root.sh
             tests/test-boot-animator.sh
