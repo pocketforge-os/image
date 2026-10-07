@@ -344,9 +344,15 @@ fi
 cp "${BOOTPKG_FILE}"                         "${GENIMAGE_INPUT}/boot_package.fex"
 cp "${BOOTIMG_FILE}"                         "${GENIMAGE_INPUT}/boot.img"
 if [ "${PF_KERNEL_REPO}" = "kernel-sunxi-7.x" ]; then
+    # The shipped vendor environment uses CONFIG_ENV_SIZE=0x20000 with the
+    # redundant-environment flags byte: crc32 at [0:4], flags at [4], data at
+    # [5:0x20000], then partition padding. The equivalent owned U-Boot format is
+    # defined by u-boot-tsp-a133 include/env_internal.h:56-83 (db70249c).
     python3 "${SRC_DIR}/scripts/remove-a133-env-cma.py" \
         --input "${BLOBS_DIR}/sunxi/a133/boot-chain/env.img" \
-        --output "${GENIMAGE_INPUT}/env.img"
+        --output "${GENIMAGE_INPUT}/env.img" \
+        --env-size 0x20000 \
+        --env-redundant
 else
     cp "${BLOBS_DIR}/sunxi/a133/boot-chain/env.img" "${GENIMAGE_INPUT}/env.img"
 fi
@@ -359,6 +365,8 @@ CMA_GUARD_ARGS=(
     --dtb "${DTB_FILE}"
     --cmdline "${CMDLINE_FILE}"
     --env-img "${GENIMAGE_INPUT}/env.img"
+    --env-size 0x20000
+    --env-redundant
 )
 if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
     CMA_GUARD_ARGS+=(--uboot-config "${UBOOT_CONFIG}")

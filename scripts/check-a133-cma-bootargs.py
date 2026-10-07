@@ -13,6 +13,16 @@ class GuardError(Exception):
     pass
 
 
+def env_size(value: str) -> int:
+    try:
+        parsed = int(value, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer such as 0x20000") from exc
+    if parsed < 8:
+        raise argparse.ArgumentTypeError("must leave room for the environment header and terminator")
+    return parsed
+
+
 def read_required(path: Path) -> bytes:
     try:
         data = path.read_bytes()
@@ -124,11 +134,19 @@ def read_uboot_bootargs(path: Path) -> str:
     return matches[0]
 
 
-def env_contains_cma(path: Path) -> bool:
+def env_contains_cma(path: Path, configured_size: int, redundant: bool) -> bool:
     image = read_required(path)
-    if len(image) < 8:
-        raise GuardError(f"{path} is too short to be a CRC-protected U-Boot environment")
-    payload = image[4:]
+    header_size = 5 if redundant else 4
+    if configured_size <= header_size + 1:
+        raise GuardError(
+            f"configured environment size {configured_size} leaves no room for a double-NUL terminator"
+        )
+    if len(image) < configured_size:
+        raise GuardError(
+            f"{path} is shorter than the configured U-Boot environment size "
+            f"({len(image)} < {configured_size})"
+        )
+    payload = image[header_size:configured_size]
     stored = image[:4]
     calculated = zlib.crc32(payload) & 0xFFFFFFFF
     if stored not in (struct.pack("<I", calculated), struct.pack(">I", calculated)):
@@ -152,6 +170,10 @@ def main() -> int:
     parser.add_argument("--dtb", type=Path, required=True)
     parser.add_argument("--cmdline", type=Path, required=True)
     parser.add_argument("--env-img", type=Path, required=True)
+    parser.add_argument("--env-size", type=env_size, required=True)
+    layout = parser.add_mutually_exclusive_group(required=True)
+    layout.add_argument("--env-redundant", dest="redundant", action="store_true")
+    layout.add_argument("--env-plain", dest="redundant", action="store_false")
     parser.add_argument("--uboot-config", type=Path)
     args = parser.parse_args()
 
@@ -165,7 +187,12 @@ def main() -> int:
                     contains_cma(read_uboot_bootargs(args.uboot_config)),
                 )
             )
-        sources.append((str(args.env_img), env_contains_cma(args.env_img)))
+        sources.append(
+            (
+                str(args.env_img),
+                env_contains_cma(args.env_img, args.env_size, args.redundant),
+            )
+        )
     except GuardError as exc:
         print(f"A133 CMA guard ERROR: {exc}", file=sys.stderr)
         return 2
