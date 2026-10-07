@@ -15,23 +15,19 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# tsp-op5a.439 moves the launcher alone: launcher#150 (merged ab9fb7fd -> 1ef9671a)
-# maps L1/R1 to cyclic top-level room switching without escaping first-run, modal
-# or sub-screen ownership, and restores held shoulder actions after SYN_DROPPED.
-# Its vendored runtime crates are byte-identical to ab9fb7fd's. Runtime#104
-# 1dd87ecc adds fresh-store durable initial state without changing those vendored
-# crates. The previous image guard accepted (7536aa1f, 1ef9671a). The new guard
-# refuses that prior runtime, the old launcher, the pre-#149 launcher, the
-# pre-#148 launcher (it ignores the d-pad hat), the pre-#147 launcher (it drops
-# the first A after a return), the pre-#146, pre-#145 and older launchers, and the
-# pre-tsp-f3fm.219 runtime 0955d8a8.
-expected_runtime=1dd87ecc2952584a7ef1473c5dcb872662b7c0cb
-expected_launcher=1ef9671afdd687d53f61a91e92c51da9fb614293
+# Runtime#106 source-owns the Wayland contract that launcher#153 vendors. The
+# preceding guarded pair (runtime#104 candidate 1dd87ecc, launcher#150 candidate
+# 1ef9671a) fails the production comparator at pf-session-authority. The new
+# guard therefore admits only the exact compatible source candidates and rejects
+# both the preceding pair and either crossed generation.
+expected_runtime=5738f3d5e108b52186b129a5db1c62a878278b19
+expected_launcher=73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5
+prior_runtime=1dd87ecc2952584a7ef1473c5dcb872662b7c0cb
+prior_launcher=1ef9671afdd687d53f61a91e92c51da9fb614293
 old_launcher=ab9fb7fde36e633add69b94c36bf1213f7cff5d9
 pre149_launcher=ca22de0ed3cec46c73f2de44aa6e570e109695d8
 pre148_launcher=d26dfa1162e601100c3a18956b5ce4a2ddc7427f
 pre147_launcher=7a2b792d0813fc8fb5c2915bdc00ef976b0cc986
-prior_runtime=7536aa1f5af76f0220b582ee68e29e254251fd76
 older_runtime=0955d8a83ee59df89eaba79ffee9e99e4f52384c
 pre146_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
 pre145_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
@@ -45,16 +41,13 @@ test "$launcher_guard" = "$expected_launcher"
 new_guard_accepts() {
     test "$1" = "$runtime_guard" && test "$2" = "$launcher_guard"
 }
-old_guard_accepts() {
-    test "$1" = "$prior_runtime" && test "$2" = "$expected_launcher"
-}
-
-# Each guard accepts exactly its own (runtime, launcher) pair: the new image
-# refuses the old launcher, the pre-#149, pre-#148, pre-#147, pre-#146, pre-#145
-# and older launchers, and the pre-tsp-f3fm.219 runtime; the old image refuses
-# the new launcher. So the lock must move image and launcher together.
+# The production guards accept exactly the compatible target pair. Keeping both
+# preceding identities together is still invalid because their source trees
+# drift at pf-session-authority; crossing either generation is invalid too.
 new_guard_accepts "$expected_runtime" "$expected_launcher"
+! new_guard_accepts "$prior_runtime" "$prior_launcher"
 ! new_guard_accepts "$expected_runtime" "$old_launcher"
+! new_guard_accepts "$expected_runtime" "$prior_launcher"
 ! new_guard_accepts "$prior_runtime" "$expected_launcher"
 ! new_guard_accepts "$older_runtime" "$expected_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre149_launcher"
@@ -63,16 +56,6 @@ new_guard_accepts "$expected_runtime" "$expected_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre146_launcher"
 ! new_guard_accepts "$expected_runtime" "$pre145_launcher"
 ! new_guard_accepts "$expected_runtime" "$older_launcher"
-old_guard_accepts "$prior_runtime" "$expected_launcher"
-! old_guard_accepts "$expected_runtime" "$expected_launcher"
-! old_guard_accepts "$older_runtime" "$expected_launcher"
-! old_guard_accepts "$prior_runtime" "$old_launcher"
-! old_guard_accepts "$prior_runtime" "$pre149_launcher"
-! old_guard_accepts "$prior_runtime" "$pre148_launcher"
-! old_guard_accepts "$prior_runtime" "$pre147_launcher"
-! old_guard_accepts "$prior_runtime" "$pre146_launcher"
-! old_guard_accepts "$prior_runtime" "$pre145_launcher"
-! old_guard_accepts "$prior_runtime" "$older_launcher"
 
 grep -F -- '--no-default-features -p pf-shell' "$dockerfile" >/dev/null
 if grep -E 'cargo build .*--features[ =][^#]*(desktop-sim)' "$dockerfile"; then
@@ -92,6 +75,20 @@ for crate in $crates; do
 done
 
 "$guard" "$scratch/launcher" "$scratch/runtime" $crates
+
+# Hermetic reproduction of the preceding guarded source generation: only the
+# launcher-owned pf-session-authority copy differs, and the production comparator
+# must report that typed drift while continuing to audit every crate.
+printf 'preceding-generation drift\n' >> \
+    "$scratch/launcher/vendor/pf-session-authority/src/lib.rs"
+if output=$("$guard" "$scratch/launcher" "$scratch/runtime" $crates 2>&1); then
+    echo "FAIL: preceding pf-session-authority drift passed the launcher/runtime contract guard" >&2
+    exit 1
+fi
+printf '%s\n' "$output" | grep -Fqx \
+    'FATAL: launcher/runtime contract drift: pf-session-authority'
+cp "$scratch/runtime/crates/pf-session-authority/src/lib.rs" \
+    "$scratch/launcher/vendor/pf-session-authority/src/lib.rs"
 
 # A missing vendored crate must fail cleanly at the shell boundary. In
 # particular, do not enter the reference scanner with absent Cargo/source paths
