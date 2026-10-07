@@ -10,6 +10,8 @@ fi
 rootfs=$1
 producer=$2
 status_file="${rootfs}/var/lib/dpkg/status"
+script_dir=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
+artifact_policy="${script_dir}/verify-no-gpu-artifacts.sh"
 
 fatal() {
     echo "FATAL: open GPU tools: $*" >&2
@@ -19,6 +21,7 @@ fatal() {
 [ -d "$rootfs" ] || fatal "rootfs is not a directory: ${rootfs}"
 [ -d "$producer/usr/local" ] || fatal "gpu-um-tsp producer tree is missing: ${producer}/usr/local"
 [ -f "$status_file" ] || fatal "dpkg installed-state database is missing: ${status_file}"
+[ -x "$artifact_policy" ] || fatal "GPU artifact policy is missing: ${artifact_policy}"
 
 package_is_installed() {
     awk -v wanted="$1" '
@@ -80,21 +83,65 @@ rootfs_icd_hash=$(sha256sum "$rootfs_icd" | awk '{ print $1 }')
     || fatal "gpu-um-tsp artifact hash mismatch: ${canonical_icd} producer=${producer_icd_hash} rootfs=${rootfs_icd_hash}"
 echo "open-gpu-stack artifact=PASS path=/${canonical_icd} sha256=${rootfs_icd_hash}"
 
-foreign_icd=$(
-    find \
-        "${rootfs}/usr/share/vulkan/icd.d" \
-        "${rootfs}/usr/local/share/vulkan/icd.d" \
-        -mindepth 1 -maxdepth 1 \( -type f -o -type l \) \
-        ! -name powervr_mesa_icd.aarch64.json -print -quit 2>/dev/null
-)
-[ -z "$foreign_icd" ] || fatal "foreign Vulkan ICD manifest: ${foreign_icd#"${rootfs}"}"
+vulkan_icd_boundaries=$($artifact_policy --print-vulkan-icd-boundaries)
+mesa_dri_boundaries="$($artifact_policy --print-mesa-dri-boundaries)
+usr/local/lib/dri"
+[ -n "$vulkan_icd_boundaries" ] || fatal 'Vulkan ICD discovery boundary list is empty'
+[ -n "$mesa_dri_boundaries" ] || fatal 'Mesa DRI discovery boundary list is empty'
 
-foreign_dri=''
-if [ -d "${rootfs}/usr/lib" ]; then
-    foreign_dri=$(find "${rootfs}/usr/lib" -path '*/dri/*_dri.so' \
-        \( -type f -o -type l \) -print -quit 2>/dev/null)
-fi
-[ -z "$foreign_dri" ] || fatal "foreign Mesa DRI driver: ${foreign_dri#"${rootfs}"}"
+# A loader boundary reached through a symlink can hide a driver outside the
+# staged rootfs from a lexical scan. Reject a link at every path component,
+# including the boundary itself, before inspecting entries beneath it.
+reject_symlinked_boundary() {
+    boundary=$1
+    component=$rootfs
+    old_ifs=$IFS
+    IFS=/
+    for name in $boundary; do
+        component=$component/$name
+        if [ -L "$component" ]; then
+            IFS=$old_ifs
+            fatal "GPU driver discovery boundary reached through symlink: /${boundary} component=${component#"${rootfs}"}"
+        fi
+    done
+    IFS=$old_ifs
+}
+
+for boundary in $vulkan_icd_boundaries; do
+    reject_symlinked_boundary "$boundary"
+    directory="${rootfs}/${boundary}"
+    if [ -e "$directory" ] && [ ! -d "$directory" ]; then
+        fatal "Vulkan ICD discovery boundary is not a directory: /${boundary}"
+    fi
+    [ -d "$directory" ] || continue
+    case "$boundary" in
+        usr/local/share/vulkan/icd.d|usr/share/vulkan/icd.d)
+            allowed=powervr_mesa_icd.aarch64.json
+            ;;
+        *) allowed=__no_owned_manifest_at_this_boundary__ ;;
+    esac
+    foreign_icd=$(find "$directory" -mindepth 1 -maxdepth 1 \
+        \( -type f -o -type l \) ! -name "$allowed" -print -quit)
+    [ -z "$foreign_icd" ] \
+        || fatal "foreign Vulkan ICD manifest: ${foreign_icd#"${rootfs}"}"
+done
+
+for boundary in $mesa_dri_boundaries; do
+    reject_symlinked_boundary "$boundary"
+    directory="${rootfs}/${boundary}"
+    if [ -e "$directory" ] && [ ! -d "$directory" ]; then
+        fatal "Mesa DRI discovery boundary is not a directory: /${boundary}"
+    fi
+    [ -d "$directory" ] || continue
+    case "$boundary" in
+        usr/local/lib/dri) allowed=zink_dri.so ;;
+        *) allowed=__no_owned_dri_driver_at_this_boundary__ ;;
+    esac
+    foreign_dri=$(find "$directory" -mindepth 1 -maxdepth 1 \
+        \( -type f -o -type l \) -name '*_dri.so*' ! -name "$allowed" -print -quit)
+    [ -z "$foreign_dri" ] \
+        || fatal "foreign Mesa DRI driver: ${foreign_dri#"${rootfs}"}"
+done
 echo 'open-gpu-stack drivers=PASS dri=zink vulkan=powervr foreign_drivers=absent'
 
 default_rootfs_ldd() {

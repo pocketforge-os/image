@@ -5,10 +5,12 @@ root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 verifier="$root/scripts/verify-open-gpu-tools.sh"
 provider_control="$root/packages/pocketforge-open-gpu-stack/DEBIAN/control"
 builder="$root/scripts/build-rootfs.sh"
+artifact_policy="$root/scripts/verify-no-gpu-artifacts.sh"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/open-gpu-tools.XXXXXX")
 trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT
 
 test -x "$verifier"
+test -x "$artifact_policy"
 test -f "$provider_control"
 
 grep -Fx 'Package: pocketforge-open-gpu-stack' "$provider_control" >/dev/null
@@ -153,4 +155,55 @@ if PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$negative_icd" "$producer" \
 fi
 grep -Fq 'foreign Vulkan ICD manifest:' "$scratch/negative-icd.err"
 
-echo 'open-gpu-tools-test=PASS positive=owned-stack negative=installed-mesa-vulkan-drivers,changed-hash,foreign-icd'
+expect_rejection() {
+    label=$1
+    candidate=$2
+    message=$3
+    if PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$candidate" "$producer" \
+        >"$scratch/${label}.out" 2>"$scratch/${label}.err"; then
+        echo "FAIL: ${label} negative control was accepted" >&2
+        exit 1
+    fi
+    grep -Fq "$message" "$scratch/${label}.err"
+}
+
+# Exercise every system and image-user Vulkan loader fallback maintained by the
+# repository's shared artifact policy. The two owned manifest directories also
+# receive an extra manifest, proving that the allowlist is exact rather than
+# merely accepting those directory names.
+boundary_number=0
+for boundary in $($artifact_policy --print-vulkan-icd-boundaries); do
+    boundary_number=$((boundary_number + 1))
+    candidate="$scratch/negative-icd-boundary-${boundary_number}"
+    cp -a "$positive" "$candidate"
+    mkdir -p "$candidate/$boundary"
+    printf '%s\n' '{"ICD":{"library_path":"/foreign/libvulkan_lvp.so"}}' \
+        >"$candidate/$boundary/foreign_icd.json"
+    expect_rejection "negative-icd-boundary-${boundary_number}" "$candidate" \
+        'foreign Vulkan ICD manifest:'
+done
+
+# A lexical scan must not be bypassable by replacing any discovery path
+# component with a link.
+negative_boundary_link="$scratch/negative-boundary-link"
+cp -a "$positive" "$negative_boundary_link"
+mkdir -p "$negative_boundary_link/etc"
+ln -s /outside-rootfs "$negative_boundary_link/etc/vulkan"
+expect_rejection negative-boundary-link "$negative_boundary_link" \
+    'GPU driver discovery boundary reached through symlink:'
+
+# Cover both Mesa's Debian multiarch directory and gpu-um-tsp's copied DRI
+# directory. Only the already hash-checked local zink_dri.so is accepted.
+dri_boundary_number=0
+for boundary in $($artifact_policy --print-mesa-dri-boundaries) usr/local/lib/dri; do
+    dri_boundary_number=$((dri_boundary_number + 1))
+    candidate="$scratch/negative-dri-boundary-${dri_boundary_number}"
+    cp -a "$positive" "$candidate"
+    mkdir -p "$candidate/$boundary"
+    printf '%s\n' 'foreign Mesa DRI payload' \
+        >"$candidate/$boundary/swrast_dri.so"
+    expect_rejection "negative-dri-boundary-${dri_boundary_number}" "$candidate" \
+        'foreign Mesa DRI driver:'
+done
+
+echo "open-gpu-tools-test=PASS positive=owned-stack negative=installed-mesa-vulkan-drivers,changed-hash,foreign-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"
