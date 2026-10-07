@@ -151,26 +151,9 @@ for firmware in fw_xr829.bin fw_xr829_bt.bin; do
 done
 
 printf 'kernel image\n' > "${kernel_tree}/arch/arm64/boot/Image"
-printf '%s\n' \
-    '/dts-v1/;' \
-    '/ {' \
-    '  #address-cells = <2>;' \
-    '  #size-cells = <2>;' \
-    '  reserved-memory {' \
-    '    #address-cells = <2>;' \
-    '    #size-cells = <2>;' \
-    '    ranges;' \
-    '    vpu-cma@40000000 {' \
-    '      compatible = "shared-dma-pool";' \
-    '      reusable;' \
-    '      linux,cma-default;' \
-    '      reg = <0 0x40000000 0 0x08000000>;' \
-    '    };' \
-    '  };' \
-    '};' > "${scratch}/kernel-fixture.dts"
-dtc -I dts -O dtb \
-    -o "${kernel_tree}/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb" \
-    "${scratch}/kernel-fixture.dts"
+python3 "${repo_dir}/tests/helpers/make-cma-test-dtb.py" \
+    --output "${kernel_tree}/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb" \
+    --default-cma
 : > "${kernel_release_dir}/modules.builtin"
 printf 'alias of:N*T*Cimg,img-rogue powervr\n' > "${kernel_release_dir}/modules.alias"
 printf 'powervr fixture\n' > "${powervr_module}"

@@ -9,31 +9,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-printf '%s\n' \
-    '/dts-v1/;' \
-    '/ {' \
-    '  #address-cells = <2>;' \
-    '  #size-cells = <2>;' \
-    '  reserved-memory {' \
-    '    #address-cells = <2>;' \
-    '    #size-cells = <2>;' \
-    '    ranges;' \
-    '    vpu-cma@40000000 {' \
-    '      compatible = "shared-dma-pool";' \
-    '      reusable;' \
-    '      linux,cma-default;' \
-    '      reg = <0 0x40000000 0 0x08000000>;' \
-    '    };' \
-    '  };' \
-    '};' > "${scratch}/default-cma.dts"
-printf '%s\n' \
-    '/dts-v1/;' \
-    '/ {' \
-    '  reserved-memory {' \
-    '  };' \
-    '};' > "${scratch}/no-default-cma.dts"
-dtc -I dts -O dtb -o "${scratch}/default-cma.dtb" "${scratch}/default-cma.dts"
-dtc -I dts -O dtb -o "${scratch}/no-default-cma.dtb" "${scratch}/no-default-cma.dts"
+python3 "${repo}/tests/helpers/make-cma-test-dtb.py" \
+    --output "${scratch}/default-cma.dtb" --default-cma
+python3 "${repo}/tests/helpers/make-cma-test-dtb.py" \
+    --output "${scratch}/no-default-cma.dtb"
+head -c 20 "${scratch}/default-cma.dtb" > "${scratch}/truncated.dtb"
 
 printf 'cmdline=console=ttyS0 cma=64M rootwait\n' > "${scratch}/bad-cmdline.txt"
 printf 'cmdline=console=ttyS0 rootwait\n' > "${scratch}/clean-cmdline.txt"
@@ -69,6 +49,16 @@ guard=(python3 "${repo}/scripts/check-a133-cma-bootargs.py")
     --cmdline "${scratch}/clean-cmdline.txt" \
     --env-img "${scratch}/clean-env.img"
 
+# The failure under test: an effective cmdline override must lose to the DT's
+# owned default pool instead of silently disabling that pool.
+if "${guard[@]}" \
+    --dtb "${scratch}/default-cma.dtb" \
+    --cmdline "${scratch}/bad-cmdline.txt" \
+    --env-img "${scratch}/clean-env.img"; then
+    echo "FAIL: guard accepted cma= from the effective cmdline" >&2
+    exit 1
+fi
+
 # The shipped environment is a bootargs source too. The guard rejects its
 # vendor-era cma variable/scripts before the deterministic transform.
 if "${guard[@]}" \
@@ -92,6 +82,14 @@ if python3 "${repo}/scripts/remove-a133-env-cma.py" \
     --input "${scratch}/bad-crc-env.img" \
     --output "${scratch}/unused-env.img"; then
     echo "FAIL: environment transform accepted a corrupt CRC" >&2
+    exit 1
+fi
+
+if "${guard[@]}" \
+    --dtb "${scratch}/truncated.dtb" \
+    --cmdline "${scratch}/clean-cmdline.txt" \
+    --env-img "${scratch}/clean-env.img"; then
+    echo "FAIL: guard treated a partial DTB read as a negative result" >&2
     exit 1
 fi
 

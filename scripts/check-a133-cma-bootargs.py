@@ -5,7 +5,6 @@ import argparse
 from pathlib import Path
 import re
 import struct
-import subprocess
 import sys
 import zlib
 
@@ -25,37 +24,81 @@ def read_required(path: Path) -> bytes:
 
 
 def dtb_has_default_cma(path: Path) -> bool:
-    read_required(path)
-    try:
-        result = subprocess.run(
-            ["dtc", "-I", "dtb", "-O", "dts", str(path)],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    except FileNotFoundError as exc:
-        raise GuardError("dtc is required to inspect the shipped DTB") from exc
-    except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.strip() or f"exit {exc.returncode}"
-        raise GuardError(f"cannot decode {path}: {detail}") from exc
+    image = read_required(path)
+    if len(image) < 40:
+        raise GuardError(f"{path} is too short to be a flattened device tree")
+    header = struct.unpack_from(">10I", image)
+    magic, total_size, struct_offset, strings_offset = header[:4]
+    strings_size, struct_size = header[8:10]
+    if magic != 0xD00DFEED:
+        raise GuardError(f"{path} has an invalid flattened device tree magic")
+    if total_size > len(image) or total_size < 40:
+        raise GuardError(f"{path} has an invalid flattened device tree size")
+    if (
+        struct_offset > total_size
+        or struct_size > total_size - struct_offset
+        or strings_offset > total_size
+        or strings_size > total_size - strings_offset
+    ):
+        raise GuardError(f"{path} has an out-of-bounds flattened device tree block")
 
+    structure = image[struct_offset : struct_offset + struct_size]
+    strings = image[strings_offset : strings_offset + strings_size]
     stack: list[str] = []
-    for raw_line in result.stdout.splitlines():
-        line = raw_line.strip()
-        node = re.match(r"^([^/][^=;{]*)\s*\{$", line)
-        if node:
-            stack.append(node.group(1).strip())
+    offset = 0
+    saw_end = False
+    has_default_cma = False
+    while offset + 4 <= len(structure):
+        token = struct.unpack_from(">I", structure, offset)[0]
+        offset += 4
+        if token == 1:  # FDT_BEGIN_NODE
+            end = structure.find(b"\0", offset)
+            if end < 0:
+                raise GuardError(f"{path} has an unterminated node name")
+            try:
+                stack.append(structure[offset:end].decode("ascii"))
+            except UnicodeDecodeError as exc:
+                raise GuardError(f"{path} has a non-ASCII node name") from exc
+            offset = (end + 4) & ~3
             continue
-        if line == "};":
+        if token == 2:  # FDT_END_NODE
+            if not stack:
+                raise GuardError(f"{path} has an unmatched end-node token")
+            stack.pop()
+            continue
+        if token == 3:  # FDT_PROP
+            if offset + 8 > len(structure):
+                raise GuardError(f"{path} has a truncated property header")
+            value_size, name_offset = struct.unpack_from(">II", structure, offset)
+            offset += 8
+            if value_size > len(structure) - offset:
+                raise GuardError(f"{path} has a truncated property value")
+            if name_offset >= len(strings):
+                raise GuardError(f"{path} has an invalid property-name offset")
+            name_end = strings.find(b"\0", name_offset)
+            if name_end < 0:
+                raise GuardError(f"{path} has an unterminated property name")
+            try:
+                name = strings[name_offset:name_end].decode("ascii")
+            except UnicodeDecodeError as exc:
+                raise GuardError(f"{path} has a non-ASCII property name") from exc
+            offset = (offset + value_size + 3) & ~3
+            if name == "linux,cma-default" and any(
+                node.split("@", 1)[0] == "reserved-memory" for node in stack
+            ):
+                has_default_cma = True
+            continue
+        if token == 4:  # FDT_NOP
+            continue
+        if token == 9:  # FDT_END
             if stack:
-                stack.pop()
-            continue
-        if line == "linux,cma-default;" and any(
-            name.split("@", 1)[0] == "reserved-memory" for name in stack
-        ):
-            return True
-    return False
+                raise GuardError(f"{path} ends with unclosed nodes")
+            saw_end = True
+            break
+        raise GuardError(f"{path} has unknown flattened device tree token {token}")
+    if not saw_end:
+        raise GuardError(f"{path} has no flattened device tree end token")
+    return has_default_cma
 
 
 def read_cmdline(path: Path) -> str:
