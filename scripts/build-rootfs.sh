@@ -237,6 +237,7 @@ PKG_FILE="${SRC_DIR}/rootfs-packages.txt"
 PKG_DEV_FILE="${SRC_DIR}/rootfs-packages-dev.txt"
 PKG_MAINLINE_FILE="${SRC_DIR}/rootfs-packages-mainline.txt"
 PKG_MAINLINE_DEV_FILE="${SRC_DIR}/rootfs-packages-mainline-dev.txt"
+PKG_A133_OPEN_7X_GPU_FILE="${SRC_DIR}/rootfs-packages-a133-open-7x-gpu.txt"
 
 [ -f "${PKG_FILE}" ] || { echo "FATAL: ${PKG_FILE} not found" >&2; exit 1; }
 
@@ -260,6 +261,20 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     PKG_LIST="${PKG_LIST},${MAINLINE_PKGS}"
     echo "  gpu_model=open: added mainline conformance packages (${MAINLINE_PKGS})"
 fi
+
+# Standard demos/diagnostics belong to the PowerVR/Zink 7.x GPU profile, not
+# every open bring-up rootfs. Their generic GLVND dependencies are satisfied by
+# the local metadata-only provider assembled below; the our-stack tripwire
+# proves that apt did not install a Debian Mesa driver implementation instead.
+case "${PF_DEVICE_ID}" in
+    a133-open-7x-gpu|a133-open-7x-gpu-noradio)
+        [ -f "${PKG_A133_OPEN_7X_GPU_FILE}" ] \
+            || { echo "FATAL: ${PKG_A133_OPEN_7X_GPU_FILE} not found" >&2; exit 1; }
+        GPU_TOOL_PKGS="$(grep -v '^\s*#' "${PKG_A133_OPEN_7X_GPU_FILE}" | grep -v '^\s*$' | tr '\n' ',' | sed 's/,$//')"
+        PKG_LIST="${PKG_LIST},${GPU_TOOL_PKGS}"
+        echo "  device=${PF_DEVICE_ID}: added GPU demos and diagnostics (${GPU_TOOL_PKGS})"
+        ;;
+esac
 
 # The G1 compositor runtime is profile-scoped so all unrelated image package
 # lists remain byte-for-byte unchanged. Xwayland is an explicit product input,
@@ -303,6 +318,32 @@ if [ "${PF_HAS_DISPLAY}" = 0 ]; then
 fi
 
 echo "  package list: ${PKG_LIST}"
+
+# Build a deterministic metadata-only package for the initial apt solve. It
+# Provides GLVND's vendor alternatives and Conflicts with Debian's Mesa driver
+# payloads; gpu-um-tsp's real libraries are copied into /usr/local later by the
+# customize hook. Passing the local .deb to mmdebstrap keeps dpkg dependency
+# state truthful without letting apt choose llvmpipe/lavapipe.
+GPU_STACK_PROVIDER_OPTS=()
+case "${PF_DEVICE_ID}" in
+    a133-open-7x-gpu|a133-open-7x-gpu-noradio)
+        GPU_STACK_PROVIDER_SOURCE="${SRC_DIR}/packages/pocketforge-open-gpu-stack/DEBIAN/control"
+        GPU_STACK_PROVIDER_ROOT="${WORK}/pocketforge-open-gpu-stack-root"
+        GPU_STACK_PROVIDER_DEB="${WORK}/pocketforge-open-gpu-stack.deb"
+        [ -f "${GPU_STACK_PROVIDER_SOURCE}" ] \
+            || { echo "FATAL: open GPU stack provider control is missing" >&2; exit 1; }
+        install -d -m 0755 "${GPU_STACK_PROVIDER_ROOT}/DEBIAN"
+        install -m 0644 "${GPU_STACK_PROVIDER_SOURCE}" \
+            "${GPU_STACK_PROVIDER_ROOT}/DEBIAN/control"
+        dpkg-deb --build --root-owner-group \
+            "${GPU_STACK_PROVIDER_ROOT}" "${GPU_STACK_PROVIDER_DEB}" >/dev/null
+        GPU_STACK_PROVIDER_OPTS=(
+            --include="${GPU_STACK_PROVIDER_DEB}"
+            --hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount
+        )
+        echo "  open GPU dependency provider: ${GPU_STACK_PROVIDER_DEB}"
+        ;;
+esac
 
 # ---- step 2: verify prerequisites ------------------------------------------
 echo ""
@@ -736,6 +777,10 @@ elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     echo "[customize] open Mesa: ICD JSON also installed at /usr/share/vulkan/icd.d/$(basename "${ICD_JSON}") (loader default search path)"
 
     verify_open_gpu_runtime_closure "${ROOTFS}"
+fi
+
+if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
+    /work/src/scripts/verify-open-gpu-tools.sh "${ROOTFS}" /work/gpu-um-mesa
 fi
 
 # Foreign-stage ABI tripwire.  Check the producer trees themselves so every ELF
@@ -1851,6 +1896,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
+    "${GPU_STACK_PROVIDER_OPTS[@]}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_KERNEL_REPO=${PF_KERNEL_REPO} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} GAMESCOPE_DIR=${GAMESCOPE_DIR} PF_GAMESCOPE_MODE=${PF_GAMESCOPE_MODE} PF_GAMESCOPE_IDENTITY_SHA256=${PF_GAMESCOPE_IDENTITY_SHA256} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
@@ -1879,6 +1925,11 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
 "${SRC_DIR}/scripts/install-platform-runtime.sh" \
     "${PLATFORM_RUNTIME_DIR}" "${ROOTFS_EXTRACTED}" \
     "${PF_STEAMLINK_FFMPEG59_MODE}"
+
+if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
+    "${SRC_DIR}/scripts/verify-open-gpu-tools.sh" \
+        "${ROOTFS_EXTRACTED}" "${GPU_UM_MESA_DIR}"
+fi
 
 # The dev bench USB network (bd tsp-mc9m.41.984.34.2) switches USB0's role, so
 # it must never ship in a release rootfs. Verify both directions on what will

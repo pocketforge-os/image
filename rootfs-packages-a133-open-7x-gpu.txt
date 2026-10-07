@@ -1,0 +1,13 @@
+# rootfs-packages-a133-open-7x-gpu.txt — standard GPU demos and diagnostics
+#
+# Layered only onto the a133-open-7x-gpu profile family. The metadata-only
+# pocketforge-open-gpu-stack local package satisfies the generic GLVND vendor
+# dependencies while preventing Debian Mesa driver payloads from entering the
+# rootfs. One signed-snapshot Debian package per line, sorted alphabetically.
+
+glmark2-es2-drm
+glmark2-es2-wayland
+glmark2-es2-x11
+kmscube
+mesa-utils
+vulkan-tools

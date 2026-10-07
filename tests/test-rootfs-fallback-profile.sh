@@ -41,6 +41,7 @@ powervr_module="${kernel_release_dir}/kernel/drivers/gpu/drm/imagination/powervr
 
 mkdir -p "${fixture_src}/scripts" "${fixture_board}/initrd" \
     "${fixture_board}/bootlogo" "${fixture_src}/tools/dragonsecboot" \
+    "${fixture_src}/packages/pocketforge-open-gpu-stack/DEBIAN" \
     "${fixture_bin}" "${scratch}/out" "${scratch}/libsdl3" \
     "${scratch}/wpa" "${scratch}/runtime" "${scratch}/launcher" \
     "${scratch}/hwprobe" "${scratch}/gpu" \
@@ -58,9 +59,13 @@ mkdir -p "${fixture_src}/scripts" "${fixture_board}/initrd" \
 # (bd tsp-mc9m.41.984.30).
 cp -a "${repo_dir}/scripts/." "${fixture_src}/scripts/"
 for input in rootfs-packages.txt rootfs-packages-dev.txt rootfs-packages-mainline.txt rootfs-packages-mainline-dev.txt \
+    rootfs-packages-a133-open-7x-gpu.txt \
     snapshot-date.txt; do
     install -m 0644 "${repo_dir}/${input}" "${fixture_src}/${input}"
 done
+install -m 0644 \
+    "${repo_dir}/packages/pocketforge-open-gpu-stack/DEBIAN/control" \
+    "${fixture_src}/packages/pocketforge-open-gpu-stack/DEBIAN/control"
 for input in fs-uuids.env cmdline.txt cmdline-vendor-4.9.txt boot_package.cfg; do
     install -m 0644 "${repo_dir}/boards/tsp/${input}" "${fixture_board}/${input}"
 done
