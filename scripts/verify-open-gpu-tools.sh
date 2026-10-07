@@ -198,6 +198,7 @@ for binary in \
         && fatal "dynamic dependency is not found: ${binary_path}"
 
     owned_bindings=0
+    owned_gbm_binding=0
     binding_mode=direct
     for soname in libEGL.so.1 libGLESv2.so.2 libgbm.so.1; do
         resolved=$(printf '%s\n' "$closure" | awk -v wanted="$soname" \
@@ -207,8 +208,13 @@ for binary in \
             /usr/local/lib/*)
                 owned_bindings=$((owned_bindings + 1))
                 case "$soname" in
-                    libEGL.so.1) owned_egl_witness=1 ;;
-                    libGLESv2.so.2) owned_gles_witness=1 ;;
+                    libEGL.so.1)
+                        owned_egl_witness=1
+                        ;;
+                    libGLESv2.so.2)
+                        owned_gles_witness=1
+                        ;;
+                    libgbm.so.1) owned_gbm_binding=1 ;;
                 esac
                 ;;
             *) fatal "${binary_path} resolves ${soname} outside gpu-um-tsp: ${resolved}" ;;
@@ -221,7 +227,7 @@ for binary in \
             binding_mode=direct-owned
             ;;
         glmark2-es2-drm)
-            [ "$owned_bindings" -gt 0 ] \
+            [ "$owned_gbm_binding" -eq 1 ] \
                 || fatal "${binary_path} has no dynamic binding to gpu-um-tsp GBM"
             binding_mode=direct-owned
             ;;

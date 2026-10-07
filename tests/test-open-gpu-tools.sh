@@ -108,7 +108,11 @@ emit_owned_gles() {
 }
 case "$binary" in
     /usr/bin/glmark2-es2-drm)
-        echo 'libgbm.so.1 => /usr/local/lib/libgbm.so.1 (0x00000000)'
+        case "${PF_TEST_DRM_BINDING:-gbm}" in
+            egl) echo 'libEGL.so.1 => /usr/local/lib/libEGL.so.1 (0x00000000)' ;;
+            gles) emit_owned_gles ;;
+            gbm) echo 'libgbm.so.1 => /usr/local/lib/libgbm.so.1 (0x00000000)' ;;
+        esac
         ;;
     /usr/bin/eglinfo)
         echo 'libEGL.so.1 => /usr/local/lib/libEGL.so.1 (0x00000000)'
@@ -135,6 +139,18 @@ printf '%s\n' "$positive_output" | \
     grep -Fq 'binary=/usr/bin/glmark2-es2 binding_mode=runtime-owned-egl-gles'
 printf '%s\n' "$positive_output" | \
     grep -Fq 'binary=/usr/bin/vulkaninfo binding_mode=runtime-vulkan-loader'
+
+for wrong_drm_binding in egl gles; do
+    if PF_TEST_DRM_BINDING="$wrong_drm_binding" PF_ROOTFS_LDD="$ldd_stub" \
+        "$verifier" "$positive" "$producer" \
+        >"$scratch/negative-drm-${wrong_drm_binding}.out" \
+        2>"$scratch/negative-drm-${wrong_drm_binding}.err"; then
+        echo "FAIL: DRM glmark2 ${wrong_drm_binding}-only negative control was accepted" >&2
+        exit 1
+    fi
+    grep -Fq '/usr/bin/glmark2-es2-drm has no dynamic binding to gpu-um-tsp GBM' \
+        "$scratch/negative-drm-${wrong_drm_binding}.err"
+done
 
 if PF_TEST_OMIT_GLES=1 PF_ROOTFS_LDD="$ldd_stub" \
     "$verifier" "$positive" "$producer" \
@@ -373,4 +389,4 @@ printf '%s\n' 'unowned zink alias' \
 expect_rejection negative-zink-alias "$negative_zink_alias" \
     'foreign Mesa DRI driver:'
 
-echo "open-gpu-tools-test=PASS positive=owned-stack negative=runtime-owned-witness,runtime-glmark-egl-identity,runtime-glmark-gles-identity,runtime-vulkaninfo-identity,installed-mesa-vulkan-drivers,changed-hash,changed-provenance,missing-rootfs-provenance,missing-producer-provenance,symlinked-provenance,non-zink-provenance,foreign-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries,foreign-zink-alias icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"
+echo "open-gpu-tools-test=PASS positive=owned-stack negative=drm-egl-only,drm-gles-only,runtime-owned-witness,runtime-glmark-egl-identity,runtime-glmark-gles-identity,runtime-vulkaninfo-identity,installed-mesa-vulkan-drivers,changed-hash,changed-provenance,missing-rootfs-provenance,missing-producer-provenance,symlinked-provenance,non-zink-provenance,foreign-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries,foreign-zink-alias icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"
