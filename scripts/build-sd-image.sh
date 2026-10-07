@@ -36,6 +36,7 @@ PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
 PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:-}"
+PF_KERNEL_REPO="${PF_KERNEL_REPO:-}"
 # Resolved .config of the kernel being packaged (the kernel stage's
 # /out/build/config). Optional; with PF_DISPLAY_PIPELINE it lets build-initrd.sh
 # decide whether the first-light frame-000 helper can work (bd tsp-3rd3.7).
@@ -129,7 +130,11 @@ fi
 
 # Working directory for intermediate artifacts
 WORK="$(mktemp -d)"
-trap 'rm -rf "${WORK}"' EXIT
+cleanup_work() {
+    find "${WORK}" -mindepth 1 -delete
+    rmdir "${WORK}"
+}
+trap cleanup_work EXIT
 
 echo "========================================================================"
 echo "PocketForge SD image builder"
@@ -256,7 +261,13 @@ echo ""
 echo "=== Step 4/6: Create boot.img (abootimg) ==="
 KERNEL_IMAGE="${KERNEL_TSP_DIR}/arch/arm64/boot/Image"
 echo "  kernel: owned-substrate (kernel-tsp)"
-CMDLINE_FILE="${BOARD_DIR}/cmdline.txt"
+if [ "${PF_KERNEL_REPO}" = "kernel-sunxi-7.x" ]; then
+    CMDLINE_FILE="${BOARD_DIR}/cmdline.txt"
+else
+    # Preserve the vendor-era CMA argument string for the shipped 4.9
+    # line (and the existing 6.x fallback). Linux 7.x owns CMA in its DTB.
+    CMDLINE_FILE="${BOARD_DIR}/cmdline-vendor-4.9.txt"
+fi
 BOOTIMG_FILE="${WORK}/boot.img"
 
 [ -f "${KERNEL_IMAGE}" ] || { echo "FATAL: kernel Image not found at ${KERNEL_IMAGE}" >&2; exit 1; }
@@ -332,7 +343,27 @@ else
 fi
 cp "${BOOTPKG_FILE}"                         "${GENIMAGE_INPUT}/boot_package.fex"
 cp "${BOOTIMG_FILE}"                         "${GENIMAGE_INPUT}/boot.img"
-cp "${BLOBS_DIR}/sunxi/a133/boot-chain/env.img"     "${GENIMAGE_INPUT}/env.img"
+if [ "${PF_KERNEL_REPO}" = "kernel-sunxi-7.x" ]; then
+    python3 "${SRC_DIR}/scripts/remove-a133-env-cma.py" \
+        --input "${BLOBS_DIR}/sunxi/a133/boot-chain/env.img" \
+        --output "${GENIMAGE_INPUT}/env.img"
+else
+    cp "${BLOBS_DIR}/sunxi/a133/boot-chain/env.img" "${GENIMAGE_INPUT}/env.img"
+fi
+
+# The Linux 7.x Odyssey DTB declares a linux,cma-default vpu-cma pool. Check
+# every shipped bootargs source after the selected cmdline, U-Boot config and
+# environment partition have reached their final image inputs. A malformed or
+# partially readable input is an error, never a negative result.
+CMA_GUARD_ARGS=(
+    --dtb "${DTB_FILE}"
+    --cmdline "${CMDLINE_FILE}"
+    --env-img "${GENIMAGE_INPUT}/env.img"
+)
+if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
+    CMA_GUARD_ARGS+=(--uboot-config "${UBOOT_CONFIG}")
+fi
+python3 "${SRC_DIR}/scripts/check-a133-cma-bootargs.py" "${CMA_GUARD_ARGS[@]}"
 
 # Create the empty FAT32 boot-resource partition image.
 # genimage's vfat{} handler runs 'mcopy rootpath/* ::' which fails when rootpath

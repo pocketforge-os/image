@@ -61,7 +61,7 @@ for input in rootfs-packages.txt rootfs-packages-dev.txt rootfs-packages-mainlin
     snapshot-date.txt; do
     install -m 0644 "${repo_dir}/${input}" "${fixture_src}/${input}"
 done
-for input in fs-uuids.env cmdline.txt boot_package.cfg; do
+for input in fs-uuids.env cmdline.txt cmdline-vendor-4.9.txt boot_package.cfg; do
     install -m 0644 "${repo_dir}/boards/tsp/${input}" "${fixture_board}/${input}"
 done
 printf 'fixture boot logo\n' > "${fixture_board}/bootlogo/bootlogo.bmp.lzma"
@@ -151,14 +151,48 @@ for firmware in fw_xr829.bin fw_xr829_bt.bin; do
 done
 
 printf 'kernel image\n' > "${kernel_tree}/arch/arm64/boot/Image"
-printf 'kernel dtb\n' > "${kernel_tree}/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb"
+printf '%s\n' \
+    '/dts-v1/;' \
+    '/ {' \
+    '  #address-cells = <2>;' \
+    '  #size-cells = <2>;' \
+    '  reserved-memory {' \
+    '    #address-cells = <2>;' \
+    '    #size-cells = <2>;' \
+    '    ranges;' \
+    '    vpu-cma@40000000 {' \
+    '      compatible = "shared-dma-pool";' \
+    '      reusable;' \
+    '      linux,cma-default;' \
+    '      reg = <0 0x40000000 0 0x08000000>;' \
+    '    };' \
+    '  };' \
+    '};' > "${scratch}/kernel-fixture.dts"
+dtc -I dts -O dtb \
+    -o "${kernel_tree}/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb" \
+    "${scratch}/kernel-fixture.dts"
 : > "${kernel_release_dir}/modules.builtin"
 printf 'alias of:N*T*Cimg,img-rogue powervr\n' > "${kernel_release_dir}/modules.alias"
 printf 'powervr fixture\n' > "${powervr_module}"
 printf 'copy only from selected modules root\n' > "${kernel_release_dir}/module-root-marker"
-for blob in u-boot.bin monitor.bin scp.bin boot0.img env.img; do
+for blob in u-boot.bin monitor.bin scp.bin boot0.img; do
     printf '%s fixture\n' "${blob}" > "${scratch}/blobs/sunxi/a133/boot-chain/${blob}"
 done
+python3 - "${scratch}/blobs/sunxi/a133/boot-chain/env.img" <<'PY'
+from pathlib import Path
+import struct
+import sys
+import zlib
+
+records = [
+    b"cma=64M",
+    b"setargs_nand=setenv bootargs console=ttyS0 cma=${cma} rootwait",
+    b"setargs_mmc=setenv bootargs console=ttyS0 cma=${cma} rootwait",
+    b"bootcmd=run setargs_nand; run boot_normal",
+]
+payload = (b"\0".join(records) + b"\0\0").ljust(131068, b"\0")
+Path(sys.argv[1]).write_bytes(struct.pack("<I", zlib.crc32(payload)) + payload)
+PY
 
 run_sd_fallback() {
     local label="$1"
@@ -173,6 +207,7 @@ run_sd_fallback() {
     LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${scratch}/hwprobe" \
     KERNEL_TSP_DIR="${kernel_tree}" GPU_KM_TSP_DIR="${scratch}/gpu" \
     SOURCE_DATE_EPOCH=1700000000 PF_DEVICE_ID="${device_id}" \
+    PF_KERNEL_REPO=kernel-sunxi-7.x \
     PF_GPU_MODEL=open PF_GPU_KM_MODEL=in-tree-7.x \
     PF_KERNEL_REQUIRED_MODULES=powervr PF_DISPLAY_PIPELINE=fbdev \
     bash "${repo_dir}/scripts/build-sd-image.sh" --variant release \
