@@ -173,8 +173,10 @@ records = [
     b"setargs_mmc=setenv bootargs console=ttyS0 cma=${cma} rootwait",
     b"bootcmd=run setargs_nand; run boot_normal",
 ]
-payload = (b"\0".join(records) + b"\0\0").ljust(131068, b"\0")
-Path(sys.argv[1]).write_bytes(struct.pack("<I", zlib.crc32(payload)) + payload)
+payload = (b"\0".join(records) + b"\0\0").ljust(0x20000 - 5, b"\0")
+Path(sys.argv[1]).write_bytes(
+    struct.pack("<I", zlib.crc32(payload)) + b"\x01" + payload
+)
 PY
 
 run_sd_fallback() {

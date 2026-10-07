@@ -14,20 +14,43 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def env_size(value: str) -> int:
+    try:
+        parsed = int(value, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer such as 0x20000") from exc
+    if parsed < 8:
+        raise argparse.ArgumentTypeError("must leave room for the environment header and terminator")
+    return parsed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--env-size", type=env_size, required=True)
+    layout = parser.add_mutually_exclusive_group(required=True)
+    layout.add_argument("--env-redundant", dest="redundant", action="store_true")
+    layout.add_argument("--env-plain", dest="redundant", action="store_false")
     args = parser.parse_args()
 
     try:
         image = args.input.read_bytes()
     except OSError as exc:
         fail(f"cannot read {args.input}: {exc}")
-    if len(image) < 8:
-        fail("input is too short to be a U-Boot environment")
+    header_size = 5 if args.redundant else 4
+    if args.env_size <= header_size + 1:
+        fail("environment size leaves no room for a double-NUL terminator")
+    if len(image) < args.env_size:
+        fail(
+            f"input is shorter than the configured environment size "
+            f"({len(image)} < {args.env_size})"
+        )
 
-    payload = image[4:]
+    # U-Boot's redundant layout is crc32 + flags + data. Only the configured
+    # environment region participates; a partition image may have trailing
+    # padding which is outside CONFIG_ENV_SIZE and must remain byte-identical.
+    payload = image[header_size : args.env_size]
     calculated = zlib.crc32(payload) & 0xFFFFFFFF
     if image[:4] == struct.pack("<I", calculated):
         byte_order = "<"
@@ -64,7 +87,9 @@ def main() -> int:
         fail("transformed environment exceeds the input payload size")
 
     output_payload = active.ljust(len(payload), b"\0")
-    output = struct.pack(f"{byte_order}I", zlib.crc32(output_payload) & 0xFFFFFFFF) + output_payload
+    output = bytearray(image)
+    output[:4] = struct.pack(f"{byte_order}I", zlib.crc32(output_payload) & 0xFFFFFFFF)
+    output[header_size : args.env_size] = output_payload
     try:
         args.output.write_bytes(output)
     except OSError as exc:
