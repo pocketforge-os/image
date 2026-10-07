@@ -75,7 +75,19 @@ for binary in \
     vkcube \
     vkcube-wayland \
     vulkaninfo; do
-    printf '#!/bin/sh\nexit 0\n' >"$positive/usr/bin/$binary"
+    case "$binary" in
+        glmark2-es2-wayland|glmark2-es2)
+            printf '#!/bin/sh\n# runtime GPU ABI: libEGL.so.1 libGLESv2.so.2\nexit 0\n' \
+                >"$positive/usr/bin/$binary"
+            ;;
+        vulkaninfo)
+            printf '#!/bin/sh\n# runtime Vulkan ABI: libvulkan.so.1\nexit 0\n' \
+                >"$positive/usr/bin/$binary"
+            ;;
+        *)
+            printf '#!/bin/sh\nexit 0\n' >"$positive/usr/bin/$binary"
+            ;;
+    esac
     chmod 0755 "$positive/usr/bin/$binary"
 done
 
@@ -87,18 +99,113 @@ rootfs=$1
 binary=$2
 test -x "$rootfs$binary"
 cat <<'OUTPUT'
-libEGL.so.1 => /usr/local/lib/libEGL.so.1 (0x00000000)
-libGLESv2.so.2 => /usr/local/lib/libGLESv2.so.2 (0x00000000)
-libgbm.so.1 => /usr/local/lib/libgbm.so.1 (0x00000000)
-libvulkan.so.1 => /usr/lib/aarch64-linux-gnu/libvulkan.so.1 (0x00000000)
 libc.so.6 => /lib/aarch64-linux-gnu/libc.so.6 (0x00000000)
 OUTPUT
+emit_owned_gles() {
+    if [ "${PF_TEST_OMIT_GLES:-0}" != 1 ]; then
+        echo 'libGLESv2.so.2 => /usr/local/lib/libGLESv2.so.2 (0x00000000)'
+    fi
+}
+case "$binary" in
+    /usr/bin/glmark2-es2-drm)
+        case "${PF_TEST_DRM_BINDING:-gbm}" in
+            egl) echo 'libEGL.so.1 => /usr/local/lib/libEGL.so.1 (0x00000000)' ;;
+            gles) emit_owned_gles ;;
+            gbm) echo 'libgbm.so.1 => /usr/local/lib/libgbm.so.1 (0x00000000)' ;;
+        esac
+        ;;
+    /usr/bin/eglinfo)
+        echo 'libEGL.so.1 => /usr/local/lib/libEGL.so.1 (0x00000000)'
+        emit_owned_gles
+        ;;
+    /usr/bin/es2gears_wayland|/usr/bin/es2gears_x11|/usr/bin/kmscube)
+        echo 'libEGL.so.1 => /usr/local/lib/libEGL.so.1 (0x00000000)'
+        emit_owned_gles
+        echo 'libgbm.so.1 => /usr/local/lib/libgbm.so.1 (0x00000000)'
+        ;;
+    /usr/bin/vkcube|/usr/bin/vkcube-wayland)
+        echo 'libvulkan.so.1 => /usr/lib/aarch64-linux-gnu/libvulkan.so.1 (0x00000000)'
+        ;;
+esac
 EOF
 chmod 0755 "$ldd_stub"
 
 positive_output=$(PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$positive" "$producer")
 printf '%s\n' "$positive_output"
 printf '%s\n' "$positive_output" | grep -Fq 'open-gpu-tools=PASS'
+printf '%s\n' "$positive_output" | \
+    grep -Fq 'binary=/usr/bin/glmark2-es2-wayland binding_mode=runtime-owned-egl-gles'
+printf '%s\n' "$positive_output" | \
+    grep -Fq 'binary=/usr/bin/glmark2-es2 binding_mode=runtime-owned-egl-gles'
+printf '%s\n' "$positive_output" | \
+    grep -Fq 'binary=/usr/bin/vulkaninfo binding_mode=runtime-vulkan-loader'
+
+for wrong_drm_binding in egl gles; do
+    if PF_TEST_DRM_BINDING="$wrong_drm_binding" PF_ROOTFS_LDD="$ldd_stub" \
+        "$verifier" "$positive" "$producer" \
+        >"$scratch/negative-drm-${wrong_drm_binding}.out" \
+        2>"$scratch/negative-drm-${wrong_drm_binding}.err"; then
+        echo "FAIL: DRM glmark2 ${wrong_drm_binding}-only negative control was accepted" >&2
+        exit 1
+    fi
+    grep -Fq '/usr/bin/glmark2-es2-drm has no dynamic binding to gpu-um-tsp GBM' \
+        "$scratch/negative-drm-${wrong_drm_binding}.err"
+done
+
+if PF_TEST_OMIT_GLES=1 PF_ROOTFS_LDD="$ldd_stub" \
+    "$verifier" "$positive" "$producer" \
+    >"$scratch/negative-runtime-witness.out" \
+    2>"$scratch/negative-runtime-witness.err"; then
+    echo 'FAIL: missing same-rootfs GLES witness negative control was accepted' >&2
+    exit 1
+fi
+grep -Fq '/usr/bin/glmark2-es2-wayland has no same-rootfs owned EGL/GLES resolution witness' \
+    "$scratch/negative-runtime-witness.err"
+
+negative_runtime_glmark_egl="$scratch/negative-runtime-glmark-egl"
+cp -a "$positive" "$negative_runtime_glmark_egl"
+printf '#!/bin/sh\n# incomplete runtime GPU ABI: libGLESv2.so.2\nexit 0\n' \
+    >"$negative_runtime_glmark_egl/usr/bin/glmark2-es2-wayland"
+chmod 0755 "$negative_runtime_glmark_egl/usr/bin/glmark2-es2-wayland"
+if PF_ROOTFS_LDD="$ldd_stub" "$verifier" \
+    "$negative_runtime_glmark_egl" "$producer" \
+    >"$scratch/negative-runtime-glmark-egl.out" \
+    2>"$scratch/negative-runtime-glmark-egl.err"; then
+    echo 'FAIL: glmark2 missing-EGL runtime identity negative control was accepted' >&2
+    exit 1
+fi
+grep -Fq '/usr/bin/glmark2-es2-wayland does not declare runtime loading of libEGL.so.1' \
+    "$scratch/negative-runtime-glmark-egl.err"
+
+negative_runtime_glmark_gles="$scratch/negative-runtime-glmark-gles"
+cp -a "$positive" "$negative_runtime_glmark_gles"
+printf '#!/bin/sh\n# incomplete runtime GPU ABI: libEGL.so.1\nexit 0\n' \
+    >"$negative_runtime_glmark_gles/usr/bin/glmark2-es2-wayland"
+chmod 0755 "$negative_runtime_glmark_gles/usr/bin/glmark2-es2-wayland"
+if PF_ROOTFS_LDD="$ldd_stub" "$verifier" \
+    "$negative_runtime_glmark_gles" "$producer" \
+    >"$scratch/negative-runtime-glmark-gles.out" \
+    2>"$scratch/negative-runtime-glmark-gles.err"; then
+    echo 'FAIL: glmark2 missing-GLES runtime identity negative control was accepted' >&2
+    exit 1
+fi
+grep -Fq '/usr/bin/glmark2-es2-wayland does not declare runtime loading of libGLESv2.so.2' \
+    "$scratch/negative-runtime-glmark-gles.err"
+
+negative_runtime_vulkaninfo="$scratch/negative-runtime-vulkaninfo"
+cp -a "$positive" "$negative_runtime_vulkaninfo"
+printf '#!/bin/sh\nexit 0\n' \
+    >"$negative_runtime_vulkaninfo/usr/bin/vulkaninfo"
+chmod 0755 "$negative_runtime_vulkaninfo/usr/bin/vulkaninfo"
+if PF_ROOTFS_LDD="$ldd_stub" "$verifier" \
+    "$negative_runtime_vulkaninfo" "$producer" \
+    >"$scratch/negative-runtime-vulkaninfo.out" \
+    2>"$scratch/negative-runtime-vulkaninfo.err"; then
+    echo 'FAIL: vulkaninfo runtime-loader identity negative control was accepted' >&2
+    exit 1
+fi
+grep -Fq '/usr/bin/vulkaninfo does not declare runtime loading of libvulkan.so.1' \
+    "$scratch/negative-runtime-vulkaninfo.err"
 
 # Negative control in this same test invocation: install an actual synthetic
 # mesa-vulkan-drivers package into a copy of the passing dpkg root, overriding
@@ -282,4 +389,4 @@ printf '%s\n' 'unowned zink alias' \
 expect_rejection negative-zink-alias "$negative_zink_alias" \
     'foreign Mesa DRI driver:'
 
-echo "open-gpu-tools-test=PASS positive=owned-stack negative=installed-mesa-vulkan-drivers,changed-hash,changed-provenance,missing-rootfs-provenance,missing-producer-provenance,symlinked-provenance,non-zink-provenance,foreign-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries,foreign-zink-alias icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"
+echo "open-gpu-tools-test=PASS positive=owned-stack negative=drm-egl-only,drm-gles-only,runtime-owned-witness,runtime-glmark-egl-identity,runtime-glmark-gles-identity,runtime-vulkaninfo-identity,installed-mesa-vulkan-drivers,changed-hash,changed-provenance,missing-rootfs-provenance,missing-producer-provenance,symlinked-provenance,non-zink-provenance,foreign-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries,foreign-zink-alias icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"
