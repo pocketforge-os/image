@@ -19,6 +19,9 @@
 #      wrongly includes the unit.
 # Hermetic: tmpdir fixtures, a fake mmdebstrap and qemu shim, python3, tar.
 set -euo pipefail
+# The production extraction runs as root and preserves archive modes. Make the
+# non-root fixture model that behavior independently of the caller's umask.
+umask 022
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 guard="${root}/scripts/verify-rootfs-usbnet-bench.py"
@@ -205,9 +208,32 @@ echo "guard: passes correct trees, fails every wrong or unparseable one: PASS"
 
 # --- 3. build-rootfs.sh invokes the guard on its extracted rootfs --------------
 fixture="${scratch}/build"
+fixture_src="${fixture}/src"
 release="${fixture}/kernel/7.0.0-pocketforge"
-mkdir -p "${fixture}/bin" "${fixture}/out" "${fixture}/wpa" \
+mkdir -p "${fixture_src}/scripts" "${fixture_src}/boards/tsp" \
+    "${fixture_src}/packages/pocketforge-open-gpu-stack/DEBIAN" \
+    "${fixture}/bin" "${fixture}/out" "${fixture}/wpa" \
     "${fixture}/blobs/sunxi/a133/wifi-firmware" "${fixture}/mesa/usr/local/lib/gbm" "${release}"
+# Keep this fixture focused on final-rootfs USB guard ordering. Stage the real
+# builder inputs but replace the independently tested GPU-tools verifier with a
+# named stub; the synthetic tar below intentionally contains no dpkg database,
+# GPU userspace, or tool binaries.
+cp -a "${root}/scripts/." "${fixture_src}/scripts/"
+cp -a "${root}/rootfs-overlay" "${fixture_src}/rootfs-overlay"
+for input in rootfs-packages.txt rootfs-packages-dev.txt rootfs-packages-mainline.txt \
+    rootfs-packages-mainline-dev.txt rootfs-packages-a133-open-7x-gpu.txt \
+    snapshot-date.txt; do
+    install -m 0644 "${root}/${input}" "${fixture_src}/${input}"
+done
+install -m 0644 "${root}/boards/tsp/fs-uuids.env" \
+    "${fixture_src}/boards/tsp/fs-uuids.env"
+install -m 0644 "${root}/packages/pocketforge-open-gpu-stack/DEBIAN/control" \
+    "${fixture_src}/packages/pocketforge-open-gpu-stack/DEBIAN/control"
+cat > "${fixture_src}/scripts/verify-open-gpu-tools.sh" <<'EOF'
+#!/bin/sh
+echo 'open-gpu-tools fixture=SKIP scope=usbnet-final-rootfs-ordering'
+EOF
+chmod 0755 "${fixture_src}/scripts/verify-open-gpu-tools.sh"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829_bt.bin"
 for library in libEGL.so libGLESv2.so libgbm.so gbm/dri_gbm.so; do
@@ -272,7 +298,7 @@ run_build() {
     mkdir -p "${fixture}/work-${label}"
     PATH="${fixture}/bin:${PATH}" PF_TEST_WORK="${fixture}/work-${label}" \
     PF_TEST_SRC="${root}" PF_TEST_TAMPER="${tamper}" \
-    SRC_DIR="${root}" BLOBS_DIR="${fixture}/blobs" \
+    SRC_DIR="${fixture_src}" BLOBS_DIR="${fixture}/blobs" \
     GPU_UM_MESA_DIR="${fixture}/mesa" WPA_DIR="${fixture}/wpa" \
     KERNEL_TSP_DIR="${fixture}/kernel" GPU_KM_TSP_DIR="${fixture}/unused-gpu" \
     OUT_DIR="${fixture}/out" SOURCE_DATE_EPOCH=1700000000 \
