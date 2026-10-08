@@ -33,6 +33,10 @@ esac
     echo "gpu-um-tsp Meson option evidence is missing: $producer/.pf-gpu-um-build-options.json" >&2
     exit 1
 }
+[ -f "$producer/.pf-gamescope-pvr-cache-provenance" ] || {
+    echo "Gamescope PVR cache provenance is missing: $producer/.pf-gamescope-pvr-cache-provenance" >&2
+    exit 1
+}
 [ -x "$probe" ] || { echo "open GPU probe is missing: $probe" >&2; exit 1; }
 [ -f "$control" ] || { echo "provider control template is missing: $control" >&2; exit 1; }
 
@@ -98,6 +102,20 @@ install -D -m 0644 "$producer/.pf-gpu-um-provenance" \
     "$stage/usr/share/pocketforge/gpu-um-mesa-provenance"
 install -D -m 0644 "$producer/.pf-gpu-um-build-options.json" \
     "$stage/usr/share/pocketforge/gpu-um-mesa-build-options.json"
+install -D -m 0644 "$producer/.pf-gamescope-pvr-cache-provenance" \
+    "$stage/usr/share/pocketforge/gamescope-pvr-cache-provenance"
+for cache_file in \
+    pocketforge-gamescope-ge8300.foz \
+    pocketforge-gamescope-ge8300_idx.foz \
+    pocketforge-gamescope-ge8300.relative-dir; do
+    source_file="$producer/usr/share/pocketforge/mesa-cache/$cache_file"
+    if [ ! -f "$source_file" ] || [ -L "$source_file" ]; then
+        echo "Gamescope PVR cache artifact is missing or not regular: $source_file" >&2
+        exit 1
+    fi
+    install -D -m 0644 "$source_file" \
+        "$stage/usr/share/pocketforge/mesa-cache/$cache_file"
+done
 install -D -m 0755 "$probe" \
     "$stage/usr/lib/pocketforge/open-gpu-probe"
 

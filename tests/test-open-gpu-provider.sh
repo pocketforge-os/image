@@ -104,6 +104,7 @@ mkdir -p \
     "$producer/usr/local/share/drirc.d" \
     "$producer/usr/local/share/glvnd/egl_vendor.d" \
     "$producer/usr/local/share/vulkan/icd.d" \
+    "$producer/usr/share/pocketforge/mesa-cache" \
     "$rootfs/usr/lib/aarch64-linux-gnu" \
     "$rootfs/usr/bin" \
     "$rootfs/var/lib/dpkg/info"
@@ -147,6 +148,16 @@ cat >"$producer/.pf-gpu-um-build-options.json" <<'EOF'
   {"name":"vulkan-drivers","value":["imagination"]}
 ]
 EOF
+printf '%s\n' 'fixture Gamescope PVR cache provenance' \
+    >"$producer/.pf-gamescope-pvr-cache-provenance"
+printf '%s\n' 'fixture foz data' \
+    >"$producer/usr/share/pocketforge/mesa-cache/pocketforge-gamescope-ge8300.foz"
+printf '%s\n' 'fixture foz index' \
+    >"$producer/usr/share/pocketforge/mesa-cache/pocketforge-gamescope-ge8300_idx.foz"
+printf '%s/%s/%s\n' mesa_shader_cache_sf \
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    >"$producer/usr/share/pocketforge/mesa-cache/pocketforge-gamescope-ge8300.relative-dir"
 printf '#!/bin/sh\nexit 0\n' >"$scratch/open-gpu-probe"
 chmod 0755 "$scratch/open-gpu-probe"
 cat >"$scratch/readelf" <<'EOF'
@@ -184,6 +195,18 @@ test "$(dpkg-deb -f "$scratch/provider-a.deb" Package)" = pocketforge-open-gpu-s
 test "$(dpkg-deb -f "$scratch/provider-a.deb" Architecture)" = arm64
 dpkg-deb -c "$scratch/provider-a.deb" | sed -n '1p' | \
     grep -E '^drwxr-xr-x[[:space:]]+root/root' >/dev/null
+package_listing=$(dpkg-deb -c "$scratch/provider-a.deb")
+for package_path in \
+    usr/share/pocketforge/gamescope-pvr-cache-provenance \
+    usr/share/pocketforge/mesa-cache/pocketforge-gamescope-ge8300.foz \
+    usr/share/pocketforge/mesa-cache/pocketforge-gamescope-ge8300_idx.foz \
+    usr/share/pocketforge/mesa-cache/pocketforge-gamescope-ge8300.relative-dir; do
+    printf '%s\n' "$package_listing" | \
+        grep -E "^-rw-r--r--[[:space:]]+root/root.*\\./${package_path}$" >/dev/null || {
+        echo "provider package does not own mode-0644 cache artifact: ${package_path}" >&2
+        exit 1
+    }
+done
 provider_version=$(dpkg-deb -f "$scratch/provider-a.deb" Version)
 case "$provider_version" in
     1:26.1.7+pf.1234567890ab) ;;
