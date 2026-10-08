@@ -35,23 +35,65 @@ package_section="$scratch/package-section.sh"
 # shellcheck disable=SC2016 # Match the literal build-script variable.
 sed -n '/^PKG_FILE=/,/^echo "  package list: ${PKG_LIST}"$/p' \
     "$builder" >"$package_section"
-resolved_packages=$(SRC_DIR="$root" VARIANT=release PF_GPU_MODEL=open \
-    PF_DEVICE_ID=a133-open-7x-gpu PF_GAMESCOPE_MODE=g1 PF_HAS_DISPLAY=1 \
-    sh "$package_section" | sed -n 's/^  package list: //p')
-for package in libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 \
-    mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers mesa-vulkan-drivers \
-    libosmesa6; do
-    if printf '%s\n' "$resolved_packages" | tr ',' '\n' | grep -Fx "$package" >/dev/null; then
-        echo "FAIL: provider-backed package solve retains explicit Debian Mesa root: $package" >&2
-        exit 1
-    fi
+resolve_packages() {
+    source_root=$1
+    device_id=$2
+    gamescope_mode=$3
+    SRC_DIR="$source_root" VARIANT=release PF_GPU_MODEL=open \
+        PF_DEVICE_ID="$device_id" PF_GAMESCOPE_MODE="$gamescope_mode" \
+        PF_HAS_DISPLAY=1 sh "$package_section" |
+        sed -n 's/^  package list: //p'
+}
+
+check_provider_package_solve() {
+    label=$1
+    resolved_packages=$2
+    for package in libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 \
+        mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers mesa-vulkan-drivers \
+        libosmesa6; do
+        if printf '%s\n' "$resolved_packages" | tr ',' '\n' | grep -Fx "$package" >/dev/null; then
+            echo "FAIL: $label retains explicit Debian Mesa root: $package" >&2
+            return 1
+        fi
+    done
+    for package in libegl1 libgles2 xwayland; do
+        printf '%s\n' "$resolved_packages" | tr ',' '\n' | grep -Fx "$package" >/dev/null || {
+            echo "FAIL: $label omits neutral client package: $package" >&2
+            return 1
+        }
+    done
+}
+
+# The provider contract applies to every shipping and build-only member of the
+# A133 open-GPU profile family. In particular, noradio has no Gamescope package
+# closure to accidentally supply Xwayland for the provider's glamor path.
+for profile_and_mode in \
+    a133-open-7x-gpu:g1 \
+    a133-open-7x-gpu-cts:g1 \
+    a133-open-7x-gpu-noradio:not-shipped; do
+    profile=${profile_and_mode%:*}
+    mode=${profile_and_mode#*:}
+    check_provider_package_solve "$profile" \
+        "$(resolve_packages "$root" "$profile" "$mode")"
 done
-for package in libegl1 libgles2 xwayland; do
-    printf '%s\n' "$resolved_packages" | tr ',' '\n' | grep -Fx "$package" >/dev/null || {
-        echo "FAIL: provider-backed package solve omits neutral client package: $package" >&2
-        exit 1
-    }
-done
+
+# Negative control in the same invocation: removing the shared Xwayland root
+# must make the noradio provider solve fail even though the two Gamescope
+# profiles would still obtain Xwayland from their compositor closure.
+negative_root="$scratch/source-without-shared-xwayland"
+mkdir -p "$negative_root"
+cp "$root"/rootfs-packages*.txt "$negative_root/"
+sed -i '/^xwayland$/d' \
+    "$negative_root/rootfs-packages-a133-open-7x-gpu.txt"
+if check_provider_package_solve "negative noradio solve" \
+    "$(resolve_packages "$negative_root" a133-open-7x-gpu-noradio not-shipped)" \
+    >"$scratch/package-negative.out" 2>"$scratch/package-negative.err"; then
+    echo 'FAIL: package negative control accepted a solve without shared Xwayland' >&2
+    exit 1
+fi
+grep -F 'negative noradio solve omits neutral client package: xwayland' \
+    "$scratch/package-negative.err" >/dev/null
+echo 'open-gpu-provider-package-negative=PASS mutation=remove-shared-xwayland profile=a133-open-7x-gpu-noradio'
 
 producer="$scratch/producer"
 rootfs="$scratch/rootfs"
