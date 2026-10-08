@@ -27,7 +27,10 @@ capture_customize_hook() {
         "${fixture}/mesa/usr/local/lib/gbm" "${release}"
     : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin"
     : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829_bt.bin"
-    for library in libEGL_mesa.so.0 libgbm.so gbm/dri_gbm.so; do
+    # Keep the legacy direct-dispatcher inputs too: several historical
+    # negative controls overlay this current capture helper onto an old
+    # build-rootfs.sh and must reach mmdebstrap for their intended reason.
+    for library in libEGL.so libGLESv2.so libEGL_mesa.so.0 libgbm.so gbm/dri_gbm.so; do
         : > "${fixture}/mesa/usr/local/lib/${library}"
     done
     : > "${fixture}/mesa/pocketforge-open-gpu-stack.deb"
