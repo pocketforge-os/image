@@ -28,9 +28,13 @@ loader override.
 The image makes only the `powervr` render-node kernel name explicit at the
 common Mesa loader boundary. `sun4i-drm` must remain unmapped so the display
 card follows Mesa's KMSRO path to the PowerVR render node. The owned
-`libgallium_dri.so` must export both `kmsro_drm_screen_create` and
-`zink_drm_create_screen_renderonly`. `loader_get_driver_for_fd` checks the
-driconf result before its PCI/kernel-name fallback
+`libgallium_dri.so` must contain the internal `kmsro_drm_screen_create` and
+`zink_drm_create_screen_renderonly` paths. The build gate checks their
+definitions in the static symbol table when present; for a stripped DSO it
+checks the recorded Zink build option because Mesa's `meson.build:336`
+includes KMSRO with Zink. These functions are called inside the DSO and are
+intentionally absent from its dynamic export table. `loader_get_driver_for_fd`
+checks the driconf result before its PCI/kernel-name fallback
 (`src/loader/loader.c:764-790`); the driconf helper passes the actual kernel
 driver to `driParseConfigFiles` and returns its non-empty `dri_driver` option
 (`src/loader/loader.c:329-359`). The loader is compiled with `USE_DRICONF`

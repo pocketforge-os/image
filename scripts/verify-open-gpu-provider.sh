@@ -209,6 +209,7 @@ then
 fi
 
 readelf_command=${PF_OPEN_GPU_READELF:-readelf}
+nm_command=${PF_OPEN_GPU_NM:-nm}
 verify_aarch64_elf() {
     relative=$1
     if ! elf_header=$($readelf_command -h "$rootfs/$relative" 2>&1); then
@@ -243,22 +244,6 @@ if ! glx_symbols=$($readelf_command -Ws \
 fi
 printf '%s\n' "$glx_symbols" | grep -Eq '[[:space:]]__glx_Main$' \
     || fatal 'GLVND GLX vendor does not export __glx_Main'
-if ! gallium_symbols=$($readelf_command --dyn-syms --wide \
-    "$rootfs/usr/local/lib/libgallium_dri.so" 2>&1); then
-    printf '%s\n' "$gallium_symbols" >&2
-    fatal 'cannot inspect Gallium DRI symbols'
-fi
-verify_gallium_export() {
-    wanted=$1
-    printf '%s\n' "$gallium_symbols" | awk -v wanted="$wanted" '
-        $4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" &&
-            $7 != "UND" && $8 == wanted { found = 1 }
-        END { exit(found ? 0 : 1) }
-    ' || fatal "Gallium DRI does not export $wanted"
-}
-verify_gallium_export kmsro_drm_screen_create
-verify_gallium_export zink_drm_create_screen_renderonly
-
 verify_evidence_file() {
     producer_relative=$1
     rootfs_relative=$2
@@ -315,6 +300,40 @@ for name, wanted in expected.items():
 PY
 then
     exit 1
+fi
+
+gallium_dri="$rootfs/usr/local/lib/libgallium_dri.so"
+if ! gallium_defined_symbols=$($nm_command --defined-only "$gallium_dri" 2>&1); then
+    printf '%s\n' "$gallium_defined_symbols" >&2
+    fatal 'cannot inspect Gallium DRI defined symbols'
+fi
+gallium_defines() {
+    wanted=$1
+    printf '%s\n' "$gallium_defined_symbols" | awk -v wanted="$wanted" '
+        $NF == wanted { found = 1 }
+        END { exit(found ? 0 : 1) }
+    '
+}
+if gallium_defines kmsro_drm_screen_create && \
+   gallium_defines zink_drm_create_screen_renderonly; then
+    kmsro_evidence=static-symtab
+else
+    if ! gallium_sections=$($readelf_command --sections --wide \
+        "$gallium_dri" 2>&1); then
+        printf '%s\n' "$gallium_sections" >&2
+        fatal 'cannot inspect Gallium DRI sections'
+    fi
+    if printf '%s\n' "$gallium_sections" | \
+        awk '$2 == ".symtab" { found = 1 } END { exit(found ? 0 : 1) }'; then
+        gallium_defines kmsro_drm_screen_create \
+            || fatal 'Gallium DRI static symbol table does not define kmsro_drm_screen_create'
+        gallium_defines zink_drm_create_screen_renderonly \
+            || fatal 'Gallium DRI static symbol table does not define zink_drm_create_screen_renderonly'
+    fi
+    # Mesa meson.build:336 adds the KMSRO winsys whenever Zink is selected.
+    # The validated build-options record therefore proves the path was built
+    # when packaging has stripped the static symbol table from the shipped DSO.
+    kmsro_evidence=build-options:zink-implies-kmsro
 fi
 
 reject_symlinked_boundary() {
@@ -393,4 +412,4 @@ glx_vendor_count=$(find "$rootfs" \( -type f -o -type l \) \
 [ -e "$rootfs/usr/local/lib/libGLX_mesa.so.0" ] \
     || fatal 'canonical GLVND Mesa GLX vendor is missing from /usr/local/lib'
 
-echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present vulkan=powervr vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
+echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=${kmsro_evidence} vulkan=powervr vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
