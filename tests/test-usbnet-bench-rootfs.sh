@@ -233,7 +233,12 @@ cat > "${fixture_src}/scripts/verify-open-gpu-tools.sh" <<'EOF'
 #!/bin/sh
 echo 'open-gpu-tools fixture=SKIP scope=usbnet-final-rootfs-ordering'
 EOF
-chmod 0755 "${fixture_src}/scripts/verify-open-gpu-tools.sh"
+cat > "${fixture_src}/scripts/verify-mesa-shader-cache.sh" <<'EOF'
+#!/bin/sh
+echo 'mesa-shader-cache fixture=SKIP scope=usbnet-final-rootfs-ordering'
+EOF
+chmod 0755 "${fixture_src}/scripts/verify-open-gpu-tools.sh" \
+    "${fixture_src}/scripts/verify-mesa-shader-cache.sh"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829_bt.bin"
 for library in libEGL.so libGLESv2.so libgbm.so gbm/dri_gbm.so; do
