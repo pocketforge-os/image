@@ -110,6 +110,7 @@ jobs:
             tests/test-kernel-module-form.sh
             tests/test-launcher-runtime-contract.sh
             tests/test-mainline-rootfs-packages.sh
+            tests/test-mesa-shader-cache.sh
             tests/test-none-gpu-model.sh
             tests/test-open-gpu-integration.sh
             tests/test-open-gpu-gate-ordering.sh

@@ -780,6 +780,8 @@ elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
 fi
 
 if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
+    /work/src/scripts/verify-mesa-shader-cache.sh \
+        /work/gpu-um-mesa/usr/local/lib/libgallium_dri.so
     /work/src/scripts/verify-open-gpu-tools.sh "${ROOTFS}" /work/gpu-um-mesa
 fi
 
@@ -1927,6 +1929,8 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
     "${PF_STEAMLINK_FFMPEG59_MODE}"
 
 if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
+    "${SRC_DIR}/scripts/verify-mesa-shader-cache.sh" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libgallium_dri.so"
     "${SRC_DIR}/scripts/verify-open-gpu-tools.sh" \
         "${ROOTFS_EXTRACTED}" "${GPU_UM_MESA_DIR}"
 fi
