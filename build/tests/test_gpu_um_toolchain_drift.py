@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ARM64_DESTINATION = "/etc/apt/sources.list.d/ubuntu-arm64.sources"
-PINNED_GPU_UM_SHA = "d7637e31011c6fd90255f94d169dedab06099ca9"
+PINNED_GPU_UM_SHA = "6d0344fe93aa58f9b894e7b199c5aabfafe7655f"
 
 
 def stage(text: str, alias: str) -> str:
@@ -131,7 +131,7 @@ def main() -> int:
     parser.add_argument(
         "--fixture",
         type=Path,
-        default=root / "build/tests/fixtures/gpu-um-toolchain-d7637e31.Dockerfile",
+        default=root / "build/tests/fixtures/gpu-um-toolchain-6d0344fe.Dockerfile",
     )
     parser.add_argument("--source-sha", default=PINNED_GPU_UM_SHA)
     args = parser.parse_args()
