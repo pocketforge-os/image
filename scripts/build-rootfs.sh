@@ -622,7 +622,10 @@ verify_open_gpu_runtime_closure() {
     require_open_gpu_library "${rootfs}" libvulkan.so.1 || return 1
     require_open_gpu_library "${rootfs}" libdrm.so.2 || return 1
     if ! icd_runtime_closure="$(
-        chroot "${rootfs}" /lib/ld-linux-aarch64.so.1 --list /usr/local/lib/libvulkan_powervr_mesa.so 2>&1
+        env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+            "${PF_ROOTFS_CHROOT:-chroot}" "${rootfs}" \
+            /lib/ld-linux-aarch64.so.1 --list \
+            /usr/local/lib/libvulkan_powervr_mesa.so 2>&1
     )"; then
         printf '%s\n' "${icd_runtime_closure}" >&2
         echo "FATAL: could not inspect open GPU PowerVR ICD dynamic runtime closure" >&2
@@ -1378,12 +1381,6 @@ fi
 if [ "${PF_GPU_MODEL}" = "open" ]; then
     install -D -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules" \
         "${ROOTFS}/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
-    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf" \
-        "${ROOTFS}/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"
-    install -D -m 0644 "/work/src/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf" \
-        "${ROOTFS}/etc/environment.d/50-pocketforge-open-gpu.conf"
-    install -D -m 0755 "/work/src/rootfs-overlay/etc/profile.d/pocketforge-open-gpu.sh" \
-        "${ROOTFS}/etc/profile.d/pocketforge-open-gpu.sh"
     install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/open-gpu-gate.sh" \
         "${ROOTFS}/usr/lib/pocketforge/open-gpu-gate.sh"
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service" \
@@ -1395,12 +1392,6 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     ln -sf ../pf-open-gpu-gate.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-open-gpu-gate.service"
     if [ "${PF_HAS_DISPLAY}" = 1 ]; then
-        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf" \
-            "${ROOTFS}/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf"
-        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf" \
-            "${ROOTFS}/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf"
-        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf" \
-            "${ROOTFS}/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf"
         for ui_unit in pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
             dropin="${ROOTFS}/etc/systemd/system/${ui_unit}.d"
             install -d "${dropin}"
