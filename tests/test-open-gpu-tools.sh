@@ -39,6 +39,7 @@ mkdir -p \
 
 for artifact in \
     libEGL_mesa.so.0.0.0 \
+    libGLX_mesa.so.0.0.0 \
     libgbm.so.1.0.0 \
     libgallium_dri.so \
     libvulkan_powervr_mesa.so; do
@@ -46,6 +47,7 @@ for artifact in \
         >"$producer/usr/local/lib/$artifact"
 done
 ln -s libEGL_mesa.so.0.0.0 "$producer/usr/local/lib/libEGL_mesa.so.0"
+ln -s libGLX_mesa.so.0.0.0 "$producer/usr/local/lib/libGLX_mesa.so.0"
 ln -s libgbm.so.1.0.0 "$producer/usr/local/lib/libgbm.so.1"
 printf '%s\n' 'owned gpu-um-tsp libdril megadriver' \
     >"$producer/usr/local/lib/dri/libdril_dri.so"
@@ -53,7 +55,7 @@ ln -s libdril_dri.so "$producer/usr/local/lib/dri/ili9225_dri.so"
 ln -s libdril_dri.so "$producer/usr/local/lib/dri/zink_dri.so"
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
     >"$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
-printf '%s\n' 'gpu-um-tsp@977370a239cfe5d8e06aea7fb0e475bd0da58738 (open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
+printf '%s\n' 'gpu-um-tsp@977370a239cfe5d8e06aea7fb0e475bd0da58738 (open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
     >"$producer/.pf-gpu-um-provenance"
 cp -a "$producer/usr/local/." "$positive/usr/local/"
 find "$positive/usr/local/share/vulkan/icd.d" -mindepth 1 \

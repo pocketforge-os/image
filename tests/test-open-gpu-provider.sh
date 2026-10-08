@@ -20,7 +20,7 @@ test -x "$verifier" || {
 }
 test "$(grep -Fc 'scripts/verify-open-gpu-provider.sh' "$builder")" -eq 2
 grep -F -- '-Dglvnd=enabled -Dglvnd-vendor-name=mesa' "$dockerfile" >/dev/null
-grep -F -- '-Dglx=disabled -Degl=enabled -Dgbm=enabled' "$dockerfile" >/dev/null
+grep -F -- '-Dglx=dri -Degl=enabled -Dgbm=enabled' "$dockerfile" >/dev/null
 grep -F -- '-Dplatforms=x11,wayland' "$dockerfile" >/dev/null
 
 # Exercise the production package-list merge in isolation. A package named as
@@ -62,6 +62,7 @@ mkdir -p \
 
 for artifact in \
     libEGL_mesa.so.0.0.0 \
+    libGLX_mesa.so.0.0.0 \
     libgbm.so.1.0.0 \
     libgallium_dri.so \
     libvulkan_powervr_mesa.so; do
@@ -69,6 +70,7 @@ for artifact in \
         >"$producer/usr/local/lib/$artifact"
 done
 ln -s libEGL_mesa.so.0.0.0 "$producer/usr/local/lib/libEGL_mesa.so.0"
+ln -s libGLX_mesa.so.0.0.0 "$producer/usr/local/lib/libGLX_mesa.so.0"
 ln -s libgbm.so.1.0.0 "$producer/usr/local/lib/libgbm.so.1"
 printf 'gpu-um-tsp fixture: dri_gbm.so\n' \
     >"$producer/usr/local/lib/gbm/dri_gbm.so"
@@ -79,14 +81,14 @@ printf '%s\n' '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_mesa
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
     >"$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
 printf '%s\n' \
-    'gpu-um-tsp@1234567890abcdef1234567890abcdef12345678 (open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
+    'gpu-um-tsp@1234567890abcdef1234567890abcdef12345678 (open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
     >"$producer/.pf-gpu-um-provenance"
 cat >"$producer/.pf-gpu-um-build-options.json" <<'EOF'
 [
   {"name":"platforms","value":["x11","wayland"]},
   {"name":"glvnd","value":"enabled"},
   {"name":"glvnd-vendor-name","value":"mesa"},
-  {"name":"glx","value":"disabled"},
+  {"name":"glx","value":"dri"},
   {"name":"egl","value":"enabled"},
   {"name":"gbm","value":"enabled"},
   {"name":"gallium-drivers","value":["zink"]},
@@ -107,8 +109,9 @@ case "$1" in
         ;;
     -Ws)
         case "$2" in
-            *red-missing-egl-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT UND another_symbol\n' ;;
-            *) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n' ;;
+            *red-missing-egl-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n' ;;
+            *red-missing-glx-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n' ;;
+            *) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n' ;;
         esac
         ;;
     *) exit 2 ;;
@@ -134,13 +137,27 @@ case "$provider_version" in
     1:26.1.7+pf.1234567890ab) ;;
     *) echo "unexpected provider version: $provider_version" >&2; exit 1 ;;
 esac
-for field in Provides Conflicts Replaces; do
+provides=$(dpkg-deb -f "$scratch/provider-a.deb" Provides)
+for package in libegl-mesa0 libegl-vendor libgl1-mesa-dri libglx-mesa0 \
+    libglx-vendor libgbm1 mesa-vulkan-drivers; do
+    printf '%s\n' "$provides" | grep -F "$package" >/dev/null || {
+        echo "Provides omits real artifact capability $package" >&2
+        exit 1
+    }
+done
+for package in mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers libosmesa6; do
+    if printf '%s\n' "$provides" | grep -F "$package" >/dev/null; then
+        echo "Provides falsely claims unshipped capability $package" >&2
+        exit 1
+    fi
+done
+for field in Conflicts Replaces; do
     metadata=$(dpkg-deb -f "$scratch/provider-a.deb" "$field")
     for package in libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 \
         mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers mesa-vulkan-drivers \
         libosmesa6; do
         printf '%s\n' "$metadata" | grep -F "$package" >/dev/null || {
-            echo "$field omits $package" >&2
+            echo "$field omits forbidden Debian package $package" >&2
             exit 1
         }
     done
@@ -157,6 +174,10 @@ cp "$producer/.pf-gpu-um-build-options.json" \
     "$rootfs/usr/share/pocketforge/gpu-um-mesa-build-options.json"
 printf 'neutral GLVND dispatcher\n' \
     >"$rootfs/usr/lib/aarch64-linux-gnu/libEGL.so.1"
+printf 'neutral GLVND dispatcher\n' \
+    >"$rootfs/usr/lib/aarch64-linux-gnu/libGL.so.1"
+printf 'neutral GLVND dispatcher\n' \
+    >"$rootfs/usr/lib/aarch64-linux-gnu/libGLX.so.0"
 printf '#!/bin/sh\nexit 0\n' >"$rootfs/usr/bin/Xwayland"
 chmod 0755 "$rootfs/usr/bin/Xwayland"
 
@@ -165,7 +186,7 @@ Package: pocketforge-open-gpu-stack
 Status: install ok installed
 Architecture: arm64
 Version: $provider_version
-Provides: libegl-mesa0 (= $provider_version), libegl-vendor, libgl1-mesa-dri (= $provider_version), libglx-mesa0 (= $provider_version), libglx-vendor, libgbm1 (= $provider_version), mesa-opencl-icd (= $provider_version), mesa-va-drivers (= $provider_version), mesa-vdpau-drivers (= $provider_version), mesa-vulkan-drivers (= $provider_version), libosmesa6 (= $provider_version)
+Provides: libegl-mesa0 (= $provider_version), libegl-vendor, libgl1-mesa-dri (= $provider_version), libglx-mesa0 (= $provider_version), libglx-vendor, libgbm1 (= $provider_version), mesa-vulkan-drivers (= $provider_version)
 Conflicts: libegl-mesa0, libgl1-mesa-dri, libglx-mesa0, libgbm1, mesa-opencl-icd, mesa-va-drivers, mesa-vdpau-drivers, mesa-vulkan-drivers, libosmesa6
 Replaces: libegl-mesa0, libgl1-mesa-dri, libglx-mesa0, libgbm1, mesa-opencl-icd, mesa-va-drivers, mesa-vdpau-drivers, mesa-vulkan-drivers, libosmesa6
 Description: fixture provider
@@ -176,6 +197,16 @@ Architecture: arm64
 Version: 1.6.0-1
 
 Package: libgles2
+Status: install ok installed
+Architecture: arm64
+Version: 1.6.0-1
+
+Package: libgl1
+Status: install ok installed
+Architecture: arm64
+Version: 1.6.0-1
+
+Package: libglx0
 Status: install ok installed
 Architecture: arm64
 Version: 1.6.0-1
@@ -196,7 +227,7 @@ dpkg-deb --fsys-tarfile "$scratch/provider-a.deb" | tar -tf - | \
 positive_output=$("$verifier" "$rootfs" "$producer")
 printf '%s\n' "$positive_output"
 printf '%s\n' "$positive_output" | grep -Fx \
-    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=disabled gbm=owned dri=zink vulkan=powervr vulkan_manifests=1 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
+    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink vulkan=powervr vulkan_manifests=1 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
     >/dev/null
 
 expect_rejection() {
@@ -298,6 +329,12 @@ rm "$candidate/usr/local/lib/libEGL_mesa.so.0"
 expect_rejection red-missing-egl-vendor "$candidate" \
     'rootfs gpu-um-tsp artifact is missing: usr/local/lib/libEGL_mesa.so.0'
 
+candidate="$scratch/red-missing-glx-vendor"
+cp -a "$rootfs" "$candidate"
+rm "$candidate/usr/local/lib/libGLX_mesa.so.0"
+expect_rejection red-missing-glx-vendor "$candidate" \
+    'rootfs gpu-um-tsp artifact is missing: usr/local/lib/libGLX_mesa.so.0'
+
 candidate="$scratch/red-changed-gallium"
 cp -a "$rootfs" "$candidate"
 printf 'tampered\n' >"$candidate/usr/local/lib/libgallium_dri.so"
@@ -314,20 +351,25 @@ cp -a "$rootfs" "$candidate"
 expect_rejection red-missing-egl-main "$candidate" \
     'GLVND EGL vendor does not export __egl_Main'
 
-candidate="$scratch/red-glx-enabled"
-producer_bad="$scratch/producer-glx-enabled"
+candidate="$scratch/red-missing-glx-main"
+cp -a "$rootfs" "$candidate"
+expect_rejection red-missing-glx-main "$candidate" \
+    'GLVND GLX vendor does not export __glx_Main'
+
+candidate="$scratch/red-glx-disabled"
+producer_bad="$scratch/producer-glx-disabled"
 cp -a "$rootfs" "$candidate"
 cp -a "$producer" "$producer_bad"
-sed -i 's/"name":"glx","value":"disabled"/"name":"glx","value":"dri"/' \
+sed -i 's/"name":"glx","value":"dri"/"name":"glx","value":"disabled"/' \
     "$producer_bad/.pf-gpu-um-build-options.json"
 cp "$producer_bad/.pf-gpu-um-build-options.json" \
     "$candidate/usr/share/pocketforge/gpu-um-mesa-build-options.json"
 if "$verifier" "$candidate" "$producer_bad" \
-    >"$scratch/red-glx-enabled.out" 2>"$scratch/red-glx-enabled.err"; then
-    echo 'FAIL: red-glx-enabled fixture was accepted' >&2
+    >"$scratch/red-glx-disabled.out" 2>"$scratch/red-glx-disabled.err"; then
+    echo 'FAIL: red-glx-disabled fixture was accepted' >&2
     exit 1
 fi
-grep -F 'Mesa build option mismatch: glx expected=disabled actual=dri' \
-    "$scratch/red-glx-enabled.err" >/dev/null
+grep -F 'Mesa build option mismatch: glx expected=dri actual=disabled' \
+    "$scratch/red-glx-disabled.err" >/dev/null
 
-echo 'open-gpu-provider-test=PASS green=source-package+glvnd-routing red=debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-vendor,changed-hash,wrong-arch,missing-egl-main,glx-enabled'
+echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing red=false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,glx-disabled'

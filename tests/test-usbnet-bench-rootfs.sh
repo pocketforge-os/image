@@ -246,7 +246,7 @@ chmod 0755 "${fixture_src}/scripts/verify-open-gpu-tools.sh" \
     "${fixture_src}/scripts/verify-mesa-shader-cache.sh"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829_bt.bin"
-for library in libEGL_mesa.so.0 libgbm.so gbm/dri_gbm.so; do
+for library in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so gbm/dri_gbm.so; do
     : > "${fixture}/mesa/usr/local/lib/${library}"
 done
 : > "${fixture}/mesa/pocketforge-open-gpu-stack.deb"

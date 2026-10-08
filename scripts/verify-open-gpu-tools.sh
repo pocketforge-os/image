@@ -66,6 +66,7 @@ verify_owned_artifact() {
 
 for artifact in \
     usr/local/lib/libEGL_mesa.so.0 \
+    usr/local/lib/libGLX_mesa.so.0 \
     usr/local/lib/libgbm.so.1 \
     usr/local/lib/libgallium_dri.so \
     usr/local/lib/libvulkan_powervr_mesa.so; do
@@ -86,7 +87,7 @@ producer_provenance_hash=$(sha256sum "$producer_provenance" | awk '{ print $1 }'
 rootfs_provenance_hash=$(sha256sum "$rootfs_provenance" | awk '{ print $1 }')
 [ "$producer_provenance_hash" = "$rootfs_provenance_hash" ] \
     || fatal "gpu-um-tsp provenance hash mismatch: producer=${producer_provenance_hash} rootfs=${rootfs_provenance_hash}"
-grep -Eq '^gpu-um-tsp@[0-9a-f]{40} \(open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink\)$' \
+grep -Eq '^gpu-um-tsp@[0-9a-f]{40} \(open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink\)$' \
     "$producer_provenance" \
     || fatal 'gpu-um-tsp producer provenance does not identify the GE8300 Zink stack'
 echo "open-gpu-stack provenance=PASS driver=zink artifact=libgallium_dri.so sha256=${rootfs_provenance_hash}"
@@ -331,4 +332,4 @@ for binary in \
     printf '%s\n' "$closure"
 done
 
-echo 'open-gpu-tools=PASS stack=gpu-um-tsp egl=glvnd:mesa glx=disabled gles=zink vulkan=powervr'
+echo 'open-gpu-tools=PASS stack=gpu-um-tsp egl=glvnd:mesa glx=glvnd:mesa gles=zink vulkan=powervr'

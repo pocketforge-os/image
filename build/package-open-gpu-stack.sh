@@ -36,6 +36,18 @@ esac
 [ -x "$probe" ] || { echo "open GPU probe is missing: $probe" >&2; exit 1; }
 [ -f "$control" ] || { echo "provider control template is missing: $control" >&2; exit 1; }
 
+for artifact in \
+    libEGL_mesa.so.0 \
+    libGLX_mesa.so.0 \
+    libgbm.so.1 \
+    libgallium_dri.so \
+    libvulkan_powervr_mesa.so; do
+    [ -e "$producer/usr/local/lib/$artifact" ] || {
+        echo "required gpu-um-tsp provider artifact is missing: usr/local/lib/$artifact" >&2
+        exit 1
+    }
+done
+
 short_sha=$(printf '%.12s' "$source_sha")
 mesa_pc="$producer/usr/local/lib/pkgconfig/dri.pc"
 [ -f "$mesa_pc" ] || { echo "Mesa version evidence is missing: $mesa_pc" >&2; exit 1; }

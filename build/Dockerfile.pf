@@ -501,7 +501,7 @@ RUN mkdir -p /out && printf 'gpu-fw NOT-SHIPPED (gpu_model=none; graphics delibe
 FROM gpu-fw-${PF_GPU_MODEL} AS gpu-fw
 
 # =============================================================================
-# gpu-um-mesa — open Mesa GLES/EGL/GBM/Vulkan userspace for the a133-open GPU
+# gpu-um-mesa — open Mesa GLX/GLES/EGL/GBM/Vulkan userspace for the a133-open GPU
 # model (tsp-mc9m.41.924.6 / C1). Ports gpu-um-tsp's OWN committed cross-build
 # recipe (docker/Dockerfile.ge8300-mesa-cross, upstream-driven by
 # docker/build-ge8300-mesa-cross.sh) INLINE: that script wraps a SECOND
@@ -693,8 +693,9 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ccache g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
   libdrm-dev:arm64 libglvnd-dev:arm64 libvulkan-dev:arm64 libwayland-dev:arm64 \
   libwayland-egl-backend-dev:arm64 \
-  libx11-xcb-dev:arm64 libxrandr-dev:arm64 libxcb-dri3-dev:arm64 \
-  libxcb-present-dev:arm64 \
+  libx11-dev:arm64 libx11-xcb-dev:arm64 libxext-dev:arm64 \
+  libxrandr-dev:arm64 libxcb-dri3-dev:arm64 libxcb-glx0-dev:arm64 \
+  libxcb-present-dev:arm64 libxxf86vm-dev:arm64 x11proto-dev:arm64 \
   libxcb-randr0-dev:arm64 libxcb-shm0-dev:arm64 libxcb-sync-dev:arm64 \
   libxcb-xfixes0-dev:arm64 libxcb1-dev:arm64 libxshmfence-dev:arm64 \
   libzstd-dev:arm64 python3-mako python3-packaging python3-pip python3-ply \
@@ -761,7 +762,7 @@ for pass in 1 2; do
     -Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=disabled \
     -Dmesa-clc=system \
     -Dprecomp-compiler=system -Dgallium-drivers=zink -Dplatforms=x11,wayland \
-    -Dglx=disabled -Degl=enabled -Dgbm=enabled \
+    -Dglx=dri -Degl=enabled -Dgbm=enabled \
     -Dglvnd=enabled -Dglvnd-vendor-name=mesa -Dshader-cache=enabled \
     -Dshader-cache-max-size=64M \
     -Dxmlconfig=disabled -Dzlib=disabled -Dzstd=enabled -Dvideo-codecs=[] \
@@ -791,7 +792,7 @@ install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
 # the full install-tree manifest by sha256, so C's acceptance evidence lists real
 # staged artifact paths + hashes rather than a hand-picked subset.
 {
-  printf 'gpu-um-tsp@%s (open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)\n' "${PF_GPU_UM_SHA}"
+  printf 'gpu-um-tsp@%s (open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)\n' "${PF_GPU_UM_SHA}"
   printf 'target_abi=debian-bookworm snapshot=%s %s meson=%s\n' \
     "$(cat /bookworm-apt-snapshot-date)" \
     "$(tr '\n' ' ' </bookworm-target-toolchain.txt)" "$(meson --version)"
@@ -808,7 +809,7 @@ GPUUMBUILD
 
 # --- 5/5 gpu-um-mesa-open: the consumable artifact — /out/usr/local is the FULL DESTDIR
 # install tree (Zink in the unified libgallium_dri.so megadriver,
-# GLVND's libEGL_mesa vendor, libgbm, the Vulkan ICD .so + its ICD JSON under
+# GLVND's libEGL_mesa/libGLX_mesa vendors, libgbm, the Vulkan ICD .so + its ICD JSON under
 # share/vulkan/icd.d) exactly as gpu-um-tsp emits it: a real `meson install`
 # tree, never a hand-picked .so subset.
 FROM scratch AS gpu-um-mesa-open
@@ -1005,7 +1006,7 @@ fi
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 # sdl is SELECTED for every a133 variant. The sunxifb backend's build recipe links EITHER the
 # closed PowerVR UM (ddk) OR — tsp-mc9m.41.924.6 / C3, replacing the former B-deferred marker —
-# the C1 open Mesa GLES/EGL/GBM install tree (open): build-libsdl3.sh itself branches on
+# the C1 open Mesa GLX/GLES/EGL/GBM install tree (open): build-libsdl3.sh itself branches on
 # PF_GPU_MODEL and, for open, requires SUNXIFB_MESA_ROOT (the C1 gpu-um-mesa stage's
 # /work/gpu-um-mesa/usr/local — the real `meson install` prefix: include/EGL,EGL/eglext.h... +
 # lib/libEGL.so,libGLESv2.so... — CheckSUNXIFB's CMAKE_FIND_ROOT_PATH usage is generic, so no

@@ -70,11 +70,20 @@ provider_replaces=$(package_field pocketforge-open-gpu-stack Replaces) \
     || fatal 'provider Replaces is missing'
 
 for package in libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 \
-    mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers mesa-vulkan-drivers \
-    libosmesa6; do
+    mesa-vulkan-drivers; do
     printf '%s\n' "$provider_provides" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | \
         grep -Fx "$package (= $provider_version)" >/dev/null \
         || fatal "provider lacks versioned Provides for $package"
+done
+for package in mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers libosmesa6; do
+    if printf '%s\n' "$provider_provides" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | \
+        grep -Eq "^$package([[:space:]]|$)"; then
+        fatal "provider falsely Provides unshipped capability $package"
+    fi
+done
+for package in libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 \
+    mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers mesa-vulkan-drivers \
+    libosmesa6; do
     for field_value in "$provider_conflicts" "$provider_replaces"; do
         printf '%s\n' "$field_value" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | \
             grep -Fx "$package" >/dev/null \
@@ -94,7 +103,7 @@ for package in libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 \
         fatal "forbidden Debian Mesa driver package is installed: $package"
     fi
 done
-for package in libegl1 libgles2 libglvnd0; do
+for package in libegl1 libgles2 libgl1 libglx0 libglvnd0; do
     package_is_installed "$package" \
         || fatal "neutral GLVND client package is not installed: $package"
 done
@@ -102,6 +111,10 @@ package_is_installed xwayland || fatal 'Xwayland is not installed for the glamor
 [ -x "$rootfs/usr/bin/Xwayland" ] || fatal 'Xwayland binary is missing'
 [ -e "$rootfs/usr/lib/aarch64-linux-gnu/libEGL.so.1" ] \
     || fatal 'neutral GLVND libEGL.so.1 dispatcher is missing'
+[ -e "$rootfs/usr/lib/aarch64-linux-gnu/libGL.so.1" ] \
+    || fatal 'neutral GLVND libGL.so.1 dispatcher is missing'
+[ -e "$rootfs/usr/lib/aarch64-linux-gnu/libGLX.so.0" ] \
+    || fatal 'neutral GLVND libGLX.so.0 dispatcher is missing'
 
 provider_list="$rootfs/var/lib/dpkg/info/pocketforge-open-gpu-stack.list"
 if [ ! -f "$provider_list" ] || [ -L "$provider_list" ]; then
@@ -125,6 +138,7 @@ verify_owned_artifact() {
 
 for artifact in \
     usr/local/lib/libEGL_mesa.so.0 \
+    usr/local/lib/libGLX_mesa.so.0 \
     usr/local/lib/libgbm.so.1 \
     usr/local/lib/gbm/dri_gbm.so \
     usr/local/lib/libgallium_dri.so \
@@ -146,6 +160,7 @@ verify_aarch64_elf() {
 }
 for artifact in \
     usr/local/lib/libEGL_mesa.so.0 \
+    usr/local/lib/libGLX_mesa.so.0 \
     usr/local/lib/libgbm.so.1 \
     usr/local/lib/gbm/dri_gbm.so \
     usr/local/lib/libgallium_dri.so \
@@ -159,6 +174,13 @@ if ! egl_symbols=$($readelf_command -Ws \
 fi
 printf '%s\n' "$egl_symbols" | grep -Eq '[[:space:]]__egl_Main$' \
     || fatal 'GLVND EGL vendor does not export __egl_Main'
+if ! glx_symbols=$($readelf_command -Ws \
+    "$rootfs/usr/local/lib/libGLX_mesa.so.0" 2>&1); then
+    printf '%s\n' "$glx_symbols" >&2
+    fatal 'cannot inspect GLVND GLX vendor symbols'
+fi
+printf '%s\n' "$glx_symbols" | grep -Eq '[[:space:]]__glx_Main$' \
+    || fatal 'GLVND GLX vendor does not export __glx_Main'
 
 verify_evidence_file() {
     producer_relative=$1
@@ -181,7 +203,7 @@ verify_evidence_file() {
 verify_evidence_file .pf-gpu-um-provenance usr/share/pocketforge/gpu-um-mesa-provenance
 verify_evidence_file .pf-gpu-um-build-options.json usr/share/pocketforge/gpu-um-mesa-build-options.json
 source_sha=$(sed -n \
-    's/^gpu-um-tsp@\([0-9a-f]\{40\}\) (open Mesa GLES\/EGL\/GBM\/Vulkan userspace, GE8300 Zink)$/\1/p' \
+    's/^gpu-um-tsp@\([0-9a-f]\{40\}\) (open Mesa GLX\/GLES\/EGL\/GBM\/Vulkan userspace, GE8300 Zink)$/\1/p' \
     "$producer/.pf-gpu-um-provenance")
 [ "${#source_sha}" -eq 40 ] \
     || fatal 'producer provenance does not contain one exact gpu-um-tsp source SHA'
@@ -195,7 +217,7 @@ expected = {
     "platforms": ["x11", "wayland"],
     "glvnd": "enabled",
     "glvnd-vendor-name": "mesa",
-    "glx": "disabled",
+    "glx": "dri",
     "egl": "enabled",
     "gbm": "enabled",
     "gallium-drivers": ["zink"],
@@ -283,4 +305,14 @@ for boundary in usr/lib/aarch64-linux-gnu lib/aarch64-linux-gnu; do
         || fatal "forbidden Debian Mesa driver file: ${forbidden#"$rootfs"}"
 done
 
-echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=disabled gbm=owned dri=zink vulkan=powervr vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
+# GLVND asks the X server for the vendor name and dlopens
+# libGLX_<vendor>.so.0. With "mesa" selected, a unique provider-owned basename
+# makes that route unambiguous without a GLX JSON override.
+glx_vendor_count=$(find "$rootfs" \( -type f -o -type l \) \
+    -name 'libGLX_mesa.so.0' -print | wc -l)
+[ "$glx_vendor_count" -eq 1 ] \
+    || fatal "expected exactly one GLVND Mesa GLX vendor, found $glx_vendor_count"
+[ -e "$rootfs/usr/local/lib/libGLX_mesa.so.0" ] \
+    || fatal 'canonical GLVND Mesa GLX vendor is missing from /usr/local/lib'
+
+echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink vulkan=powervr vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"

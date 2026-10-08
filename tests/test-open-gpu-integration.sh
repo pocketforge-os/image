@@ -176,10 +176,12 @@ printf '%s\n' "$target_stage_block" | grep -F -- '-Dzstd=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dplatforms=x11,wayland' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dglvnd=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dglvnd-vendor-name=mesa' >/dev/null
-printf '%s\n' "$target_stage_block" | grep -F -- '-Dglx=disabled' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dglx=dri' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Degl=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dgbm=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F 'libglvnd-dev:arm64' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F 'libxcb-glx0-dev:arm64' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F 'libxxf86vm-dev:arm64' >/dev/null
 # The cross sysroot needs the aarch64 zstd headers/.pc file for meson's
 # `dependency('libzstd', required: get_option('zstd'))` to resolve; the
 # runtime library (libzstd1) is already in rootfs-packages.txt.
@@ -341,7 +343,7 @@ mkdir -p "${closure_root}/usr/local/lib/gbm" \
     "${closure_root}/usr/share/vulkan/icd.d" \
     "${closure_root}/usr/lib/aarch64-linux-gnu" \
     "${host_library_dir}"
-for artifact in libEGL_mesa.so.0 libgbm.so.1.0.0 \
+for artifact in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so.1.0.0 \
     libgallium_dri.so libvulkan_powervr_mesa.so; do
     : >"${closure_root}/usr/local/lib/${artifact}"
 done

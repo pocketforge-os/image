@@ -320,7 +320,8 @@ fi
 # An explicit apt root such as libgbm1 selects Debian's real package even when
 # a local package provides that name. Remove every implementation package that
 # the source-built provider replaces before handing the list to mmdebstrap;
-# neutral GLVND client libraries (libegl1/libgles2) and Xwayland stay present.
+# neutral GLVND client libraries (libegl1/libgles2/libgl1/libglx0) and Xwayland
+# stay present.
 case "${PF_DEVICE_ID}" in
     a133-open-7x-gpu|a133-open-7x-gpu-noradio)
         GPU_STACK_REPLACED_PACKAGES="libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers mesa-vulkan-drivers libosmesa6"
@@ -394,11 +395,12 @@ elif [ "${PF_GPU_MODEL}" = "open" ]; then
     for f in \
         "${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb" \
         "${GPU_UM_MESA_DIR}/usr/local/lib/libEGL_mesa.so.0" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libGLX_mesa.so.0" \
         "${GPU_UM_MESA_DIR}/usr/local/lib/libgbm.so" \
         "${GPU_UM_MESA_DIR}/usr/local/lib/gbm/dri_gbm.so"; do
         [ -f "$f" ] || { echo "FATAL: open Mesa userspace not found: $f (gpu-um-mesa stage did not build for gpu_model=open?)" >&2; exit 1; }
     done
-    echo "  open Mesa GLES/EGL/GBM userspace: ${GPU_UM_MESA_DIR}/usr/local (spot-check passed)"
+    echo "  open Mesa GLX/GLES/EGL/GBM userspace: ${GPU_UM_MESA_DIR}/usr/local (spot-check passed)"
 fi
 
 # GPU modules from gpu-km-tsp, kernel modules from kernel-tsp. The closed-KM file names
@@ -616,6 +618,7 @@ verify_open_gpu_runtime_closure() {
     local relative
     for relative in \
         usr/local/lib/libEGL_mesa.so.0 \
+        usr/local/lib/libGLX_mesa.so.0 \
         usr/local/lib/libgbm.so.1.0.0 \
         usr/local/lib/gbm/dri_gbm.so \
         usr/local/lib/libgallium_dri.so \
@@ -758,9 +761,9 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
 elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     # mmdebstrap installed the file-owning PocketForge provider during its apt
     # solve. Do not copy a second, dpkg-invisible tree here: only refresh the
-    # loader cache and verify the package-owned GLVND EGL, GBM, Gallium, and
+    # loader cache and verify the package-owned GLVND EGL/GLX, GBM, Gallium, and
     # PowerVR Vulkan closure.
-    echo "[customize] Activating package-owned open Mesa GLVND EGL/GBM userspace (Zink, GE8300)..."
+    echo "[customize] Activating package-owned open Mesa GLVND EGL/GLX/GBM userspace (Zink, GE8300)..."
     printf '/usr/local/lib\n' > "${ROOTFS}/etc/ld.so.conf.d/00-mesa-powervr.conf"
     chroot "$ROOTFS" ldconfig
     echo "[customize] open Mesa: ldconfig done"
@@ -768,7 +771,11 @@ elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
         echo "FATAL: GLVND vendor libEGL_mesa.so.0 missing from ${ROOTFS}/usr/local/lib" >&2
         exit 1
     fi
-    echo "[customize] open Mesa: package-owned userspace verified (libEGL_mesa.so.0 present)"
+    if [ ! -L "${ROOTFS}/usr/local/lib/libGLX_mesa.so.0" ] && [ ! -f "${ROOTFS}/usr/local/lib/libGLX_mesa.so.0" ]; then
+        echo "FATAL: GLVND vendor libGLX_mesa.so.0 missing from ${ROOTFS}/usr/local/lib" >&2
+        exit 1
+    fi
+    echo "[customize] open Mesa: package-owned userspace verified (libEGL_mesa.so.0 and libGLX_mesa.so.0 present)"
 
     verify_open_gpu_runtime_closure "${ROOTFS}"
 fi
