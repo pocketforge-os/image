@@ -21,10 +21,11 @@ chmod +x "${scratch}/bin/qemu-aarch64-static"
 for firmware in fw_xr829.bin fw_xr829_bt.bin; do
     : > "${scratch}/blobs/sunxi/a133/wifi-firmware/${firmware}"
 done
-for library in libEGL.so libGLESv2.so libgbm.so; do
+for library in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so; do
     : > "${scratch}/mesa/usr/local/lib/${library}"
 done
 : > "${scratch}/mesa/usr/local/lib/gbm/dri_gbm.so"
+: > "${scratch}/mesa/pocketforge-open-gpu-stack.deb"
 
 populate_modules() {
     local release_dir="$1"

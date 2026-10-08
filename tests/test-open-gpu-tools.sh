@@ -14,9 +14,9 @@ test -x "$artifact_policy"
 test -f "$provider_control"
 
 grep -Fx 'Package: pocketforge-open-gpu-stack' "$provider_control" >/dev/null
-grep -Fx 'Provides: libegl-mesa0, libegl-vendor, libglx-mesa0, libglx-vendor' \
+grep -F 'Provides: libegl-mesa0 (= @PROVIDER_VERSION@), libegl-vendor' \
     "$provider_control" >/dev/null
-for package in libegl-mesa0 libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers; do
+for package in libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 mesa-vulkan-drivers; do
     sed -n 's/^Conflicts: //p' "$provider_control" | tr ', ' '\n' | \
         grep -Fx "$package" >/dev/null
 done
@@ -38,23 +38,28 @@ mkdir -p \
     "$positive/var/lib/dpkg"
 
 for artifact in \
-    libEGL.so.1.0.0 \
-    libGLESv2.so.2.0.0 \
+    libEGL_mesa.so.0.0.0 \
+    libGLX_mesa.so.0.0.0 \
     libgbm.so.1.0.0 \
     libgallium_dri.so \
     libvulkan_powervr_mesa.so; do
     printf 'owned gpu-um-tsp artifact: %s\n' "$artifact" \
         >"$producer/usr/local/lib/$artifact"
 done
+ln -s libEGL_mesa.so.0.0.0 "$producer/usr/local/lib/libEGL_mesa.so.0"
+ln -s libGLX_mesa.so.0.0.0 "$producer/usr/local/lib/libGLX_mesa.so.0"
+ln -s libgbm.so.1.0.0 "$producer/usr/local/lib/libgbm.so.1"
 printf '%s\n' 'owned gpu-um-tsp libdril megadriver' \
     >"$producer/usr/local/lib/dri/libdril_dri.so"
 ln -s libdril_dri.so "$producer/usr/local/lib/dri/ili9225_dri.so"
 ln -s libdril_dri.so "$producer/usr/local/lib/dri/zink_dri.so"
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
     >"$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
-printf '%s\n' 'gpu-um-tsp@977370a239cfe5d8e06aea7fb0e475bd0da58738 (open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
+printf '%s\n' 'gpu-um-tsp@977370a239cfe5d8e06aea7fb0e475bd0da58738 (open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
     >"$producer/.pf-gpu-um-provenance"
 cp -a "$producer/usr/local/." "$positive/usr/local/"
+find "$positive/usr/local/share/vulkan/icd.d" -mindepth 1 \
+    -maxdepth 1 -name 'powervr_mesa_icd.aarch64.json' -delete
 cp "$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
     "$positive/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
 cp "$producer/.pf-gpu-um-provenance" \
@@ -107,23 +112,23 @@ libc.so.6 => /lib/aarch64-linux-gnu/libc.so.6 (0x00000000)
 OUTPUT
 emit_owned_gles() {
     if [ "${PF_TEST_OMIT_GLES:-0}" != 1 ]; then
-        echo 'libGLESv2.so.2 => /usr/local/lib/libGLESv2.so.2 (0x00000000)'
+        echo 'libGLESv2.so.2 => /usr/lib/aarch64-linux-gnu/libGLESv2.so.2 (0x00000000)'
     fi
 }
 case "$binary" in
     /usr/bin/glmark2-es2-drm)
         case "${PF_TEST_DRM_BINDING:-gbm}" in
-            egl) echo 'libEGL.so.1 => /usr/local/lib/libEGL.so.1 (0x00000000)' ;;
+            egl) echo 'libEGL.so.1 => /usr/lib/aarch64-linux-gnu/libEGL.so.1 (0x00000000)' ;;
             gles) emit_owned_gles ;;
             gbm) echo 'libgbm.so.1 => /usr/local/lib/libgbm.so.1 (0x00000000)' ;;
         esac
         ;;
     /usr/bin/eglinfo)
-        echo 'libEGL.so.1 => /usr/local/lib/libEGL.so.1 (0x00000000)'
+        echo 'libEGL.so.1 => /usr/lib/aarch64-linux-gnu/libEGL.so.1 (0x00000000)'
         emit_owned_gles
         ;;
     /usr/bin/es2gears_wayland|/usr/bin/es2gears_x11|/usr/bin/kmscube)
-        echo 'libEGL.so.1 => /usr/local/lib/libEGL.so.1 (0x00000000)'
+        echo 'libEGL.so.1 => /usr/lib/aarch64-linux-gnu/libEGL.so.1 (0x00000000)'
         emit_owned_gles
         echo 'libgbm.so.1 => /usr/local/lib/libgbm.so.1 (0x00000000)'
         ;;
@@ -140,9 +145,9 @@ printf '%s\n' "$positive_output" | grep -Fq 'open-gpu-tools=PASS'
 printf '%s\n' "$positive_output" | \
     grep -Fq 'open-gpu-stack dri-artifacts=PASS boundary=/usr/local/lib/dri producer_entries=3'
 printf '%s\n' "$positive_output" | \
-    grep -Fq 'binary=/usr/bin/glmark2-es2-wayland binding_mode=runtime-owned-egl-gles'
+    grep -Fq 'binary=/usr/bin/glmark2-es2-wayland binding_mode=runtime-glvnd-egl-gles-owned-vendor'
 printf '%s\n' "$positive_output" | \
-    grep -Fq 'binary=/usr/bin/glmark2-es2 binding_mode=runtime-owned-egl-gles'
+    grep -Fq 'binary=/usr/bin/glmark2-es2 binding_mode=runtime-glvnd-egl-gles-owned-vendor'
 printf '%s\n' "$positive_output" | \
     grep -Fq 'binary=/usr/bin/vulkaninfo binding_mode=runtime-vulkan-loader'
 
@@ -165,7 +170,7 @@ if PF_TEST_OMIT_GLES=1 PF_ROOTFS_LDD="$ldd_stub" \
     echo 'FAIL: missing same-rootfs GLES witness negative control was accepted' >&2
     exit 1
 fi
-grep -Fq '/usr/bin/glmark2-es2-wayland has no same-rootfs owned EGL/GLES resolution witness' \
+grep -Fq '/usr/bin/glmark2-es2-wayland has no same-rootfs neutral GLVND EGL/GLES resolution witness' \
     "$scratch/negative-runtime-witness.err"
 
 negative_runtime_glmark_egl="$scratch/negative-runtime-glmark-egl"
@@ -251,13 +256,13 @@ grep -Fq 'forbidden Debian Mesa driver package is installed: mesa-vulkan-drivers
 negative_hash="$scratch/negative-hash-rootfs"
 cp -a "$positive" "$negative_hash"
 printf '%s\n' 'tampered Debian replacement' \
-    >"$negative_hash/usr/local/lib/libEGL.so.1.0.0"
+    >"$negative_hash/usr/local/lib/libEGL_mesa.so.0.0.0"
 if PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$negative_hash" "$producer" \
     >"$scratch/negative-hash.out" 2>"$scratch/negative-hash.err"; then
     echo 'FAIL: changed gpu-um-tsp library hash was accepted' >&2
     exit 1
 fi
-grep -Fq 'gpu-um-tsp artifact hash mismatch: usr/local/lib/libEGL.so.1.0.0' \
+grep -Fq 'gpu-um-tsp artifact hash mismatch: usr/local/lib/libEGL_mesa.so.0' \
     "$scratch/negative-hash.err"
 
 negative_provenance_hash="$scratch/negative-provenance-hash"
@@ -374,8 +379,8 @@ expect_rejection negative-boundary-link "$negative_boundary_link" \
     'GPU driver discovery boundary reached through symlink:'
 
 # Cover both Mesa's Debian multiarch directory and gpu-um-tsp's copied DRI
-# directory. The pinned producer installs its unified Zink megadriver at
-# /usr/local/lib/libgallium_dri.so, so no per-driver DRI payload is accepted.
+# directory. Only entries that identically match the source-built producer
+# tree are accepted beneath /usr/local.
 dri_boundary_number=0
 for boundary in $($artifact_policy --print-mesa-dri-boundaries) usr/local/lib/dri; do
     dri_boundary_number=$((dri_boundary_number + 1))

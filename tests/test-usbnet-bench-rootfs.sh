@@ -233,17 +233,23 @@ cat > "${fixture_src}/scripts/verify-open-gpu-tools.sh" <<'EOF'
 #!/bin/sh
 echo 'open-gpu-tools fixture=SKIP scope=usbnet-final-rootfs-ordering'
 EOF
+cat > "${fixture_src}/scripts/verify-open-gpu-provider.sh" <<'EOF'
+#!/bin/sh
+echo 'open-gpu-provider fixture=SKIP scope=usbnet-final-rootfs-ordering'
+EOF
 cat > "${fixture_src}/scripts/verify-mesa-shader-cache.sh" <<'EOF'
 #!/bin/sh
 echo 'mesa-shader-cache fixture=SKIP scope=usbnet-final-rootfs-ordering'
 EOF
 chmod 0755 "${fixture_src}/scripts/verify-open-gpu-tools.sh" \
+    "${fixture_src}/scripts/verify-open-gpu-provider.sh" \
     "${fixture_src}/scripts/verify-mesa-shader-cache.sh"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829_bt.bin"
-for library in libEGL.so libGLESv2.so libgbm.so gbm/dri_gbm.so; do
+for library in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so gbm/dri_gbm.so; do
     : > "${fixture}/mesa/usr/local/lib/${library}"
 done
+: > "${fixture}/mesa/pocketforge-open-gpu-stack.deb"
 : > "${release}/modules.builtin"
 : > "${release}/powervr.ko"
 : > "${fixture}/wpa/wpa_supplicant"

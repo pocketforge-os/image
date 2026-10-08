@@ -114,6 +114,7 @@ jobs:
             tests/test-none-gpu-model.sh
             tests/test-open-gpu-integration.sh
             tests/test-open-gpu-gate-ordering.sh
+            tests/test-open-gpu-provider.sh
             tests/test-open-gpu-tools.sh
             tests/test-open-module-contract.sh
             tests/test-poolsuite-rootfs-install.sh

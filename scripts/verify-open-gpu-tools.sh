@@ -39,6 +39,8 @@ for package in \
     libegl-mesa0 \
     libgl1-mesa-dri \
     libglx-mesa0 \
+    libgbm1 \
+    libosmesa6 \
     mesa-opencl-icd \
     mesa-va-drivers \
     mesa-vdpau-drivers \
@@ -63,12 +65,11 @@ verify_owned_artifact() {
 }
 
 for artifact in \
-    usr/local/lib/libEGL.so.1.0.0 \
-    usr/local/lib/libGLESv2.so.2.0.0 \
-    usr/local/lib/libgbm.so.1.0.0 \
+    usr/local/lib/libEGL_mesa.so.0 \
+    usr/local/lib/libGLX_mesa.so.0 \
+    usr/local/lib/libgbm.so.1 \
     usr/local/lib/libgallium_dri.so \
-    usr/local/lib/libvulkan_powervr_mesa.so \
-    usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json; do
+    usr/local/lib/libvulkan_powervr_mesa.so; do
     verify_owned_artifact "$artifact"
 done
 
@@ -76,15 +77,17 @@ done
 # Bind that producer identity to the rootfs alongside the megadriver hash.
 producer_provenance="${producer}/.pf-gpu-um-provenance"
 rootfs_provenance="${rootfs}/usr/share/pocketforge/gpu-um-mesa-provenance"
-[ -f "$producer_provenance" ] && [ ! -L "$producer_provenance" ] \
-    || fatal 'gpu-um-tsp producer provenance is missing or not a regular file'
-[ -f "$rootfs_provenance" ] && [ ! -L "$rootfs_provenance" ] \
-    || fatal 'rootfs gpu-um-tsp provenance is missing or not a regular file'
+if [ ! -f "$producer_provenance" ] || [ -L "$producer_provenance" ]; then
+    fatal 'gpu-um-tsp producer provenance is missing or not a regular file'
+fi
+if [ ! -f "$rootfs_provenance" ] || [ -L "$rootfs_provenance" ]; then
+    fatal 'rootfs gpu-um-tsp provenance is missing or not a regular file'
+fi
 producer_provenance_hash=$(sha256sum "$producer_provenance" | awk '{ print $1 }')
 rootfs_provenance_hash=$(sha256sum "$rootfs_provenance" | awk '{ print $1 }')
 [ "$producer_provenance_hash" = "$rootfs_provenance_hash" ] \
     || fatal "gpu-um-tsp provenance hash mismatch: producer=${producer_provenance_hash} rootfs=${rootfs_provenance_hash}"
-grep -Eq '^gpu-um-tsp@[0-9a-f]{40} \(open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink\)$' \
+grep -Eq '^gpu-um-tsp@[0-9a-f]{40} \(open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink\)$' \
     "$producer_provenance" \
     || fatal 'gpu-um-tsp producer provenance does not identify the GE8300 Zink stack'
 echo "open-gpu-stack provenance=PASS driver=zink artifact=libgallium_dri.so sha256=${rootfs_provenance_hash}"
@@ -131,7 +134,7 @@ for boundary in $vulkan_icd_boundaries; do
     fi
     [ -d "$directory" ] || continue
     case "$boundary" in
-        usr/local/share/vulkan/icd.d|usr/share/vulkan/icd.d)
+        usr/share/vulkan/icd.d)
             allowed=powervr_mesa_icd.aarch64.json
             ;;
         *) allowed=__no_owned_manifest_at_this_boundary__ ;;
@@ -219,8 +222,8 @@ binary_embeds_soname() {
     LC_ALL=C grep -aF "$2" "$1" >/dev/null
 }
 
-owned_egl_witness=0
-owned_gles_witness=0
+glvnd_egl_witness=0
+glvnd_gles_witness=0
 vulkan_loader_witness=0
 
 for binary in \
@@ -243,48 +246,68 @@ for binary in \
     printf '%s\n' "$closure" | grep -F 'not found' >/dev/null \
         && fatal "dynamic dependency is not found: ${binary_path}"
 
-    owned_bindings=0
+    routed_bindings=0
+    glvnd_egl_binding=0
+    glvnd_gles_binding=0
     owned_gbm_binding=0
     binding_mode=direct
     for soname in libEGL.so.1 libGLESv2.so.2 libgbm.so.1; do
         resolved=$(printf '%s\n' "$closure" | awk -v wanted="$soname" \
             '$1 == wanted && $2 == "=>" { print $3; exit }')
         [ -n "$resolved" ] || continue
-        case "$resolved" in
-            /usr/local/lib/*)
-                owned_bindings=$((owned_bindings + 1))
-                case "$soname" in
-                    libEGL.so.1)
-                        owned_egl_witness=1
+        case "$soname" in
+            libgbm.so.1)
+                case "$resolved" in
+                    /usr/local/lib/*)
+                        routed_bindings=$((routed_bindings + 1))
+                        owned_gbm_binding=1
                         ;;
-                    libGLESv2.so.2)
-                        owned_gles_witness=1
-                        ;;
-                    libgbm.so.1) owned_gbm_binding=1 ;;
+                    *) fatal "${binary_path} resolves libgbm.so.1 outside gpu-um-tsp: ${resolved}" ;;
                 esac
                 ;;
-            *) fatal "${binary_path} resolves ${soname} outside gpu-um-tsp: ${resolved}" ;;
+            libEGL.so.1)
+                case "$resolved" in
+                    /usr/lib/aarch64-linux-gnu/*|/lib/aarch64-linux-gnu/*)
+                        routed_bindings=$((routed_bindings + 1))
+                        glvnd_egl_binding=1
+                        glvnd_egl_witness=1
+                        ;;
+                    *) fatal "${binary_path} resolves libEGL.so.1 outside neutral GLVND: ${resolved}" ;;
+                esac
+                ;;
+            libGLESv2.so.2)
+                case "$resolved" in
+                    /usr/lib/aarch64-linux-gnu/*|/lib/aarch64-linux-gnu/*)
+                        routed_bindings=$((routed_bindings + 1))
+                        glvnd_gles_binding=1
+                        glvnd_gles_witness=1
+                        ;;
+                    *) fatal "${binary_path} resolves libGLESv2.so.2 outside neutral GLVND: ${resolved}" ;;
+                esac
+                ;;
         esac
     done
     case "$binary" in
         eglinfo|es2gears_wayland|es2gears_x11|kmscube)
-            [ "$owned_bindings" -gt 0 ] \
-                || fatal "${binary_path} has no dynamic binding to gpu-um-tsp EGL/GLES/GBM"
-            binding_mode=direct-owned
+            [ "$glvnd_egl_binding" -eq 1 ] || [ "$glvnd_gles_binding" -eq 1 ] || \
+                [ "$owned_gbm_binding" -eq 1 ] \
+                || fatal "${binary_path} has no dynamic binding to GLVND EGL/GLES or gpu-um-tsp GBM"
+            binding_mode=direct-glvnd-owned-vendor
             ;;
         glmark2-es2-drm)
             [ "$owned_gbm_binding" -eq 1 ] \
                 || fatal "${binary_path} has no dynamic binding to gpu-um-tsp GBM"
-            binding_mode=direct-owned
+            binding_mode=direct-owned-gbm
             ;;
         glmark2-es2-wayland|glmark2-es2)
-            [ "$owned_egl_witness" -eq 1 ] && [ "$owned_gles_witness" -eq 1 ] \
-                || fatal "${binary_path} has no same-rootfs owned EGL/GLES resolution witness"
+            if [ "$glvnd_egl_witness" -ne 1 ] || [ "$glvnd_gles_witness" -ne 1 ]; then
+                fatal "${binary_path} has no same-rootfs neutral GLVND EGL/GLES resolution witness"
+            fi
             for soname in libEGL.so.1 libGLESv2.so.2; do
                 binary_embeds_soname "${rootfs}${binary_path}" "$soname" \
                     || fatal "${binary_path} does not declare runtime loading of ${soname}"
             done
-            binding_mode=runtime-owned-egl-gles
+            binding_mode=runtime-glvnd-egl-gles-owned-vendor
             ;;
         vkcube|vkcube-wayland)
             printf '%s\n' "$closure" | grep -Fq 'libvulkan.so.1' \
@@ -305,8 +328,8 @@ for binary in \
             fi
             ;;
     esac
-    echo "open-gpu-tool=PASS binary=${binary_path} binding_mode=${binding_mode} owned_bindings=${owned_bindings}"
+    echo "open-gpu-tool=PASS binary=${binary_path} binding_mode=${binding_mode} routed_bindings=${routed_bindings}"
     printf '%s\n' "$closure"
 done
 
-echo 'open-gpu-tools=PASS stack=gpu-um-tsp gles=zink vulkan=powervr'
+echo 'open-gpu-tools=PASS stack=gpu-um-tsp egl=glvnd:mesa glx=glvnd:mesa gles=zink vulkan=powervr'

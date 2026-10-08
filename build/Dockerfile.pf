@@ -501,7 +501,7 @@ RUN mkdir -p /out && printf 'gpu-fw NOT-SHIPPED (gpu_model=none; graphics delibe
 FROM gpu-fw-${PF_GPU_MODEL} AS gpu-fw
 
 # =============================================================================
-# gpu-um-mesa — open Mesa GLES/EGL/GBM/Vulkan userspace for the a133-open GPU
+# gpu-um-mesa — open Mesa GLX/GLES/EGL/GBM/Vulkan userspace for the a133-open GPU
 # model (tsp-mc9m.41.924.6 / C1). Ports gpu-um-tsp's OWN committed cross-build
 # recipe (docker/Dockerfile.ge8300-mesa-cross, upstream-driven by
 # docker/build-ge8300-mesa-cross.sh) INLINE: that script wraps a SECOND
@@ -684,15 +684,19 @@ COPY --from=gpu-um-native-precompilers /opt/mesa-native /opt/mesa-native
 # resource path.  They are generator inputs only, never target headers.
 COPY --from=gpu-um-native-precompilers /usr/lib/llvm-20/lib/clang /usr/lib/llvm-20/lib/clang
 COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
+COPY --from=image-src build/package-open-gpu-stack.sh /tmp/package-open-gpu-stack.sh
+COPY --from=image-src packages/pocketforge-open-gpu-stack/DEBIAN/control /tmp/pocketforge-open-gpu-stack.control
+COPY --from=image-src packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf /tmp/10-pocketforge-zink.conf
 RUN <<'GPUUMSYSROOT'
 set -eux
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ccache g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
-  libdrm-dev:arm64 libvulkan-dev:arm64 libwayland-dev:arm64 \
+  libdrm-dev:arm64 libexpat1-dev:arm64 libglvnd-dev:arm64 libvulkan-dev:arm64 libwayland-dev:arm64 \
   libwayland-egl-backend-dev:arm64 \
-  libx11-xcb-dev:arm64 libxrandr-dev:arm64 libxcb-dri3-dev:arm64 \
-  libxcb-present-dev:arm64 \
+  libx11-dev:arm64 libx11-xcb-dev:arm64 libxext-dev:arm64 \
+  libxrandr-dev:arm64 libxcb-dri3-dev:arm64 libxcb-glx0-dev:arm64 \
+  libxcb-present-dev:arm64 libxxf86vm-dev:arm64 x11proto-dev:arm64 \
   libxcb-randr0-dev:arm64 libxcb-shm0-dev:arm64 libxcb-sync-dev:arm64 \
   libxcb-xfixes0-dev:arm64 libxcb1-dev:arm64 libxshmfence-dev:arm64 \
   libzstd-dev:arm64 python3-mako python3-packaging python3-pip python3-ply \
@@ -759,9 +763,10 @@ for pass in 1 2; do
     -Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=disabled \
     -Dmesa-clc=system \
     -Dprecomp-compiler=system -Dgallium-drivers=zink -Dplatforms=x11,wayland \
-    -Dglx=disabled -Degl=enabled -Dgbm=enabled -Dshader-cache=enabled \
+    -Dglx=dri -Degl=enabled -Dgbm=enabled \
+    -Dglvnd=enabled -Dglvnd-vendor-name=mesa -Dshader-cache=enabled \
     -Dshader-cache-max-size=64M \
-    -Dxmlconfig=disabled -Dzlib=disabled -Dzstd=enabled -Dvideo-codecs=[] \
+    -Dxmlconfig=enabled -Dzlib=disabled -Dzstd=enabled -Dvideo-codecs=[] \
     -Dunversion-libgallium=true
   grep -q 'Build machine cpu family: x86_64' "${build_dir}/meson-logs/meson-log.txt"
   grep -q 'Host machine cpu family: aarch64' "${build_dir}/meson-logs/meson-log.txt"
@@ -779,6 +784,9 @@ sha256sum /first-cross-build.so "build-cross/${so}" >/src/cross-build-sha256.txt
 elapsed="$(( $(date +%s) - start ))"
 printf 'two_builds_elapsed_seconds=%s\n' "${elapsed}" >/src/cross-build-time.txt
 DESTDIR=/instroot SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" meson install -C build-cross --no-rebuild --skip-subprojects
+install -D -m 0644 /tmp/10-pocketforge-zink.conf \
+  /instroot/usr/local/share/drirc.d/10-pocketforge-zink.conf
+meson introspect --buildoptions build-cross >/instroot/.pf-gpu-um-build-options.json
 aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
   /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe -lvulkan
 readelf -h /tmp/open-gpu-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
@@ -787,20 +795,26 @@ install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
 # the full install-tree manifest by sha256, so C's acceptance evidence lists real
 # staged artifact paths + hashes rather than a hand-picked subset.
 {
-  printf 'gpu-um-tsp@%s (open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)\n' "${PF_GPU_UM_SHA}"
+  printf 'gpu-um-tsp@%s (open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)\n' "${PF_GPU_UM_SHA}"
   printf 'target_abi=debian-bookworm snapshot=%s %s meson=%s\n' \
     "$(cat /bookworm-apt-snapshot-date)" \
     "$(tr '\n' ' ' </bookworm-target-toolchain.txt)" "$(meson --version)"
-  find /instroot/usr/local -type f \( -name '*.so*' -o -name '*.json' \) -printf '%P\n' | LC_ALL=C sort | while read -r f; do
+  find /instroot/usr/local -type f \
+    \( -name '*.so*' -o -name '*.json' -o -name '10-pocketforge-zink.conf' \) \
+    -printf '%P\n' | LC_ALL=C sort | while read -r f; do
     printf '  %s sha256=%s\n' "${f}" "$(sha256sum "/instroot/usr/local/${f}" | cut -d' ' -f1)"
   done
-} > /src/.pf-gpu-um-provenance
-cat /src/.pf-gpu-um-provenance
+} > /instroot/.pf-gpu-um-provenance
+/tmp/package-open-gpu-stack.sh \
+  /instroot /probe/usr/lib/pocketforge/open-gpu-probe \
+  /tmp/pocketforge-open-gpu-stack.control "${PF_GPU_UM_SHA}" \
+  /pocketforge-open-gpu-stack.deb
+cat /instroot/.pf-gpu-um-provenance
 GPUUMBUILD
 
 # --- 5/5 gpu-um-mesa-open: the consumable artifact — /out/usr/local is the FULL DESTDIR
 # install tree (Zink in the unified libgallium_dri.so megadriver,
-# libEGL/libgbm/libGLESv2, the Vulkan ICD .so + its ICD JSON under
+# GLVND's libEGL_mesa/libGLX_mesa vendors, libgbm, the Vulkan ICD .so + its ICD JSON under
 # share/vulkan/icd.d) exactly as gpu-um-tsp emits it: a real `meson install`
 # tree, never a hand-picked .so subset.
 FROM scratch AS gpu-um-mesa-open
@@ -808,7 +822,9 @@ COPY --from=gpu-um-build /mesa-source-commit /mesa-source-commit
 COPY --from=gpu-um-build /toolchain-packages.txt /toolchain-packages.txt
 COPY --from=gpu-um-build /src/cross-build-sha256.txt /cross-build-sha256.txt
 COPY --from=gpu-um-build /src/cross-build-time.txt /cross-build-time.txt
-COPY --from=gpu-um-build /src/.pf-gpu-um-provenance /out/.pf-gpu-um-provenance
+COPY --from=gpu-um-build /instroot/.pf-gpu-um-provenance /out/.pf-gpu-um-provenance
+COPY --from=gpu-um-build /instroot/.pf-gpu-um-build-options.json /out/.pf-gpu-um-build-options.json
+COPY --from=gpu-um-build /pocketforge-open-gpu-stack.deb /out/pocketforge-open-gpu-stack.deb
 COPY --from=gpu-um-build /src/build-cross/src/imagination/vulkan/libvulkan_powervr_mesa.so /libvulkan_powervr_mesa.so
 COPY --from=gpu-um-build /instroot/usr/local /out/usr/local
 COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe
@@ -995,7 +1011,7 @@ fi
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
 # sdl is SELECTED for every a133 variant. The sunxifb backend's build recipe links EITHER the
 # closed PowerVR UM (ddk) OR — tsp-mc9m.41.924.6 / C3, replacing the former B-deferred marker —
-# the C1 open Mesa GLES/EGL/GBM install tree (open): build-libsdl3.sh itself branches on
+# the C1 open Mesa GLX/GLES/EGL/GBM install tree (open): build-libsdl3.sh itself branches on
 # PF_GPU_MODEL and, for open, requires SUNXIFB_MESA_ROOT (the C1 gpu-um-mesa stage's
 # /work/gpu-um-mesa/usr/local — the real `meson install` prefix: include/EGL,EGL/eglext.h... +
 # lib/libEGL.so,libGLESv2.so... — CheckSUNXIFB's CMAKE_FIND_ROOT_PATH usage is generic, so no

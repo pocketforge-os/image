@@ -146,10 +146,11 @@ for input in libsdl3 wpa runtime launcher hwprobe gpu; do
     printf '%s fixture\n' "${input}" > "${scratch}/${input}/payload"
 done
 printf 'fixture SDL\n' > "${scratch}/libsdl3/libSDL3-pocketforge.so.0"
-for library in libEGL.so libGLESv2.so libgbm.so; do
+for library in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so; do
     printf '%s fixture\n' "${library}" > "${scratch}/mesa/usr/local/lib/${library}"
 done
 printf 'dri gbm fixture\n' > "${scratch}/mesa/usr/local/lib/gbm/dri_gbm.so"
+printf 'provider fixture\n' > "${scratch}/mesa/pocketforge-open-gpu-stack.deb"
 for firmware in fw_xr829.bin fw_xr829_bt.bin; do
     printf '%s fixture\n' "${firmware}" \
         > "${scratch}/blobs/sunxi/a133/wifi-firmware/${firmware}"

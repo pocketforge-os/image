@@ -264,7 +264,7 @@ fi
 
 # Standard demos/diagnostics belong to the PowerVR/Zink 7.x GPU profile, not
 # every open bring-up rootfs. Their generic GLVND dependencies are satisfied by
-# the local metadata-only provider assembled below; the our-stack tripwire
+# the source-built, file-owning provider selected below; the our-stack tripwire
 # proves that apt did not install a Debian Mesa driver implementation instead.
 case "${PF_DEVICE_ID}" in
     a133-open-7x-gpu|a133-open-7x-gpu-noradio)
@@ -317,26 +317,34 @@ if [ "${PF_HAS_DISPLAY}" = 0 ]; then
     echo "  display_pipeline=none: omitted graphics package roots (${DISPLAY_PACKAGE_ROOTS})"
 fi
 
+# An explicit apt root such as libgbm1 selects Debian's real package even when
+# a local package provides that name. Remove every implementation package that
+# the source-built provider replaces before handing the list to mmdebstrap;
+# neutral GLVND client libraries (libegl1/libgles2/libgl1/libglx0) and Xwayland
+# stay present.
+case "${PF_DEVICE_ID}" in
+    a133-open-7x-gpu|a133-open-7x-gpu-noradio)
+        GPU_STACK_REPLACED_PACKAGES="libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers mesa-vulkan-drivers libosmesa6"
+        for package in ${GPU_STACK_REPLACED_PACKAGES}; do
+            PKG_LIST="$(printf '%s\n' "${PKG_LIST}" | tr ',' '\n' |
+                awk -v drop="${package}" '$0 != drop' | paste -sd, -)"
+        done
+        echo "  open GPU provider: removed explicit Debian Mesa package roots (${GPU_STACK_REPLACED_PACKAGES})"
+        ;;
+esac
+
 echo "  package list: ${PKG_LIST}"
 
-# Build a deterministic metadata-only package for the initial apt solve. It
-# Provides GLVND's vendor alternatives and Conflicts with Debian's Mesa driver
-# payloads; gpu-um-tsp's real libraries are copied into /usr/local later by the
-# customize hook. Passing the local .deb to mmdebstrap keeps dpkg dependency
-# state truthful without letting apt choose llvmpipe/lavapipe.
+# Feed the deterministic, file-owning package produced from gpu-um-tsp's exact
+# Meson install tree into the initial apt solve. Its versioned Provides satisfy
+# Debian's graphics relationships while Conflicts/Replaces prevent a second
+# Mesa vendor from entering the rootfs.
 GPU_STACK_PROVIDER_OPTS=()
 case "${PF_DEVICE_ID}" in
     a133-open-7x-gpu|a133-open-7x-gpu-noradio)
-        GPU_STACK_PROVIDER_SOURCE="${SRC_DIR}/packages/pocketforge-open-gpu-stack/DEBIAN/control"
-        GPU_STACK_PROVIDER_ROOT="${WORK}/pocketforge-open-gpu-stack-root"
-        GPU_STACK_PROVIDER_DEB="${WORK}/pocketforge-open-gpu-stack.deb"
-        [ -f "${GPU_STACK_PROVIDER_SOURCE}" ] \
-            || { echo "FATAL: open GPU stack provider control is missing" >&2; exit 1; }
-        install -d -m 0755 "${GPU_STACK_PROVIDER_ROOT}/DEBIAN"
-        install -m 0644 "${GPU_STACK_PROVIDER_SOURCE}" \
-            "${GPU_STACK_PROVIDER_ROOT}/DEBIAN/control"
-        dpkg-deb --build --root-owner-group \
-            "${GPU_STACK_PROVIDER_ROOT}" "${GPU_STACK_PROVIDER_DEB}" >/dev/null
+        GPU_STACK_PROVIDER_DEB="${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb"
+        [ -f "${GPU_STACK_PROVIDER_DEB}" ] \
+            || { echo "FATAL: source-built open GPU stack provider is missing: ${GPU_STACK_PROVIDER_DEB}" >&2; exit 1; }
         GPU_STACK_PROVIDER_OPTS=(
             --include="${GPU_STACK_PROVIDER_DEB}"
             --hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount
@@ -385,13 +393,14 @@ elif [ "${PF_GPU_MODEL}" = "open" ]; then
     # REAL install tree, not just its NOT-SHIPPED-for-ddk marker (which would mean the
     # Dockerfile's PF_GPU_MODEL/gpu-um-mesa-${PF_GPU_MODEL} selector picked the wrong stage).
     for f in \
-        "${GPU_UM_MESA_DIR}/usr/local/lib/libEGL.so" \
-        "${GPU_UM_MESA_DIR}/usr/local/lib/libGLESv2.so" \
+        "${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libEGL_mesa.so.0" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libGLX_mesa.so.0" \
         "${GPU_UM_MESA_DIR}/usr/local/lib/libgbm.so" \
         "${GPU_UM_MESA_DIR}/usr/local/lib/gbm/dri_gbm.so"; do
         [ -f "$f" ] || { echo "FATAL: open Mesa userspace not found: $f (gpu-um-mesa stage did not build for gpu_model=open?)" >&2; exit 1; }
     done
-    echo "  open Mesa GLES/EGL/GBM userspace: ${GPU_UM_MESA_DIR}/usr/local (spot-check passed)"
+    echo "  open Mesa GLX/GLES/EGL/GBM userspace: ${GPU_UM_MESA_DIR}/usr/local (spot-check passed)"
 fi
 
 # GPU modules from gpu-km-tsp, kernel modules from kernel-tsp. The closed-KM file names
@@ -608,8 +617,8 @@ verify_open_gpu_runtime_closure() {
     local icd_runtime_closure
     local relative
     for relative in \
-        usr/local/lib/libEGL.so.1.0.0 \
-        usr/local/lib/libGLESv2.so.2.0.0 \
+        usr/local/lib/libEGL_mesa.so.0 \
+        usr/local/lib/libGLX_mesa.so.0 \
         usr/local/lib/libgbm.so.1.0.0 \
         usr/local/lib/gbm/dri_gbm.so \
         usr/local/lib/libgallium_dri.so \
@@ -636,7 +645,7 @@ verify_open_gpu_runtime_closure() {
         echo "FATAL: open GPU PowerVR ICD dynamic runtime closure is incomplete" >&2
         return 1
     fi
-    echo "[customize] open Mesa: EGL/GLES/GBM/Gallium/PowerVR Vulkan dynamic closure verified"
+    echo "[customize] open Mesa: GLVND-EGL/GBM/Gallium/PowerVR Vulkan dynamic closure verified"
 }
 
 install_open_gpu_module_options() {
@@ -750,47 +759,23 @@ if [ "${PF_GPU_MODEL:-ddk}" = "ddk" ]; then
     fi
     echo "[customize] PowerVR DDK: SONAME symlinks verified (libEGL.so.1 exists)"
 elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
-    # Open Mesa GLES/EGL/GBM userspace (tsp-mc9m.41.924.6 / C4): install the C1
-    # gpu-um-mesa stage's FULL meson DESTDIR tree verbatim at the SAME prefix it was
-    # built for (/usr/local) — the Zink DRI driver, gbm backend loader, and Vulkan ICD
-    # all resolve each other via paths baked in at build time relative to that prefix
-    # (e.g. GBM's dlopen of lib/gbm/dri_gbm.so), so preserving the prefix identity is
-    # what keeps those baked-in paths valid post-install; translating the tree onto a
-    # different prefix would need re-deriving every one of those compiled-in paths.
-    echo "[customize] Installing open Mesa GLES/EGL/GBM userspace (Zink, GE8300)..."
-    install -d "${ROOTFS}/usr/local"
-    cp -a /work/gpu-um-mesa/usr/local/. "${ROOTFS}/usr/local/"
-    install -D -m 0755 /work/gpu-um-mesa/usr/lib/pocketforge/open-gpu-probe \
-        "${ROOTFS}/usr/lib/pocketforge/open-gpu-probe"
+    # mmdebstrap installed the file-owning PocketForge provider during its apt
+    # solve. Do not copy a second, dpkg-invisible tree here: only refresh the
+    # loader cache and verify the package-owned GLVND EGL/GLX, GBM, Gallium, and
+    # PowerVR Vulkan closure.
+    echo "[customize] Activating package-owned open Mesa GLVND EGL/GLX/GBM userspace (Zink, GE8300)..."
     printf '/usr/local/lib\n' > "${ROOTFS}/etc/ld.so.conf.d/00-mesa-powervr.conf"
     chroot "$ROOTFS" ldconfig
     echo "[customize] open Mesa: ldconfig done"
-    if [ ! -L "${ROOTFS}/usr/local/lib/libEGL.so.1" ] && [ ! -f "${ROOTFS}/usr/local/lib/libEGL.so.1" ]; then
-        echo "FATAL: libEGL.so.1 missing from ${ROOTFS}/usr/local/lib after install" >&2
+    if [ ! -L "${ROOTFS}/usr/local/lib/libEGL_mesa.so.0" ] && [ ! -f "${ROOTFS}/usr/local/lib/libEGL_mesa.so.0" ]; then
+        echo "FATAL: GLVND vendor libEGL_mesa.so.0 missing from ${ROOTFS}/usr/local/lib" >&2
         exit 1
     fi
-    if [ -f /work/gpu-um-mesa/.pf-gpu-um-provenance ]; then
-        install -D -m 0644 /work/gpu-um-mesa/.pf-gpu-um-provenance "${ROOTFS}/usr/share/pocketforge/gpu-um-mesa-provenance"
+    if [ ! -L "${ROOTFS}/usr/local/lib/libGLX_mesa.so.0" ] && [ ! -f "${ROOTFS}/usr/local/lib/libGLX_mesa.so.0" ]; then
+        echo "FATAL: GLVND vendor libGLX_mesa.so.0 missing from ${ROOTFS}/usr/local/lib" >&2
+        exit 1
     fi
-    echo "[customize] open Mesa: userspace install verified (libEGL.so.1 present)"
-
-    # Zink is a Vulkan-on-GL translation layer: at runtime it needs the Khronos
-    # Vulkan LOADER (libvulkan.so.1, from the open-only mmdebstrap package set) to find
-    # and dlopen the imagination ICD via the manifest JSON above. The ICD JSON's
-    # own "library_path" is an ABSOLUTE path baked in at Mesa build time
-    # (meson.build: vulkan_icd_lib_path = prefix / libdir, i.e. /usr/local/lib —
-    # NOT relative to the JSON file), so copying the JSON to a second location is
-    # safe and does not need re-deriving any path. The loader's default manifest
-    # search covers both /usr/local/share/vulkan/icd.d (where the Mesa DESTDIR
-    # tree ships it, installed above) and /usr/share/vulkan/icd.d via
-    # XDG_DATA_DIRS — but XDG_DATA_DIRS is not guaranteed to be set in every
-    # runtime environment, so also install the JSON at the canonical
-    # /usr/share/vulkan/icd.d path the loader falls back to unconditionally.
-    ICD_JSON="$(find "${ROOTFS}/usr/local/share/vulkan/icd.d" -name '*.json' -type f | head -1)"
-    [ -n "${ICD_JSON}" ] || { echo "FATAL: no Vulkan ICD JSON found under ${ROOTFS}/usr/local/share/vulkan/icd.d (open Mesa install incomplete)" >&2; exit 1; }
-    install -d "${ROOTFS}/usr/share/vulkan/icd.d"
-    install -m 0644 "${ICD_JSON}" "${ROOTFS}/usr/share/vulkan/icd.d/$(basename "${ICD_JSON}")"
-    echo "[customize] open Mesa: ICD JSON also installed at /usr/share/vulkan/icd.d/$(basename "${ICD_JSON}") (loader default search path)"
+    echo "[customize] open Mesa: package-owned userspace verified (libEGL_mesa.so.0 and libGLX_mesa.so.0 present)"
 
     verify_open_gpu_runtime_closure "${ROOTFS}"
 fi
@@ -798,6 +783,7 @@ fi
 if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
     /work/src/scripts/verify-mesa-shader-cache.sh \
         /work/gpu-um-mesa/usr/local/lib/libgallium_dri.so
+    /work/src/scripts/verify-open-gpu-provider.sh "${ROOTFS}" /work/gpu-um-mesa
     /work/src/scripts/verify-open-gpu-tools.sh "${ROOTFS}" /work/gpu-um-mesa
 fi
 
@@ -1935,6 +1921,8 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
 if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
     "${SRC_DIR}/scripts/verify-mesa-shader-cache.sh" \
         "${GPU_UM_MESA_DIR}/usr/local/lib/libgallium_dri.so"
+    "${SRC_DIR}/scripts/verify-open-gpu-provider.sh" \
+        "${ROOTFS_EXTRACTED}" "${GPU_UM_MESA_DIR}"
     "${SRC_DIR}/scripts/verify-open-gpu-tools.sh" \
         "${ROOTFS_EXTRACTED}" "${GPU_UM_MESA_DIR}"
 fi

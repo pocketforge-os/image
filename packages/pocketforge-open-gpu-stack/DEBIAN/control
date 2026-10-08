@@ -1,13 +1,15 @@
 Package: pocketforge-open-gpu-stack
-Version: 1
+Version: @PROVIDER_VERSION@
 Section: libs
 Priority: optional
-Architecture: all
+Architecture: arm64
 Maintainer: PocketForge OS <os@pocketforge.invalid>
-Provides: libegl-mesa0, libegl-vendor, libglx-mesa0, libglx-vendor
-Conflicts: libegl-mesa0, libgl1-mesa-dri, libglx-mesa0, mesa-opencl-icd, mesa-va-drivers, mesa-vdpau-drivers, mesa-vulkan-drivers
-Description: dependency contract for the PocketForge open GPU stack
- This metadata-only package lets generic Debian graphics clients depend on the
- GLVND EGL and GLX vendor interfaces without installing Debian Mesa drivers.
- The actual EGL, GLES, GBM, Zink, and PowerVR Vulkan implementation is the
- source-built gpu-um-tsp tree installed under /usr/local by the image builder.
+Provides: libegl-mesa0 (= @PROVIDER_VERSION@), libegl-vendor, libgl1-mesa-dri (= @PROVIDER_VERSION@), libglx-mesa0 (= @PROVIDER_VERSION@), libglx-vendor, libgbm1 (= @PROVIDER_VERSION@), mesa-vulkan-drivers (= @PROVIDER_VERSION@)
+Conflicts: libegl-mesa0, libgl1-mesa-dri, libglx-mesa0, libgbm1, mesa-opencl-icd, mesa-va-drivers, mesa-vdpau-drivers, mesa-vulkan-drivers, libosmesa6
+Replaces: libegl-mesa0, libgl1-mesa-dri, libglx-mesa0, libgbm1, mesa-opencl-icd, mesa-va-drivers, mesa-vdpau-drivers, mesa-vulkan-drivers, libosmesa6
+Description: PocketForge source-built Mesa vendor for the open GPU image
+ This package owns the exact gpu-um-tsp install tree, its GLVND EGL and GLX
+ vendor routes, GBM and Zink Gallium implementation, loader driconf policy,
+ and PowerVR Vulkan ICD.
+ It satisfies Debian's Mesa driver package relationships without installing a
+ second vendor stack.
