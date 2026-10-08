@@ -168,6 +168,8 @@ printf 'mode=not-shipped\n' > "${scratch}/not-shipped/NOT-SHIPPED"
 "${install_bundle}" "${scratch}/not-shipped" "${scratch}/release-rootfs" not-shipped ''
 test ! -e "${scratch}/release-rootfs/opt/pocketforge/cts"
 test ! -e "${scratch}/release-rootfs/usr/share/pocketforge/cts-provenance"
+"${install_bundle}" "${scratch}/absent-producer" "${scratch}/release-rootfs" not-shipped ''
+test ! -e "${scratch}/release-rootfs/opt/pocketforge/cts"
 
 grep -F 'AS cts-bundle-v1' "${dockerfile}" >/dev/null
 grep -F 'AS cts-bundle-not-shipped' "${dockerfile}" >/dev/null

@@ -21,11 +21,15 @@ rootfs=$2
 mode=$3
 expected_sha=$4
 
-regular_dir "${producer}" || die 'reason=producer_missing'
 regular_dir "${rootfs}" || die 'reason=rootfs_missing'
 
 case "${mode}" in
     not-shipped)
+        if [ ! -e "${producer}" ]; then
+            printf 'cts_install_status=PASS mode=not-shipped producer=absent\n'
+            exit 0
+        fi
+        regular_dir "${producer}" || die 'reason=producer_invalid'
         regular_file "${producer}/NOT-SHIPPED" || die 'reason=not_shipped_marker_missing'
         [ "$(cat "${producer}/NOT-SHIPPED")" = 'mode=not-shipped' ] \
             || die 'reason=not_shipped_marker_invalid'
@@ -39,6 +43,8 @@ case "${mode}" in
     v1) ;;
     *) die 'reason=invalid_mode' ;;
 esac
+
+regular_dir "${producer}" || die 'reason=producer_missing'
 
 case "${expected_sha}" in
     *[!0-9a-f]*|'') die 'reason=invalid_expected_sha256' ;;
