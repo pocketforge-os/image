@@ -72,9 +72,8 @@ for artifact in \
     verify_owned_artifact "$artifact"
 done
 
-# gpu-um-tsp's pinned Mesa builds Zink into one unified Gallium DRI
-# megadriver; it does not install a per-driver zink_dri.so alias. Bind that
-# actual producer identity to the rootfs alongside the megadriver hash.
+# gpu-um-tsp's pinned Mesa builds Zink into unified Gallium DRI megadrivers.
+# Bind that producer identity to the rootfs alongside the megadriver hash.
 producer_provenance="${producer}/.pf-gpu-um-provenance"
 rootfs_provenance="${rootfs}/usr/share/pocketforge/gpu-um-mesa-provenance"
 [ -f "$producer_provenance" ] && [ ! -L "$producer_provenance" ] \
@@ -150,6 +149,53 @@ for boundary in $mesa_dri_boundaries; do
         fatal "Mesa DRI discovery boundary is not a directory: /${boundary}"
     fi
     [ -d "$directory" ] || continue
+    if [ "$boundary" = usr/local/lib/dri ]; then
+        producer_directory="${producer}/${boundary}"
+        [ -d "$producer_directory" ] && [ ! -L "$producer_directory" ] \
+            || fatal "gpu-um-tsp DRI producer boundary is missing or not a real directory: /${boundary}"
+
+        # Mesa installs libdril_dri.so plus hardware-name and zink aliases in
+        # its configured prefix. They are owned only when the copied rootfs
+        # tree is an exact mirror of the pinned gpu-um-tsp producer: regular
+        # files retain their hash and symlinks retain both kind and target.
+        # Anything else in this loader boundary can shadow the owned stack.
+        dri_entry_count=0
+        for rootfs_entry in "$directory"/*_dri.so*; do
+            [ -e "$rootfs_entry" ] || [ -L "$rootfs_entry" ] || continue
+            name=${rootfs_entry##*/}
+            producer_entry="${producer_directory}/${name}"
+            [ -e "$producer_entry" ] || [ -L "$producer_entry" ] \
+                || fatal "foreign Mesa DRI driver: ${rootfs_entry#"${rootfs}"} reason=absent-from-gpu-um-tsp-producer"
+            if [ -L "$rootfs_entry" ]; then
+                [ -L "$producer_entry" ] \
+                    || fatal "gpu-um-tsp DRI artifact mismatch: /${boundary}/${name} rootfs=symlink producer=non-symlink"
+                rootfs_target=$(readlink "$rootfs_entry")
+                producer_target=$(readlink "$producer_entry")
+                [ "$rootfs_target" = "$producer_target" ] \
+                    || fatal "gpu-um-tsp DRI artifact mismatch: /${boundary}/${name} rootfs_target=${rootfs_target} producer_target=${producer_target}"
+            else
+                [ -f "$rootfs_entry" ] && [ -f "$producer_entry" ] && [ ! -L "$producer_entry" ] \
+                    || fatal "gpu-um-tsp DRI artifact mismatch: /${boundary}/${name} rootfs=regular producer=non-regular"
+                rootfs_hash=$(sha256sum "$rootfs_entry" | awk '{ print $1 }')
+                producer_hash=$(sha256sum "$producer_entry" | awk '{ print $1 }')
+                [ "$rootfs_hash" = "$producer_hash" ] \
+                    || fatal "gpu-um-tsp DRI artifact mismatch: /${boundary}/${name} rootfs_sha256=${rootfs_hash} producer_sha256=${producer_hash}"
+            fi
+            dri_entry_count=$((dri_entry_count + 1))
+        done
+
+        for producer_entry in "$producer_directory"/*_dri.so*; do
+            [ -e "$producer_entry" ] || [ -L "$producer_entry" ] || continue
+            name=${producer_entry##*/}
+            rootfs_entry="${directory}/${name}"
+            [ -e "$rootfs_entry" ] || [ -L "$rootfs_entry" ] \
+                || fatal "gpu-um-tsp DRI artifact missing from rootfs: /${boundary}/${name}"
+        done
+        [ "$dri_entry_count" -gt 0 ] \
+            || fatal "gpu-um-tsp DRI producer boundary contains no driver artifacts: /${boundary}"
+        echo "open-gpu-stack dri-artifacts=PASS boundary=/${boundary} producer_entries=${dri_entry_count}"
+        continue
+    fi
     foreign_dri=$(find "$directory" -mindepth 1 -maxdepth 1 \
         \( -type f -o -type l \) -name '*_dri.so*' -print -quit)
     [ -z "$foreign_dri" ] \
