@@ -6,7 +6,12 @@ installer="${root}/scripts/install-platform-runtime.sh"
 dockerfile="${root}/build/Dockerfile.pf"
 builder="${root}/build/platform-runtimes/steamlink-ffmpeg59/v1/build.sh"
 scratch="$(mktemp -d)"
-trap 'chmod -R u+w "${scratch}" 2>/dev/null || true; rm -rf "${scratch}"' EXIT
+cleanup() {
+    chmod -R u+w "${scratch}"
+    find "${scratch}" -mindepth 1 -delete
+    rmdir "${scratch}"
+}
+trap cleanup EXIT
 
 make_fixture() {
     local producer=$1
@@ -243,23 +248,42 @@ awk_length='length($0) == 6'
 grep -F "${awk_length}" "${builder}" >/dev/null
 
 # Exercise the producer's fail-closed lock admission before any source fetch.
-# platform#267 moved the selected profile's kernel/UAPI source to this commit;
-# a matching image lock advances to the deliberately absent receipt, while a
-# stale image lock fails here with PF_FFMPEG_UAPI_SHA drift.
+# A matching platform/image lock advances to the deliberately absent receipt,
+# while the previous platform pin fails first with PF_FFMPEG_UAPI_SHA drift.
 mkdir -p "${scratch}/contract-kernel"
-if (
-    # shellcheck disable=SC1091
-    . "${root}/build/platform-runtimes/steamlink-ffmpeg59/v1/source.lock"
-    export SOURCE_DATE_EPOCH=0
-    export PF_FFMPEG_DEBIAN_VERSION="${FFMPEG_DEBIAN_VERSION}"
-    export PF_FFMPEG_DSC_SHA256="${FFMPEG_DSC_SHA256}"
-    export PF_FFMPEG_ORIG_SHA256="${FFMPEG_ORIG_SHA256}"
-    export PF_FFMPEG_ORIG_ASC_SHA256="${FFMPEG_ORIG_ASC_SHA256}"
-    export PF_FFMPEG_DEBIAN_SHA256="${FFMPEG_DEBIAN_SHA256}"
-    export PF_FFMPEG_PATCH_SERIES_SHA256="${PATCH_SERIES_SHA256}"
-    export PF_FFMPEG_UAPI_SHA=671e7090246a6ae9d347a70e2b3952b7819f937d
-    "${builder}" "${scratch}/contract-out" "${scratch}/contract-kernel"
-) >"${scratch}/contract.log" 2>&1; then
+run_contract_builder() {
+    local platform_uapi_sha=$1
+    (
+        # shellcheck disable=SC1091
+        . "${root}/build/platform-runtimes/steamlink-ffmpeg59/v1/source.lock"
+        export SOURCE_DATE_EPOCH=0
+        export PF_FFMPEG_DEBIAN_VERSION="${FFMPEG_DEBIAN_VERSION}"
+        export PF_FFMPEG_DSC_SHA256="${FFMPEG_DSC_SHA256}"
+        export PF_FFMPEG_ORIG_SHA256="${FFMPEG_ORIG_SHA256}"
+        export PF_FFMPEG_ORIG_ASC_SHA256="${FFMPEG_ORIG_ASC_SHA256}"
+        export PF_FFMPEG_DEBIAN_SHA256="${FFMPEG_DEBIAN_SHA256}"
+        export PF_FFMPEG_PATCH_SERIES_SHA256="${PATCH_SERIES_SHA256}"
+        export PF_FFMPEG_UAPI_SHA="${platform_uapi_sha}"
+        "${builder}" "${scratch}/contract-out" "${scratch}/contract-kernel"
+    )
+}
+
+previous_uapi_sha=671e7090246a6ae9d347a70e2b3952b7819f937d
+if run_contract_builder "${previous_uapi_sha}" \
+        >"${scratch}/stale-uapi.log" 2>&1; then
+    echo 'FAIL: previous platform UAPI pin was accepted' >&2
+    exit 1
+fi
+grep -Fxq \
+    "steamlink-ffmpeg59: PF_FFMPEG_UAPI_SHA drift: got '${previous_uapi_sha}', want 'a65b6107b0ab0938a80cee810d103e759da8f8c2'" \
+    "${scratch}/stale-uapi.log"
+if grep -Fq 'kernel UAPI source receipt missing' "${scratch}/stale-uapi.log"; then
+    echo 'FAIL: stale platform UAPI pin reached the kernel receipt gate' >&2
+    exit 1
+fi
+
+if run_contract_builder a65b6107b0ab0938a80cee810d103e759da8f8c2 \
+        >"${scratch}/contract.log" 2>&1; then
     echo 'FAIL: lock admission reached a missing kernel receipt without failing' >&2
     exit 1
 fi
