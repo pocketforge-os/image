@@ -17,7 +17,7 @@ for the PowerVR render node in its Gallium pipe loader: it first obtains the
 driver name from `loader_get_driver_for_fd` and then rewrites `powervr` to
 `zink` because PowerVR has no Gallium driver
 (`src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c:119-157`, gpu-um-tsp
-`977370a2`). The same build enables KMSRO when KMS DRM and Zink are present
+`7cc55c90`). The same build enables KMSRO when KMS DRM and Zink are present
 (`meson.build:335-336`), installs the dril compatibility entry for
 `sun4i-drm` (`src/gallium/targets/dril/meson.build:65-103`), and that entry
 re-enters EGL through a GBM device
