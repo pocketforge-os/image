@@ -1,4 +1,4 @@
-# Vendored from gpu-um-tsp docker/Dockerfile.ge8300-mesa-cross at 16550cc17c5cafa9ba8aed705c7c024f82cd71ca.
+# Vendored from gpu-um-tsp docker/Dockerfile.ge8300-mesa-cross at d7637e31011c6fd90255f94d169dedab06099ca9.
 # Update this fixture deliberately when the platform.lock gpu-um-tsp pin moves.
 FROM ubuntu:24.04@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb AS toolchain
 
@@ -43,6 +43,7 @@ RUN sed -i '/^trap .rm -f -- /d' /usr/local/src/install-mesa-buildenv.sh \
        gcc-aarch64-linux-gnu \
        libc6-dev:arm64 \
        libdrm-dev:arm64 \
+       libexpat1-dev:arm64 \
     && dpkg-query -W > /toolchain-packages.txt
 
 COPY docker/pkg-config/ /usr/local/bin/

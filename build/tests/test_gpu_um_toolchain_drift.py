@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ARM64_DESTINATION = "/etc/apt/sources.list.d/ubuntu-arm64.sources"
-PINNED_GPU_UM_SHA = "16550cc17c5cafa9ba8aed705c7c024f82cd71ca"
+PINNED_GPU_UM_SHA = "d7637e31011c6fd90255f94d169dedab06099ca9"
 
 
 def stage(text: str, alias: str) -> str:
@@ -82,6 +82,22 @@ def arm64_stanza(text: str) -> list[str]:
     return values[first : last + 1]
 
 
+def installed_packages(text: str) -> list[str]:
+    match = re.search(
+        r"apt-get install -y --no-install-recommends\s+"
+        r"(.*?)\n\s*(?:&&\s+)?dpkg-query -W",
+        text,
+        re.DOTALL,
+    )
+    if not match:
+        raise ValueError("toolchain apt package list not found")
+    return sorted(
+        token
+        for token in match.group(1).replace("\\\n", " ").split()
+        if token not in {"&&", "\\"}
+    )
+
+
 def fixture_source_sha(text: str) -> str:
     match = re.search(
         r"(?m)^# Vendored from gpu-um-tsp docker/Dockerfile\.ge8300-mesa-cross "
@@ -115,7 +131,7 @@ def main() -> int:
     parser.add_argument(
         "--fixture",
         type=Path,
-        default=root / "build/tests/fixtures/gpu-um-toolchain-16550cc1.Dockerfile",
+        default=root / "build/tests/fixtures/gpu-um-toolchain-d7637e31.Dockerfile",
     )
     parser.add_argument("--source-sha", default=PINNED_GPU_UM_SHA)
     args = parser.parse_args()
@@ -130,6 +146,11 @@ def main() -> int:
             ("fixture source pin", args.source_sha, fixture_source_sha(fixture_text)),
             ("base image", base_image(expected), base_image(actual)),
             ("sed strip expression", sed_strip(expected), sed_strip(actual)),
+            (
+                "upstream toolchain apt packages missing",
+                [],
+                sorted(set(installed_packages(expected)) - set(installed_packages(actual))),
+            ),
         ]
         expected_env = mesa_env(expected)
         actual_env = mesa_env(actual)

@@ -54,12 +54,15 @@ generate-wifi-config:
 	fi
 
 # ---- hermetic build-file tests ----------------------------------------------
-.PHONY: test-app-runtime-root test-cts-bundle-image test-dockerfile-pf-transforms test-kernel-build-identity
+.PHONY: test-app-runtime-root test-cts-bundle-image test-gles32-candidate-profile test-dockerfile-pf-transforms test-kernel-build-identity
 test-app-runtime-root:
 	@tests/test-app-runtime-root.sh
 
 test-cts-bundle-image:
 	@tests/test-cts-bundle-image.sh
+
+test-gles32-candidate-profile:
+	@tests/test-gles32-candidate-profile.sh
 
 test-dockerfile-pf-transforms:
 	@tests/test-a133-cma-bootargs.sh
