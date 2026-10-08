@@ -678,6 +678,7 @@ FROM ${PF_CONTAINER} AS gpu-um-build
 WORKDIR /src
 ARG SOURCE_DATE_EPOCH
 ARG PF_GPU_UM_SHA
+ARG PF_GAMESCOPE_SHA
 COPY --from=gpu-um-src . /src/
 COPY --from=gpu-um-src docker/pkg-config/ /usr/local/bin/
 COPY --from=gpu-um-src docker/meson/ /usr/local/share/mesa-cross/
@@ -687,6 +688,7 @@ COPY --from=gpu-um-native-precompilers /opt/mesa-native /opt/mesa-native
 COPY --from=gpu-um-native-precompilers /usr/lib/llvm-20/lib/clang /usr/lib/llvm-20/lib/clang
 COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
 COPY --from=image-src build/package-open-gpu-stack.sh /tmp/package-open-gpu-stack.sh
+COPY --from=image-src build/produce-gamescope-pvr-cache.sh /tmp/produce-gamescope-pvr-cache.sh
 COPY --from=image-src packages/pocketforge-open-gpu-stack/DEBIAN/control /tmp/pocketforge-open-gpu-stack.control
 COPY --from=image-src packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf /tmp/10-pocketforge-zink.conf
 RUN <<'GPUUMSYSROOT'
@@ -701,7 +703,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   libxcb-present-dev:arm64 libxxf86vm-dev:arm64 x11proto-dev:arm64 \
   libxcb-randr0-dev:arm64 libxcb-shm0-dev:arm64 libxcb-sync-dev:arm64 \
   libxcb-xfixes0-dev:arm64 libxcb1-dev:arm64 libxshmfence-dev:arm64 \
-  libzstd-dev:arm64 python3-mako python3-packaging python3-pip python3-ply \
+  libzstd-dev:arm64 python3-mako python3-packaging python3-pip python3-ply qemu-user-static \
   python3-yaml wayland-protocols/bookworm-backports
 PIP_ROOT_USER_ACTION=ignore python3 -m pip install --break-system-packages \
   'meson==1.7.2' 'ninja==1.11.1.4'
@@ -768,7 +770,7 @@ for pass in 1 2; do
     -Dglx=dri -Degl=enabled -Dgbm=enabled \
     -Dglvnd=enabled -Dglvnd-vendor-name=mesa -Dshader-cache=enabled \
     -Dshader-cache-max-size=64M \
-    -Dxmlconfig=enabled -Dzlib=disabled -Dzstd=enabled -Dvideo-codecs=[] \
+    -Dxmlconfig=enabled -Dzlib=disabled -Dzstd=enabled -Dtools=drm-shim -Dvideo-codecs=[] \
     -Dunversion-libgallium=true
   grep -q 'Build machine cpu family: x86_64' "${build_dir}/meson-logs/meson-log.txt"
   grep -q 'Host machine cpu family: aarch64' "${build_dir}/meson-logs/meson-log.txt"
@@ -793,6 +795,8 @@ aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
   /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe -lvulkan
 readelf -h /tmp/open-gpu-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
 install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
+/tmp/produce-gamescope-pvr-cache.sh \
+  /src /src/build-cross /instroot "${PF_GAMESCOPE_SHA}"
 # Provenance (this file's convention — a `.pf-*-provenance` marker for every stage):
 # the full install-tree manifest by sha256, so C's acceptance evidence lists real
 # staged artifact paths + hashes rather than a hand-picked subset.
@@ -812,6 +816,7 @@ install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
   /tmp/pocketforge-open-gpu-stack.control "${PF_GPU_UM_SHA}" \
   /pocketforge-open-gpu-stack.deb
 cat /instroot/.pf-gpu-um-provenance
+cat /instroot/.pf-gamescope-pvr-cache-provenance
 GPUUMBUILD
 
 # --- 5/5 gpu-um-mesa-open: the consumable artifact — /out/usr/local is the FULL DESTDIR

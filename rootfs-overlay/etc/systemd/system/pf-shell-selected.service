@@ -39,6 +39,8 @@ ConditionPathExists=/dev/fb0
 Type=simple
 User=gamer
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
+Environment=MESA_DISK_CACHE_COMBINE_RW_WITH_RO_FOZ=1
+Environment=MESA_DISK_CACHE_READ_ONLY_FOZ_DBS=pocketforge-gamescope-ge8300
 SupplementaryGroups=input video
 ExecStartPre=/bin/sh -c 'i=0; while [ ! -e /dev/input/pf-gamepad ] && [ "$i" -lt 20 ]; do sleep 0.2; i=$((i + 1)); done; exit 0'
 ExecStartPre=-+/bin/systemctl stop pocketforge-boot-animator.service

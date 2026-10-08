@@ -811,6 +811,7 @@ elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     fi
     echo "[customize] open Mesa: package-owned userspace verified (libEGL_mesa.so.0 and libGLX_mesa.so.0 present)"
 
+    /work/src/scripts/install-gamescope-pvr-cache.sh "${ROOTFS}"
     verify_open_gpu_runtime_closure "${ROOTFS}"
 fi
 

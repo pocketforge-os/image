@@ -10,6 +10,6 @@ Replaces: libegl-mesa0, libgl1-mesa-dri, libglx-mesa0, libgbm1, mesa-opencl-icd,
 Description: PocketForge source-built Mesa vendor for the open GPU image
  This package owns the exact gpu-um-tsp install tree, its GLVND EGL and GLX
  vendor routes, GBM and Zink Gallium implementation, loader driconf policy,
- and PowerVR Vulkan ICD.
+ PowerVR Vulkan ICD, and the matching read-only GE8300 Gamescope compute cache.
  It satisfies Debian's Mesa driver package relationships without installing a
  second vendor stack.
