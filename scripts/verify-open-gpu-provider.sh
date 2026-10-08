@@ -261,9 +261,9 @@ producer_icd="$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.js
 rootfs_icd="$rootfs/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
 [ -f "$producer_icd" ] || fatal 'producer PowerVR ICD JSON is missing'
 rootfs_icd_count=$(find "$rootfs" \( -type f -o -type l \) \
-    -name 'powervr_mesa_icd.aarch64.json' -print | wc -l)
+    -path '*/vulkan/icd.d/*.json' -print | wc -l)
 [ "$rootfs_icd_count" -eq 1 ] \
-    || fatal "expected exactly one PowerVR ICD manifest, found $rootfs_icd_count"
+    || fatal "expected exactly one Vulkan ICD manifest, found $rootfs_icd_count"
 if [ ! -f "$rootfs_icd" ] || [ -L "$rootfs_icd" ]; then
     fatal 'canonical PowerVR ICD JSON is missing or not regular'
 fi
@@ -283,4 +283,4 @@ for boundary in usr/lib/aarch64-linux-gnu lib/aarch64-linux-gnu; do
         || fatal "forbidden Debian Mesa driver file: ${forbidden#"$rootfs"}"
 done
 
-echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=disabled gbm=owned dri=zink vulkan=powervr vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
+echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=disabled gbm=owned dri=zink vulkan=powervr vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"

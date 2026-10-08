@@ -196,7 +196,7 @@ dpkg-deb --fsys-tarfile "$scratch/provider-a.deb" | tar -tf - | \
 positive_output=$("$verifier" "$rootfs" "$producer")
 printf '%s\n' "$positive_output"
 printf '%s\n' "$positive_output" | grep -Fx \
-    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=disabled gbm=owned dri=zink vulkan=powervr vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
+    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=disabled gbm=owned dri=zink vulkan=powervr vulkan_manifests=1 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
     >/dev/null
 
 expect_rejection() {
@@ -260,7 +260,16 @@ mkdir -p "$candidate/usr/local/share/vulkan/icd.d"
 cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
     "$candidate/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
 expect_rejection red-duplicate-vulkan-icd "$candidate" \
-    'expected exactly one PowerVR ICD manifest, found 2'
+    'expected exactly one Vulkan ICD manifest, found 2'
+
+# The loader does not care about the manifest filename. A differently named
+# alias to the same library also enumerates the physical device twice.
+candidate="$scratch/red-duplicate-vulkan-alias"
+cp -a "$rootfs" "$candidate"
+cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
+    "$candidate/usr/share/vulkan/icd.d/powervr_alias.json"
+expect_rejection red-duplicate-vulkan-alias "$candidate" \
+    'expected exactly one Vulkan ICD manifest, found 2'
 
 candidate="$scratch/red-relative-egl-json"
 cp -a "$rootfs" "$candidate"
@@ -321,4 +330,4 @@ fi
 grep -F 'Mesa build option mismatch: glx expected=disabled actual=dri' \
     "$scratch/red-glx-enabled.err" >/dev/null
 
-echo 'open-gpu-provider-test=PASS green=source-package+glvnd-routing red=debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,relative-json,wrong-target-json,symlink-boundary,missing-vendor,changed-hash,wrong-arch,missing-egl-main,glx-enabled'
+echo 'open-gpu-provider-test=PASS green=source-package+glvnd-routing red=debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-vendor,changed-hash,wrong-arch,missing-egl-main,glx-enabled'

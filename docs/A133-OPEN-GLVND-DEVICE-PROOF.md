@@ -33,9 +33,19 @@ owned file must resolve to `pocketforge-open-gpu-stack`; the vendor JSON must
 name the absolute `/usr/local/lib/libEGL_mesa.so.0`; and the final `find` must
 print nothing. The Vulkan-manifest `find` must print exactly the canonical
 `/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json`, never a second
-`/usr/local/share` route. The system manager must supply the image-owned Zink
-selection; do not add an ad hoc `MESA_LOADER_DRIVER_OVERRIDE` to the test
-command.
+`/usr/local/share` route. This build-time assertion proves one loader route;
+the device run must separately prove that route enumerates one physical device:
+
+```sh
+vulkaninfo --summary | tee /run/pocketforge-vulkan-summary.txt
+test "$(grep -c '^[[:space:]]*deviceName[[:space:]]*=[[:space:]]*PowerVR Rogue GE8300$' \
+  /run/pocketforge-vulkan-summary.txt)" -eq 1
+```
+
+Quote the full summary and the successful count check. Two identical `deviceName`
+lines fail even when they name the same hardware. The system manager must supply
+the image-owned Zink selection; do not add an ad hoc
+`MESA_LOADER_DRIVER_OVERRIDE` to the test command.
 
 ## Runtime routing evidence
 
