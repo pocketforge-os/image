@@ -167,6 +167,21 @@ chmod 0755 "$scratch/open-gpu-probe"
 cat >"$scratch/readelf" <<'EOF'
 #!/bin/sh
 set -eu
+emit_symbols() {
+    case "$1" in
+        *red-missing-egl-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n' ;;
+        *red-missing-glx-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n' ;;
+        *red-missing-kmsro-screen*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-missing-zink-renderonly*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n' ;;
+        *red-local-kmsro-screen*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC LOCAL DEFAULT 1 kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-hidden-kmsro-screen*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL HIDDEN 1 kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-undefined-kmsro-screen*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT UND kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-local-zink-renderonly*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC LOCAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-hidden-zink-renderonly*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC GLOBAL HIDDEN 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-undefined-zink-renderonly*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT UND zink_drm_create_screen_renderonly\n' ;;
+        *) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n  3: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n  4: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+    esac
+}
 case "$1" in
     -h)
         machine=AArch64
@@ -175,13 +190,11 @@ case "$1" in
         printf '  Machine:                           %s\n' "$machine"
         ;;
     -Ws)
-        case "$2" in
-            *red-missing-egl-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n' ;;
-            *red-missing-glx-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n' ;;
-            *red-missing-kmsro-screen*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
-            *red-missing-zink-renderonly*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n' ;;
-            *) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n  3: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n  4: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
-        esac
+        emit_symbols "$2"
+        ;;
+    --dyn-syms)
+        test "$2" = --wide
+        emit_symbols "$3"
         ;;
     *) exit 2 ;;
 esac
@@ -495,6 +508,18 @@ cp -a "$rootfs" "$candidate"
 expect_rejection red-missing-zink-renderonly "$candidate" \
     'Gallium DRI does not export zink_drm_create_screen_renderonly'
 
+for failure in local hidden undefined; do
+    candidate="$scratch/red-$failure-kmsro-screen"
+    cp -a "$rootfs" "$candidate"
+    expect_rejection "red-$failure-kmsro-screen" "$candidate" \
+        'Gallium DRI does not export kmsro_drm_screen_create'
+
+    candidate="$scratch/red-$failure-zink-renderonly"
+    cp -a "$rootfs" "$candidate"
+    expect_rejection "red-$failure-zink-renderonly" "$candidate" \
+        'Gallium DRI does not export zink_drm_create_screen_renderonly'
+done
+
 candidate="$scratch/red-glx-disabled"
 producer_bad="$scratch/producer-glx-disabled"
 cp -a "$rootfs" "$candidate"
@@ -527,4 +552,4 @@ fi
 grep -F 'Mesa build option mismatch: xmlconfig expected=enabled actual=disabled' \
     "$scratch/red-xmlconfig-disabled.err" >/dev/null
 
-echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+drirc-powervr+kmsro+zink-renderonly red=loader-environment,missing-zink-policy,old-two-block-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,missing-kmsro-screen,missing-zink-renderonly,glx-disabled,xmlconfig-disabled'
+echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+drirc-powervr+kmsro+zink-renderonly red=loader-environment,missing-zink-policy,old-two-block-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,missing-kmsro-screen,missing-zink-renderonly,local-hidden-undefined-kmsro,local-hidden-undefined-zink-renderonly,glx-disabled,xmlconfig-disabled'

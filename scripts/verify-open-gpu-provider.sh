@@ -243,15 +243,21 @@ if ! glx_symbols=$($readelf_command -Ws \
 fi
 printf '%s\n' "$glx_symbols" | grep -Eq '[[:space:]]__glx_Main$' \
     || fatal 'GLVND GLX vendor does not export __glx_Main'
-if ! gallium_symbols=$($readelf_command -Ws \
+if ! gallium_symbols=$($readelf_command --dyn-syms --wide \
     "$rootfs/usr/local/lib/libgallium_dri.so" 2>&1); then
     printf '%s\n' "$gallium_symbols" >&2
     fatal 'cannot inspect Gallium DRI symbols'
 fi
-printf '%s\n' "$gallium_symbols" | grep -Eq '[[:space:]]kmsro_drm_screen_create$' \
-    || fatal 'Gallium DRI does not export kmsro_drm_screen_create'
-printf '%s\n' "$gallium_symbols" | grep -Eq '[[:space:]]zink_drm_create_screen_renderonly$' \
-    || fatal 'Gallium DRI does not export zink_drm_create_screen_renderonly'
+verify_gallium_export() {
+    wanted=$1
+    printf '%s\n' "$gallium_symbols" | awk -v wanted="$wanted" '
+        $4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" &&
+            $7 != "UND" && $8 == wanted { found = 1 }
+        END { exit(found ? 0 : 1) }
+    ' || fatal "Gallium DRI does not export $wanted"
+}
+verify_gallium_export kmsro_drm_screen_create
+verify_gallium_export zink_drm_create_screen_renderonly
 
 verify_evidence_file() {
     producer_relative=$1
