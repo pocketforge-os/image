@@ -55,7 +55,7 @@ ln -s libdril_dri.so "$producer/usr/local/lib/dri/ili9225_dri.so"
 ln -s libdril_dri.so "$producer/usr/local/lib/dri/zink_dri.so"
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
     >"$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
-printf '%s\n' 'gpu-um-tsp@7cc55c9006d1516ec8b77d200f8ac18f1e691219 (open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
+printf '%s\n' 'gpu-um-tsp@16550cc17c5cafa9ba8aed705c7c024f82cd71ca (open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
     >"$producer/.pf-gpu-um-provenance"
 cp -a "$producer/usr/local/." "$positive/usr/local/"
 find "$positive/usr/local/share/vulkan/icd.d" -mindepth 1 \
@@ -316,7 +316,7 @@ negative_provenance_identity="$scratch/negative-provenance-identity"
 negative_producer_identity="$scratch/negative-producer-identity"
 cp -a "$positive" "$negative_provenance_identity"
 cp -a "$producer" "$negative_producer_identity"
-printf '%s\n' 'gpu-um-tsp@7cc55c9006d1516ec8b77d200f8ac18f1e691219 (unknown stack)' \
+printf '%s\n' 'gpu-um-tsp@16550cc17c5cafa9ba8aed705c7c024f82cd71ca (unknown stack)' \
     >"$negative_producer_identity/.pf-gpu-um-provenance"
 cp "$negative_producer_identity/.pf-gpu-um-provenance" \
     "$negative_provenance_identity/usr/share/pocketforge/gpu-um-mesa-provenance"
