@@ -147,6 +147,7 @@ grep -Fx AFTER "${scratch}/control-true.out" >/dev/null
 [ "$(run_prelude_case control-false 'false')" -eq 1 ]
 [ "$(run_prelude_case control-exit 'exit 3')" -eq 3 ]
 [ "$(run_prelude_case control-shared 'is_a133_open_7x_gpu_device a133-open-7x-gpu')" -eq 0 ]
+[ "$(run_prelude_case control-shared-cts 'is_a133_open_7x_gpu_device a133-open-7x-gpu-cts')" -eq 0 ]
 
 # 3. The gated PowerVR option is written by the generated hook itself.  Run the
 # hook's own definitions (prelude through install_open_gpu_module_options, with
@@ -177,7 +178,7 @@ run_options_helper() {
     printf '%s\n' "${status}"
 }
 
-for device_id in a133-open-7x-gpu a133-open-7x-gpu-noradio; do
+for device_id in a133-open-7x-gpu a133-open-7x-gpu-cts a133-open-7x-gpu-noradio; do
     status="$(run_options_helper "options-${device_id}" "${device_id}" open in-tree-7.x)"
     if [ "${status}" -ne 0 ] || grep -F 'command not found' "${scratch}/options-${device_id}.err" >&2; then
         echo "FAIL: generated hook could not evaluate the ${device_id} PowerVR option gate (status ${status})" >&2
@@ -193,7 +194,7 @@ for device_id in a133-open-7x-gpu a133-open-7x-gpu-noradio; do
         "${scratch}/options-${device_id}.out" >/dev/null
 done
 
-# Only the two named sibling profiles may receive the option; near matches and
+# Only the named 7.x GPU profiles may receive the option; near matches and
 # other devices are excluded without error.
 for tuple in \
     'a133-open open in-tree-6.x' \
@@ -220,7 +221,7 @@ for tuple in \
 done
 
 # A 7.x GPU device ID without the exact open/in-tree-7.x contract is refused.
-for device_id in a133-open-7x-gpu a133-open-7x-gpu-noradio; do
+for device_id in a133-open-7x-gpu a133-open-7x-gpu-cts a133-open-7x-gpu-noradio; do
     status="$(run_options_helper "wrong-${device_id}" "${device_id}" open in-tree-6.x)"
     [ "${status}" -ne 0 ] || {
         echo "FAIL: ${device_id} PowerVR option accepted a non-7.x contract" >&2

@@ -63,6 +63,7 @@ ARG PF_GPU_MODEL=ddk
 ARG PF_DISPLAY_PIPELINE
 ARG PF_STEAMLINK_FFMPEG59_MODE=not-shipped
 ARG PF_GAMESCOPE_MODE=not-shipped
+ARG PF_CTS_BUNDLE_MODE=not-shipped
 
 # The image variant is declared globally so the dev-only producer selectors cannot
 # drift from the variant passed to the rootfs and assemble stages. Release selects
@@ -1392,6 +1393,48 @@ FROM scratch AS platform-runtime-steamlink-ffmpeg59-export
 COPY --from=platform-runtime-steamlink-ffmpeg59 /out /
 
 # =============================================================================
+# cts-bundle — immutable full GLES CTS payload for the explicit dev test image.
+# The artifact is fetched only in the selected v1 stage, verified first by its
+# content-addressed SHA and then by its embedded receipt/file manifest. All
+# release and unrelated profiles select the byte-empty NOT-SHIPPED producer.
+# =============================================================================
+FROM ${PF_CONTAINER} AS cts-bundle-not-shipped
+RUN install -d /out && printf '%s\n' 'mode=not-shipped' > /out/NOT-SHIPPED
+
+FROM ${PF_CONTAINER} AS cts-bundle-v1
+ARG PF_CTS_BUNDLE_URL
+ARG PF_CTS_BUNDLE_SHA256
+ARG PF_CTS_SOURCE_TAG
+ARG PF_CTS_SOURCE_COMMIT
+ARG PF_CTS_SOURCE_ARCHIVE_SHA256
+ARG PF_CTS_LIST_COUNT
+ARG PF_CTS_CASE_COUNT
+ARG PF_CTS_SURFACES
+ARG PF_CTS_SOURCE_DATE_EPOCH
+COPY --from=image-src scripts/prepare-cts-bundle.sh /usr/local/bin/prepare-cts-bundle
+RUN <<'CTS_BUNDLE'
+set -eux
+: "${PF_CTS_BUNDLE_URL:?}" "${PF_CTS_BUNDLE_SHA256:?}" \
+  "${PF_CTS_SOURCE_TAG:?}" "${PF_CTS_SOURCE_COMMIT:?}" \
+  "${PF_CTS_SOURCE_ARCHIVE_SHA256:?}" "${PF_CTS_LIST_COUNT:?}" \
+  "${PF_CTS_CASE_COUNT:?}" "${PF_CTS_SURFACES:?}" "${PF_CTS_SOURCE_DATE_EPOCH:?}"
+archive=/work/pf-deqp-gles-aarch64.tar.gz
+curl --fail --location --retry 3 --output "${archive}" "${PF_CTS_BUNDLE_URL}"
+PF_CTS_SOURCE_TAG="${PF_CTS_SOURCE_TAG}" \
+PF_CTS_SOURCE_COMMIT="${PF_CTS_SOURCE_COMMIT}" \
+PF_CTS_SOURCE_ARCHIVE_SHA256="${PF_CTS_SOURCE_ARCHIVE_SHA256}" \
+PF_CTS_LIST_COUNT="${PF_CTS_LIST_COUNT}" \
+PF_CTS_CASE_COUNT="${PF_CTS_CASE_COUNT}" \
+PF_CTS_SURFACES="${PF_CTS_SURFACES}" \
+PF_CTS_SOURCE_DATE_EPOCH="${PF_CTS_SOURCE_DATE_EPOCH}" \
+  /usr/local/bin/prepare-cts-bundle \
+    "${archive}" /out "${PF_CTS_BUNDLE_URL}" "${PF_CTS_BUNDLE_SHA256}"
+find "${archive}" -delete
+CTS_BUNDLE
+
+FROM cts-bundle-${PF_CTS_BUNDLE_MODE} AS cts-bundle
+
+# =============================================================================
 # sdl-static — static AArch64 SDL used only to link pf-hwprobe.
 # sim owns the static configuration/toolchain. The already staged, lock-pinned
 # libsdl3-sunxifb archive supplies SDL source so this stage never clones/fetches.
@@ -1923,6 +1966,9 @@ ARG PF_UBOOT_SHA=
 ARG PF_TFA_SHA=
 ARG PF_STEAMLINK_FFMPEG59_MODE=not-shipped
 ARG PF_GAMESCOPE_MODE=not-shipped
+ARG PF_CTS_BUNDLE_MODE=not-shipped
+ARG PF_CTS_BUNDLE_URL=
+ARG PF_CTS_BUNDLE_SHA256=
 ARG PF_ODYSSEY_CAPTURE=
 ARG APT_SNAPSHOT_DATE
 ARG SOURCE_DATE_EPOCH
@@ -1952,6 +1998,7 @@ COPY --from=recovery /out           /work/recovery
 COPY --from=launcher /out           /work/launcher
 COPY --from=platform-runtime-steamlink-ffmpeg59 /out /work/platform-runtime
 COPY --from=gamescope /out /work/gamescope-package
+COPY --from=cts-bundle /out /work/cts-bundle
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -1972,8 +2019,12 @@ case "${PF_SOC}" in
       POOLSUITE_DIR=/work/poolsuite \
       PLATFORM_RUNTIME_DIR=/work/platform-runtime \
       GAMESCOPE_DIR=/work/gamescope-package \
+      CTS_BUNDLE_DIR=/work/cts-bundle \
       PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE}" \
       PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE}" \
+      PF_CTS_BUNDLE_MODE="${PF_CTS_BUNDLE_MODE}" \
+      PF_CTS_BUNDLE_URL="${PF_CTS_BUNDLE_URL}" \
+      PF_CTS_BUNDLE_SHA256="${PF_CTS_BUNDLE_SHA256}" \
       PF_ODYSSEY_CAPTURE="${PF_ODYSSEY_CAPTURE:-}" \
       PF_DEVICE_ID="${PF_DEVICE_ID}" PF_VARIANT="${PF_VARIANT}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \

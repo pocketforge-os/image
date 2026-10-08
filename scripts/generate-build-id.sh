@@ -58,6 +58,14 @@ identity="$({
     if [ -n "${PF_GAMESCOPE_IDENTITY_SHA256:-}" ]; then
         printf 'gamescope_identity=%s\n' "${PF_GAMESCOPE_IDENTITY_SHA256}"
     fi
+    if [ -n "${PF_CTS_BUNDLE_SHA256:-}" ]; then
+        case "${PF_CTS_BUNDLE_SHA256}" in
+            *[!0-9a-f]*|'') echo "generate-build-id: invalid PF_CTS_BUNDLE_SHA256" >&2; exit 1 ;;
+        esac
+        [ "${#PF_CTS_BUNDLE_SHA256}" -eq 64 ] \
+            || { echo "generate-build-id: invalid PF_CTS_BUNDLE_SHA256" >&2; exit 1; }
+        printf 'cts_bundle=%s\n' "${PF_CTS_BUNDLE_SHA256}"
+    fi
 } | sha256sum | cut -d' ' -f1)"
 
 printf 'device=%s build=%.12s\n' "${PF_DEVICE_ID}" "${identity}"

@@ -338,6 +338,7 @@ class GamescopePackagePathTest(unittest.TestCase):
 
     def test_profile_gate_is_exact_and_diagnostics_are_default_off(self) -> None:
         self.assertTrue(gp.profile_enabled("a133-open-7x-gpu", "g1"))
+        self.assertTrue(gp.profile_enabled("a133-open-7x-gpu-cts", "g1"))
         for device in ("a133", "a133-open", "a133-open-7x-gpu-noradio", "a523"):
             self.assertFalse(gp.profile_enabled(device, "not-shipped"))
             self.assertFalse(gp.profile_enabled(device, "g1"))

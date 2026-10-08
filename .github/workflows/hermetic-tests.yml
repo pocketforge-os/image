@@ -99,6 +99,7 @@ jobs:
             tests/test-cedar-spike.sh
             tests/test-clock-seed.sh
             tests/test-customize-hook-fail-closed.sh
+            tests/test-cts-bundle-image.sh
             tests/test-default-app-input-gates.sh
             tests/test-default-app-platform.sh
             tests/test-default-app-rootfs.sh

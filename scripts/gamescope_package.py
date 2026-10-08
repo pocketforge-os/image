@@ -483,7 +483,7 @@ def validate_aarch64_elf(readelf_header: str) -> None:
 
 
 def profile_enabled(device_id: str, mode: str) -> bool:
-    return device_id == "a133-open-7x-gpu" and mode == "g1"
+    return device_id in {"a133-open-7x-gpu", "a133-open-7x-gpu-cts"} and mode == "g1"
 
 
 def diagnostics_enabled(mode: str, variant: str, *, explicit: bool = False) -> bool:

@@ -52,7 +52,7 @@ declare -a KERNEL_REQUIRED_MODULE_LIST=()
 
 is_a133_open_7x_gpu_device() {
     case "$1" in
-        a133-open-7x-gpu|a133-open-7x-gpu-noradio) return 0 ;;
+        a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -121,6 +121,10 @@ PLATFORM_RUNTIME_DIR="${PLATFORM_RUNTIME_DIR:-/work/platform-runtime}"
 PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE:-not-shipped}"
 GAMESCOPE_DIR="${GAMESCOPE_DIR:-/work/gamescope-package}"
 PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE:-not-shipped}"
+CTS_BUNDLE_DIR="${CTS_BUNDLE_DIR:-/work/cts-bundle}"
+PF_CTS_BUNDLE_MODE="${PF_CTS_BUNDLE_MODE:-not-shipped}"
+PF_CTS_BUNDLE_URL="${PF_CTS_BUNDLE_URL:-}"
+PF_CTS_BUNDLE_SHA256="${PF_CTS_BUNDLE_SHA256:-}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 BOARD_DIR="${SRC_DIR}/boards/tsp"
 
@@ -150,6 +154,29 @@ if [ "$VARIANT" != "dev" ] && [ "$VARIANT" != "release" ]; then
     exit 2
 fi
 
+case "${PF_CTS_BUNDLE_MODE}" in
+    not-shipped)
+        [ -z "${PF_CTS_BUNDLE_SHA256}" ] || {
+            echo "FATAL: not-shipped CTS mode must not carry an artifact SHA" >&2
+            exit 2
+        }
+        ;;
+    v1)
+        [ "${VARIANT}" = dev ] && [ "${PF_DEVICE_ID}" = a133-open-7x-gpu-cts ] || {
+            echo "FATAL: CTS v1 is restricted to the a133-open-7x-gpu-cts dev image" >&2
+            exit 2
+        }
+        case "${PF_CTS_BUNDLE_SHA256}" in
+            *[!0-9a-f]*|'') echo "FATAL: CTS v1 requires a full lowercase SHA-256" >&2; exit 2 ;;
+        esac
+        [ "${#PF_CTS_BUNDLE_SHA256}" -eq 64 ] || {
+            echo "FATAL: CTS v1 requires a full lowercase SHA-256" >&2
+            exit 2
+        }
+        ;;
+    *) echo "FATAL: PF_CTS_BUNDLE_MODE must be not-shipped or v1" >&2; exit 2 ;;
+esac
+
 # Reproducible timestamp
 if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
     if git -C "${SRC_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
@@ -169,10 +196,13 @@ case "${PF_GAMESCOPE_MODE}" in
         }
         ;;
     g1)
-        [ "${PF_DEVICE_ID}" = "a133-open-7x-gpu" ] || {
-            echo "FATAL: Gamescope g1 package is restricted to a133-open-7x-gpu" >&2
-            exit 1
-        }
+        case "${PF_DEVICE_ID}" in
+            a133-open-7x-gpu|a133-open-7x-gpu-cts) ;;
+            *)
+                echo "FATAL: Gamescope g1 package is restricted to an a133-open-7x-gpu profile" >&2
+                exit 1
+                ;;
+        esac
         [ -x "${GAMESCOPE_DIR}/usr/bin/gamescope" ] || {
             echo "FATAL: Gamescope g1 package binary is missing" >&2
             exit 1
@@ -267,7 +297,7 @@ fi
 # the source-built, file-owning provider selected below; the our-stack tripwire
 # proves that apt did not install a Debian Mesa driver implementation instead.
 case "${PF_DEVICE_ID}" in
-    a133-open-7x-gpu|a133-open-7x-gpu-noradio)
+    a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
         [ -f "${PKG_A133_OPEN_7X_GPU_FILE}" ] \
             || { echo "FATAL: ${PKG_A133_OPEN_7X_GPU_FILE} not found" >&2; exit 1; }
         GPU_TOOL_PKGS="$(grep -v '^\s*#' "${PKG_A133_OPEN_7X_GPU_FILE}" | grep -v '^\s*$' | tr '\n' ',' | sed 's/,$//')"
@@ -323,7 +353,7 @@ fi
 # neutral GLVND client libraries (libegl1/libgles2/libgl1/libglx0) and Xwayland
 # stay present.
 case "${PF_DEVICE_ID}" in
-    a133-open-7x-gpu|a133-open-7x-gpu-noradio)
+    a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
         GPU_STACK_REPLACED_PACKAGES="libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers mesa-vulkan-drivers libosmesa6"
         for package in ${GPU_STACK_REPLACED_PACKAGES}; do
             PKG_LIST="$(printf '%s\n' "${PKG_LIST}" | tr ',' '\n' |
@@ -341,7 +371,7 @@ echo "  package list: ${PKG_LIST}"
 # Mesa vendor from entering the rootfs.
 GPU_STACK_PROVIDER_OPTS=()
 case "${PF_DEVICE_ID}" in
-    a133-open-7x-gpu|a133-open-7x-gpu-noradio)
+    a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
         GPU_STACK_PROVIDER_DEB="${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb"
         [ -f "${GPU_STACK_PROVIDER_DEB}" ] \
             || { echo "FATAL: source-built open GPU stack provider is missing: ${GPU_STACK_PROVIDER_DEB}" >&2; exit 1; }
@@ -533,16 +563,20 @@ ROOTFS="$1"
 # Keep omission fail-closed as the source-free producer instead of relying on
 # the outer build-rootfs environment to define this newer selector.
 PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE:-not-shipped}"
+PF_CTS_BUNDLE_SHA256="${PF_CTS_BUNDLE_SHA256:-}"
 
 echo "[customize] Starting PocketForge rootfs customization..."
 
 case "${PF_GAMESCOPE_MODE}" in
     not-shipped) ;;
     g1)
-        [ "${PF_DEVICE_ID}" = "a133-open-7x-gpu" ] || {
-            echo "FATAL: refusing Gamescope package on ${PF_DEVICE_ID}" >&2
-            exit 1
-        }
+        case "${PF_DEVICE_ID}" in
+            a133-open-7x-gpu|a133-open-7x-gpu-cts) ;;
+            *)
+                echo "FATAL: refusing Gamescope package on ${PF_DEVICE_ID}" >&2
+                exit 1
+                ;;
+        esac
         test "$(od -An -tx1 -j18 -N2 "${GAMESCOPE_DIR}/usr/bin/gamescope" | tr -d ' ')" = b700
         install -d "${ROOTFS}/usr"
         cp -a "${GAMESCOPE_DIR}/." "${ROOTFS}/"
@@ -1889,7 +1923,7 @@ mmdebstrap \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
     "${GPU_STACK_PROVIDER_OPTS[@]}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_KERNEL_REPO=${PF_KERNEL_REPO} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} GAMESCOPE_DIR=${GAMESCOPE_DIR} PF_GAMESCOPE_MODE=${PF_GAMESCOPE_MODE} PF_GAMESCOPE_IDENTITY_SHA256=${PF_GAMESCOPE_IDENTITY_SHA256} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_KERNEL_REPO=${PF_KERNEL_REPO} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} GAMESCOPE_DIR=${GAMESCOPE_DIR} PF_GAMESCOPE_MODE=${PF_GAMESCOPE_MODE} PF_GAMESCOPE_IDENTITY_SHA256=${PF_GAMESCOPE_IDENTITY_SHA256} PF_CTS_BUNDLE_SHA256=${PF_CTS_BUNDLE_SHA256} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
@@ -1917,6 +1951,10 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
 "${SRC_DIR}/scripts/install-platform-runtime.sh" \
     "${PLATFORM_RUNTIME_DIR}" "${ROOTFS_EXTRACTED}" \
     "${PF_STEAMLINK_FFMPEG59_MODE}"
+
+"${SRC_DIR}/scripts/install-cts-bundle.sh" \
+    "${CTS_BUNDLE_DIR}" "${ROOTFS_EXTRACTED}" \
+    "${PF_CTS_BUNDLE_MODE}" "${PF_CTS_BUNDLE_SHA256}"
 
 if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
     "${SRC_DIR}/scripts/verify-mesa-shader-cache.sh" \

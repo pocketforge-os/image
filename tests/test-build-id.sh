@@ -32,6 +32,18 @@ with_gamescope="$(${generator})"
 PF_GAMESCOPE_IDENTITY_SHA256=
 export PF_GAMESCOPE_IDENTITY_SHA256
 
+PF_CTS_BUNDLE_SHA256=9ce9b9c252c1b288ffb4a58dd8e976fd35110b4e2b1d9cc1a3a0cd3be13e5125
+export PF_CTS_BUNDLE_SHA256
+with_cts="$(${generator})"
+[ "${first}" != "${with_cts}" ] \
+    || { echo "FAIL: CTS bundle identity did not affect image build-id" >&2; exit 1; }
+if PF_CTS_BUNDLE_SHA256=wrong "${generator}" >/dev/null 2>&1; then
+    echo "FAIL: build-id accepted an invalid CTS bundle SHA" >&2
+    exit 1
+fi
+PF_CTS_BUNDLE_SHA256=
+export PF_CTS_BUNDLE_SHA256
+
 PF_KERNEL_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export PF_KERNEL_SHA
 different="$(${generator})"
@@ -52,5 +64,5 @@ case "${first}" in
     *) echo "FAIL: build-id is not a single cat-readable line: ${first}" >&2; exit 1 ;;
 esac
 
-printf 'PASS identical=%s\nPASS different=%s\nPASS gamescope=%s\n' \
-    "${first}" "${different}" "${with_gamescope}"
+printf 'PASS identical=%s\nPASS different=%s\nPASS gamescope=%s\nPASS cts=%s\n' \
+    "${first}" "${different}" "${with_gamescope}" "${with_cts}"

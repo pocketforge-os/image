@@ -232,6 +232,14 @@ grep -F "required kernel module powervr (module): ${powervr_module}" \
 grep -F 'owned wpa_supplicant not found' \
     "${scratch}/modules-present-noradio.err" >/dev/null
 
+# The CTS profile is a normal open-GPU release when the lock emits no CTS
+# selector; it must reach the same preflight without staging test payloads.
+run_sd_fallback modules-present-cts-release a133-open-7x-gpu-cts
+grep -F "required kernel module powervr (module): ${powervr_module}" \
+    "${scratch}/modules-present-cts-release.out" >/dev/null
+grep -F 'owned wpa_supplicant not found' \
+    "${scratch}/modules-present-cts-release.err" >/dev/null
+
 # Missing required modules must fail in that same real preflight, before its
 # later WPA sentinel.  This also prevents a fixture-only success path.
 mv "${powervr_module}" "${scratch}/powervr.ko.saved"
