@@ -94,6 +94,13 @@ grep -F 'required kernel module powervr (module)' \
 grep -F 'owned wpa_supplicant not found' \
     "${scratch}/rootfs-7x-noradio.err" >/dev/null
 
+run_rootfs_preflight a133-open-7x-gpu-cts in-tree-7.x powervr \
+    "${kernel7}" rootfs-7x-cts
+grep -F 'required kernel module powervr (module)' \
+    "${scratch}/rootfs-7x-cts.out" >/dev/null
+grep -F 'owned wpa_supplicant not found' \
+    "${scratch}/rootfs-7x-cts.err" >/dev/null
+
 populate_modules "${release7}" powervr
 find "${release7}" -name powervr.ko -delete
 run_rootfs_preflight a133-open-7x-gpu in-tree-7.x powervr "${kernel7}" rootfs-7x-missing

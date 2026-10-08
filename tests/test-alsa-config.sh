@@ -70,6 +70,7 @@ PROFILES=(
     "a133-open:kernel-sunxi-6.x"
     "a133-open-7x:kernel-sunxi-7.x"
     "a133-open-7x-gpu:kernel-sunxi-7.x"
+    "a133-open-7x-gpu-cts:kernel-sunxi-7.x"
     "a133-open-7x-gpu-noradio:kernel-sunxi-7.x"
     "a133-open-7x-gpu-spl-trace:kernel-sunxi-7.x"
 )
