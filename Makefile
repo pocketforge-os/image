@@ -11,7 +11,7 @@
 # update-manifest targets — pf build now fetches the .car in-container) were
 # removed in tsp-7xe. This Makefile no longer builds the image or fetches blobs.
 #
-# What remains here: dev wifi.txt generation.
+# What remains here: hermetic source checks and local cleanup helpers.
 # =============================================================================
 
 SHELL := /bin/bash
@@ -21,37 +21,6 @@ SHELL := /bin/bash
 # ---- paths ------------------------------------------------------------------
 CURDIR_ABS := $(shell pwd)
 WORK       := $(CURDIR_ABS)/work
-
-# WiFi network name for dev builds (looked up in system keyring)
-WIFI_SSID ?= Cobblejob
-
-# ---- generate-wifi-config ---------------------------------------------------
-# Pull WiFi PSK from the system keyring (secret-tool) and generate wifi.txt
-# for the boot-resource FAT partition. Dev builds only — release images use
-# the WiFi wizard (M1.D). The PSK is never committed; wifi.txt is gitignored.
-#
-# To store a PSK:
-#   echo -n "YourPassword" | secret-tool store --label="PocketForge WiFi PSK (MyNetwork)" \
-#     service pocketforge type wifi-psk network MyNetwork
-BOOT_RES_DIR := $(CURDIR_ABS)/boards/tsp/boot-resource
-WIFI_TXT     := $(BOOT_RES_DIR)/wifi.txt
-
-.PHONY: generate-wifi-config
-generate-wifi-config:
-	@mkdir -p "$(BOOT_RES_DIR)"
-	@PSK=$$(secret-tool lookup service pocketforge type wifi-psk network "$(WIFI_SSID)" 2>/dev/null) || true; \
-	if [ -n "$${PF_WIFI_PSK:-}" ]; then \
-		printf 'SSID=%s\nPSK=%s\n' "$(WIFI_SSID)" "$${PF_WIFI_PSK}" > "$(WIFI_TXT)"; \
-		echo "  wifi.txt generated from PF_WIFI_PSK env for SSID=$(WIFI_SSID)"; \
-	elif [ -n "$$PSK" ]; then \
-		printf 'SSID=%s\nPSK=%s\n' "$(WIFI_SSID)" "$$PSK" > "$(WIFI_TXT)"; \
-		echo "  wifi.txt generated from keyring for SSID=$(WIFI_SSID)"; \
-	elif grep -q '^SSID=' "$(WIFI_TXT)" 2>/dev/null && grep -q '^PSK=' "$(WIFI_TXT)" 2>/dev/null; then \
-		echo "  using pre-staged $(WIFI_TXT) (gitignored; no keyring/env PSK)"; \
-	else \
-		echo "WARN: No WiFi PSK (PF_WIFI_PSK env, keyring, or pre-staged wifi.txt) for '$(WIFI_SSID)' -- WiFi NOT configured"; \
-		rm -f "$(WIFI_TXT)"; \
-	fi
 
 # ---- hermetic build-file tests ----------------------------------------------
 .PHONY: test-app-runtime-root test-cts-bundle-image test-gles32-candidate-profile test-dockerfile-pf-transforms test-kernel-build-identity
@@ -86,7 +55,10 @@ test-kernel-build-identity:
 # ---- clean ------------------------------------------------------------------
 .PHONY: clean clean-all
 clean clean-all:
-	rm -rf "$(WORK)"
+	@if [ -d "$(WORK)" ]; then \
+		find "$(WORK)" -mindepth 1 -delete; \
+		rmdir "$(WORK)"; \
+	fi
 
 # ---- help -------------------------------------------------------------------
 .PHONY: help
@@ -101,13 +73,9 @@ help:
 	@echo ""
 	@echo "  Dev helpers:"
 	@echo "    test-app-runtime-root          Test proposed app-root rendering/isolation (no network)"
-	@echo "    generate-wifi-config  Stage boards/tsp/boot-resource/wifi.txt from PF_WIFI_PSK/keyring"
 	@echo "    test-dockerfile-pf-transforms  Test Dockerfile source transforms (no Docker/network)"
 	@echo "    test-kernel-build-identity    Test pinned kernel UTS identity (no Docker/network)"
 	@echo ""
 	@echo "  Cleanup:"
 	@echo "    clean / clean-all     Remove the work/ directory"
 	@echo ""
-	@echo "Environment variables:"
-	@echo "  WIFI_SSID        WiFi SSID for generate-wifi-config (default: Cobblejob)"
-	@echo "  PF_WIFI_PSK      WiFi PSK for generate-wifi-config (else keyring or pre-staged wifi.txt)"

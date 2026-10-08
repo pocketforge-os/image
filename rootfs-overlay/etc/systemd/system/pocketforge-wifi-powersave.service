@@ -10,8 +10,7 @@
 #
 # Disabling power-save is the default product policy (stability-first); it is a
 # per-wdev nl80211 property that persists across association cycles, so a single
-# application at interface bring-up is sufficient. The policy is overridable via
-# a POWER_SAVE key in /boot/wifi.txt — see wifi-powersave.sh.
+# application at interface bring-up is sufficient.
 #
 # bd: tsp-cv7.4.12
 # =============================================================================

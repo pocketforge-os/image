@@ -23,6 +23,7 @@ capture_customize_hook() {
     local status
 
     mkdir -p "${fixture}/bin" "${fixture}/out" "${fixture}/wpa" \
+        "${fixture}/cloud-init" \
         "${fixture}/blobs/sunxi/a133/wifi-firmware" \
         "${fixture}/mesa/usr/local/lib/gbm" "${release}"
     : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin"
@@ -37,6 +38,7 @@ capture_customize_hook() {
     : > "${release}/modules.builtin"
     : > "${release}/powervr.ko"
     : > "${fixture}/wpa/wpa_supplicant"
+    : > "${fixture}/cloud-init/cloud-init-pocketforge.deb"
 
     cat > "${fixture}/bin/qemu-aarch64-static" <<'EOF'
 #!/bin/sh
@@ -70,9 +72,11 @@ EOF
     PF_TEST_CUSTOMIZE_HOOK_CAPTURE="${out_hook}" \
     SRC_DIR="${repo_dir}" BLOBS_DIR="${fixture}/blobs" \
     GPU_UM_MESA_DIR="${fixture}/mesa" WPA_DIR="${fixture}/wpa" \
+    CLOUD_INIT_DIR="${fixture}/cloud-init" \
     KERNEL_TSP_DIR="${fixture}/kernel" GPU_KM_TSP_DIR="${fixture}/unused-gpu" \
     OUT_DIR="${fixture}/out" SOURCE_DATE_EPOCH=1700000000 \
     PF_DEVICE_ID=a133-open-7x-gpu PF_KERNEL_REPO=kernel-sunxi-7.x PF_GPU_MODEL=open \
+    PF_CLOUD_INIT_SHA=5656565656565656565656565656565656565656 \
     PF_GPU_KM_MODEL=in-tree-7.x PF_KERNEL_REQUIRED_MODULES=powervr \
     PF_DISPLAY_PIPELINE=none \
         bash "${repo_dir}/scripts/build-rootfs.sh" --variant dev \

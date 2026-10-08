@@ -3,9 +3,9 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d)"
-trap 'rm -rf "${scratch}"' EXIT
+trap 'find "${scratch}" -mindepth 1 -delete; rmdir "${scratch}"' EXIT
 
-for input in src blobs libsdl3 wpa runtime launcher hwprobe kernel gpu; do
+for input in src blobs libsdl3 wpa cloud-init runtime launcher hwprobe kernel gpu; do
     mkdir -p "${scratch}/${input}"
     printf '%s input\n' "${input}" > "${scratch}/${input}/payload"
 done
@@ -36,6 +36,7 @@ run_direct() {
     local uboot_spl="${1:-}"
     SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
     LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
+    CLOUD_INIT_DIR="${scratch}/cloud-init" \
     RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${scratch}/hwprobe" \
     KERNEL_TSP_DIR="${scratch}/kernel" \
     GPU_KM_TSP_DIR="${scratch}/gpu" OUT_DIR="${scratch}/out" \
@@ -102,6 +103,7 @@ chmod +x "${release_builder}"
 
 SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
 LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
+CLOUD_INIT_DIR="${scratch}/cloud-init" \
 RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${missing_hwprobe}" \
 KERNEL_TSP_DIR="${scratch}/kernel" GPU_KM_TSP_DIR="${scratch}/gpu" \
 OUT_DIR="${scratch}/out" \
@@ -119,6 +121,7 @@ esac
 
 if SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
     LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
+    CLOUD_INIT_DIR="${scratch}/cloud-init" \
     RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${missing_hwprobe}" \
     KERNEL_TSP_DIR="${scratch}/kernel" GPU_KM_TSP_DIR="${scratch}/gpu" \
     OUT_DIR="${scratch}/out" \

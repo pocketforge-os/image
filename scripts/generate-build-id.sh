@@ -15,7 +15,7 @@ set -euo pipefail
 #   - PF_SIM_SHA : empty on release because its identity derives from hwprobe.
 required=(
     PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA
-    PF_LIBSDL3_SHA PF_WPA_SHA PF_RUNTIME_SHA PF_BLOBS_SHA
+    PF_LIBSDL3_SHA PF_WPA_SHA PF_CLOUD_INIT_SHA PF_RUNTIME_SHA PF_BLOBS_SHA
     PF_VENDOR_MANIFEST_SHA PF_CAR_SHA256 SOURCE_DATE_EPOCH
 )
 for name in "${required[@]}"; do
@@ -46,6 +46,7 @@ identity="$({
     printf 'gpu=%s\n' "${PF_GPU_SHA}"
     printf 'sdl=%s\n' "${PF_LIBSDL3_SHA}"
     printf 'wpa=%s\n' "${PF_WPA_SHA}"
+    printf 'cloud_init=%s\n' "${PF_CLOUD_INIT_SHA}"
     printf 'runtime=%s\n' "${PF_RUNTIME_SHA}"
     printf 'hwprobe=%s\n' "${PF_HWPROBE_SHA:-}"
     printf 'sim=%s\n' "${PF_SIM_SHA:-}"

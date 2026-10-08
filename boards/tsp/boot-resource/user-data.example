@@ -1,0 +1,9 @@
+#cloud-config
+hostname: pocketforge
+ssh_pwauth: false
+disable_root: true
+users:
+  - name: gamer
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ssh-ed25519 REPLACE_WITH_PUBLIC_KEY owner@example

@@ -30,14 +30,10 @@
 #   - A WiFi-less image never reaches here: the unit's ConditionPathExists on
 #     the generated wpa_supplicant conf skips it cleanly.
 #
-# Policy knob (parity with wifi-powersave.sh): set WIFI_WATCHDOG=off in
-# /boot/wifi.txt to disable the watchdog without a rebuild.
-#
 # bd: tsp-h1o
 # =============================================================================
 set -u   # NOT -e: the health loop must survive transient command failures.
 
-WIFI_CONF="/boot/wifi.txt"
 IFACE="wlan0"
 SERVICE="wpa_supplicant@wlan0.service"
 
@@ -47,30 +43,6 @@ RECOVERY_GRACE=45      # seconds to let DHCP resettle after a restart
 BACKOFF_MAX=300        # cap (s) on the post-restart cooldown when restarts don't help
 
 log() { echo "[pocketforge-wifi-watchdog] $*"; }
-
-# --- optional disable knob from /boot/wifi.txt -------------------------------
-ENABLED="on"
-if [ -f "${WIFI_CONF}" ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-        line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-        case "$line" in
-            ""|\#*) continue ;;
-        esac
-        key="${line%%=*}"
-        val="${line#*=}"
-        if [ "$key" = "WIFI_WATCHDOG" ]; then
-            case "$(echo "$val" | tr '[:upper:]' '[:lower:]')" in
-                off|false|0) ENABLED="off" ;;
-                on|true|1)   ENABLED="on" ;;
-                *) log "WARN: unrecognized WIFI_WATCHDOG='${val}' — using default (on)" ;;
-            esac
-        fi
-    done < "${WIFI_CONF}"
-fi
-if [ "${ENABLED}" = "off" ]; then
-    log "disabled via WIFI_WATCHDOG=off in ${WIFI_CONF} — exiting"
-    exit 0
-fi
 
 # --- health probes -----------------------------------------------------------
 gw_of() {

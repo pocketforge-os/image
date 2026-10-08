@@ -213,6 +213,7 @@ release="${fixture}/kernel/7.0.0-pocketforge"
 mkdir -p "${fixture_src}/scripts" "${fixture_src}/boards/tsp" \
     "${fixture_src}/packages/pocketforge-open-gpu-stack/DEBIAN" \
     "${fixture}/bin" "${fixture}/out" "${fixture}/wpa" \
+    "${fixture}/cloud-init" \
     "${fixture}/blobs/sunxi/a133/wifi-firmware" "${fixture}/mesa/usr/local/lib/gbm" "${release}"
 # Keep this fixture focused on final-rootfs USB guard ordering. Stage the real
 # builder inputs but replace the independently tested GPU-tools verifier with a
@@ -253,6 +254,7 @@ done
 : > "${release}/modules.builtin"
 : > "${release}/powervr.ko"
 : > "${fixture}/wpa/wpa_supplicant"
+: > "${fixture}/cloud-init/cloud-init-pocketforge.deb"
 cat > "${fixture}/bin/qemu-aarch64-static" <<'EOF'
 #!/bin/sh
 exit 0
@@ -311,9 +313,11 @@ run_build() {
     PF_TEST_SRC="${root}" PF_TEST_TAMPER="${tamper}" \
     SRC_DIR="${fixture_src}" BLOBS_DIR="${fixture}/blobs" \
     GPU_UM_MESA_DIR="${fixture}/mesa" WPA_DIR="${fixture}/wpa" \
+    CLOUD_INIT_DIR="${fixture}/cloud-init" \
     KERNEL_TSP_DIR="${fixture}/kernel" GPU_KM_TSP_DIR="${fixture}/unused-gpu" \
     OUT_DIR="${fixture}/out" SOURCE_DATE_EPOCH=1700000000 \
     PF_DEVICE_ID=a133-open-7x-gpu PF_KERNEL_REPO=kernel-sunxi-7.x PF_GPU_MODEL=open \
+    PF_CLOUD_INIT_SHA=5656565656565656565656565656565656565656 \
     PF_GPU_KM_MODEL=in-tree-7.x PF_KERNEL_REQUIRED_MODULES=powervr \
     PF_DISPLAY_PIPELINE=none \
         bash "${root}/scripts/build-rootfs.sh" --variant "${variant}" \

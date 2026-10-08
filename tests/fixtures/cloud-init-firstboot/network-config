@@ -1,0 +1,8 @@
+version: 2
+wifis:
+  wlan0:
+    dhcp4: true
+    regulatory-domain: US
+    access-points:
+      Bench Network:
+        password-b64: Y29ycmVjdCBob3JzZSBiYXR0ZXJ5IHN0YXBsZQ==

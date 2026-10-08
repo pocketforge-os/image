@@ -1,0 +1,8 @@
+version: 2
+wifis:
+  wlan0:
+    dhcp4: true
+    regulatory-domain: US
+    access-points:
+      REPLACE_WITH_SSID:
+        password-b64: REPLACE_WITH_BASE64_PASSPHRASE

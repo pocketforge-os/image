@@ -43,7 +43,7 @@ mkdir -p "${fixture_src}/scripts" "${fixture_board}/initrd" \
     "${fixture_board}/bootlogo" "${fixture_src}/tools/dragonsecboot" \
     "${fixture_src}/packages/pocketforge-open-gpu-stack/DEBIAN" \
     "${fixture_bin}" "${scratch}/out" "${scratch}/libsdl3" \
-    "${scratch}/wpa" "${scratch}/runtime" "${scratch}/launcher" \
+    "${scratch}/wpa" "${scratch}/cloud-init" "${scratch}/runtime" "${scratch}/launcher" \
     "${scratch}/hwprobe" "${scratch}/gpu" \
     "${scratch}/mesa/usr/local/lib/gbm" \
     "${kernel_tree}/arch/arm64/boot/dts/sunxi" \
@@ -145,6 +145,7 @@ chmod 0755 "${fixture_bin}/abootimg" "${fixture_bin}/dd" \
 for input in libsdl3 wpa runtime launcher hwprobe gpu; do
     printf '%s fixture\n' "${input}" > "${scratch}/${input}/payload"
 done
+: > "${scratch}/cloud-init/cloud-init-pocketforge.deb"
 printf 'fixture SDL\n' > "${scratch}/libsdl3/libSDL3-pocketforge.so.0"
 for library in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so; do
     printf '%s fixture\n' "${library}" > "${scratch}/mesa/usr/local/lib/${library}"
@@ -194,10 +195,12 @@ run_sd_fallback() {
     PATH="${fixture_bin}:${PATH}" \
     SRC_DIR="${fixture_src}" BLOBS_DIR="${scratch}/blobs" OUT_DIR="${scratch}/out" \
     LIBSDL3_DIR="${scratch}/libsdl3" GPU_UM_MESA_DIR="${scratch}/mesa" \
-    WPA_DIR="${scratch}/wpa" RUNTIME_DIR="${scratch}/runtime" \
+    WPA_DIR="${scratch}/wpa" CLOUD_INIT_DIR="${scratch}/cloud-init" \
+    RUNTIME_DIR="${scratch}/runtime" \
     LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${scratch}/hwprobe" \
     KERNEL_TSP_DIR="${kernel_tree}" GPU_KM_TSP_DIR="${scratch}/gpu" \
     SOURCE_DATE_EPOCH=1700000000 PF_DEVICE_ID="${device_id}" \
+    PF_CLOUD_INIT_SHA=5656565656565656565656565656565656565656 \
     PF_KERNEL_REPO=kernel-sunxi-7.x \
     PF_GPU_MODEL=open PF_GPU_KM_MODEL=in-tree-7.x \
     PF_KERNEL_REQUIRED_MODULES=powervr PF_DISPLAY_PIPELINE=fbdev \

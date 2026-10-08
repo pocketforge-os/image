@@ -113,6 +113,7 @@ LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
 # meson DESTDIR install — only meaningful (non-marker-only) for PF_GPU_MODEL=open.
 GPU_UM_MESA_DIR="${GPU_UM_MESA_DIR:-/work/gpu-um-mesa}"
 WPA_DIR="${WPA_DIR:-/work/wpa}"
+CLOUD_INIT_DIR="${CLOUD_INIT_DIR:-/work/cloud-init}"
 RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-decode) from the runtime stage (tsp-e1b.11)
 LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
@@ -365,23 +366,30 @@ esac
 
 echo "  package list: ${PKG_LIST}"
 
+# Feed the deterministic local packages into mmdebstrap's initial apt solve so
+# their Debian dependencies are resolved from the same frozen image snapshot.
+CLOUD_INIT_DEB="${CLOUD_INIT_DIR}/cloud-init-pocketforge.deb"
+[ -f "${CLOUD_INIT_DEB}" ] \
+    || { echo "FATAL: cloud-init-pocketforge package is missing: ${CLOUD_INIT_DEB}" >&2; exit 1; }
+LOCAL_DEBS="${CLOUD_INIT_DEB}"
+
 # Feed the deterministic, file-owning package produced from gpu-um-tsp's exact
 # Meson install tree into the initial apt solve. Its versioned Provides satisfy
 # Debian's graphics relationships while Conflicts/Replaces prevent a second
 # Mesa vendor from entering the rootfs.
-GPU_STACK_PROVIDER_OPTS=()
 case "${PF_DEVICE_ID}" in
     a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
         GPU_STACK_PROVIDER_DEB="${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb"
         [ -f "${GPU_STACK_PROVIDER_DEB}" ] \
             || { echo "FATAL: source-built open GPU stack provider is missing: ${GPU_STACK_PROVIDER_DEB}" >&2; exit 1; }
-        GPU_STACK_PROVIDER_OPTS=(
-            --include="${GPU_STACK_PROVIDER_DEB}"
-            --hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount
-        )
+        LOCAL_DEBS="${LOCAL_DEBS},${GPU_STACK_PROVIDER_DEB}"
         echo "  open GPU dependency provider: ${GPU_STACK_PROVIDER_DEB}"
         ;;
 esac
+LOCAL_PACKAGE_OPTS=(
+    --include="${LOCAL_DEBS}"
+    --hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount
+)
 
 # ---- step 2: verify prerequisites ------------------------------------------
 echo ""
@@ -1018,6 +1026,11 @@ if [ -f /work/wpa/.pf-wpa-provenance ]; then
 fi
 echo "[customize] owned wpa_supplicant installed at /sbin/wpa_supplicant (aarch64 ELF verified)"
 
+if [ -f /work/cloud-init/.pf-cloud-init-provenance ]; then
+    install -D -m 0644 /work/cloud-init/.pf-cloud-init-provenance \
+        "${ROOTFS}/usr/share/pocketforge/cloud-init-provenance"
+fi
+
 # --- Config files ------------------------------------------------------------
 echo "[customize] Writing config files..."
 
@@ -1081,13 +1094,9 @@ if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then
     echo "[customize] XR829 vendor attach helper installed and enabled on ttyS1"
 fi
 
-# WiFi templater script (reads /boot/wifi.txt -> wpa_supplicant conf)
 install -d "${ROOTFS}/usr/lib/pocketforge"
-install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/wifi-setup.sh" \
-    "${ROOTFS}/usr/lib/pocketforge/wifi-setup.sh"
 
-# WiFi power-save policy script (reads optional POWER_SAVE from /boot/wifi.txt;
-# default off — xradio flap mitigation). bd: tsp-cv7.4.12.
+# WiFi power-save policy (fixed off — xradio flap mitigation).
 install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/wifi-powersave.sh" \
     "${ROOTFS}/usr/lib/pocketforge/wifi-powersave.sh"
 
@@ -1095,10 +1104,6 @@ install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/wifi-powersave.sh"
 # xr819/xr829 drops its DHCP lease). bd: tsp-h1o.
 install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/wifi-watchdog.sh" \
     "${ROOTFS}/usr/lib/pocketforge/wifi-watchdog.sh"
-
-# WiFi templater systemd service (runs before wpa_supplicant@wlan0)
-install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-wifi-setup.service" \
-    "${ROOTFS}/etc/systemd/system/pocketforge-wifi-setup.service"
 
 # WiFi power-save disable service (xradio deauth/reassoc flap mitigation).
 # bd: tsp-cv7.4.12 — needs `iw` (added to rootfs-packages.txt).
@@ -1161,7 +1166,7 @@ install -d "${ROOTFS}/etc/systemd/network"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/network/20-wlan0.network" \
     "${ROOTFS}/etc/systemd/network/20-wlan0.network"
 
-# /etc/fstab: mount the boot-resource FAT partition read-only at /boot.
+# /etc/fstab: mount the boot-resource FAT partition read-only and root-only at /boot.
 # The kernel + initrd live inside boot.img (raw partition), not on /boot —
 # /boot is free to serve as the user-editable config mount point (Raspberry
 # Pi precedent). Read-only prevents accidental writes to the FAT partition.
@@ -1169,8 +1174,8 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/network/20-wlan0.network" 
 # x-systemd.device-timeout=10s: give udev 10s to enumerate the device node
 # (default 90s would hit the 16s watchdog timeout).
 cat >> "${ROOTFS}/etc/fstab" << 'FSTAB_EOF'
-# Boot-resource FAT partition (user-editable WiFi config, boot logs)
-LABEL=POCKETFORGE  /boot  vfat  ro,noatime,nofail,x-systemd.device-timeout=10s,fmask=0133,dmask=0022  0  0
+# Boot-resource FAT partition (NoCloud seed; readable only by root)
+LABEL=POCKETFORGE  /boot  vfat  ro,noatime,nofail,x-systemd.device-timeout=10s,fmask=0177,dmask=0077  0  0
 FSTAB_EOF
 
 # Hostname
@@ -1221,6 +1226,8 @@ ln -sf /lib/systemd/system/wpa_supplicant@.service \
 install -d "${ROOTFS}/etc/systemd/system/wpa_supplicant@wlan0.service.d"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-unconfigured-skip.conf" \
     "${ROOTFS}/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-unconfigured-skip.conf"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-firstboot.conf" \
+    "${ROOTFS}/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-firstboot.conf"
 
 # Mask the global wpa_supplicant.service — we use the template instance
 # wpa_supplicant@wlan0.service instead. The global one fails without a
@@ -1327,10 +1334,6 @@ if [ -f "${PREFSD_BIN}" ]; then
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-prefsd.service"
     echo "[customize] pf-prefsd installed and enabled as the preference state authority"
 fi
-
-# pocketforge-wifi-setup.service
-ln -sf /etc/systemd/system/pocketforge-wifi-setup.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-wifi-setup.service"
 
 if [ "${PF_HAS_DISPLAY}" = 1 ]; then
 # pocketforge-boot-animator (bd tsp-3rd3.4: kernel-handoff fb0 boot animator).
@@ -1687,38 +1690,12 @@ if [ "${VARIANT}" = "dev" ]; then
 
     # Dev: sshd hardening (PermitRootLogin no, PasswordAuthentication no)
     install -d "${ROOTFS}/etc/ssh/sshd_config.d"
-    install -m 0644 "/work/src/rootfs-overlay/etc/ssh/sshd_config.d/pocketforge.conf" \
-        "${ROOTFS}/etc/ssh/sshd_config.d/pocketforge.conf"
+    install -m 0644 "/work/src/rootfs-overlay/etc/ssh/sshd_config.d/00-pocketforge.conf" \
+        "${ROOTFS}/etc/ssh/sshd_config.d/00-pocketforge.conf"
     echo "[customize] dev: sshd hardening drop-in installed"
 
-    # Dev: multi-developer authorized_keys from device-config/dev/ssh/authorized_keys.d/*.pub
-    # OpenSSH does not natively read from a directory — concatenate all .pub files
-    # into a single authorized_keys at build time. One file per developer for clean
-    # git blame and easy add/remove.
-    KEYS_DIR="/work/src/device-config/dev/ssh/authorized_keys.d"
-    install -d -o 1000 -g 1000 -m 0700 "${ROOTFS}/home/gamer/.ssh"
-    KEY_COUNT=0
-    : > "${ROOTFS}/home/gamer/.ssh/authorized_keys"
-    for pub in "${KEYS_DIR}"/*.pub; do
-        [ -f "${pub}" ] || continue
-        cat "${pub}" >> "${ROOTFS}/home/gamer/.ssh/authorized_keys"
-        KEY_COUNT=$((KEY_COUNT + 1))
-        echo "[customize] dev: added SSH key $(basename "${pub}")"
-    done
-    chown 1000:1000 "${ROOTFS}/home/gamer/.ssh/authorized_keys"
-    chmod 0600 "${ROOTFS}/home/gamer/.ssh/authorized_keys"
-    echo "[customize] dev: authorized_keys installed (${KEY_COUNT} keys)"
-
-    # Dev: give the serial 'debug' user the same authorized_keys so it is
-    # key-SSH-able over WiFi for iteration. sshd keeps PermitRootLogin no, but
-    # debug is non-root and no AllowUsers/AllowGroups excludes it, so key auth
-    # works. Mirrors the gamer keys above; removed with the debug user before
-    # release (tsp-iuz.2.9). Release ships no sshd/keys at all. bd: tsp-cv7.4.11.
-    install -d -m 0700 "${ROOTFS}/home/debug/.ssh"
-    install -m 0600 "${ROOTFS}/home/gamer/.ssh/authorized_keys" \
-        "${ROOTFS}/home/debug/.ssh/authorized_keys"
-    chroot "${ROOTFS}" chown -R debug:debug /home/debug/.ssh
-    echo "[customize] dev: debug authorized_keys installed (${KEY_COUNT} keys, SSH-over-WiFi)"
+    # No key is baked into the image. cloud-init creates gamer's authorized_keys
+    # only after the complete POCKETFORGE seed has passed strict validation.
 
     # openssh-server's postinst generates random host keys in the build chroot.
     # Strip them from the image and generate unique keys on each device's first
@@ -1729,11 +1706,10 @@ if [ "${VARIANT}" = "dev" ]; then
         "/work/src/rootfs-overlay/etc/systemd/system/ssh-keygen-firstboot.service" \
         "${ROOTFS}/etc/systemd/system/ssh-keygen-firstboot.service"
     install -m 0644 \
-        "/work/src/rootfs-overlay/etc/systemd/system/ssh.service.d/pocketforge-hostkeys.conf" \
-        "${ROOTFS}/etc/systemd/system/ssh.service.d/pocketforge-hostkeys.conf"
-    chroot "${ROOTFS}" systemctl enable ssh-keygen-firstboot.service
+        "/work/src/rootfs-overlay/etc/systemd/system/ssh.service.d/pocketforge-firstboot.conf" \
+        "${ROOTFS}/etc/systemd/system/ssh.service.d/pocketforge-firstboot.conf"
     chroot "${ROOTFS}" systemctl enable ssh.service
-    echo "[customize] dev: build-time SSH host keys removed; first-boot keygen and ssh.service enabled"
+    echo "[customize] dev: key-only ssh enabled; start requires a cloud-init-installed gamer key"
 
     # Dev: bench USB network (usbnet contract v1). The function itself refuses
     # anything but dev on kernel-sunxi-7.x; see its definition above.
@@ -1923,7 +1899,7 @@ mmdebstrap \
     --aptopt='Acquire::Retries "5"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
-    "${GPU_STACK_PROVIDER_OPTS[@]}" \
+    "${LOCAL_PACKAGE_OPTS[@]}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_KERNEL_REPO=${PF_KERNEL_REPO} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} GAMESCOPE_DIR=${GAMESCOPE_DIR} PF_GAMESCOPE_MODE=${PF_GAMESCOPE_MODE} PF_GAMESCOPE_IDENTITY_SHA256=${PF_GAMESCOPE_IDENTITY_SHA256} PF_CTS_BUNDLE_SHA256=${PF_CTS_BUNDLE_SHA256} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
