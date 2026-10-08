@@ -689,8 +689,14 @@ set -eux
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ccache g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
-  libdrm-dev:arm64 libvulkan-dev:arm64 libzstd-dev:arm64 python3-mako \
-  python3-packaging python3-pip python3-ply python3-yaml
+  libdrm-dev:arm64 libvulkan-dev:arm64 libwayland-dev:arm64 \
+  libwayland-egl-backend-dev:arm64 \
+  libx11-xcb-dev:arm64 libxrandr-dev:arm64 libxcb-dri3-dev:arm64 \
+  libxcb-present-dev:arm64 \
+  libxcb-randr0-dev:arm64 libxcb-shm0-dev:arm64 libxcb-sync-dev:arm64 \
+  libxcb-xfixes0-dev:arm64 libxcb1-dev:arm64 libxshmfence-dev:arm64 \
+  libzstd-dev:arm64 python3-mako python3-packaging python3-pip python3-ply \
+  python3-yaml wayland-protocols/bookworm-backports
 PIP_ROOT_USER_ACTION=ignore python3 -m pip install --break-system-packages \
   'meson==1.7.2' 'ninja==1.11.1.4'
 chmod 0755 /usr/local/bin/aarch64-linux-gnu-pkg-config /usr/local/bin/x86_64-linux-gnu-pkg-config
@@ -752,7 +758,7 @@ for pass in 1 2; do
     --wrap-mode=nodownload \
     -Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=disabled \
     -Dmesa-clc=system \
-    -Dprecomp-compiler=system -Dgallium-drivers=zink -Dplatforms=[] \
+    -Dprecomp-compiler=system -Dgallium-drivers=zink -Dplatforms=x11,wayland \
     -Dglx=disabled -Degl=enabled -Dgbm=enabled -Dshader-cache=enabled \
     -Dshader-cache-max-size=64M \
     -Dxmlconfig=disabled -Dzlib=disabled -Dzstd=enabled -Dvideo-codecs=[] \

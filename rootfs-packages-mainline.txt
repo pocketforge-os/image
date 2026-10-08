@@ -8,4 +8,7 @@
 cpufrequtils
 i2c-tools
 iperf3
+libxcb-dri3-0
+libxcb-present0
+libxshmfence1
 usbutils
