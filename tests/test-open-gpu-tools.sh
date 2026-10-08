@@ -28,7 +28,7 @@ test "$(grep -Fc 'scripts/verify-open-gpu-tools.sh' "$builder")" -eq 2
 producer="$scratch/producer"
 positive="$scratch/positive"
 mkdir -p \
-    "$producer/usr/local/lib" \
+    "$producer/usr/local/lib/dri" \
     "$producer/usr/local/share/vulkan/icd.d" \
     "$positive/usr/local/lib/dri" \
     "$positive/usr/local/share/vulkan/icd.d" \
@@ -46,6 +46,10 @@ for artifact in \
     printf 'owned gpu-um-tsp artifact: %s\n' "$artifact" \
         >"$producer/usr/local/lib/$artifact"
 done
+printf '%s\n' 'owned gpu-um-tsp libdril megadriver' \
+    >"$producer/usr/local/lib/dri/libdril_dri.so"
+ln -s libdril_dri.so "$producer/usr/local/lib/dri/ili9225_dri.so"
+ln -s libdril_dri.so "$producer/usr/local/lib/dri/zink_dri.so"
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
     >"$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
 printf '%s\n' 'gpu-um-tsp@299d52947864fd42aa9a153aaaf5a14f6e23c1ce (open Mesa GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
@@ -133,6 +137,8 @@ chmod 0755 "$ldd_stub"
 positive_output=$(PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$positive" "$producer")
 printf '%s\n' "$positive_output"
 printf '%s\n' "$positive_output" | grep -Fq 'open-gpu-tools=PASS'
+printf '%s\n' "$positive_output" | \
+    grep -Fq 'open-gpu-stack dri-artifacts=PASS boundary=/usr/local/lib/dri producer_entries=3'
 printf '%s\n' "$positive_output" | \
     grep -Fq 'binary=/usr/bin/glmark2-es2-wayland binding_mode=runtime-owned-egl-gles'
 printf '%s\n' "$positive_output" | \
@@ -384,9 +390,31 @@ done
 
 negative_zink_alias="$scratch/negative-zink-alias"
 cp -a "$positive" "$negative_zink_alias"
+rm "$negative_zink_alias/usr/local/lib/dri/zink_dri.so"
 printf '%s\n' 'unowned zink alias' \
     >"$negative_zink_alias/usr/local/lib/dri/zink_dri.so"
 expect_rejection negative-zink-alias "$negative_zink_alias" \
-    'foreign Mesa DRI driver:'
+    'gpu-um-tsp DRI artifact mismatch: /usr/local/lib/dri/zink_dri.so rootfs=regular producer=non-regular'
 
-echo "open-gpu-tools-test=PASS positive=owned-stack negative=drm-egl-only,drm-gles-only,runtime-owned-witness,runtime-glmark-egl-identity,runtime-glmark-gles-identity,runtime-vulkaninfo-identity,installed-mesa-vulkan-drivers,changed-hash,changed-provenance,missing-rootfs-provenance,missing-producer-provenance,symlinked-provenance,non-zink-provenance,foreign-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries,foreign-zink-alias icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"
+negative_zink_target="$scratch/negative-zink-target"
+cp -a "$positive" "$negative_zink_target"
+rm "$negative_zink_target/usr/local/lib/dri/zink_dri.so"
+ln -s ../libEGL.so.1.0.0 \
+    "$negative_zink_target/usr/local/lib/dri/zink_dri.so"
+expect_rejection negative-zink-target "$negative_zink_target" \
+    'gpu-um-tsp DRI artifact mismatch: /usr/local/lib/dri/zink_dri.so rootfs_target=../libEGL.so.1.0.0 producer_target=libdril_dri.so'
+
+negative_dri_hash="$scratch/negative-dri-hash"
+cp -a "$positive" "$negative_dri_hash"
+printf '%s\n' 'shadow replacement' \
+    >>"$negative_dri_hash/usr/local/lib/dri/libdril_dri.so"
+expect_rejection negative-dri-hash "$negative_dri_hash" \
+    'gpu-um-tsp DRI artifact mismatch: /usr/local/lib/dri/libdril_dri.so rootfs_sha256='
+
+missing_owned_alias="$scratch/missing-owned-alias"
+cp -a "$positive" "$missing_owned_alias"
+rm "$missing_owned_alias/usr/local/lib/dri/ili9225_dri.so"
+expect_rejection missing-owned-alias "$missing_owned_alias" \
+    'gpu-um-tsp DRI artifact missing from rootfs: /usr/local/lib/dri/ili9225_dri.so'
+
+echo "open-gpu-tools-test=PASS positive=owned-stack-with-producer-dri-mirror negative=drm-egl-only,drm-gles-only,runtime-owned-witness,runtime-glmark-egl-identity,runtime-glmark-gles-identity,runtime-vulkaninfo-identity,installed-mesa-vulkan-drivers,changed-hash,changed-provenance,missing-rootfs-provenance,missing-producer-provenance,symlinked-provenance,non-zink-provenance,foreign-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries,foreign-zink-alias,changed-zink-target,changed-dri-hash,missing-owned-alias icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"
