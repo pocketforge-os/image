@@ -11,6 +11,9 @@ foreground_unit="$root/rootfs-overlay/etc/systemd/system/pf-foreground@.service"
 manager_environment="$root/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"
 session_environment="$root/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf"
 profile_environment="$root/rootfs-overlay/etc/profile.d/pocketforge-open-gpu.sh"
+zink_manager_environment="$root/rootfs-overlay/etc/systemd/system.conf.d/60-pocketforge-zink.conf"
+zink_session_environment="$root/rootfs-overlay/etc/environment.d/60-pocketforge-zink.conf"
+zink_profile_environment="$root/rootfs-overlay/etc/profile.d/pocketforge-zink.sh"
 required="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf"
 drm_systemd_rule="$root/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
 probe="$root/tools/open-gpu-probe.c"
@@ -40,6 +43,24 @@ grep -F 'require_rootfs_file "lib/firmware/${artifact}"' \
 grep -F 'wifi-firmware/fw_xr829_bt.bin' "$customize" >/dev/null
 grep -F 'llvmpipe' "$probe" >/dev/null
 grep -F 'PF-OPEN-GPU PASS:' "$gate" >/dev/null
+grep -Fx 'DefaultEnvironment=MESA_LOADER_DRIVER_OVERRIDE=zink' \
+    "$zink_manager_environment" >/dev/null
+grep -Fx 'MESA_LOADER_DRIVER_OVERRIDE=zink' \
+    "$zink_session_environment" >/dev/null
+grep -Fx 'export MESA_LOADER_DRIVER_OVERRIDE=zink' \
+    "$zink_profile_environment" >/dev/null
+if grep -F 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER' \
+    "$zink_manager_environment" "$zink_session_environment" \
+    "$zink_profile_environment" >/dev/null; then
+    echo 'Zink defaults must not restore the retired PowerVR opt-in' >&2
+    exit 1
+fi
+grep -F 'install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/60-pocketforge-zink.conf"' \
+    "$customize" >/dev/null
+grep -F 'install -D -m 0644 "/work/src/rootfs-overlay/etc/environment.d/60-pocketforge-zink.conf"' \
+    "$customize" >/dev/null
+grep -F 'install -D -m 0755 "/work/src/rootfs-overlay/etc/profile.d/pocketforge-zink.sh"' \
+    "$customize" >/dev/null
 grep -Fx 'Environment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$unit" >/dev/null
 grep -Fx 'export PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$gate" >/dev/null
 grep -F 'hint=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=%s' "$probe" >/dev/null
@@ -68,8 +89,20 @@ for removed_export in \
 done
 for open_gpu_unit in $open_gpu_units; do
     shared_unit="$root/rootfs-overlay/etc/systemd/system/$open_gpu_unit"
+    zink_dropin="$root/rootfs-overlay/etc/systemd/system/$open_gpu_unit.d/60-zink.conf"
+    grep -Fx 'Environment=MESA_LOADER_DRIVER_OVERRIDE=zink' "$zink_dropin" >/dev/null
+    if grep -F 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER' "$zink_dropin" >/dev/null; then
+        echo "Zink drop-in must not restore the PowerVR opt-in: $open_gpu_unit" >&2
+        exit 1
+    fi
+    printf '%s\n' "$open_model_block" | \
+        grep -F "/etc/systemd/system/${open_gpu_unit}.d/60-zink.conf" >/dev/null
     if grep -F 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER' "$shared_unit" >/dev/null; then
         echo "open GPU opt-in must not be present in shared unit: $open_gpu_unit" >&2
+        exit 1
+    fi
+    if grep -F 'MESA_LOADER_DRIVER_OVERRIDE' "$shared_unit" >/dev/null; then
+        echo "open GPU Zink selection must not be present in shared unit: $open_gpu_unit" >&2
         exit 1
     fi
 done
@@ -79,7 +112,14 @@ grep -F 'vkQueueSubmit' "$probe" >/dev/null
 grep -F 'vkWaitForFences' "$probe" >/dev/null
 grep -F 'submit=ok' "$probe" >/dev/null
 grep -F 'COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe' "$dockerfile" >/dev/null
-grep -F 'install -D -m 0755 /work/gpu-um-mesa/usr/lib/pocketforge/open-gpu-probe' "$customize" >/dev/null
+grep -F 'COPY --from=gpu-um-build /pocketforge-open-gpu-stack.deb /out/pocketforge-open-gpu-stack.deb' "$dockerfile" >/dev/null
+grep -F 'GPU_STACK_PROVIDER_DEB="${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb"' "$customize" >/dev/null
+grep -F 'stage/usr/lib/pocketforge/open-gpu-probe' "$root/build/package-open-gpu-stack.sh" >/dev/null
+test "$(grep -Fc 'scripts/verify-open-gpu-provider.sh' "$customize")" -eq 2
+if grep -F 'cp -a /work/gpu-um-mesa/usr/local/.' "$customize" >/dev/null; then
+    echo 'open Mesa files must enter the rootfs through the file-owning provider package' >&2
+    exit 1
+fi
 grep -F 'libvulkan-dev:arm64' "$dockerfile" >/dev/null
 for wsi_runtime_package in libxcb-dri3-0 libxcb-present0 libxshmfence1; do
     grep -Fx "$wsi_runtime_package" "$mainline_packages" >/dev/null || {
@@ -133,6 +173,13 @@ target_stage_block="$(awk '
 }
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dshader-cache=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dzstd=enabled' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dplatforms=x11,wayland' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dglvnd=enabled' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dglvnd-vendor-name=mesa' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dglx=disabled' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Degl=enabled' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dgbm=enabled' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F 'libglvnd-dev:arm64' >/dev/null
 # The cross sysroot needs the aarch64 zstd headers/.pc file for meson's
 # `dependency('libzstd', required: get_option('zstd'))` to resolve; the
 # runtime library (libzstd1) is already in rootfs-packages.txt.
@@ -147,14 +194,8 @@ printf '%s\n' "$target_stage_block" | grep -F 'libzstd-dev:arm64' >/dev/null
 # partition"), as the build-time default via Mesa's own meson option -- still
 # overridable at runtime via MESA_SHADER_CACHE_MAX_SIZE with no rebuild.
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dshader-cache-max-size=64M' >/dev/null
-# The open-model install block is shared by release and dev construction. Keep
-# the production probe outside every POCKETFORGE_VARIANT conditional.
-probe_install_block="$(sed -n '/# Open Mesa GLES\/EGL\/GBM userspace/,/open Mesa: userspace install verified/p' "$customize")"
-printf '%s\n' "$probe_install_block" | grep -F 'open-gpu-probe' >/dev/null
-if printf '%s\n' "$probe_install_block" | grep -F 'POCKETFORGE_VARIANT' >/dev/null; then
-    echo 'open GPU probe install must not be variant-gated' >&2
-    exit 1
-fi
+# The provider package owns the production probe for both release and dev.
+grep -F 'install -D -m 0755 "$probe"' "$root/build/package-open-gpu-stack.sh" >/dev/null
 if grep -Eq 'testgles2|SDL_VIDEODRIVER|pf-take-panel|systemctl|fb0|boot-animator|foreground' "$gate"; then
     echo 'open GPU gate must not reference display machinery or dev diagnostics' >&2
     exit 1
@@ -300,7 +341,7 @@ mkdir -p "${closure_root}/usr/local/lib/gbm" \
     "${closure_root}/usr/share/vulkan/icd.d" \
     "${closure_root}/usr/lib/aarch64-linux-gnu" \
     "${host_library_dir}"
-for artifact in libEGL.so.1.0.0 libGLESv2.so.2.0.0 libgbm.so.1.0.0 \
+for artifact in libEGL_mesa.so.0 libgbm.so.1.0.0 \
     libgallium_dri.so libvulkan_powervr_mesa.so; do
     : >"${closure_root}/usr/local/lib/${artifact}"
 done
