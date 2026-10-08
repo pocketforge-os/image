@@ -43,8 +43,8 @@ grep -F 'llvmpipe' "$probe" >/dev/null
 grep -F 'PF-OPEN-GPU PASS:' "$gate" >/dev/null
 test -f "$zink_policy"
 test "$(grep -Fc 'driver="loader" kernel_driver="powervr"' "$zink_policy")" -eq 1
-test "$(grep -Fc 'driver="loader" kernel_driver="sun4i-drm"' "$zink_policy")" -eq 1
-test "$(grep -Fc 'option name="dri_driver" value="zink"' "$zink_policy")" -eq 2
+test "$(grep -Fc 'driver="loader" kernel_driver="sun4i-drm"' "$zink_policy")" -eq 0
+test "$(grep -Fc 'option name="dri_driver" value="zink"' "$zink_policy")" -eq 1
 grep -F 'packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf /tmp/10-pocketforge-zink.conf' \
     "$dockerfile" >/dev/null
 grep -F '/instroot/usr/local/share/drirc.d/10-pocketforge-zink.conf' \

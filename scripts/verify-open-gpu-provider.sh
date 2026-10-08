@@ -182,7 +182,7 @@ except (ET.ParseError, OSError) as error:
     print(f"FATAL: open GPU provider: cannot parse Zink loader policy: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-expected = [("powervr", "zink"), ("sun4i-drm", "zink")]
+expected = [("powervr", "zink")]
 actual = []
 if root.tag != "driconf":
     print(f"FATAL: open GPU provider: Zink loader policy root must be driconf: {root.tag}", file=sys.stderr)
@@ -243,6 +243,21 @@ if ! glx_symbols=$($readelf_command -Ws \
 fi
 printf '%s\n' "$glx_symbols" | grep -Eq '[[:space:]]__glx_Main$' \
     || fatal 'GLVND GLX vendor does not export __glx_Main'
+if ! gallium_symbols=$($readelf_command --dyn-syms --wide \
+    "$rootfs/usr/local/lib/libgallium_dri.so" 2>&1); then
+    printf '%s\n' "$gallium_symbols" >&2
+    fatal 'cannot inspect Gallium DRI symbols'
+fi
+verify_gallium_export() {
+    wanted=$1
+    printf '%s\n' "$gallium_symbols" | awk -v wanted="$wanted" '
+        $4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" &&
+            $7 != "UND" && $8 == wanted { found = 1 }
+        END { exit(found ? 0 : 1) }
+    ' || fatal "Gallium DRI does not export $wanted"
+}
+verify_gallium_export kmsro_drm_screen_create
+verify_gallium_export zink_drm_create_screen_renderonly
 
 verify_evidence_file() {
     producer_relative=$1
@@ -378,4 +393,4 @@ glx_vendor_count=$(find "$rootfs" \( -type f -o -type l \) \
 [ -e "$rootfs/usr/local/lib/libGLX_mesa.so.0" ] \
     || fatal 'canonical GLVND Mesa GLX vendor is missing from /usr/local/lib'
 
-echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr,sun4i-drm vulkan=powervr vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
+echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present vulkan=powervr vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"

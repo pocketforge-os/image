@@ -130,6 +130,10 @@ printf '%s\n' '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_mesa
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
     >"$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
 test -f "$zink_policy"
+if grep -F 'kernel_driver="sun4i-drm"' "$zink_policy" >/dev/null; then
+    echo 'FAIL: source Zink loader policy maps sun4i-drm' >&2
+    exit 1
+fi
 cp "$zink_policy" \
     "$producer/usr/local/share/drirc.d/10-pocketforge-zink.conf"
 printf '%s\n' \
@@ -163,6 +167,21 @@ chmod 0755 "$scratch/open-gpu-probe"
 cat >"$scratch/readelf" <<'EOF'
 #!/bin/sh
 set -eu
+emit_symbols() {
+    case "$1" in
+        *red-missing-egl-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n' ;;
+        *red-missing-glx-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n' ;;
+        *red-missing-kmsro-screen*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-missing-zink-renderonly*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n' ;;
+        *red-local-kmsro-screen*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC LOCAL DEFAULT 1 kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-hidden-kmsro-screen*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL HIDDEN 1 kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-undefined-kmsro-screen*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT UND kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-local-zink-renderonly*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC LOCAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-hidden-zink-renderonly*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC GLOBAL HIDDEN 1 zink_drm_create_screen_renderonly\n' ;;
+        *red-undefined-zink-renderonly*/usr/local/lib/libgallium_dri.so) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT UND zink_drm_create_screen_renderonly\n' ;;
+        *) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n  3: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 kmsro_drm_screen_create\n  4: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 zink_drm_create_screen_renderonly\n' ;;
+    esac
+}
 case "$1" in
     -h)
         machine=AArch64
@@ -171,11 +190,11 @@ case "$1" in
         printf '  Machine:                           %s\n' "$machine"
         ;;
     -Ws)
-        case "$2" in
-            *red-missing-egl-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n' ;;
-            *red-missing-glx-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n' ;;
-            *) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n' ;;
-        esac
+        emit_symbols "$2"
+        ;;
+    --dyn-syms)
+        test "$2" = --wide
+        emit_symbols "$3"
         ;;
     *) exit 2 ;;
 esac
@@ -302,7 +321,7 @@ dpkg-deb --fsys-tarfile "$scratch/provider-a.deb" | tar -tf - | \
 positive_output=$("$verifier" "$rootfs" "$producer")
 printf '%s\n' "$positive_output"
 printf '%s\n' "$positive_output" | grep -Fx \
-    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr,sun4i-drm vulkan=powervr vulkan_manifests=1 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
+    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present vulkan=powervr vulkan_manifests=1 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
     >/dev/null
 
 expect_rejection() {
@@ -338,20 +357,36 @@ rm "$candidate/usr/local/share/drirc.d/10-pocketforge-zink.conf"
 expect_rejection red-missing-zink-policy "$candidate" \
     'Zink loader policy is missing, not regular, or symlinked:'
 
-candidate="$scratch/red-wrong-zink-policy"
-producer_bad="$scratch/producer-wrong-zink-policy"
+candidate="$scratch/red-old-two-block-zink-policy"
+producer_bad="$scratch/producer-old-two-block-zink-policy"
 cp -a "$rootfs" "$candidate"
 cp -a "$producer" "$producer_bad"
-sed -i 's/kernel_driver="powervr"/kernel_driver="panfrost"/' \
+for policy in \
     "$candidate/usr/local/share/drirc.d/10-pocketforge-zink.conf" \
-    "$producer_bad/usr/local/share/drirc.d/10-pocketforge-zink.conf"
+    "$producer_bad/usr/local/share/drirc.d/10-pocketforge-zink.conf"; do
+    cat >"$policy" <<'EOF'
+<?xml version="1.0" standalone="yes"?>
+<driconf>
+  <device driver="loader" kernel_driver="powervr">
+    <application name="PocketForge Zink">
+      <option name="dri_driver" value="zink" />
+    </application>
+  </device>
+  <device driver="loader" kernel_driver="sun4i-drm">
+    <application name="PocketForge Zink">
+      <option name="dri_driver" value="zink" />
+    </application>
+  </device>
+</driconf>
+EOF
+done
 if "$verifier" "$candidate" "$producer_bad" \
-    >"$scratch/red-wrong-zink-policy.out" 2>"$scratch/red-wrong-zink-policy.err"; then
-    echo 'FAIL: red-wrong-zink-policy fixture was accepted' >&2
+    >"$scratch/red-old-two-block-zink-policy.out" 2>"$scratch/red-old-two-block-zink-policy.err"; then
+    echo 'FAIL: red-old-two-block-zink-policy fixture was accepted' >&2
     exit 1
 fi
 grep -F 'Zink loader policy mismatch:' \
-    "$scratch/red-wrong-zink-policy.err" >/dev/null
+    "$scratch/red-old-two-block-zink-policy.err" >/dev/null
 
 for fixture in zink_dri libEGL_mesa libGLX_mesa libgbm; do
     candidate="$scratch/red-$fixture"
@@ -463,6 +498,28 @@ cp -a "$rootfs" "$candidate"
 expect_rejection red-missing-glx-main "$candidate" \
     'GLVND GLX vendor does not export __glx_Main'
 
+candidate="$scratch/red-missing-kmsro-screen"
+cp -a "$rootfs" "$candidate"
+expect_rejection red-missing-kmsro-screen "$candidate" \
+    'Gallium DRI does not export kmsro_drm_screen_create'
+
+candidate="$scratch/red-missing-zink-renderonly"
+cp -a "$rootfs" "$candidate"
+expect_rejection red-missing-zink-renderonly "$candidate" \
+    'Gallium DRI does not export zink_drm_create_screen_renderonly'
+
+for failure in local hidden undefined; do
+    candidate="$scratch/red-$failure-kmsro-screen"
+    cp -a "$rootfs" "$candidate"
+    expect_rejection "red-$failure-kmsro-screen" "$candidate" \
+        'Gallium DRI does not export kmsro_drm_screen_create'
+
+    candidate="$scratch/red-$failure-zink-renderonly"
+    cp -a "$rootfs" "$candidate"
+    expect_rejection "red-$failure-zink-renderonly" "$candidate" \
+        'Gallium DRI does not export zink_drm_create_screen_renderonly'
+done
+
 candidate="$scratch/red-glx-disabled"
 producer_bad="$scratch/producer-glx-disabled"
 cp -a "$rootfs" "$candidate"
@@ -495,4 +552,4 @@ fi
 grep -F 'Mesa build option mismatch: xmlconfig expected=enabled actual=disabled' \
     "$scratch/red-xmlconfig-disabled.err" >/dev/null
 
-echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+drirc-zink red=loader-environment,missing-zink-policy,wrong-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,glx-disabled,xmlconfig-disabled'
+echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+drirc-powervr+kmsro+zink-renderonly red=loader-environment,missing-zink-policy,old-two-block-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,missing-kmsro-screen,missing-zink-renderonly,local-hidden-undefined-kmsro,local-hidden-undefined-zink-renderonly,glx-disabled,xmlconfig-disabled'

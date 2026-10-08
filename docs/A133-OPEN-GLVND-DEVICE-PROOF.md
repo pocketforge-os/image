@@ -25,15 +25,18 @@ re-enters EGL through a GBM device
 image's clean-environment KMS/GBM path could reach Zink without a global
 loader override.
 
-The image now makes both kernel names explicit at the common Mesa loader
-boundary. `loader_get_driver_for_fd` checks the driconf result before its
-PCI/kernel-name fallback (`src/loader/loader.c:764-790`); the driconf helper
-passes the actual kernel driver to `driParseConfigFiles` and returns its
-non-empty `dri_driver` option (`src/loader/loader.c:329-359`). The loader is
-compiled with `USE_DRICONF` (`src/loader/meson.build:37-39`), and the target
-build enables XML config so `DATADIR/drirc.d` is parsed
-(`src/util/xmlconfig.c:1258-1268`). With Mesa's `/usr/local` prefix, the
-provider-owned policy is
+The image makes only the `powervr` render-node kernel name explicit at the
+common Mesa loader boundary. `sun4i-drm` must remain unmapped so the display
+card follows Mesa's KMSRO path to the PowerVR render node. The owned
+`libgallium_dri.so` must export both `kmsro_drm_screen_create` and
+`zink_drm_create_screen_renderonly`. `loader_get_driver_for_fd` checks the
+driconf result before its PCI/kernel-name fallback
+(`src/loader/loader.c:764-790`); the driconf helper passes the actual kernel
+driver to `driParseConfigFiles` and returns its non-empty `dri_driver` option
+(`src/loader/loader.c:329-359`). The loader is compiled with `USE_DRICONF`
+(`src/loader/meson.build:37-39`), and the target build enables XML config so
+`DATADIR/drirc.d` is parsed (`src/util/xmlconfig.c:1258-1268`). With Mesa's
+`/usr/local` prefix, the provider-owned policy is
 `/usr/local/share/drirc.d/10-pocketforge-zink.conf`. No process environment is
 part of this selection.
 
@@ -91,8 +94,8 @@ test "$(grep -c '^[[:space:]]*deviceName[[:space:]]*=[[:space:]]*PowerVR Rogue G
 
 Quote the full summary and the successful count check. Two identical `deviceName`
 lines fail even when they name the same hardware. The drirc file must contain
-exactly the `powervr` and `sun4i-drm` loader mappings to `zink`; the clean-rootfs
-scan must find no environment assignment.
+exactly the `powervr` loader mapping to `zink`, with no `sun4i-drm` mapping; the
+clean-rootfs scan must find no environment assignment.
 
 Before starting Xwayland, stage the device kit's arm64 node-selecting GBM/EGL
 probe in tmpfs and record its SHA-256. The probe must open the named node,
