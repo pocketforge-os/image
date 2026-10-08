@@ -10,6 +10,7 @@ selected_unit="$root/rootfs-overlay/etc/systemd/system/pf-shell-selected.service
 foreground_unit="$root/rootfs-overlay/etc/systemd/system/pf-foreground@.service"
 manager_environment="$root/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"
 session_environment="$root/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf"
+profile_environment="$root/rootfs-overlay/etc/profile.d/pocketforge-open-gpu.sh"
 required="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf"
 drm_systemd_rule="$root/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
 probe="$root/tools/open-gpu-probe.c"
@@ -39,25 +40,34 @@ grep -F 'require_rootfs_file "lib/firmware/${artifact}"' \
 grep -F 'wifi-firmware/fw_xr829_bt.bin' "$customize" >/dev/null
 grep -F 'llvmpipe' "$probe" >/dev/null
 grep -F 'PF-OPEN-GPU PASS:' "$gate" >/dev/null
-grep -Fx 'DefaultEnvironment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$manager_environment" >/dev/null
-grep -Fx 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$session_environment" >/dev/null
 grep -Fx 'Environment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$unit" >/dev/null
 grep -Fx 'export PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$gate" >/dev/null
 grep -F 'hint=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=%s' "$probe" >/dev/null
-grep -F 'install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"' "$customize" >/dev/null
-grep -F 'install -D -m 0644 "/work/src/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf"' "$customize" >/dev/null
-grep -F 'install -D -m 0755 "/work/src/rootfs-overlay/etc/profile.d/pocketforge-open-gpu.sh"' "$customize" >/dev/null
 # shellcheck disable=SC2016 # Match the literal build-script variable.
 open_model_block="$(sed -n '/^if \[ "${PF_GPU_MODEL}" = "open" \]; then$/,/^fi$/p' "$customize")"
 grep -Fx 'SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="systemd"' "$drm_systemd_rule" >/dev/null
 printf '%s\n' "$open_model_block" | grep -F '/etc/udev/rules.d/70-pocketforge-drm-systemd.rules' >/dev/null
 [ "$(grep -Fc '/etc/udev/rules.d/70-pocketforge-drm-systemd.rules' "$customize")" -eq \
   "$(printf '%s\n' "$open_model_block" | grep -Fc '/etc/udev/rules.d/70-pocketforge-drm-systemd.rules')" ]
+for removed_export in \
+    "$manager_environment" \
+    "$session_environment" \
+    "$profile_environment" \
+    "$root/rootfs-overlay/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf" \
+    "$root/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf" \
+    "$root/rootfs-overlay/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf"; do
+    if [ -e "$removed_export" ]; then
+        echo "open GPU global opt-in export remains: $removed_export" >&2
+        exit 1
+    fi
+    installed_path="/${removed_export#"$root/rootfs-overlay/"}"
+    if printf '%s\n' "$open_model_block" | grep -F "$installed_path" >/dev/null; then
+        echo "open GPU global opt-in export is still installed: $installed_path" >&2
+        exit 1
+    fi
+done
 for open_gpu_unit in $open_gpu_units; do
     shared_unit="$root/rootfs-overlay/etc/systemd/system/$open_gpu_unit"
-    dropin="$root/rootfs-overlay/etc/systemd/system/$open_gpu_unit.d/50-open-gpu.conf"
-    grep -Fx 'Environment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$dropin" >/dev/null
-    printf '%s\n' "$open_model_block" | grep -F "/etc/systemd/system/${open_gpu_unit}.d/50-open-gpu.conf" >/dev/null
     if grep -F 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER' "$shared_unit" >/dev/null; then
         echo "open GPU opt-in must not be present in shared unit: $open_gpu_unit" >&2
         exit 1
@@ -252,25 +262,36 @@ bash -n "${closure_helpers}"
 grep -F 'if open_gpu_library_is_usable "${candidate}"; then' "${closure_helpers}" >/dev/null
 grep -F 'require_open_gpu_library "${rootfs}" libvulkan.so.1 || return 1' "${closure_helpers}" >/dev/null
 grep -F 'require_open_gpu_library "${rootfs}" libdrm.so.2 || return 1' "${closure_helpers}" >/dev/null
-grep -F 'chroot "${rootfs}" /lib/ld-linux-aarch64.so.1 --list /usr/local/lib/libvulkan_powervr_mesa.so' \
-    "${closure_helpers}" >/dev/null
+grep -F 'env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \' "${closure_helpers}" >/dev/null
+grep -F '"${PF_ROOTFS_CHROOT:-chroot}" "${rootfs}" \' "${closure_helpers}" >/dev/null
+grep -F '/lib/ld-linux-aarch64.so.1 --list \' "${closure_helpers}" >/dev/null
+grep -F '/usr/local/lib/libvulkan_powervr_mesa.so 2>&1' "${closure_helpers}" >/dev/null
 grep -F 'open GPU PowerVR ICD dynamic runtime closure is incomplete' "${closure_helpers}" >/dev/null
 # shellcheck source=/dev/null
 . "${closure_helpers}"
 
-# Stand in for the target loader in this host-side hermetic test. The source
-# assertions above tie this seam to the exact production chroot invocation;
-# this function lets the positive and missing-WSI-library paths run without an
-# AArch64 rootfs or emulator.
-chroot() {
-    chroot_root=$1
-    chroot_wsi_library="${chroot_root}/usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0"
-    if open_gpu_library_is_usable "${chroot_wsi_library}"; then
-        printf '%s\n' 'libxcb-dri3.so.0 => /usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0'
-    else
-        printf '%s\n' 'libxcb-dri3.so.0 => not found'
-    fi
-}
+# Stand in for the target loader in this host-side hermetic test. It runs as an
+# external process so the production env -i boundary is exercised, and refuses
+# any leaked non-conformant-driver opt-in.
+chroot_stub="${closure_tmp}/chroot-stub"
+cat >"${chroot_stub}" <<'EOF'
+#!/bin/sh
+set -eu
+if env | grep -Fq 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER'; then
+    echo 'clean-environment ICD check inherited the PVR opt-in' >&2
+    exit 1
+fi
+chroot_root=$1
+chroot_wsi_library="${chroot_root}/usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0"
+if [ -e "${chroot_wsi_library}" ]; then
+    printf '%s\n' 'libxcb-dri3.so.0 => /usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0'
+else
+    printf '%s\n' 'libxcb-dri3.so.0 => not found'
+fi
+EOF
+chmod 0755 "${chroot_stub}"
+PF_ROOTFS_CHROOT="${chroot_stub}"
+export PF_ROOTFS_CHROOT
 
 # Exercise the production runtime-closure entry point, including its negative
 # paths.  The exact Mesa build uses a Gallium/GBM module and does not install
@@ -291,7 +312,11 @@ done
 ln -s libvulkan.so.1.3.239 "${closure_root}/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
 ln -s libdrm.so.2.4.0 "${closure_root}/usr/lib/aarch64-linux-gnu/libdrm.so.2"
 ln -s libxcb-dri3.so.0.0.0 "${closure_root}/usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0"
+PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1
+export PVR_I_WANT_A_BROKEN_VULKAN_DRIVER
 verify_open_gpu_runtime_closure "${closure_root}" >/dev/null
+unset PVR_I_WANT_A_BROKEN_VULKAN_DRIVER
+echo 'open-gpu-clean-env-icd=PASS variable=absent loader=dynamic-closure'
 
 rm "${closure_root}/usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0.0.0"
 if verify_open_gpu_runtime_closure "${closure_root}" >/dev/null 2>&1; then

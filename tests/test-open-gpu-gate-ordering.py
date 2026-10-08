@@ -92,7 +92,6 @@ REAL_FILES = [
     GATE,
     SHELL,
     f"{SHELL}.d/10-input-broker.conf",
-    f"{SHELL}.d/50-open-gpu.conf",
     ANIM,
     "pocketforge-foreground.target",
     "pocketforge-foreground.target.d/10-owner-shell.conf",
