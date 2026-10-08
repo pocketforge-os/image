@@ -3,7 +3,9 @@
 # Layered only onto the a133-open-7x-gpu profile family. The file-owning
 # pocketforge-open-gpu-stack package satisfies the generic GLVND vendor and GBM
 # dependencies while preventing Debian Mesa driver payloads from entering the
-# rootfs. One signed-snapshot Debian package per line, sorted alphabetically.
+# rootfs. Xwayland is shared by the whole profile family because the provider
+# gate requires its glamor path even when Gamescope is not shipped. One
+# signed-snapshot Debian package per line, sorted alphabetically.
 
 glmark2-es2-drm
 glmark2-es2-wayland
@@ -11,3 +13,4 @@ glmark2-es2-x11
 kmscube
 mesa-utils
 vulkan-tools
+xwayland
