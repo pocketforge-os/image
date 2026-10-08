@@ -13,44 +13,18 @@
 #   - The real battery lever on this handheld is screen-off / suspend (which
 #     powers the radio down entirely), not dozing the radio mid-session.
 #
-# This is a POLICY KNOB, not a hardcode. It reads an optional POWER_SAVE key
-# from the same user-editable /boot/wifi.txt that holds the credentials, so the
-# setting can be changed from the OS (edit + reboot) without a rebuild, and a
-# future appliance power-manager can own it contextually (force-off while
-# streaming, suspend-based idle savings, re-enable only once the owned xradio
-# driver's power-save is proven stable).
-#
-#   POWER_SAVE=off   (default) — stability-first; recommended.
-#   POWER_SAVE=on              — let the chip doze when idle (may flap on xradio).
+# The first-boot seed intentionally has no driver-policy escape hatch. A future
+# appliance power manager can own this contextually after the xradio driver's
+# power-save path is proven stable.
 #
 # bd: tsp-cv7.4.12
 # =============================================================================
 set -eu
 
-WIFI_CONF="/boot/wifi.txt"
 IFACE="wlan0"
 DESIRED="off"   # product default: stability-first
 
 log() { echo "[pocketforge-wifi-powersave] $*"; }
-
-# --- read the optional POWER_SAVE knob from /boot/wifi.txt --------------------
-if [ -f "${WIFI_CONF}" ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-        line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-        case "$line" in
-            ""|\#*) continue ;;
-        esac
-        key="${line%%=*}"
-        val="${line#*=}"
-        if [ "$key" = "POWER_SAVE" ]; then
-            case "$(echo "$val" | tr '[:upper:]' '[:lower:]')" in
-                on|true|1)  DESIRED="on" ;;
-                off|false|0) DESIRED="off" ;;
-                *) log "WARN: unrecognized POWER_SAVE='${val}' — using default (off)" ;;
-            esac
-        fi
-    done < "${WIFI_CONF}"
-fi
 
 # --- apply -------------------------------------------------------------------
 if [ ! -e "/sys/class/net/${IFACE}" ]; then

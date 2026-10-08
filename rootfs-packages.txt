@@ -68,6 +68,17 @@ libxcb1
 libxkbcommon-x11-0
 libxkbcommon0
 libzstd1
+netcat-openbsd
+procps
+python3
+python3-configobj
+python3-debconf
+python3-jinja2
+python3-jsonpatch
+python3-jsonschema
+python3-oauthlib
+python3-requests
+python3-yaml
 sudo
 systemd-resolved
 systemd-sysv

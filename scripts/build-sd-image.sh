@@ -382,12 +382,11 @@ echo "  Creating FAT32 boot-resource image (64 MiB, label POCKETFORGE, volume id
 bash "${SRC_DIR}/scripts/make-reproducible-vfat.sh" \
     "${GENIMAGE_INPUT}/boot-resource.vfat" 64 POCKETFORGE "${BOOTRES_VOLID}"
 
-# Copy any files from boards/tsp/boot-resource/ into the FAT image.
-# wifi.txt is generated at build time by 'make generate-wifi-config' from
-# the system keyring (secret-tool). The file is gitignored.
+# Copy documentation/examples only. Published images are never seeded here;
+# node-recover owns the verified-copy p4 seed transform at flash time.
 BOOT_RES_DIR="${SRC_DIR}/boards/tsp/boot-resource"
-if [ -d "${BOOT_RES_DIR}" ] && ls "${BOOT_RES_DIR}"/* >/dev/null 2>&1; then
-    for f in "${BOOT_RES_DIR}"/*; do
+if [ -d "${BOOT_RES_DIR}" ]; then
+    for f in "${BOOT_RES_DIR}"/*.example; do
         [ -f "$f" ] || continue
         mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "$f" "::/$(basename "$f")"
         echo "  boot-resource: added $(basename "$f")"

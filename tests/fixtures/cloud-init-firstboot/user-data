@@ -1,0 +1,9 @@
+#cloud-config
+hostname: pocketforge-bench
+ssh_pwauth: false
+disable_root: true
+users:
+  - name: gamer
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest bench@example

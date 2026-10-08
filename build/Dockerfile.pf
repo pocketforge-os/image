@@ -17,6 +17,7 @@
 # content-addressed SHA is byte-identical regardless of transport, and is air-gap-safe):
 #   --build-context image-src=<archive>  kernel-src=<archive>  gpu-src=<archive>
 #                    sdl-src=<archive>    blobs-src=<archive>   wpa-src=<archive>
+#                    cloud-init-src=<archive>
 #                    runtime-src=<archive> launcher-src=<archive> poolsuite-src=<archive>
 #                    uboot-src=<archive>  tfa-src=<archive>    (a523 bootchain; EMPTY dirs
 #                                                               for a device with no source
@@ -38,7 +39,8 @@
 #   sdl ─────────────────┼─┼─┐           libSDL3-pocketforge.so (closed DDK OR, for
 #                        │ │ │           a133-open, linked against gpu-um-mesa — C3)  (tsp-1dl.4.4)
 #   wpa ─────────────────┼─┼─┼─┐         owned wpa_supplicant (a133 xr829 fork)     (tsp-myp1.8.2)
-#          └─▶ rootfs ───┴─┴─┴─┴─▶ assemble ─▶ export mmdebstrap + genimage/extlinux (tsp-1dl.4.5)
+#   cloud-init ──────────┼─┼─┼─┼─┐       NoCloud first-boot package                 (tsp-mc9m.41.1002)
+#          └─▶ rootfs ───┴─┴─┴─┴─┴─▶ assemble ─▶ export mmdebstrap + genimage/extlinux (tsp-1dl.4.5)
 #   bootchain ─────────────▶ (assemble)  a523 TF-A BL31 + U-Boot SPL → u-boot-sunxi-with-spl.bin
 #                                        (tsp-jet.1; consumed by the a523 assemble branch via
 #                                        COPY --from=bootchain — tsp-jet.4)
@@ -1072,6 +1074,19 @@ COPY --from=wpa-src . /work/src
 RUN <<'WPA'
 set -eux
 mkdir -p /out
+: "${PF_WPA_SHA:?}"
+case "${PF_WPA_SHA}" in
+  *[!0-9a-f]*|???????????????????????????????????????|?????????????????????????????????????????*)
+    echo "FATAL: PF_WPA_SHA must be exactly 40 lowercase hex characters" >&2
+    exit 1
+    ;;
+esac
+[ -f /work/src/.pf-source-revision ] || { echo "FATAL: wpa source receipt missing" >&2; exit 1; }
+[ "$(cat /work/src/.pf-source-revision)" = "${PF_WPA_SHA}" ] || {
+  echo "FATAL: wpa source receipt does not match PF_WPA_SHA" >&2
+  exit 1
+}
+find /work/src -maxdepth 1 -name .pf-source-revision -delete
 # Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
 # proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). wpa_supplicant's
 # xr829 roam-hysteresis fork is unrelated to the GPU choice — it ships on every a133
@@ -1145,6 +1160,79 @@ cp .config /out/config.used
 } > /out/.pf-wpa-provenance
 cat /out/.pf-wpa-provenance
 WPA
+
+# =============================================================================
+# cloud-init — deterministic PocketForge package from cloud-init-tsp 26.2.
+# The source named context is pinned by platform.lock and carries the same
+# .pf-source-revision receipt as every other source archive. The image-owned
+# fixture runs the source's strict validation/install path before packaging:
+# one accepted Wi-Fi + SSH-key seed and two fail-before-write controls.
+# =============================================================================
+FROM ${PF_CONTAINER} AS cloud-init
+ARG PF_CLOUD_INIT_SHA
+ARG SOURCE_DATE_EPOCH
+COPY --from=cloud-init-src . /work/src
+COPY --from=image-src . /work/image
+RUN <<'CLOUD_INIT'
+set -eux
+: "${PF_CLOUD_INIT_SHA:?}"
+: "${SOURCE_DATE_EPOCH:?}"
+case "${PF_CLOUD_INIT_SHA}" in
+  *[!0-9a-f]*|???????????????????????????????????????|?????????????????????????????????????????*)
+    echo "FATAL: PF_CLOUD_INIT_SHA must be exactly 40 lowercase hex characters" >&2
+    exit 1
+    ;;
+esac
+[ -f /work/src/.pf-source-revision ] || { echo "FATAL: cloud-init source receipt missing" >&2; exit 1; }
+[ "$(cat /work/src/.pf-source-revision)" = "${PF_CLOUD_INIT_SHA}" ] || {
+  echo "FATAL: cloud-init source receipt does not match PF_CLOUD_INIT_SHA" >&2
+  exit 1
+}
+find /work/src -maxdepth 1 -name .pf-source-revision -delete
+
+# Build dependencies resolve through the build image's immutable Debian
+# snapshot. Runtime dependencies are solved later by mmdebstrap from the image
+# snapshot when this local package enters its initial apt transaction.
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  build-essential debhelper devscripts dh-python distro-info distro-info-data \
+  fakeroot git libsystemd-dev:amd64 libudev-dev:amd64 meson ninja-build pkg-config systemd:amd64 udev:amd64 \
+  python3 python3-configobj python3-dev python3-jinja2 python3-jsonpatch \
+  python3-jsonschema python3-oauthlib python3-packaging python3-requests \
+  python3-setuptools python3-yaml ripgrep
+
+# packages/bddeb archives HEAD. Named contexts intentionally contain no .git,
+# so create a deterministic, local-only history whose content is exactly the
+# already verified archive. The package version remains the upstream 26.2 from
+# meson because this synthetic history has no tag.
+cd /work/src
+git init -q
+git config user.name PocketForge
+git config user.email builds@pocketforge.invalid
+# Force tracked-source names such as meson.build through upstream's '*.build'
+# ignore pattern; this synthetic index represents the already verified archive.
+git add -Af
+GIT_AUTHOR_DATE="@${SOURCE_DATE_EPOCH}" GIT_COMMITTER_DATE="@${SOURCE_DATE_EPOCH}" \
+  git commit -q -m "cloud-init-tsp ${PF_CLOUD_INIT_SHA}"
+
+PF_CLOUD_INIT_TREE=/work/src /work/image/tests/test-cloud-init-firstboot.sh
+export CLOUD_INIT_TOP_D=/work/src
+export DEB_BUILD_OPTIONS=nocheck
+export POCKETFORGE_BUILD=1
+./packages/bddeb -v -d --release bookworm
+
+mkdir -p /out
+package_count="$(find /work/src -maxdepth 1 -type f -name 'cloud-init-pocketforge_*_all.deb' | wc -l)"
+[ "${package_count}" -eq 1 ] || { echo "FATAL: expected one cloud-init-pocketforge package, found ${package_count}" >&2; exit 1; }
+package="$(find /work/src -maxdepth 1 -type f -name 'cloud-init-pocketforge_*_all.deb' -print -quit)"
+[ "$(dpkg-deb -f "${package}" Package)" = cloud-init-pocketforge ]
+install -m 0644 "${package}" /out/cloud-init-pocketforge.deb
+{
+  printf 'cloud-init-tsp@%s\n' "${PF_CLOUD_INIT_SHA}"
+  printf '  package sha256=%s\n' "$(sha256sum /out/cloud-init-pocketforge.deb | cut -d' ' -f1)"
+} > /out/.pf-cloud-init-provenance
+cat /out/.pf-cloud-init-provenance
+CLOUD_INIT
 
 # =============================================================================
 # platform-inputs — the ONE staged platform device descriptor (bd: tsp-f3fm.202.1
@@ -1959,6 +2047,7 @@ ARG PF_KERNEL_SHA
 ARG PF_GPU_SHA=
 ARG PF_LIBSDL3_SHA
 ARG PF_WPA_SHA
+ARG PF_CLOUD_INIT_SHA
 ARG PF_RUNTIME_SHA
 ARG PF_HWPROBE_SHA
 ARG PF_POOLSUITE_SHA=
@@ -1997,6 +2086,7 @@ COPY --from=gpu-fw /out             /work/gpu-fw-tsp
 COPY --from=gpu-um-mesa /out        /work/gpu-um-mesa
 COPY --from=sdl    /out/lib         /work/libsdl3
 COPY --from=wpa    /out             /work/wpa
+COPY --from=cloud-init /out /work/cloud-init
 COPY --from=runtime /out            /work/runtime
 COPY --from=hwprobe /out            /work/hwprobe
 COPY --from=poolsuite /out           /work/poolsuite
@@ -2019,6 +2109,7 @@ mkdir -p /out
 case "${PF_SOC}" in
   sun50iw10p1)   # a133 (PowerVR): the fully-integrated owned rootfs (DDK UM, PowerVR/xr829 modules, SDL3, audio)
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs LIBSDL3_DIR=/work/libsdl3 WPA_DIR=/work/wpa \
+      CLOUD_INIT_DIR=/work/cloud-init \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
       GPU_UM_MESA_DIR=/work/gpu-um-mesa OUT_DIR=/out \
       RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher HWPROBE_DIR=/work/hwprobe \
@@ -2040,7 +2131,8 @@ case "${PF_SOC}" in
       PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \
       PF_IMAGE_SHA="${PF_IMAGE_SHA}" PF_KERNEL_SHA="${PF_KERNEL_SHA}" \
       PF_GPU_SHA="${PF_GPU_SHA:-}" PF_LIBSDL3_SHA="${PF_LIBSDL3_SHA}" \
-      PF_WPA_SHA="${PF_WPA_SHA}" PF_RUNTIME_SHA="${PF_RUNTIME_SHA}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA:-}" \
+      PF_WPA_SHA="${PF_WPA_SHA}" PF_CLOUD_INIT_SHA="${PF_CLOUD_INIT_SHA}" \
+      PF_RUNTIME_SHA="${PF_RUNTIME_SHA}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA:-}" \
       PF_HWPROBE_SHA="${PF_HWPROBE_SHA}" PF_SIM_SHA="${PF_SIM_SHA}" \
       PF_RECOVERY_SHA="${PF_RECOVERY_SHA}" RECOVERY_DIR=/work/recovery \
       PF_BLOBS_SHA="${PF_BLOBS_SHA}" \
@@ -2114,30 +2206,8 @@ ARG PF_BOOTCHAIN_MODEL
 ARG PF_BOOTCHAIN_BLOB_GROUP
 ARG PF_VARIANT=dev
 ARG SOURCE_DATE_EPOCH
-# WiFi credentials (bd tsp-8ba, the tsp-zbg#5 seam): the gitignored
-# boards/tsp/boot-resource/wifi.txt cannot come from the image-src lock-ref context, so
-# it arrives as a BuildKit secret — never a layer, never a committed file. No secret =
-# the image ships WiFi-unconfigured (wifi.txt.example only), exactly as before.
-# PF_WIFI_SHA (sha256 of the secret file, set by pf-build.sh alongside the secret)
-# cache-busts this RUN: BuildKit excludes secret CONTENT from the cache key, so a
-# rotated PSK would otherwise silently reuse the stale cached layer. mcopy stamps FAT
-# timestamps from SOURCE_DATE_EPOCH, so the staged file's mtime never reaches the image.
-ARG PF_WIFI_SHA=
-# Destination is board-specific: a133 → boards/tsp/boot-resource/wifi.txt (consumed by
-# build-sd-image.sh); a523 → boards/tsp-s/boot-resource/wifi.txt (assemble-sd.sh reads it
-# via the WIFI_TXT default). Both wifi/tsp and wifi/tsp-s are seeded on modelmaker.
-RUN --mount=type=secret,id=wifi,required=false \
-    if [ -f /run/secrets/wifi ]; then \
-        case "${PF_BOOT_PROTO}" in \
-          extlinux) WIFI_DST=/work/src/boards/tsp-s/boot-resource/wifi.txt ;; \
-          *)        WIFI_DST=/work/src/boards/tsp/boot-resource/wifi.txt ;; \
-        esac; \
-        mkdir -p "$(dirname "${WIFI_DST}")" && \
-        cp /run/secrets/wifi "${WIFI_DST}" && \
-        echo "wifi.txt staged from secret to ${WIFI_DST} (sha256=${PF_WIFI_SHA:-unset})"; \
-    else \
-        echo "no wifi secret provided -> image ships WiFi-unconfigured"; \
-    fi
+# Published images are unseeded. node-recover owns the post-verification,
+# p4-only seed transform at flash time; no credential enters this build graph.
 # /work/kboot = kernel Image + <dtb>.
 COPY --from=kernel /out/boot     /work/kboot
 # The packaged kernel's resolved .config: the owned-SPL initrd stages the
