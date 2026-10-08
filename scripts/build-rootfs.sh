@@ -1956,6 +1956,12 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
     "${CTS_BUNDLE_DIR}" "${ROOTFS_EXTRACTED}" \
     "${PF_CTS_BUNDLE_MODE}" "${PF_CTS_BUNDLE_SHA256}"
 
+"${SRC_DIR}/scripts/install-gles32-candidate-profile.sh" \
+    "${SRC_DIR}/packages/pocketforge-gles32-candidate/99-pocketforge-gles32-candidate.conf" \
+    "${ROOTFS_EXTRACTED}" "${VARIANT}" "${PF_DEVICE_ID}"
+"${SRC_DIR}/scripts/verify-gles32-candidate-profile.sh" \
+    "${ROOTFS_EXTRACTED}" "${VARIANT}" "${PF_DEVICE_ID}"
+
 if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
     "${SRC_DIR}/scripts/verify-mesa-shader-cache.sh" \
         "${GPU_UM_MESA_DIR}/usr/local/lib/libgallium_dri.so"
