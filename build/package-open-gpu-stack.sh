@@ -47,6 +47,11 @@ for artifact in \
         exit 1
     }
 done
+zink_policy="$producer/usr/local/share/drirc.d/10-pocketforge-zink.conf"
+if [ ! -f "$zink_policy" ] || [ -L "$zink_policy" ]; then
+    echo "required gpu-um-tsp Zink loader policy is missing or not regular: $zink_policy" >&2
+    exit 1
+fi
 
 short_sha=$(printf '%.12s' "$source_sha")
 mesa_pc="$producer/usr/local/lib/pkgconfig/dri.pc"

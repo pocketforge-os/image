@@ -11,9 +11,7 @@ foreground_unit="$root/rootfs-overlay/etc/systemd/system/pf-foreground@.service"
 manager_environment="$root/rootfs-overlay/etc/systemd/system.conf.d/50-pocketforge-open-gpu.conf"
 session_environment="$root/rootfs-overlay/etc/environment.d/50-pocketforge-open-gpu.conf"
 profile_environment="$root/rootfs-overlay/etc/profile.d/pocketforge-open-gpu.sh"
-zink_manager_environment="$root/rootfs-overlay/etc/systemd/system.conf.d/60-pocketforge-zink.conf"
-zink_session_environment="$root/rootfs-overlay/etc/environment.d/60-pocketforge-zink.conf"
-zink_profile_environment="$root/rootfs-overlay/etc/profile.d/pocketforge-zink.sh"
+zink_policy="$root/packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf"
 required="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf"
 drm_systemd_rule="$root/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
 probe="$root/tools/open-gpu-probe.c"
@@ -43,24 +41,16 @@ grep -F 'require_rootfs_file "lib/firmware/${artifact}"' \
 grep -F 'wifi-firmware/fw_xr829_bt.bin' "$customize" >/dev/null
 grep -F 'llvmpipe' "$probe" >/dev/null
 grep -F 'PF-OPEN-GPU PASS:' "$gate" >/dev/null
-grep -Fx 'DefaultEnvironment=MESA_LOADER_DRIVER_OVERRIDE=zink' \
-    "$zink_manager_environment" >/dev/null
-grep -Fx 'MESA_LOADER_DRIVER_OVERRIDE=zink' \
-    "$zink_session_environment" >/dev/null
-grep -Fx 'export MESA_LOADER_DRIVER_OVERRIDE=zink' \
-    "$zink_profile_environment" >/dev/null
-if grep -F 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER' \
-    "$zink_manager_environment" "$zink_session_environment" \
-    "$zink_profile_environment" >/dev/null; then
-    echo 'Zink defaults must not restore the retired PowerVR opt-in' >&2
-    exit 1
-fi
-grep -F 'install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/60-pocketforge-zink.conf"' \
-    "$customize" >/dev/null
-grep -F 'install -D -m 0644 "/work/src/rootfs-overlay/etc/environment.d/60-pocketforge-zink.conf"' \
-    "$customize" >/dev/null
-grep -F 'install -D -m 0755 "/work/src/rootfs-overlay/etc/profile.d/pocketforge-zink.sh"' \
-    "$customize" >/dev/null
+test -f "$zink_policy"
+test "$(grep -Fc 'driver="loader" kernel_driver="powervr"' "$zink_policy")" -eq 1
+test "$(grep -Fc 'driver="loader" kernel_driver="sun4i-drm"' "$zink_policy")" -eq 1
+test "$(grep -Fc 'option name="dri_driver" value="zink"' "$zink_policy")" -eq 2
+grep -F 'packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf /tmp/10-pocketforge-zink.conf' \
+    "$dockerfile" >/dev/null
+grep -F '/instroot/usr/local/share/drirc.d/10-pocketforge-zink.conf' \
+    "$dockerfile" >/dev/null
+grep -F 'MESA_LOADER_DRIVER_OVERRIDE is forbidden in the rootfs:' \
+    "$root/scripts/verify-open-gpu-provider.sh" >/dev/null
 grep -Fx 'Environment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$unit" >/dev/null
 grep -Fx 'export PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1' "$gate" >/dev/null
 grep -F 'hint=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=%s' "$probe" >/dev/null
@@ -76,7 +66,13 @@ for removed_export in \
     "$profile_environment" \
     "$root/rootfs-overlay/etc/systemd/system/pocketforge-menu.service.d/50-open-gpu.conf" \
     "$root/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/50-open-gpu.conf" \
-    "$root/rootfs-overlay/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf"; do
+    "$root/rootfs-overlay/etc/systemd/system/pf-foreground@.service.d/50-open-gpu.conf" \
+    "$root/rootfs-overlay/etc/systemd/system.conf.d/60-pocketforge-zink.conf" \
+    "$root/rootfs-overlay/etc/environment.d/60-pocketforge-zink.conf" \
+    "$root/rootfs-overlay/etc/profile.d/pocketforge-zink.sh" \
+    "$root/rootfs-overlay/etc/systemd/system/pocketforge-menu.service.d/60-zink.conf" \
+    "$root/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/60-zink.conf" \
+    "$root/rootfs-overlay/etc/systemd/system/pf-foreground@.service.d/60-zink.conf"; do
     if [ -e "$removed_export" ]; then
         echo "open GPU global opt-in export remains: $removed_export" >&2
         exit 1
@@ -89,14 +85,6 @@ for removed_export in \
 done
 for open_gpu_unit in $open_gpu_units; do
     shared_unit="$root/rootfs-overlay/etc/systemd/system/$open_gpu_unit"
-    zink_dropin="$root/rootfs-overlay/etc/systemd/system/$open_gpu_unit.d/60-zink.conf"
-    grep -Fx 'Environment=MESA_LOADER_DRIVER_OVERRIDE=zink' "$zink_dropin" >/dev/null
-    if grep -F 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER' "$zink_dropin" >/dev/null; then
-        echo "Zink drop-in must not restore the PowerVR opt-in: $open_gpu_unit" >&2
-        exit 1
-    fi
-    printf '%s\n' "$open_model_block" | \
-        grep -F "/etc/systemd/system/${open_gpu_unit}.d/60-zink.conf" >/dev/null
     if grep -F 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER' "$shared_unit" >/dev/null; then
         echo "open GPU opt-in must not be present in shared unit: $open_gpu_unit" >&2
         exit 1
@@ -106,6 +94,16 @@ for open_gpu_unit in $open_gpu_units; do
         exit 1
     fi
 done
+if find "$root/rootfs-overlay" -type f -exec \
+    grep -IlE '(^|[^[:alnum:]_])MESA_LOADER_DRIVER_OVERRIDE[[:space:]]*=' {} + | \
+    grep -q .; then
+    echo 'rootfs overlay still exports MESA_LOADER_DRIVER_OVERRIDE' >&2
+    exit 1
+fi
+if grep -E 'MESA_LOADER_DRIVER_OVERRIDE[[:space:]]*=' "$customize" >/dev/null; then
+    echo 'rootfs builder still exports MESA_LOADER_DRIVER_OVERRIDE' >&2
+    exit 1
+fi
 grep -F '/usr/lib/pocketforge/open-gpu-probe' "$gate" >/dev/null
 grep -F 'VK_PHYSICAL_DEVICE_TYPE_CPU' "$probe" >/dev/null
 grep -F 'vkQueueSubmit' "$probe" >/dev/null
@@ -179,7 +177,9 @@ printf '%s\n' "$target_stage_block" | grep -F -- '-Dglvnd-vendor-name=mesa' >/de
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dglx=dri' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Degl=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dgbm=enabled' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dxmlconfig=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F 'libglvnd-dev:arm64' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F 'libexpat1-dev:arm64' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F 'libxcb-glx0-dev:arm64' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F 'libxxf86vm-dev:arm64' >/dev/null
 # The cross sysroot needs the aarch64 zstd headers/.pc file for meson's

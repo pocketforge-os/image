@@ -121,6 +121,16 @@ if [ ! -f "$provider_list" ] || [ -L "$provider_list" ]; then
     fatal 'provider dpkg ownership list is missing or not a regular file'
 fi
 
+# Zink selection is image policy, not inherited process state. Search text
+# files across the complete rootfs so environment.d, profile, systemd, launcher,
+# and application-specific exports are all rejected while ELF string tables are
+# ignored as binary data.
+loader_override=$(find "$rootfs" -xdev -type f -exec \
+    grep -IlE '(^|[^[:alnum:]_])MESA_LOADER_DRIVER_OVERRIDE[[:space:]]*=' {} + | \
+    sed -n '1p')
+[ -z "$loader_override" ] \
+    || fatal "MESA_LOADER_DRIVER_OVERRIDE is forbidden in the rootfs: ${loader_override#"$rootfs"}"
+
 verify_owned_artifact() {
     relative=$1
     source_path="$producer/$relative"
@@ -145,6 +155,58 @@ for artifact in \
     usr/local/lib/libvulkan_powervr_mesa.so; do
     verify_owned_artifact "$artifact"
 done
+
+zink_policy_relative=usr/local/share/drirc.d/10-pocketforge-zink.conf
+zink_policy_source="$producer/$zink_policy_relative"
+zink_policy_rootfs="$rootfs/$zink_policy_relative"
+for policy_path in "$zink_policy_source" "$zink_policy_rootfs"; do
+    if [ ! -f "$policy_path" ] || [ -L "$policy_path" ]; then
+        fatal "Zink loader policy is missing, not regular, or symlinked: $policy_path"
+    fi
+done
+policy_component=$rootfs
+for policy_name in usr local share drirc.d; do
+    policy_component=$policy_component/$policy_name
+    [ ! -L "$policy_component" ] \
+        || fatal "Zink loader policy boundary reached through symlink: ${policy_component#"$rootfs"}"
+done
+verify_owned_artifact "$zink_policy_relative"
+if ! python3 - "$zink_policy_rootfs" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+path = sys.argv[1]
+try:
+    root = ET.parse(path).getroot()
+except (ET.ParseError, OSError) as error:
+    print(f"FATAL: open GPU provider: cannot parse Zink loader policy: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+expected = [("powervr", "zink"), ("sun4i-drm", "zink")]
+actual = []
+if root.tag != "driconf":
+    print(f"FATAL: open GPU provider: Zink loader policy root must be driconf: {root.tag}", file=sys.stderr)
+    raise SystemExit(1)
+for device in list(root):
+    if device.tag != "device" or set(device.attrib) != {"driver", "kernel_driver"} or device.get("driver") != "loader":
+        print("FATAL: open GPU provider: Zink loader policy has a non-loader device", file=sys.stderr)
+        raise SystemExit(1)
+    applications = list(device)
+    if len(applications) != 1 or applications[0].tag != "application" or applications[0].attrib != {"name": "PocketForge Zink"}:
+        print("FATAL: open GPU provider: Zink loader policy has a non-canonical application", file=sys.stderr)
+        raise SystemExit(1)
+    options = list(applications[0])
+    if len(options) != 1 or options[0].tag != "option" or set(options[0].attrib) != {"name", "value"} or options[0].get("name") != "dri_driver":
+        print("FATAL: open GPU provider: Zink loader policy has a non-canonical option", file=sys.stderr)
+        raise SystemExit(1)
+    actual.append((device.get("kernel_driver"), options[0].get("value")))
+if actual != expected:
+    print(f"FATAL: open GPU provider: Zink loader policy mismatch: expected={expected} actual={actual}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+then
+    exit 1
+fi
 
 readelf_command=${PF_OPEN_GPU_READELF:-readelf}
 verify_aarch64_elf() {
@@ -220,6 +282,7 @@ expected = {
     "glx": "dri",
     "egl": "enabled",
     "gbm": "enabled",
+    "xmlconfig": "enabled",
     "gallium-drivers": ["zink"],
     "vulkan-drivers": ["imagination"],
 }
@@ -315,4 +378,4 @@ glx_vendor_count=$(find "$rootfs" \( -type f -o -type l \) \
 [ -e "$rootfs/usr/local/lib/libGLX_mesa.so.0" ] \
     || fatal 'canonical GLVND Mesa GLX vendor is missing from /usr/local/lib'
 
-echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink vulkan=powervr vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
+echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr,sun4i-drm vulkan=powervr vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"

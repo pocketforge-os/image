@@ -5,6 +5,7 @@ root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 packager="$root/build/package-open-gpu-stack.sh"
 verifier="$root/scripts/verify-open-gpu-provider.sh"
 control="$root/packages/pocketforge-open-gpu-stack/DEBIAN/control"
+zink_policy="$root/packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf"
 builder="$root/scripts/build-rootfs.sh"
 dockerfile="$root/build/Dockerfile.pf"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/open-gpu-provider.XXXXXX")
@@ -22,6 +23,10 @@ test "$(grep -Fc 'scripts/verify-open-gpu-provider.sh' "$builder")" -eq 2
 grep -F -- '-Dglvnd=enabled -Dglvnd-vendor-name=mesa' "$dockerfile" >/dev/null
 grep -F -- '-Dglx=dri -Degl=enabled -Dgbm=enabled' "$dockerfile" >/dev/null
 grep -F -- '-Dplatforms=x11,wayland' "$dockerfile" >/dev/null
+grep -F -- '-Dxmlconfig=enabled' "$dockerfile" >/dev/null
+grep -F 'libexpat1-dev:arm64' "$dockerfile" >/dev/null
+grep -F 'packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf /tmp/10-pocketforge-zink.conf' \
+    "$dockerfile" >/dev/null
 
 # Exercise the production package-list merge in isolation. A package named as
 # an explicit apt root wins over a virtual provider, so the provider-backed
@@ -54,6 +59,7 @@ mkdir -p \
     "$producer/usr/local/lib" \
     "$producer/usr/local/lib/gbm" \
     "$producer/usr/local/lib/pkgconfig" \
+    "$producer/usr/local/share/drirc.d" \
     "$producer/usr/local/share/glvnd/egl_vendor.d" \
     "$producer/usr/local/share/vulkan/icd.d" \
     "$rootfs/usr/lib/aarch64-linux-gnu" \
@@ -80,6 +86,9 @@ printf '%s\n' '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_mesa
     >"$producer/usr/local/share/glvnd/egl_vendor.d/50_mesa.json"
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
     >"$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+test -f "$zink_policy"
+cp "$zink_policy" \
+    "$producer/usr/local/share/drirc.d/10-pocketforge-zink.conf"
 printf '%s\n' \
     'gpu-um-tsp@1234567890abcdef1234567890abcdef12345678 (open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
     >"$producer/.pf-gpu-um-provenance"
@@ -91,6 +100,7 @@ cat >"$producer/.pf-gpu-um-build-options.json" <<'EOF'
   {"name":"glx","value":"dri"},
   {"name":"egl","value":"enabled"},
   {"name":"gbm","value":"enabled"},
+  {"name":"xmlconfig","value":"enabled"},
   {"name":"gallium-drivers","value":["zink"]},
   {"name":"vulkan-drivers","value":["imagination"]}
 ]
@@ -227,7 +237,7 @@ dpkg-deb --fsys-tarfile "$scratch/provider-a.deb" | tar -tf - | \
 positive_output=$("$verifier" "$rootfs" "$producer")
 printf '%s\n' "$positive_output"
 printf '%s\n' "$positive_output" | grep -Fx \
-    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink vulkan=powervr vulkan_manifests=1 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
+    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr,sun4i-drm vulkan=powervr vulkan_manifests=1 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
     >/dev/null
 
 expect_rejection() {
@@ -245,6 +255,38 @@ expect_rejection() {
         exit 1
     }
 }
+
+# An inherited loader override is not a reliable image policy: clean or
+# sandboxed process environments silently lose it. The built-image gate must
+# reject every occurrence and require the provider-owned drirc policy instead.
+candidate="$scratch/red-loader-environment"
+cp -a "$rootfs" "$candidate"
+mkdir -p "$candidate/etc/environment.d"
+printf '%s\n' 'MESA_LOADER_DRIVER_OVERRIDE=zink' \
+    >"$candidate/etc/environment.d/60-pocketforge-zink.conf"
+expect_rejection red-loader-environment "$candidate" \
+    'MESA_LOADER_DRIVER_OVERRIDE is forbidden in the rootfs:'
+
+candidate="$scratch/red-missing-zink-policy"
+cp -a "$rootfs" "$candidate"
+rm "$candidate/usr/local/share/drirc.d/10-pocketforge-zink.conf"
+expect_rejection red-missing-zink-policy "$candidate" \
+    'Zink loader policy is missing, not regular, or symlinked:'
+
+candidate="$scratch/red-wrong-zink-policy"
+producer_bad="$scratch/producer-wrong-zink-policy"
+cp -a "$rootfs" "$candidate"
+cp -a "$producer" "$producer_bad"
+sed -i 's/kernel_driver="powervr"/kernel_driver="panfrost"/' \
+    "$candidate/usr/local/share/drirc.d/10-pocketforge-zink.conf" \
+    "$producer_bad/usr/local/share/drirc.d/10-pocketforge-zink.conf"
+if "$verifier" "$candidate" "$producer_bad" \
+    >"$scratch/red-wrong-zink-policy.out" 2>"$scratch/red-wrong-zink-policy.err"; then
+    echo 'FAIL: red-wrong-zink-policy fixture was accepted' >&2
+    exit 1
+fi
+grep -F 'Zink loader policy mismatch:' \
+    "$scratch/red-wrong-zink-policy.err" >/dev/null
 
 for fixture in zink_dri libEGL_mesa libGLX_mesa libgbm; do
     candidate="$scratch/red-$fixture"
@@ -372,4 +414,20 @@ fi
 grep -F 'Mesa build option mismatch: glx expected=dri actual=disabled' \
     "$scratch/red-glx-disabled.err" >/dev/null
 
-echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing red=false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,glx-disabled'
+candidate="$scratch/red-xmlconfig-disabled"
+producer_bad="$scratch/producer-xmlconfig-disabled"
+cp -a "$rootfs" "$candidate"
+cp -a "$producer" "$producer_bad"
+sed -i 's/"name":"xmlconfig","value":"enabled"/"name":"xmlconfig","value":"disabled"/' \
+    "$producer_bad/.pf-gpu-um-build-options.json"
+cp "$producer_bad/.pf-gpu-um-build-options.json" \
+    "$candidate/usr/share/pocketforge/gpu-um-mesa-build-options.json"
+if "$verifier" "$candidate" "$producer_bad" \
+    >"$scratch/red-xmlconfig-disabled.out" 2>"$scratch/red-xmlconfig-disabled.err"; then
+    echo 'FAIL: red-xmlconfig-disabled fixture was accepted' >&2
+    exit 1
+fi
+grep -F 'Mesa build option mismatch: xmlconfig expected=enabled actual=disabled' \
+    "$scratch/red-xmlconfig-disabled.err" >/dev/null
+
+echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+drirc-zink red=loader-environment,missing-zink-policy,wrong-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,glx-disabled,xmlconfig-disabled'

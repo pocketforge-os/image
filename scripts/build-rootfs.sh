@@ -1367,14 +1367,6 @@ fi
 if [ "${PF_GPU_MODEL}" = "open" ]; then
     install -D -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules" \
         "${ROOTFS}/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
-    # Select the only Gallium driver this image builds without restoring the
-    # retired PowerVR non-conformant-driver opt-in configuration.
-    install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/60-pocketforge-zink.conf" \
-        "${ROOTFS}/etc/systemd/system.conf.d/60-pocketforge-zink.conf"
-    install -D -m 0644 "/work/src/rootfs-overlay/etc/environment.d/60-pocketforge-zink.conf" \
-        "${ROOTFS}/etc/environment.d/60-pocketforge-zink.conf"
-    install -D -m 0755 "/work/src/rootfs-overlay/etc/profile.d/pocketforge-zink.sh" \
-        "${ROOTFS}/etc/profile.d/pocketforge-zink.sh"
     install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/open-gpu-gate.sh" \
         "${ROOTFS}/usr/lib/pocketforge/open-gpu-gate.sh"
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service" \
@@ -1386,12 +1378,6 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     ln -sf ../pf-open-gpu-gate.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-open-gpu-gate.service"
     if [ "${PF_HAS_DISPLAY}" = 1 ]; then
-        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-menu.service.d/60-zink.conf" \
-            "${ROOTFS}/etc/systemd/system/pocketforge-menu.service.d/60-zink.conf"
-        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/60-zink.conf" \
-            "${ROOTFS}/etc/systemd/system/pf-shell-selected.service.d/60-zink.conf"
-        install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-foreground@.service.d/60-zink.conf" \
-            "${ROOTFS}/etc/systemd/system/pf-foreground@.service.d/60-zink.conf"
         for ui_unit in pf-shell-selected.service pocketforge-menu.service pocketforge-placeholder.service; do
             dropin="${ROOTFS}/etc/systemd/system/${ui_unit}.d"
             install -d "${dropin}"
