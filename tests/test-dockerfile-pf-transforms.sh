@@ -48,13 +48,13 @@ printf 'PASS: Dockerfile preserves conditional cleanup bodies and strips only th
 
 python3 "$root/build/tests/test_gpu_um_toolchain_drift.py"
 
-target_gpu_um_sha=1d8056548b79b236e45d3ba0b0dec94a25660930
-stale_gpu_um_sha=fd904962ec4726d038cf5b5e895598ac48081cce
+target_gpu_um_sha=299d52947864fd42aa9a153aaaf5a14f6e23c1ce
+stale_gpu_um_sha=1d8056548b79b236e45d3ba0b0dec94a25660930
 stale_dockerfile="$tmpdir/gpu-um-stale.Dockerfile"
 stale_fixture="$tmpdir/gpu-um-stale-fixture.Dockerfile"
 sed "s/$target_gpu_um_sha/$stale_gpu_um_sha/g" "$dockerfile" >"$stale_dockerfile"
 sed "s/$target_gpu_um_sha/$stale_gpu_um_sha/g" \
-  "$root/build/tests/fixtures/gpu-um-toolchain-1d805654.Dockerfile" >"$stale_fixture"
+  "$root/build/tests/fixtures/gpu-um-toolchain-299d5294.Dockerfile" >"$stale_fixture"
 
 gpu_um_stale="$tmpdir/gpu-um-stale-source-pin.log"
 if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \

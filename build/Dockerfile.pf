@@ -549,7 +549,7 @@ GPUUMNONE
 
 # --- 1/5 toolchain: Ubuntu 24.04 (native x86_64) + the arm64 cross toolchain + LLVM 20 ---
 # Keep the load-bearing toolchain settings aligned with gpu-um-tsp's
-# docker/Dockerfile.ge8300-mesa-cross at 1d8056548b79b236e45d3ba0b0dec94a25660930. Do NOT add
+# docker/Dockerfile.ge8300-mesa-cross at 299d52947864fd42aa9a153aaaf5a14f6e23c1ce. Do NOT add
 # --platform=linux/arm64 anywhere in this subgraph: every program this recipe executes is
 # x86_64 (the "native precompilers" stage below is the whole reason a cross build needs a
 # native pass at all — mesa_clc/pco_clc/vtn_bindgen2 run at BUILD time, not on-device).
