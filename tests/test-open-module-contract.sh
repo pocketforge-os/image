@@ -11,6 +11,7 @@ trap 'find "${scratch}" -mindepth 1 -delete; rmdir "${scratch}"' EXIT
 
 mkdir -p "${scratch}/bin" \
     "${scratch}/blobs/sunxi/a133/wifi-firmware" \
+    "${scratch}/cloud-init" \
     "${scratch}/mesa/usr/local/lib/gbm" \
     "${scratch}/out"
 cat > "${scratch}/bin/qemu-aarch64-static" <<'EOF'
@@ -26,6 +27,7 @@ for library in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so; do
 done
 : > "${scratch}/mesa/usr/local/lib/gbm/dri_gbm.so"
 : > "${scratch}/mesa/pocketforge-open-gpu-stack.deb"
+: > "${scratch}/cloud-init/cloud-init-pocketforge.deb"
 
 populate_modules() {
     local release_dir="$1"
@@ -48,10 +50,12 @@ run_rootfs_preflight() {
     if PATH="${scratch}/bin:${PATH}" \
         SRC_DIR="${root}" BLOBS_DIR="${scratch}/blobs" \
         GPU_UM_MESA_DIR="${scratch}/mesa" WPA_DIR="${scratch}/missing-wpa" \
+        CLOUD_INIT_DIR="${scratch}/cloud-init" \
         KERNEL_TSP_DIR="${kernel_dir}" GPU_KM_TSP_DIR="${scratch}/unused-gpu" \
         OUT_DIR="${scratch}/out" PF_GPU_MODEL=open \
         PF_GPU_KM_MODEL="${km_model}" PF_KERNEL_REQUIRED_MODULES="${required_modules}" \
         PF_DEVICE_ID="${device_id}" PF_DISPLAY_PIPELINE=none \
+        PF_CLOUD_INIT_SHA=5656565656565656565656565656565656565656 \
         bash "${rootfs_script}" >"${scratch}/${label}.out" 2>"${scratch}/${label}.err"; then
         echo "FAIL: rootfs fixture ${label} unexpectedly completed" >&2
         exit 1
