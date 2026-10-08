@@ -13,6 +13,7 @@ session_environment="$root/rootfs-overlay/etc/environment.d/50-pocketforge-open-
 required="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf"
 drm_systemd_rule="$root/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
 probe="$root/tools/open-gpu-probe.c"
+mainline_packages="$root/rootfs-packages-mainline.txt"
 open_gpu_units='pocketforge-menu.service pf-shell-selected.service pf-foreground@.service'
 
 # Literal Dockerfile variables are intentional in these structural assertions.
@@ -70,6 +71,12 @@ grep -F 'submit=ok' "$probe" >/dev/null
 grep -F 'COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe' "$dockerfile" >/dev/null
 grep -F 'install -D -m 0755 /work/gpu-um-mesa/usr/lib/pocketforge/open-gpu-probe' "$customize" >/dev/null
 grep -F 'libvulkan-dev:arm64' "$dockerfile" >/dev/null
+for wsi_runtime_package in libxcb-dri3-0 libxcb-present0 libxshmfence1; do
+    grep -Fx "$wsi_runtime_package" "$mainline_packages" >/dev/null || {
+        echo "open GPU rootfs lacks WSI runtime package: $wsi_runtime_package" >&2
+        exit 1
+    }
+done
 # shellcheck disable=SC2016 # Dockerfile variable is intentionally literal.
 grep -F 'FROM ${PF_CONTAINER} AS gpu-um-build' "$dockerfile" >/dev/null
 grep -F 'gpu_um_toolchain_probe=ok distro=debian-bookworm' "$dockerfile" >/dev/null
@@ -245,8 +252,25 @@ bash -n "${closure_helpers}"
 grep -F 'if open_gpu_library_is_usable "${candidate}"; then' "${closure_helpers}" >/dev/null
 grep -F 'require_open_gpu_library "${rootfs}" libvulkan.so.1 || return 1' "${closure_helpers}" >/dev/null
 grep -F 'require_open_gpu_library "${rootfs}" libdrm.so.2 || return 1' "${closure_helpers}" >/dev/null
+grep -F 'chroot "${rootfs}" /lib/ld-linux-aarch64.so.1 --list /usr/local/lib/libvulkan_powervr_mesa.so' \
+    "${closure_helpers}" >/dev/null
+grep -F 'open GPU PowerVR ICD dynamic runtime closure is incomplete' "${closure_helpers}" >/dev/null
 # shellcheck source=/dev/null
 . "${closure_helpers}"
+
+# Stand in for the target loader in this host-side hermetic test. The source
+# assertions above tie this seam to the exact production chroot invocation;
+# this function lets the positive and missing-WSI-library paths run without an
+# AArch64 rootfs or emulator.
+chroot() {
+    chroot_root=$1
+    chroot_wsi_library="${chroot_root}/usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0"
+    if open_gpu_library_is_usable "${chroot_wsi_library}"; then
+        printf '%s\n' 'libxcb-dri3.so.0 => /usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0'
+    else
+        printf '%s\n' 'libxcb-dri3.so.0 => not found'
+    fi
+}
 
 # Exercise the production runtime-closure entry point, including its negative
 # paths.  The exact Mesa build uses a Gallium/GBM module and does not install
@@ -263,9 +287,18 @@ done
 : >"${closure_root}/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
 : >"${closure_root}/usr/lib/aarch64-linux-gnu/libvulkan.so.1.3.239"
 : >"${closure_root}/usr/lib/aarch64-linux-gnu/libdrm.so.2.4.0"
+: >"${closure_root}/usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0.0.0"
 ln -s libvulkan.so.1.3.239 "${closure_root}/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
 ln -s libdrm.so.2.4.0 "${closure_root}/usr/lib/aarch64-linux-gnu/libdrm.so.2"
+ln -s libxcb-dri3.so.0.0.0 "${closure_root}/usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0"
 verify_open_gpu_runtime_closure "${closure_root}" >/dev/null
+
+rm "${closure_root}/usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0.0.0"
+if verify_open_gpu_runtime_closure "${closure_root}" >/dev/null 2>&1; then
+    echo 'open runtime closure accepted a missing WSI dependency' >&2
+    exit 1
+fi
+: >"${closure_root}/usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0.0.0"
 
 reset_loader_link() {
     reset_soname=$1

@@ -605,6 +605,7 @@ EOF
 
 verify_open_gpu_runtime_closure() {
     local rootfs=$1
+    local icd_runtime_closure
     local relative
     for relative in \
         usr/local/lib/libEGL.so.1.0.0 \
@@ -620,7 +621,19 @@ verify_open_gpu_runtime_closure() {
 
     require_open_gpu_library "${rootfs}" libvulkan.so.1 || return 1
     require_open_gpu_library "${rootfs}" libdrm.so.2 || return 1
-    echo "[customize] open Mesa: EGL/GLES/GBM/Gallium/PowerVR Vulkan/libdrm closure verified"
+    if ! icd_runtime_closure="$(
+        chroot "${rootfs}" /lib/ld-linux-aarch64.so.1 --list /usr/local/lib/libvulkan_powervr_mesa.so 2>&1
+    )"; then
+        printf '%s\n' "${icd_runtime_closure}" >&2
+        echo "FATAL: could not inspect open GPU PowerVR ICD dynamic runtime closure" >&2
+        return 1
+    fi
+    printf '%s\n' "${icd_runtime_closure}"
+    if printf '%s\n' "${icd_runtime_closure}" | grep -F 'not found'; then
+        echo "FATAL: open GPU PowerVR ICD dynamic runtime closure is incomplete" >&2
+        return 1
+    fi
+    echo "[customize] open Mesa: EGL/GLES/GBM/Gallium/PowerVR Vulkan dynamic closure verified"
 }
 
 install_open_gpu_module_options() {
