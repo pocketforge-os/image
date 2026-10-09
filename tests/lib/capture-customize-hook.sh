@@ -14,7 +14,8 @@
 #   REPO_DIR    image repository whose scripts/build-rootfs.sh generates the hook
 #   FIXTURE_DIR empty scratch directory for the fixture inputs
 #   OUT_HOOK    destination for the generated hook; OUT_HOOK.cmd receives the
-#               --customize-hook command line mmdebstrap would run
+#               --customize-hook command line and OUT_HOOK.argv receives the
+#               exact mmdebstrap argument vector, one argument per line
 capture_customize_hook() {
     local repo_dir="$1"
     local fixture="$2"
@@ -47,6 +48,7 @@ EOF
     cat > "${fixture}/bin/mmdebstrap" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$@" > "${PF_TEST_CUSTOMIZE_HOOK_CAPTURE}.argv"
 hook_command=""
 for arg in "$@"; do
     case "${arg}" in

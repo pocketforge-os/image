@@ -100,6 +100,7 @@ jobs:
             tests/test-clock-seed.sh
             tests/test-cloud-init-firstboot.sh
             tests/test-customize-hook-fail-closed.sh
+            tests/test-mmdebstrap-local-packages.sh
             tests/test-cts-bundle-image.sh
             tests/test-gles32-candidate-profile.sh
             tests/test-default-app-input-gates.sh

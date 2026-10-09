@@ -33,10 +33,8 @@ grep -Fq "printf 'cloud_init=%s" "${repo_dir}/scripts/generate-build-id.sh" \
 
 grep -Fq 'CLOUD_INIT_DIR="${CLOUD_INIT_DIR:-/work/cloud-init}"' "${builder}" \
     || fail "rootfs builder has no cloud-init package input"
-grep -Fq 'LOCAL_DEBS="${CLOUD_INIT_DEB}"' "${builder}" \
+grep -Fq -- '--include="${CLOUD_INIT_DEB}"' "${builder}" \
     || fail "cloud-init package is not the first local package"
-grep -Fq -- '--include="${LOCAL_DEBS}"' "${builder}" \
-    || fail "local cloud-init package is not part of the initial mmdebstrap solve"
 for package in netcat-openbsd procps python3 python3-configobj python3-debconf \
     python3-jinja2 python3-jsonpatch python3-jsonschema python3-oauthlib \
     python3-requests python3-yaml; do
