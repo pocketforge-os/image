@@ -38,6 +38,24 @@ platform evidence already distinguishes a FelBoot payload run from a cold
 BROM-to-SPL run (`pocketforge-platform/docs/A133-OPEN-7X-OWNED-SPL.md:20-26`).
 Any kit whose subject includes the boot chain remains standalone and cold-boots.
 
+The same rule applies between attached kits. Kit 1 uses the direct payload boot
+that follows the one verified UMS flash. After every passing kit, kits 2 through
+N use `#PocketForge.FelSdBoot`: enter FEL, RAM-boot recovery U-Boot, load the SD
+payload, and append `pocketforge.root=volatile`, with **no UMS write**. A normal
+cold power cycle would run the flashed release U-Boot without the selector and
+produce a persistent root; that ends the session, and the next attach validator
+must refuse it rather than dispatch another kit. Every attached boot therefore
+has the same `boot_path=fel-sd-boot` and a fresh volatile-root witness.
+
+For planning, a healthy no-write FelSdBoot is expected to cost roughly 60--120
+seconds per later kit: its fixed defaults include 2 seconds of strap settling, 6
+seconds powered off, and 18 seconds after loading recovery U-Boot, followed by SD
+payload loads and Linux login (`test-node-farm/node/bin/fel-sd-boot.sh:40-55`,
+`:385-442`). This estimate must be replaced by `.995.43.2`'s PhaseHistory device
+measurement. Against the measured 995-second whole-image FelBoot reference, the
+expected gross saving is about 875--935 seconds (14:35--15:35) for each later
+kit. Timeout ceilings are failure bounds, not expected duration.
+
 The alternatives are weaker:
 
 | Selection | Cost and coverage | Decision |

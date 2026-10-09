@@ -285,21 +285,18 @@ if aarch64-linux-gnu-readelf -d "${STAGING}/bin/busybox" 2>/dev/null | grep -q '
 fi
 echo "  busybox: AArch64, statically linked — OK"
 
-# Self-flash recovery (dev) relies on these busybox applets in /init. Assert they
-# are compiled into this busybox so a missing applet fails the BUILD, not a boot.
-# (bd tsp-bcx.17) — qemu-user runs the arm64 binary; --list works without args.
-if [ "$VARIANT" = "dev" ]; then
-    echo "=== verifying busybox provides self-flash applets (unxz, sha256sum, dd, findfs) ==="
-    BB_APPLETS="$("${STAGING}/bin/busybox" --list 2>/dev/null || true)"
-    if [ -n "$BB_APPLETS" ]; then
-        for ap in unxz sha256sum dd findfs head sed tr reboot mount umount sync; do
-            printf '%s\n' "$BB_APPLETS" | grep -qx "$ap" \
-                || { echo "FATAL: busybox lacks applet '$ap' (needed by self-flash /init)" >&2; exit 1; }
-        done
-        echo "  busybox self-flash applets present — OK"
-    else
-        echo "  WARN: could not list busybox applets (no qemu-user?); skipping applet assert" >&2
-    fi
+# Early root setup relies on these BusyBox applets in every variant. Assert them
+# so a missing volatile-root primitive fails the build rather than the next boot.
+echo "=== verifying busybox provides initrd applets ==="
+BB_APPLETS="$("${STAGING}/bin/busybox" --list 2>/dev/null || true)"
+if [ -n "$BB_APPLETS" ]; then
+    for ap in awk blockdev grep unxz sha256sum dd findfs head sed tr reboot mount umount sync; do
+        printf '%s\n' "$BB_APPLETS" | grep -qx "$ap" \
+            || { echo "FATAL: busybox lacks applet '$ap' (needed by /init)" >&2; exit 1; }
+    done
+    echo "  busybox initrd applets present — OK"
+else
+    echo "  WARN: could not list busybox applets (no qemu-user?); skipping applet assert" >&2
 fi
 
 # /init

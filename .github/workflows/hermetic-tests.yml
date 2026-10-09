@@ -111,6 +111,7 @@ jobs:
             tests/test-gamescope-pvr-cache.sh
             tests/test-hwprobe-variant-stage.sh
             tests/test-initrd-selfflash-watchdog.sh
+            tests/test-initrd-volatile-root.sh
             tests/test-kernel-build-identity.sh
             tests/test-kernel-module-form.sh
             tests/test-launcher-runtime-contract.sh
