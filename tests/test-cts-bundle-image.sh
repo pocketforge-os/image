@@ -29,7 +29,7 @@ make_bundle() {
         "${bundle}/config" "${bundle}/mustpass" "${bundle}/receipts"
 
     for binary in deqp-gles2 deqp-gles3 deqp-gles31 glcts; do
-        printf '#!/bin/sh\nexit 0\nlibEGL.so\nlibGLESv2.so\n' \
+        printf '#!/bin/sh\nexit 0\nlibEGL.so\nlibGLESv2.so\nlibGL.so\n' \
             > "${bundle}/bin/${binary}"
         chmod 0755 "${bundle}/bin/${binary}"
     done
@@ -158,6 +158,8 @@ printf '\177ELF fixture EGL\n' \
     > "${rootfs}/usr/lib/aarch64-linux-gnu/libEGL.so.1"
 printf '\177ELF fixture GLESv2\n' \
     > "${rootfs}/usr/lib/aarch64-linux-gnu/libGLESv2.so.2"
+printf '\177ELF fixture GL\n' \
+    > "${rootfs}/usr/lib/aarch64-linux-gnu/libGL.so.1"
 fake_readelf="${scratch}/readelf"
 printf '#!/bin/sh\nprintf "  Machine:                           AArch64\\n"\n' \
     > "${fake_readelf}"
@@ -166,7 +168,7 @@ chmod 0755 "${fake_readelf}"
 cmp "${producer}/usr/share/pocketforge/cts-provenance" \
     "${rootfs}/usr/share/pocketforge/cts-provenance"
 test -x "${rootfs}/opt/pocketforge/cts/bin/deqp-gles31"
-for library in libEGL.so libGLESv2.so; do
+for library in libEGL.so libGLESv2.so libGL.so; do
     if [ ! -L "${rootfs}/usr/lib/aarch64-linux-gnu/${library}" ]; then
         echo "FAIL: CTS dlopen library missing: ${library}" >&2
         exit 1
@@ -177,7 +179,8 @@ PF_CTS_READELF="${fake_readelf}" "${verify_runtime}" "${rootfs}"
 negative_rootfs="${scratch}/negative-rootfs"
 cp -a "${rootfs}" "${negative_rootfs}"
 rm "${negative_rootfs}/usr/lib/aarch64-linux-gnu/libEGL.so" \
-    "${negative_rootfs}/usr/lib/aarch64-linux-gnu/libGLESv2.so"
+    "${negative_rootfs}/usr/lib/aarch64-linux-gnu/libGLESv2.so" \
+    "${negative_rootfs}/usr/lib/aarch64-linux-gnu/libGL.so"
 if PF_CTS_READELF="${fake_readelf}" "${verify_runtime}" "${negative_rootfs}" \
         >"${scratch}/negative.out" 2>"${scratch}/negative.err"; then
     echo 'FAIL: CTS rootfs without dlopen symlinks passed' >&2
@@ -199,6 +202,7 @@ test ! -e "${scratch}/release-rootfs/opt/pocketforge/cts"
 test ! -e "${scratch}/release-rootfs/usr/share/pocketforge/cts-provenance"
 test ! -e "${scratch}/release-rootfs/usr/lib/aarch64-linux-gnu/libEGL.so"
 test ! -e "${scratch}/release-rootfs/usr/lib/aarch64-linux-gnu/libGLESv2.so"
+test ! -e "${scratch}/release-rootfs/usr/lib/aarch64-linux-gnu/libGL.so"
 "${install_bundle}" "${scratch}/absent-producer" "${scratch}/release-rootfs" not-shipped ''
 test ! -e "${scratch}/release-rootfs/opt/pocketforge/cts"
 

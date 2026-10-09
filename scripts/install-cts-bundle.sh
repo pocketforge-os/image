@@ -76,11 +76,11 @@ glvnd_dir="${rootfs}/usr/lib/aarch64-linux-gnu"
 [ ! -e "${destination_provenance}" ] \
     || die 'reason=destination_collision collision at /usr/share/pocketforge/cts-provenance'
 regular_dir "${glvnd_dir}" || die 'reason=glvnd_directory_missing'
-for target in libEGL.so.1 libGLESv2.so.2; do
+for target in libEGL.so.1 libGLESv2.so.2 libGL.so.1; do
     [ -e "${glvnd_dir}/${target}" ] \
         || die "reason=glvnd_target_missing library=${target}"
 done
-for link in libEGL.so libGLESv2.so; do
+for link in libEGL.so libGLESv2.so libGL.so; do
     if [ -e "${glvnd_dir}/${link}" ] || [ -L "${glvnd_dir}/${link}" ]; then
         die "reason=destination_collision collision at /usr/lib/aarch64-linux-gnu/${link}"
     fi
@@ -91,4 +91,5 @@ cp -a "${payload}" "${destination}"
 cp -a "${provenance}" "${destination_provenance}"
 ln -s libEGL.so.1 "${glvnd_dir}/libEGL.so"
 ln -s libGLESv2.so.2 "${glvnd_dir}/libGLESv2.so"
+ln -s libGL.so.1 "${glvnd_dir}/libGL.so"
 printf 'cts_install_status=PASS mode=v1 sha256=%s\n' "${expected_sha}"
