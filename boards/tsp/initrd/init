@@ -33,6 +33,208 @@ mount -t proc     proc     /proc
 mount -t sysfs    sysfs    /sys
 mount -t devtmpfs devtmpfs /dev
 
+# BEGIN POCKETFORGE VOLATILE ROOT FUNCTIONS
+# This block is executed directly by tests/test-initrd-volatile-root.sh. Keep it
+# POSIX/BusyBox-ash compatible and free of boot-time side effects at definition.
+PF_ROOT_MODE=normal
+PF_ROOT_SELECTOR_MALFORMED=0
+PF_VOLATILE_ERROR=""
+
+pf_select_root_mode() {
+    pf_sr_cmdline="$1"
+    pf_sr_count=0
+    pf_sr_value=""
+    pf_sr_words=""
+    if [ -r "$pf_sr_cmdline" ]; then
+        pf_sr_words="$(cat "$pf_sr_cmdline" 2>/dev/null)"
+    fi
+    # Kernel command lines are whitespace-delimited, not pathname patterns.
+    # Disable glob expansion so a token can never be rewritten from initrd files.
+    case "$-" in
+        *f*) pf_sr_restore_glob=0 ;;
+        *) set -f; pf_sr_restore_glob=1 ;;
+    esac
+    for pf_sr_word in $pf_sr_words; do
+        case "$pf_sr_word" in
+            pocketforge.root)
+                pf_sr_count=$((pf_sr_count + 1))
+                pf_sr_value=""
+                ;;
+            pocketforge.root=*)
+                pf_sr_count=$((pf_sr_count + 1))
+                pf_sr_value="${pf_sr_word#pocketforge.root=}"
+                ;;
+        esac
+    done
+    [ "$pf_sr_restore_glob" -eq 0 ] || set +f
+    PF_ROOT_MODE=normal
+    PF_ROOT_SELECTOR_MALFORMED=0
+    if [ "$pf_sr_count" -eq 1 ] && [ "$pf_sr_value" = volatile ]; then
+        PF_ROOT_MODE=volatile
+    elif [ "$pf_sr_count" -ne 0 ]; then
+        PF_ROOT_SELECTOR_MALFORMED=1
+    fi
+}
+
+pf_mountinfo_exact() {
+    pf_mi_path="$1"
+    awk -v path="$pf_mi_path" '
+        $5 == path {
+            for (i = 7; i <= NF; i++) {
+                if ($i == "-") {
+                    print $1, $6, $(i + 1), $(i + 2)
+                    found = 1
+                    exit
+                }
+            }
+        }
+        END { if (!found) exit 1 }
+    ' "${PF_VOLATILE_MOUNTINFO:-/proc/self/mountinfo}"
+}
+
+pf_mountinfo_covering() {
+    pf_mi_path="$1"
+    awk -v path="$pf_mi_path" '
+        function covers(mountpoint) {
+            return path == mountpoint || mountpoint == "/" || \
+                index(path, mountpoint "/") == 1
+        }
+        covers($5) && length($5) > best_length {
+            for (i = 7; i <= NF; i++) {
+                if ($i == "-") {
+                    best_length = length($5)
+                    best_id = $1
+                    best_type = $(i + 1)
+                    break
+                }
+            }
+        }
+        END {
+            if (!best_length) exit 1
+            print best_id, best_type
+        }
+    ' "${PF_VOLATILE_MOUNTINFO:-/proc/self/mountinfo}"
+}
+
+pf_verify_volatile_root() {
+    pf_vr_rootdev="$1"
+    pf_vr_newroot="$2"
+    pf_vr_boot_id="$3"
+    pf_vr_prefix="$pf_vr_newroot/run/pf-kit-session/$pf_vr_boot_id"
+
+    pf_vr_line="$(pf_mountinfo_exact "$pf_vr_newroot")" || return 1
+    # shellcheck disable=SC2086  # controlled, space-delimited mountinfo fields
+    set -- $pf_vr_line
+    [ "$3" = overlay ] || return 1
+
+    pf_vr_line="$(pf_mountinfo_exact "$pf_vr_prefix/lower")" || return 1
+    # shellcheck disable=SC2086  # controlled, space-delimited mountinfo fields
+    set -- $pf_vr_line
+    pf_vr_lower_options="$2"
+    pf_vr_lower_type="$3"
+    pf_vr_lower_source="$4"
+    [ "$pf_vr_lower_type" = ext4 ] || return 1
+    [ "$pf_vr_lower_source" = "$pf_vr_rootdev" ] || return 1
+    case ",$pf_vr_lower_options," in
+        *,ro,*) ;;
+        *) return 1 ;;
+    esac
+
+    pf_vr_upper="$(pf_mountinfo_covering "$pf_vr_prefix/upper")" || return 1
+    pf_vr_work="$(pf_mountinfo_covering "$pf_vr_prefix/work")" || return 1
+    # shellcheck disable=SC2086  # controlled "mount-id fstype" output
+    set -- $pf_vr_upper
+    pf_vr_upper_id="$1"
+    pf_vr_upper_type="$2"
+    # shellcheck disable=SC2086  # controlled "mount-id fstype" output
+    set -- $pf_vr_work
+    pf_vr_work_id="$1"
+    pf_vr_work_type="$2"
+    case "$pf_vr_upper_id" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$pf_vr_upper_id" -gt 0 ] || return 1
+    [ "$pf_vr_upper_type" = tmpfs ] || return 1
+    [ "$pf_vr_work_type" = tmpfs ] || return 1
+    [ "$pf_vr_work_id" = "$pf_vr_upper_id" ] || return 1
+    [ "$(blockdev --getro "$pf_vr_rootdev" 2>/dev/null)" = 1 ] || return 1
+}
+
+pf_mount_volatile_root() {
+    pf_vr_rootdev="$1"
+    pf_vr_newroot="$2"
+    pf_vr_run="${PF_VOLATILE_RUN_ROOT:-/run}"
+    pf_vr_lower="${PF_VOLATILE_LOWER_ROOT:-/lower}"
+    pf_vr_boot_id_file="${PF_VOLATILE_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}"
+    PF_VOLATILE_ERROR=""
+
+    IFS= read -r pf_vr_boot_id < "$pf_vr_boot_id_file" || {
+        PF_VOLATILE_ERROR=boot-id-read
+        return 1
+    }
+    printf '%s\n' "$pf_vr_boot_id" | grep -Eq \
+        '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || {
+        PF_VOLATILE_ERROR=boot-id-invalid
+        return 1
+    }
+    pf_vr_prefix="$pf_vr_run/pf-kit-session/$pf_vr_boot_id"
+
+    mkdir -p "$pf_vr_newroot" "$pf_vr_lower" "$pf_vr_prefix/upper" \
+        "$pf_vr_prefix/work" "$pf_vr_prefix/lower" || {
+        PF_VOLATILE_ERROR=mountpoint-create
+        return 1
+    }
+    blockdev --setro "$pf_vr_rootdev" || {
+        PF_VOLATILE_ERROR=lower-setro
+        return 1
+    }
+    [ "$(blockdev --getro "$pf_vr_rootdev" 2>/dev/null)" = 1 ] || {
+        PF_VOLATILE_ERROR=lower-not-read-only
+        return 1
+    }
+    mount -t ext4 -o ro,noload,noatime "$pf_vr_rootdev" "$pf_vr_lower" || {
+        PF_VOLATILE_ERROR=lower-mount
+        return 1
+    }
+    mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$pf_vr_run" || {
+        PF_VOLATILE_ERROR=tmpfs-mount
+        return 1
+    }
+    # Mounting tmpfs hides the directories made above; create them on the fresh
+    # tmpfs, then use those exact directories as the overlay upper/work pair.
+    pf_vr_prefix="$pf_vr_run/pf-kit-session/$pf_vr_boot_id"
+    mkdir -p "$pf_vr_prefix/upper" "$pf_vr_prefix/work" "$pf_vr_prefix/lower" || {
+        PF_VOLATILE_ERROR=tmpfs-directory-create
+        return 1
+    }
+    mount -t overlay overlay \
+        -o "lowerdir=$pf_vr_lower,upperdir=$pf_vr_prefix/upper,workdir=$pf_vr_prefix/work" \
+        "$pf_vr_newroot" || {
+        PF_VOLATILE_ERROR=overlay-mount
+        return 1
+    }
+    [ -d "$pf_vr_newroot/run" ] || {
+        PF_VOLATILE_ERROR=root-run-missing
+        return 1
+    }
+    mount -o move "$pf_vr_run" "$pf_vr_newroot/run" || {
+        PF_VOLATILE_ERROR=tmpfs-move
+        return 1
+    }
+    pf_vr_prefix="$pf_vr_newroot/run/pf-kit-session/$pf_vr_boot_id"
+    mount -o move "$pf_vr_lower" "$pf_vr_prefix/lower" || {
+        PF_VOLATILE_ERROR=lower-move
+        return 1
+    }
+    pf_verify_volatile_root "$pf_vr_rootdev" "$pf_vr_newroot" "$pf_vr_boot_id" || {
+        PF_VOLATILE_ERROR=topology-check
+        return 1
+    }
+}
+# END POCKETFORGE VOLATILE ROOT FUNCTIONS
+
+# Selection precedes every persistent-media mount. The only accepted value is
+# explicit and transient; absence retains the shipped persistent-root path.
+pf_select_root_mode /proc/cmdline
+
 # --- on-SD boot log -----------------------------------------------------------
 # Try to mount the FAT "boot-resource" partition rw at /pflog. The literal
 # "boot" partition holds a raw Android boot.img (not a filesystem) — the FAT
@@ -49,11 +251,14 @@ mount -t devtmpfs devtmpfs /dev
 # must be kept consistent by the genimage config in tsp-iuz.1.7.)
 PFLOG=""
 mkdir -p /pflog
-LOGDEV="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
-if [ -n "$LOGDEV" ] && mount -t vfat -o rw,flush "$LOGDEV" /pflog 2>/dev/null; then
-    PFLOG=/pflog/bootlog.txt
-    # Truncate at boot so the log reflects THIS boot, not an accreting history.
-    : > "$PFLOG" 2>/dev/null || PFLOG=""
+LOGDEV=""
+if [ "$PF_ROOT_MODE" != volatile ]; then
+    LOGDEV="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
+    if [ -n "$LOGDEV" ] && mount -t vfat -o rw,flush "$LOGDEV" /pflog 2>/dev/null; then
+        PFLOG=/pflog/bootlog.txt
+        # Truncate at boot so the log reflects THIS boot, not an accreting history.
+        : > "$PFLOG" 2>/dev/null || PFLOG=""
+    fi
 fi
 
 # log <msg>: emit to console always; append to the SD log when available; sync
@@ -66,6 +271,9 @@ log() {
         sync 2>/dev/null
     fi
 }
+if [ "$PF_ROOT_SELECTOR_MALFORMED" -eq 1 ]; then
+    log "STAGE: malformed pocketforge.root selector; using normal root"
+fi
 
 # The kernel auto-arms the hardware watchdog before /init. Keep it armed across
 # every read-only self-flash decision; only the committed flash path may magic-
@@ -475,7 +683,7 @@ selfflash_recover() {
 # wait for the rootfs partition to appear before reading the flag, rather than
 # racing enumeration (the original rootfs mount below only wins that race because
 # the GPU insmods burn enough time first).
-if [ -f /etc/pocketforge-selfflash ]; then
+if [ "$PF_ROOT_MODE" != volatile ] && [ -f /etc/pocketforge-selfflash ]; then
     # Keep the watchdog armed while the gate performs bounded enumeration and the
     # single file-based flag decision. Only a validated flash path disarms it,
     # immediately before selfflash_recover's first persistent SD write.
@@ -568,8 +776,14 @@ ROOT="$(findfs LABEL=POCKETFORGE_DATA 2>/dev/null)"
 log "STAGE: rootfs is $ROOT"
 
 mkdir -p /newroot
-log "STAGE: mount $ROOT -> /newroot (ext4)"
-mount -t ext4 -o rw,noatime "$ROOT" /newroot || fail "mount $ROOT failed"
+if [ "$PF_ROOT_MODE" = volatile ]; then
+    log "STAGE: mount $ROOT -> /newroot (volatile overlay)"
+    pf_mount_volatile_root "$ROOT" /newroot || fail "volatile root setup failed: ${PF_VOLATILE_ERROR}"
+    log "STAGE: volatile root verified (read-only lower, boot-local tmpfs upper/work)"
+else
+    log "STAGE: mount $ROOT -> /newroot (ext4)"
+    mount -t ext4 -o rw,noatime "$ROOT" /newroot || fail "mount $ROOT failed"
+fi
 
 # --- first-frame helper: reap before handoff (bd tsp-3rd3.7) ------------------
 # Nothing the initrd started may outlive it into switch_root (see FIRST LIGHT).
