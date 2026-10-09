@@ -680,6 +680,7 @@ FROM ${PF_CONTAINER} AS gpu-um-build
 WORKDIR /src
 ARG SOURCE_DATE_EPOCH
 ARG PF_GPU_UM_SHA
+ARG PF_GAMESCOPE_MODE=not-shipped
 ARG PF_GAMESCOPE_SHA
 COPY --from=gpu-um-src . /src/
 COPY --from=gpu-um-src docker/pkg-config/ /usr/local/bin/
@@ -691,6 +692,7 @@ COPY --from=gpu-um-native-precompilers /usr/lib/llvm-20/lib/clang /usr/lib/llvm-
 COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
 COPY --from=image-src build/package-open-gpu-stack.sh /tmp/package-open-gpu-stack.sh
 COPY --from=image-src build/produce-gamescope-pvr-cache.sh /tmp/produce-gamescope-pvr-cache.sh
+COPY --from=image-src build/run-gamescope-pvr-cache.sh /tmp/run-gamescope-pvr-cache.sh
 COPY --from=image-src packages/pocketforge-open-gpu-stack/DEBIAN/control /tmp/pocketforge-open-gpu-stack.control
 COPY --from=image-src packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf /tmp/10-pocketforge-zink.conf
 RUN <<'GPUUMSYSROOT'
@@ -797,8 +799,9 @@ aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
   /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe -lvulkan
 readelf -h /tmp/open-gpu-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
 install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
-/tmp/produce-gamescope-pvr-cache.sh \
-  /src /src/build-cross /instroot "${PF_GAMESCOPE_SHA}"
+/tmp/run-gamescope-pvr-cache.sh \
+  "${PF_GAMESCOPE_MODE}" /tmp/produce-gamescope-pvr-cache.sh \
+  /src /src/build-cross /instroot "${PF_GAMESCOPE_SHA:-}"
 # Provenance (this file's convention — a `.pf-*-provenance` marker for every stage):
 # the full install-tree manifest by sha256, so C's acceptance evidence lists real
 # staged artifact paths + hashes rather than a hand-picked subset.
@@ -815,7 +818,7 @@ install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
 } > /instroot/.pf-gpu-um-provenance
 /tmp/package-open-gpu-stack.sh \
   /instroot /probe/usr/lib/pocketforge/open-gpu-probe \
-  /tmp/pocketforge-open-gpu-stack.control "${PF_GPU_UM_SHA}" \
+  /tmp/pocketforge-open-gpu-stack.control "${PF_GPU_UM_SHA}" "${PF_GAMESCOPE_MODE}" \
   /pocketforge-open-gpu-stack.deb
 cat /instroot/.pf-gpu-um-provenance
 cat /instroot/.pf-gamescope-pvr-cache-provenance

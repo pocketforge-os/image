@@ -819,7 +819,25 @@ elif [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     fi
     echo "[customize] open Mesa: package-owned userspace verified (libEGL_mesa.so.0 and libGLX_mesa.so.0 present)"
 
-    /work/src/scripts/install-gamescope-pvr-cache.sh "${ROOTFS}"
+    case "${PF_GAMESCOPE_MODE}" in
+        g1)
+            /work/src/scripts/install-gamescope-pvr-cache.sh "${ROOTFS}"
+            ;;
+        not-shipped)
+            cache_provenance="${ROOTFS}/usr/share/pocketforge/gamescope-pvr-cache-provenance"
+            if [ ! -f "${cache_provenance}" ] || [ -L "${cache_provenance}" ] || \
+                [ "$(cat "${cache_provenance}")" != 'gamescope=absent cache=absent' ]; then
+                echo 'FATAL: Gamescope absence provenance is missing or invalid' >&2
+                exit 1
+            fi
+            cache_root="${ROOTFS}/usr/share/pocketforge/mesa-cache"
+            { [ ! -e "${cache_root}" ] && [ ! -L "${cache_root}" ]; } || {
+                echo 'FATAL: Gamescope cache exists for mode not-shipped' >&2
+                exit 1
+            }
+            echo '[customize] Gamescope PVR cache absent by profile'
+            ;;
+    esac
     verify_open_gpu_runtime_closure "${ROOTFS}"
 fi
 
