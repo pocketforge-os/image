@@ -1949,6 +1949,9 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
 "${SRC_DIR}/scripts/install-cts-bundle.sh" \
     "${CTS_BUNDLE_DIR}" "${ROOTFS_EXTRACTED}" \
     "${PF_CTS_BUNDLE_MODE}" "${PF_CTS_BUNDLE_SHA256}"
+if [ "${PF_CTS_BUNDLE_MODE}" = v1 ]; then
+    "${SRC_DIR}/scripts/verify-cts-runtime-libraries.sh" "${ROOTFS_EXTRACTED}"
+fi
 
 "${SRC_DIR}/scripts/install-gles32-candidate-profile.sh" \
     "${SRC_DIR}/packages/pocketforge-gles32-candidate/99-pocketforge-gles32-candidate.conf" \
