@@ -1,0 +1,3 @@
+# DMA heaps back unprivileged graphics, camera, and decoder clients.  Keep the
+# nodes limited to the existing video group; gamer is a committed member.
+SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"
