@@ -10,7 +10,6 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 RULE = ROOT / "rootfs-overlay/etc/udev/rules.d/73-pocketforge-dma-heap.rules"
 BUILDER = ROOT / "scripts/build-rootfs.sh"
-CUSTOMIZE = ROOT / "boards/tsp-s/rootfs-customize.sh"
 
 
 def score(mode: int | None, group: str | None) -> str:
@@ -37,8 +36,11 @@ target_rule = '"${ROOTFS}/etc/udev/rules.d/73-pocketforge-dma-heap.rules"'
 assert builder.count(source_rule) == 1
 assert builder.count(target_rule) == 1
 
-customize = CUSTOMIZE.read_text(encoding="utf-8")
-assert re.search(r"usermod\s+-aG\s+video,input\s+gamer", customize)
+# The open-GPU image is produced by this builder.  Assert its own product-user
+# setup, not a board customization hook that the production path may bypass.
+assert re.search(
+    r"usermod\s+-aG\s+(?:[a-z]+,)*video(?:,[a-z]+)*\s+gamer", builder
+)
 
 # Positive, prior-policy negative, and cannot-measure controls remain distinct.
 assert score(0o660, "video") == "pass"
