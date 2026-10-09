@@ -106,6 +106,7 @@ jobs:
             tests/test-default-app-input-gates.sh
             tests/test-default-app-platform.sh
             tests/test-default-app-rootfs.sh
+            tests/test-dma-heap-udev-policy.sh
             tests/test-dockerfile-pf-transforms.sh
             tests/test-gamescope-package-path.sh
             tests/test-gamescope-pvr-cache.sh

@@ -1422,6 +1422,8 @@ fi
 if [ "${PF_GPU_MODEL}" = "open" ]; then
     install -D -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules" \
         "${ROOTFS}/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
+    install -D -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/73-pocketforge-dma-heap.rules" \
+        "${ROOTFS}/etc/udev/rules.d/73-pocketforge-dma-heap.rules"
     install -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/open-gpu-gate.sh" \
         "${ROOTFS}/usr/lib/pocketforge/open-gpu-gate.sh"
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service" \
