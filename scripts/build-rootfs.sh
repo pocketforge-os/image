@@ -371,7 +371,9 @@ echo "  package list: ${PKG_LIST}"
 CLOUD_INIT_DEB="${CLOUD_INIT_DIR}/cloud-init-pocketforge.deb"
 [ -f "${CLOUD_INIT_DEB}" ] \
     || { echo "FATAL: cloud-init-pocketforge package is missing: ${CLOUD_INIT_DEB}" >&2; exit 1; }
-LOCAL_DEBS="${CLOUD_INIT_DEB}"
+LOCAL_PACKAGE_OPTS=(
+    --include="${CLOUD_INIT_DEB}"
+)
 
 # Feed the deterministic, file-owning package produced from gpu-um-tsp's exact
 # Meson install tree into the initial apt solve. Its versioned Provides satisfy
@@ -382,14 +384,11 @@ case "${PF_DEVICE_ID}" in
         GPU_STACK_PROVIDER_DEB="${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb"
         [ -f "${GPU_STACK_PROVIDER_DEB}" ] \
             || { echo "FATAL: source-built open GPU stack provider is missing: ${GPU_STACK_PROVIDER_DEB}" >&2; exit 1; }
-        LOCAL_DEBS="${LOCAL_DEBS},${GPU_STACK_PROVIDER_DEB}"
+        LOCAL_PACKAGE_OPTS+=(--include="${GPU_STACK_PROVIDER_DEB}")
         echo "  open GPU dependency provider: ${GPU_STACK_PROVIDER_DEB}"
         ;;
 esac
-LOCAL_PACKAGE_OPTS=(
-    --include="${LOCAL_DEBS}"
-    --hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount
-)
+LOCAL_PACKAGE_OPTS+=(--hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount)
 
 # ---- step 2: verify prerequisites ------------------------------------------
 echo ""
