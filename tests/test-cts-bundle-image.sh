@@ -4,6 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 prepare="${root}/scripts/prepare-cts-bundle.sh"
 install_bundle="${root}/scripts/install-cts-bundle.sh"
+verify_runtime="${root}/scripts/verify-cts-runtime-libraries.sh"
 dockerfile="${root}/build/Dockerfile.pf"
 rootfs_builder="${root}/scripts/build-rootfs.sh"
 workflow="${root}/.github/workflows/hermetic-tests.yml"
@@ -28,7 +29,8 @@ make_bundle() {
         "${bundle}/config" "${bundle}/mustpass" "${bundle}/receipts"
 
     for binary in deqp-gles2 deqp-gles3 deqp-gles31 glcts; do
-        printf '#!/bin/sh\nexit 0\n' > "${bundle}/bin/${binary}"
+        printf '#!/bin/sh\nexit 0\nlibEGL.so\nlibGLESv2.so\nlibGL.so\n' \
+            > "${bundle}/bin/${binary}"
         chmod 0755 "${bundle}/bin/${binary}"
     done
     printf '#!/bin/sh\nexit 0\n' > "${bundle}/run-chunks.sh"
@@ -151,11 +153,41 @@ grep -F 'reason=bundle_checksum_mismatch' "${scratch}/bad-manifest.err" >/dev/nu
 test ! -e "${scratch}/bad-manifest"
 
 rootfs="${scratch}/rootfs"
-mkdir -p "${rootfs}"
+mkdir -p "${rootfs}/usr/lib/aarch64-linux-gnu"
+printf '\177ELF fixture EGL\n' \
+    > "${rootfs}/usr/lib/aarch64-linux-gnu/libEGL.so.1"
+printf '\177ELF fixture GLESv2\n' \
+    > "${rootfs}/usr/lib/aarch64-linux-gnu/libGLESv2.so.2"
+printf '\177ELF fixture GL\n' \
+    > "${rootfs}/usr/lib/aarch64-linux-gnu/libGL.so.1"
+fake_readelf="${scratch}/readelf"
+printf '#!/bin/sh\nprintf "  Machine:                           AArch64\\n"\n' \
+    > "${fake_readelf}"
+chmod 0755 "${fake_readelf}"
 "${install_bundle}" "${producer}" "${rootfs}" v1 "${good_sha}"
 cmp "${producer}/usr/share/pocketforge/cts-provenance" \
     "${rootfs}/usr/share/pocketforge/cts-provenance"
 test -x "${rootfs}/opt/pocketforge/cts/bin/deqp-gles31"
+for library in libEGL.so libGLESv2.so libGL.so; do
+    if [ ! -L "${rootfs}/usr/lib/aarch64-linux-gnu/${library}" ]; then
+        echo "FAIL: CTS dlopen library missing: ${library}" >&2
+        exit 1
+    fi
+done
+PF_CTS_READELF="${fake_readelf}" "${verify_runtime}" "${rootfs}"
+
+negative_rootfs="${scratch}/negative-rootfs"
+cp -a "${rootfs}" "${negative_rootfs}"
+rm "${negative_rootfs}/usr/lib/aarch64-linux-gnu/libEGL.so" \
+    "${negative_rootfs}/usr/lib/aarch64-linux-gnu/libGLESv2.so" \
+    "${negative_rootfs}/usr/lib/aarch64-linux-gnu/libGL.so"
+if PF_CTS_READELF="${fake_readelf}" "${verify_runtime}" "${negative_rootfs}" \
+        >"${scratch}/negative.out" 2>"${scratch}/negative.err"; then
+    echo 'FAIL: CTS rootfs without dlopen symlinks passed' >&2
+    exit 1
+fi
+grep -F 'reason=library_missing library=libEGL.so' \
+    "${scratch}/negative.err" >/dev/null
 if "${install_bundle}" "${producer}" "${rootfs}" v1 "${good_sha}" \
         >"${scratch}/collision.out" 2>"${scratch}/collision.err"; then
     echo 'FAIL: CTS destination collision was accepted' >&2
@@ -168,6 +200,9 @@ printf 'mode=not-shipped\n' > "${scratch}/not-shipped/NOT-SHIPPED"
 "${install_bundle}" "${scratch}/not-shipped" "${scratch}/release-rootfs" not-shipped ''
 test ! -e "${scratch}/release-rootfs/opt/pocketforge/cts"
 test ! -e "${scratch}/release-rootfs/usr/share/pocketforge/cts-provenance"
+test ! -e "${scratch}/release-rootfs/usr/lib/aarch64-linux-gnu/libEGL.so"
+test ! -e "${scratch}/release-rootfs/usr/lib/aarch64-linux-gnu/libGLESv2.so"
+test ! -e "${scratch}/release-rootfs/usr/lib/aarch64-linux-gnu/libGL.so"
 "${install_bundle}" "${scratch}/absent-producer" "${scratch}/release-rootfs" not-shipped ''
 test ! -e "${scratch}/release-rootfs/opt/pocketforge/cts"
 
@@ -183,6 +218,10 @@ grep -F '"${SRC_DIR}/scripts/install-cts-bundle.sh"' "${rootfs_builder}" >/dev/n
 # Literal source-contract assertion.
 # shellcheck disable=SC2016
 grep -F 'PF_CTS_BUNDLE_SHA256=${PF_CTS_BUNDLE_SHA256}' "${rootfs_builder}" >/dev/null
+# Literal source-contract assertion.
+# shellcheck disable=SC2016
+grep -F '"${SRC_DIR}/scripts/verify-cts-runtime-libraries.sh" "${ROOTFS_EXTRACTED}"' \
+    "${rootfs_builder}" >/dev/null
 test "$(grep -Fxc '            tests/test-cts-bundle-image.sh' "${workflow}")" -eq 1
 grep -Fx 'test-cts-bundle-image:' "${makefile}" >/dev/null
 
