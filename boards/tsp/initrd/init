@@ -48,6 +48,12 @@ pf_select_root_mode() {
     if [ -r "$pf_sr_cmdline" ]; then
         pf_sr_words="$(cat "$pf_sr_cmdline" 2>/dev/null)"
     fi
+    # Kernel command lines are whitespace-delimited, not pathname patterns.
+    # Disable glob expansion so a token can never be rewritten from initrd files.
+    case "$-" in
+        *f*) pf_sr_restore_glob=0 ;;
+        *) set -f; pf_sr_restore_glob=1 ;;
+    esac
     for pf_sr_word in $pf_sr_words; do
         case "$pf_sr_word" in
             pocketforge.root)
@@ -60,6 +66,7 @@ pf_select_root_mode() {
                 ;;
         esac
     done
+    [ "$pf_sr_restore_glob" -eq 0 ] || set +f
     PF_ROOT_MODE=normal
     PF_ROOT_SELECTOR_MALFORMED=0
     if [ "$pf_sr_count" -eq 1 ] && [ "$pf_sr_value" = volatile ]; then

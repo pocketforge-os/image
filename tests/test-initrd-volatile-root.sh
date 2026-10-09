@@ -46,6 +46,14 @@ select_case 'pocketforge.root=persistent' normal 1 unknown
 select_case 'pocketforge.root=volatile pocketforge.root=volatile' normal 1 duplicate
 select_case 'pocketforge.root' normal 1 missing-equals
 
+# A kernel token is data, never an initrd pathname glob. Without noglob this
+# unknown selector would expand to the valid-looking file name and be accepted.
+touch "$tmp/pocketforge.root=volatile"
+(
+    cd "$tmp"
+    select_case 'pocketforge.root=*' normal 1 glob-like
+)
+
 # Integration ordering: selection precedes the current writable FAT log; normal
 # mode retains the exact old mount command; malformed selection logs one stable
 # line before taking that path; valid setup can only fail into fail().

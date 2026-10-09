@@ -1,9 +1,9 @@
 # Volatile-root selection for batched release-image kits
 
-Status: design for `tsp-mc9m.41.995.43.1`; implementation requires gpu-14
-approval. The reviewed source worktrees are `pocketforge-os/kernel-sunxi-7.x`
-(`device/a133`), `pocketforge-os/image` (`main`), and
-`pocketforge-os/platform` (`main`).
+Status: approved design for `tsp-mc9m.41.995.43.1`; implementation is proposed
+in the dependency-ordered kernel, image, and platform PRs. The reviewed source
+worktrees are `pocketforge-os/kernel-sunxi-7.x` (`device/a133`),
+`pocketforge-os/image` (`main`), and `pocketforge-os/platform` (`main`).
 
 ## Decision
 
@@ -71,16 +71,17 @@ and those kits must not claim coverage of that policy difference.
 
 ## Initrd contract
 
-The image uses a static BusyBox initrd: it resolves the userdata filesystem by
-label and currently mounts it directly at `/newroot` as writable ext4 before the
-existing `switch_root` checks (`pocketforge-image/boards/tsp/initrd/init:561-572`,
-`:592-639`). The new branch is wholly inside this initrd; it does not depend on
+The image uses a static BusyBox initrd. With no selector it resolves the userdata
+filesystem by label and retains the existing direct writable-ext4 mount at
+`/newroot`; the volatile branch is adjacent to that path and precedes the common
+`switch_root` checks (`pocketforge-image/boards/tsp/initrd/init:762-779`,
+`:799-846`). The branch is wholly inside this initrd; it does not depend on
 systemd interpreting the kernel command line.
 
 Selector parsing happens immediately after `/proc`, `/sys`, and `/dev` are
 mounted and **before any persistent-media mount or write**. This ordering is
-required because the current initrd otherwise mounts the boot-resource FAT
-writable and truncates `bootlog.txt` (`pocketforge-image/boards/tsp/initrd/init:31-68`).
+required because the normal path mounts the boot-resource FAT writable and
+truncates `bootlog.txt` (`pocketforge-image/boards/tsp/initrd/init:227-255`).
 
 The parser has three results:
 
@@ -119,11 +120,12 @@ existing initrd failure shell; it must never fall through to a writable root.
 Only a syntactically malformed selector is ignored, before mutation, as required
 for the normal-root fallback.
 
-The kernel prerequisite is built-in overlayfs (`CONFIG_OVERLAY_FS=y`), which is
-absent from the current `a133_defconfig`; ext4 and tmpfs are already built in
-(`pocketforge-os/kernel-sunxi-7.x/arch/arm64/configs/a133_defconfig:168-174`).
-The initrd can therefore mount the future overlay before userspace without an
-alternate image or loadable module.
+The kernel prerequisite is built-in overlayfs (`CONFIG_OVERLAY_FS=y`), supplied
+by kernel PR #84 at exact head `ea46664cf1695e83be3bd3bfb2bc14c0276b2e59`;
+ext4 and tmpfs remain built in
+(`pocketforge-os/kernel-sunxi-7.x/arch/arm64/configs/a133_defconfig:168-175`).
+The initrd can therefore mount the overlay before userspace without an alternate
+image or loadable module.
 
 ## Kit witness and evidence limits
 
