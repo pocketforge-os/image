@@ -1,4 +1,4 @@
-# Vendored from gpu-um-tsp docker/Dockerfile.ge8300-mesa-cross at 27219a2a996285caeb0eb83f8b188ab6d0cee8b3.
+# Vendored from gpu-um-tsp docker/Dockerfile.ge8300-mesa-cross at d0c388059e577067c82590c14a602c69ad67e58d.
 # Update this fixture deliberately when the platform.lock gpu-um-tsp pin moves.
 FROM ubuntu:24.04@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb AS toolchain
 
