@@ -220,11 +220,83 @@ export PF_OPEN_GPU_NM="$scratch/nm"
 
 SOURCE_DATE_EPOCH=1700000000 "$packager" \
     "$producer" "$scratch/open-gpu-probe" "$control" \
-    1234567890abcdef1234567890abcdef12345678 "$scratch/provider-a.deb"
+    1234567890abcdef1234567890abcdef12345678 g1 "$scratch/provider-a.deb"
 SOURCE_DATE_EPOCH=1700000000 "$packager" \
     "$producer" "$scratch/open-gpu-probe" "$control" \
-    1234567890abcdef1234567890abcdef12345678 "$scratch/provider-b.deb"
+    1234567890abcdef1234567890abcdef12345678 g1 "$scratch/provider-b.deb"
 cmp "$scratch/provider-a.deb" "$scratch/provider-b.deb"
+
+# Keep the g1 package byte-for-byte identical to the implementation immediately
+# before the mode guard. Only the new no-Gamescope profile may omit cache files.
+git show 9c1fc33144ad5fcb120b6d88863c2b101275429c:build/package-open-gpu-stack.sh \
+    >"$scratch/baseline-packager.sh"
+chmod 0755 "$scratch/baseline-packager.sh"
+SOURCE_DATE_EPOCH=1700000000 "$scratch/baseline-packager.sh" \
+    "$producer" "$scratch/open-gpu-probe" "$control" \
+    1234567890abcdef1234567890abcdef12345678 "$scratch/provider-baseline.deb"
+cmp "$scratch/provider-baseline.deb" "$scratch/provider-a.deb"
+
+absent_producer=$scratch/producer-absent
+cp -a "$producer" "$absent_producer"
+find "$absent_producer/usr/share/pocketforge/mesa-cache" -mindepth 1 -delete
+rmdir "$absent_producer/usr/share/pocketforge/mesa-cache"
+printf '%s\n' 'gamescope=absent cache=absent' \
+    >"$absent_producer/.pf-gamescope-pvr-cache-provenance"
+SOURCE_DATE_EPOCH=1700000000 "$packager" \
+    "$absent_producer" "$scratch/open-gpu-probe" "$control" \
+    1234567890abcdef1234567890abcdef12345678 not-shipped \
+    "$scratch/provider-absent.deb"
+absent_listing=$(dpkg-deb -c "$scratch/provider-absent.deb")
+printf '%s\n' "$absent_listing" | \
+    grep -F './usr/share/pocketforge/gamescope-pvr-cache-provenance' >/dev/null
+if printf '%s\n' "$absent_listing" | grep -F '/mesa-cache/' >/dev/null; then
+    echo 'provider package contains a cache for gamescope=absent' >&2
+    exit 1
+fi
+dpkg-deb -x "$scratch/provider-absent.deb" "$scratch/absent-rootfs"
+grep -Fx 'gamescope=absent cache=absent' \
+    "$scratch/absent-rootfs/usr/share/pocketforge/gamescope-pvr-cache-provenance" >/dev/null
+
+expect_packager_rejection() {
+    label=$1
+    fixture=$2
+    mode=$3
+    expected=$4
+    output=$scratch/$label.deb
+    if SOURCE_DATE_EPOCH=1700000000 "$packager" \
+        "$fixture" "$scratch/open-gpu-probe" "$control" \
+        1234567890abcdef1234567890abcdef12345678 "$mode" "$output" \
+        >"$scratch/$label.out" 2>"$scratch/$label.err"; then
+        echo "packager accepted negative fixture: $label" >&2
+        exit 1
+    fi
+    grep -F "$expected" "$scratch/$label.err" >/dev/null
+    test ! -e "$output"
+}
+
+bad_marker=$scratch/producer-bad-marker
+cp -a "$absent_producer" "$bad_marker"
+printf '%s\n' 'gamescope=absent cache=absent' 'unexpected=record' \
+    >"$bad_marker/.pf-gamescope-pvr-cache-provenance"
+expect_packager_rejection absent-bad-marker "$bad_marker" not-shipped \
+    'Gamescope absence provenance is invalid'
+
+stale_cache=$scratch/producer-stale-cache
+cp -a "$absent_producer" "$stale_cache"
+mkdir -p "$stale_cache/usr/share/pocketforge/mesa-cache"
+expect_packager_rejection absent-stale-cache "$stale_cache" not-shipped \
+    'Gamescope PVR cache artifacts exist for mode not-shipped'
+
+linked_cache=$scratch/producer-linked-cache
+cp -a "$absent_producer" "$linked_cache"
+ln -s "$scratch/missing-cache" "$linked_cache/usr/share/pocketforge/mesa-cache"
+expect_packager_rejection absent-linked-cache "$linked_cache" not-shipped \
+    'Gamescope PVR cache artifacts exist for mode not-shipped'
+
+expect_packager_rejection absent-unknown-mode "$absent_producer" future \
+    'invalid Gamescope mode for provider package: future'
+expect_packager_rejection g1-cache-missing "$absent_producer" g1 \
+    'Gamescope PVR cache artifact is missing or not regular:'
 
 test "$(dpkg-deb -f "$scratch/provider-a.deb" Package)" = pocketforge-open-gpu-stack
 test "$(dpkg-deb -f "$scratch/provider-a.deb" Architecture)" = arm64

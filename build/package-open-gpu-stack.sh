@@ -2,8 +2,8 @@
 # Build the deterministic, file-owning Debian provider for the open GPU stack.
 set -eu
 
-if [ "$#" -ne 5 ]; then
-    echo 'usage: package-open-gpu-stack.sh PRODUCER PROBE CONTROL SOURCE_SHA OUTPUT_DEB' >&2
+if [ "$#" -ne 6 ]; then
+    echo 'usage: package-open-gpu-stack.sh PRODUCER PROBE CONTROL SOURCE_SHA GAMESCOPE_MODE OUTPUT_DEB' >&2
     exit 2
 fi
 
@@ -11,7 +11,8 @@ producer=$1
 probe=$2
 control=$3
 source_sha=$4
-output_deb=$5
+gamescope_mode=$5
+output_deb=$6
 : "${SOURCE_DATE_EPOCH:?SOURCE_DATE_EPOCH must be set}"
 
 case "$source_sha" in
@@ -104,18 +105,39 @@ install -D -m 0644 "$producer/.pf-gpu-um-build-options.json" \
     "$stage/usr/share/pocketforge/gpu-um-mesa-build-options.json"
 install -D -m 0644 "$producer/.pf-gamescope-pvr-cache-provenance" \
     "$stage/usr/share/pocketforge/gamescope-pvr-cache-provenance"
-for cache_file in \
-    pocketforge-gamescope-ge8300.foz \
-    pocketforge-gamescope-ge8300_idx.foz \
-    pocketforge-gamescope-ge8300.relative-dir; do
-    source_file="$producer/usr/share/pocketforge/mesa-cache/$cache_file"
-    if [ ! -f "$source_file" ] || [ -L "$source_file" ]; then
-        echo "Gamescope PVR cache artifact is missing or not regular: $source_file" >&2
-        exit 1
-    fi
-    install -D -m 0644 "$source_file" \
-        "$stage/usr/share/pocketforge/mesa-cache/$cache_file"
-done
+case "$gamescope_mode" in
+    g1)
+        for cache_file in \
+            pocketforge-gamescope-ge8300.foz \
+            pocketforge-gamescope-ge8300_idx.foz \
+            pocketforge-gamescope-ge8300.relative-dir; do
+            source_file="$producer/usr/share/pocketforge/mesa-cache/$cache_file"
+            if [ ! -f "$source_file" ] || [ -L "$source_file" ]; then
+                echo "Gamescope PVR cache artifact is missing or not regular: $source_file" >&2
+                exit 1
+            fi
+            install -D -m 0644 "$source_file" \
+                "$stage/usr/share/pocketforge/mesa-cache/$cache_file"
+        done
+        ;;
+    not-shipped)
+        provenance=$producer/.pf-gamescope-pvr-cache-provenance
+        if [ ! -f "$provenance" ] || [ -L "$provenance" ] || \
+            [ "$(cat "$provenance")" != 'gamescope=absent cache=absent' ]; then
+            echo 'Gamescope absence provenance is invalid' >&2
+            exit 1
+        fi
+        cache_root=$producer/usr/share/pocketforge/mesa-cache
+        { [ ! -e "$cache_root" ] && [ ! -L "$cache_root" ]; } || {
+            echo 'Gamescope PVR cache artifacts exist for mode not-shipped' >&2
+            exit 1
+        }
+        ;;
+    *)
+        echo "invalid Gamescope mode for provider package: $gamescope_mode" >&2
+        exit 2
+        ;;
+esac
 install -D -m 0755 "$probe" \
     "$stage/usr/lib/pocketforge/open-gpu-probe"
 

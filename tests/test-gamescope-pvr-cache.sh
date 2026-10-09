@@ -5,6 +5,7 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 dockerfile=${root}/build/Dockerfile.pf
 producer=${root}/build/produce-gamescope-pvr-cache.sh
+mode_runner=${root}/build/run-gamescope-pvr-cache.sh
 packager=${root}/build/package-open-gpu-stack.sh
 installer=${root}/scripts/install-gamescope-pvr-cache.sh
 rootfs_builder=${root}/scripts/build-rootfs.sh
@@ -22,12 +23,104 @@ trap cleanup EXIT
     echo "FAIL: Gamescope PVR cache producer is missing or not executable: ${producer}" >&2
     exit 1
 }
+[ -x "${mode_runner}" ] || {
+    echo "FAIL: Gamescope PVR cache mode runner is missing or not executable: ${mode_runner}" >&2
+    exit 1
+}
 [ -x "${installer}" ] || {
     echo "FAIL: Gamescope PVR cache installer is missing or not executable: ${installer}" >&2
     exit 1
 }
 bash -n "${producer}"
+sh -n "${mode_runner}"
 sh -n "${installer}"
+
+# The no-radio profile has no [gamescope] table, so its recorded buildargs omit
+# PF_GAMESCOPE_SHA. It must produce an explicit absence marker without invoking
+# the expensive cache producer or materializing cache artifacts.
+unset PF_GAMESCOPE_MODE PF_GAMESCOPE_SHA
+set -a
+# shellcheck source=tests/fixtures/gamescope-no-profile-buildargs.env
+source "${root}/tests/fixtures/gamescope-no-profile-buildargs.env"
+set +a
+test "${PF_DEVICE_ID}" = a133-open-7x-gpu-noradio
+test "${PF_GPU_MODEL}" = open
+fake_producer=${scratch}/fake-producer
+cat >"${fake_producer}" <<'EOF'
+#!/bin/sh
+set -eu
+printf 'producer-called\n' >>"${PRODUCER_CALLS:?}"
+printf 'gamescope=%s cache=fixture\n' "$4" >"$3/.pf-gamescope-pvr-cache-provenance"
+EOF
+chmod 0755 "${fake_producer}"
+calls=${scratch}/producer-calls
+absent_root=${scratch}/absent
+mkdir -p "${absent_root}"
+SOURCE_DATE_EPOCH=1700000000 PRODUCER_CALLS=${calls} "${mode_runner}" \
+    "${PF_GAMESCOPE_MODE:-not-shipped}" "${fake_producer}" source build "${absent_root}" \
+    "${PF_GAMESCOPE_SHA:-}"
+test ! -e "${calls}"
+grep -Fx 'gamescope=absent cache=absent' \
+    "${absent_root}/.pf-gamescope-pvr-cache-provenance" >/dev/null
+test ! -e "${absent_root}/usr/share/pocketforge/mesa-cache"
+
+# g1 is fail-closed on an absent, short, uppercase or non-hex source SHA. The
+# positive control reaches the same producer with the same four arguments.
+for invalid_sha in '' abcdef ABCDEF1234567890ABCDEF1234567890ABCDEF12 \
+    1234567890abcdef1234567890abcdef1234567g; do
+    if SOURCE_DATE_EPOCH=1700000000 PRODUCER_CALLS=${calls} "${mode_runner}" g1 "${fake_producer}" \
+        source build "${scratch}/invalid" "${invalid_sha}" \
+        >"${scratch}/invalid.log" 2>&1; then
+        echo "mode runner accepted invalid g1 source SHA: ${invalid_sha:-empty}" >&2
+        exit 1
+    fi
+done
+test ! -e "${calls}"
+g1_sha=4232739e75c95113871e260967e8b4ff995ea897
+g1_root=${scratch}/g1
+mkdir -p "${g1_root}"
+SOURCE_DATE_EPOCH=1700000000 PRODUCER_CALLS=${calls} "${mode_runner}" g1 "${fake_producer}" \
+    source build "${g1_root}" "${g1_sha}"
+test "$(wc -l <"${calls}")" -eq 1
+grep -Fx "gamescope=${g1_sha} cache=fixture" \
+    "${g1_root}/.pf-gamescope-pvr-cache-provenance" >/dev/null
+calls_before=$(wc -l <"${calls}")
+if SOURCE_DATE_EPOCH=1700000000 PRODUCER_CALLS=${calls} "${mode_runner}" \
+    not-shipped "${fake_producer}" source build "${scratch}/unexpected-sha" \
+    "${g1_sha}" >"${scratch}/unexpected-sha.log" 2>&1; then
+    echo 'mode runner accepted a source SHA for gamescope=not-shipped' >&2
+    exit 1
+fi
+test "$(wc -l <"${calls}")" -eq "${calls_before}"
+stale_root=${scratch}/stale
+mkdir -p "${stale_root}/usr/share/pocketforge/mesa-cache"
+if SOURCE_DATE_EPOCH=1700000000 PRODUCER_CALLS=${calls} "${mode_runner}" \
+    not-shipped "${fake_producer}" source build "${stale_root}" '' \
+    >"${scratch}/stale.log" 2>&1; then
+    echo 'mode runner accepted a pre-existing cache for gamescope=not-shipped' >&2
+    exit 1
+fi
+test ! -e "${stale_root}/.pf-gamescope-pvr-cache-provenance"
+test "$(wc -l <"${calls}")" -eq "${calls_before}"
+linked_root=${scratch}/linked
+mkdir -p "${linked_root}/usr/share/pocketforge"
+ln -s "${scratch}/missing-cache" \
+    "${linked_root}/usr/share/pocketforge/mesa-cache"
+if SOURCE_DATE_EPOCH=1700000000 PRODUCER_CALLS=${calls} "${mode_runner}" \
+    not-shipped "${fake_producer}" source build "${linked_root}" '' \
+    >"${scratch}/linked.log" 2>&1; then
+    echo 'mode runner accepted a dangling cache symlink for gamescope=not-shipped' >&2
+    exit 1
+fi
+test ! -e "${linked_root}/.pf-gamescope-pvr-cache-provenance"
+test "$(wc -l <"${calls}")" -eq "${calls_before}"
+if SOURCE_DATE_EPOCH=1700000000 PRODUCER_CALLS=${calls} "${mode_runner}" future "${fake_producer}" \
+    source build "${scratch}/future" "${g1_sha}" \
+    >"${scratch}/future.log" 2>&1; then
+    echo 'mode runner accepted an unknown Gamescope mode' >&2
+    exit 1
+fi
+test "$(wc -l <"${calls}")" -eq "${calls_before}"
 
 # The producer must execute the target AArch64 harness explicitly with the
 # final cross-built ICD, target drm-shim, exact GE8300 BVNC, and pinned corpus.
@@ -35,6 +128,8 @@ grep -F 'qemu-user-static' "${dockerfile}" >/dev/null
 grep -F 'qemu-aarch64-static' "${producer}" >/dev/null
 grep -F -- '-Dtools=drm-shim' "${dockerfile}" >/dev/null
 grep -F 'produce-gamescope-pvr-cache.sh' "${dockerfile}" >/dev/null
+grep -F 'run-gamescope-pvr-cache.sh' "${dockerfile}" >/dev/null
+grep -F 'ARG PF_GAMESCOPE_MODE=not-shipped' "${dockerfile}" >/dev/null
 grep -F 'PF_GAMESCOPE_SHA' "${dockerfile}" >/dev/null
 grep -F '22.102.54.38' "${producer}" >/dev/null
 grep -F '4232739e75c95113871e260967e8b4ff995ea897' "${producer}" >/dev/null
