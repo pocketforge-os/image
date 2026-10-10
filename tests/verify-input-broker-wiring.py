@@ -22,6 +22,7 @@ DOCKERFILE = ROOT / "build/Dockerfile.pf"
 DESCRIPTOR = "/usr/share/pocketforge/devices/a133/capabilities.toml"
 BROKER_SOCK = "/run/pocketforge/input-broker.sock"
 AUTHORITY_SOCK = "/run/pocketforge/session-authority.sock"
+PREFSD_SOCK = "/run/pocketforge/prefsd.sock"
 
 
 def directives(text: str) -> list[tuple[str, str, str]]:
@@ -69,14 +70,21 @@ shell = directives(SHELL_DROPIN.read_text())
 # BindsTo=, not Requires= (bd: tsp-f3fm.202.1.6): Requires= does not stop the app when
 # the broker exits by itself mid-session, and the app would keep the panel with no
 # Menu intake (real-systemd harness, case (b)).
-assert values(app, "Unit", "BindsTo") == ["pf-input-broker.service"], "pf-app@ must be BindsTo= the broker"
+assert values(app, "Unit", "BindsTo") == [
+    "pf-input-broker.service",
+    "pf-prefsd.service",
+], "pf-app@ must follow both security authorities"
 assert "pf-input-broker.service" not in values(app, "Unit", "Requires"), "broker belongs in BindsTo=, not Requires="
 assert "pf-input-broker.service" in values(app, "Unit", "After"), "pf-app@ must order After the broker"
+assert "pf-prefsd.service" in values(app, "Unit", "After"), "pf-app@ must order After prefsd"
 assert "pocketforge-foreground.target" in values(app, "Unit", "Requires")
 environment = values(app, "Service", "Environment")
 assert f"PF_DESCRIPTOR={DESCRIPTOR}" in environment, environment
 assert f"PF_BROKER_SOCK={BROKER_SOCK}" in environment, environment
-assert values(app, "Service", "InaccessiblePaths") == [f"-{AUTHORITY_SOCK}"]
+assert values(app, "Service", "InaccessiblePaths") == [
+    f"-{AUTHORITY_SOCK}",
+    PREFSD_SOCK,
+]
 assert not any(section == "Install" for section, _, _ in app), "pf-app@ must stay dormant"
 
 # Broker drop-in: exactly the ruling's directives plus the Condition->Assert fix.
