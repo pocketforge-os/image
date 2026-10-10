@@ -154,3 +154,6 @@ jobs:
             echo "::endgroup::"
           done
           exit "${failed}"
+
+      - name: Check component cache keys
+        run: python3 tests/test-component-cache-keys.py
