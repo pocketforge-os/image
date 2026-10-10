@@ -26,15 +26,24 @@ PLATFORM_MANIFEST = (
 PLATFORM_VERSION = "sha256:" + hashlib.sha256(PLATFORM_MANIFEST).hexdigest()
 
 
-def manifest(*, root: bool = True, capabilities: tuple[str, ...] = ()) -> str:
+def manifest(
+    *,
+    root: bool = True,
+    distribution: str | None = None,
+    capabilities: tuple[str, ...] = (),
+) -> str:
     caps = ", ".join(json.dumps(value) for value in capabilities)
     root_table = ""
     if root:
+        distribution_line = (
+            f'distribution = "{distribution}"\n' if distribution is not None else ""
+        )
         root_table = textwrap.dedent(
             f"""
             [runtime.root]
             schema = 1
             format = "squashfs"
+            {distribution_line}
             digest = "{DIGEST}"
             platform-runtime = "pocketforge/bookworm-aarch64"
             platform-runtime-abi = "1"
@@ -116,6 +125,23 @@ class RendererTest(unittest.TestCase):
         )
         self.inventory.write_text(json.dumps(inventory()), encoding="utf-8")
 
+    def write_root_metadata(self, distribution: str) -> None:
+        root_path = next(self.app_root_store.rglob("*.raw"))
+        root_path.with_suffix(".metadata.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "distribution": distribution,
+                    "suite": {"debian-12": "bookworm", "debian-13": "trixie"}[
+                        distribution
+                    ],
+                    "architecture": "arm64",
+                    "sha256": DIGEST.removeprefix("sha256:"),
+                }
+            ),
+            encoding="utf-8",
+        )
+
     def tearDown(self) -> None:
         self.temp.cleanup()
 
@@ -177,6 +203,40 @@ class RendererTest(unittest.TestCase):
         self.assertIn("DeviceAllow=/dev/snd/controlC0 rw", unit)
         self.assertNotIn("/dev/video", unit)
         self.assertNotIn("/dev/media", unit)
+
+    def test_debian_13_root_is_selected_and_host_runtime_wins(self) -> None:
+        self.write_root_metadata("debian-13")
+        self.render(manifest(distribution="debian-13"))
+        unit = self.output.read_text(encoding="utf-8")
+        self.assertIn("# runtime root distribution: debian-13 (trixie)", unit)
+        self.assertIn(
+            'Environment="VK_DRIVER_FILES=/run/pocketforge/platform-runtime/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"',
+            unit,
+        )
+        self.assertIn(
+            'Environment="__EGL_VENDOR_LIBRARY_FILENAMES=/run/pocketforge/platform-runtime/usr/share/glvnd/egl_vendor.d/50_mesa.json"',
+            unit,
+        )
+        ld_line = next(
+            line for line in unit.splitlines() if line.startswith('Environment="LD_LIBRARY_PATH=')
+        )
+        platform_index = ld_line.index("/run/pocketforge/platform-runtime")
+        app_index = ld_line.index("/opt/pocketforge/apps/org.pocketforge.steamlink")
+        self.assertLess(platform_index, app_index)
+
+    def test_root_distribution_metadata_must_match(self) -> None:
+        result = self.render(manifest(distribution="debian-13"), expect=66)
+        self.assertIn("reason=runtime_root_metadata_missing", result.stderr)
+        self.assertFalse(self.output.exists())
+
+        self.write_root_metadata("debian-12")
+        result = self.render(manifest(distribution="debian-13"), expect=65)
+        self.assertIn("reason=runtime_root_distribution_mismatch", result.stderr)
+        self.assertFalse(self.output.exists())
+
+        result = self.render(manifest(distribution="debian-14"), expect=65)
+        self.assertIn("reason=runtime_root_invalid", result.stderr)
+        self.assertFalse(self.output.exists())
 
     def test_every_declared_capability_has_an_explicit_resource_outcome(self) -> None:
         capabilities = (
