@@ -94,40 +94,36 @@ ARG PF_SOC=not-shipped
 # tsp-1dl.3 reorg-only) reachable for merge-1; hermetic is the reproducible-from-committed target.
 # =============================================================================
 FROM ${PF_CONTAINER} AS fetch
-ARG PF_DEVICE_ID
 ARG PF_BLOB_GROUPS             # space-separated device profile groups (pf emits them sorted)
 ARG PF_VENDOR_MANIFEST_SHA     # pinned in platform.lock — provenance marker here
 ARG PF_CAR_SHA256              # pinned in platform.lock [car] — the SPECIFIC .car copy this build consumes
 ARG PF_FETCH_MODE=hermetic     # hermetic (default) | fallback (git-clone-blobs, merge-1 safety)
 ARG PF_BLOBS_SHA               # provenance marker for the fallback path
-# manifest.toml + fetch-group.py from the pinned vendor-manifest (git-archive build context;
-# context root = repo root, so fetch-group.py is at scripts/). Both land in /work/vm/ by basename.
-COPY --from=vendor-manifest-src manifest.toml scripts/fetch-group.py /work/vm/
-# Redistributable inputs live in the committed public tree rather than the
-# private vendor-originals CAR. Import them with the manifest's pinned UnixFS
-# profile; fetch-group remains the fail-closed CID + sha256 verifier.
-COPY --from=vendor-manifest-src public /work/vm/public
-# the CARv2 of the vendor originals (content-addressed; CIDs unchanged by the path reorg):
-COPY --from=blobs-car vendor-originals.car /work/vendor-originals.car
-# merge-1 fallback source (git tree of binaries at sunxi/a133/…); dropped after the strip merges:
-COPY --from=blobs-src . /work/blobs-src
-RUN set -eux; \
+# The large CAR and source trees are read-only execution inputs, not parent
+# layers. The committed cache record therefore contains only /out plus the
+# small command metadata, and survives the producer's bounded BuildKit prune.
+RUN --mount=type=bind,from=vendor-manifest-src,source=.,target=/work/vm,ro \
+    --mount=type=bind,from=blobs-car,source=.,target=/work/car,ro \
+    --mount=type=bind,from=blobs-src,source=.,target=/work/blobs-src,ro \
+    set -eux; \
     mkdir -p /out; \
     if [ "${PF_FETCH_MODE}" = "hermetic" ]; then \
-      echo "${PF_CAR_SHA256}  /work/vendor-originals.car" | sha256sum -c -; \
+      echo "${PF_CAR_SHA256}  /work/car/vendor-originals.car" | sha256sum -c -; \
       export IPFS_PATH=/work/ipfs; \
       ipfs init --profile server >/dev/null; \
-      ipfs dag import --pin-roots=false /work/vendor-originals.car; \
+      ipfs dag import --pin-roots=false /work/car/vendor-originals.car; \
       find /work/vm/public -type f -exec ipfs add --cid-version=1 --raw-leaves \
         --chunker=size-1048576 --pin -Q {} \; ; \
       for g in $(echo "${PF_BLOB_GROUPS}" | tr ' ' '\n' | sort); do \
-        python3 /work/vm/fetch-group.py --manifest /work/vm/manifest.toml \
+        python3 /work/vm/scripts/fetch-group.py --manifest /work/vm/manifest.toml \
           --group "$g" --out /out --offline ; \
       done; \
+      find "${IPFS_PATH}" -mindepth 1 -delete; \
+      rmdir "${IPFS_PATH}"; \
       printf 'fetch=hermetic car_sha256=%s vendor_manifest_sha=%s groups=[%s]\n' \
         "${PF_CAR_SHA256}" "${PF_VENDOR_MANIFEST_SHA}" "${PF_BLOB_GROUPS}" > /out/.pf-fetch-provenance; \
     else \
-      cp -a /work/blobs-src/. /out/ 2>/dev/null || true; \
+      cp -a /work/blobs-src/. /out/; \
       printf 'fetch=fallback blobs_sha=%s vendor_manifest_sha=%s groups=[%s]\n' \
         "${PF_BLOBS_SHA}" "${PF_VENDOR_MANIFEST_SHA}" "${PF_BLOB_GROUPS}" > /out/.pf-fetch-provenance; \
     fi; \
@@ -140,7 +136,6 @@ RUN set -eux; \
 # SOURCE_DATE_EPOCH. Emits Image + DTBs + /lib/modules + Module.symvers.
 # =============================================================================
 FROM ${PF_CONTAINER} AS kernel
-ARG PF_DEVICE_ID
 ARG PF_ARCH
 ARG PF_KERNEL_REPO
 ARG PF_KERNEL_SHA
@@ -149,16 +144,14 @@ ARG PF_KERNEL_DTB
 ARG PF_TOOLCHAIN_GCC_VERSION
 # Kernel repro epoch: pinned to the KERNEL commit (component reproducibility — the kernel
 # Image stays byte-identical from the kernel SHA alone, independent of image-repo churn).
-# Falls back to the image-wide SOURCE_DATE_EPOCH if the caller did not resolve a kernel one.
+# Required independently: an absent kernel epoch fails before compilation.
 ARG PF_KERNEL_SOURCE_DATE_EPOCH
-ARG SOURCE_DATE_EPOCH
 COPY --from=kernel-src . /work/kernel
 RUN <<'KERNEL'
 set -eux
 : "${PF_KERNEL_SHA:?PF_KERNEL_SHA must be the lock-resolved full kernel revision}" \
   "${PF_KERNEL_DEFCONFIG:?}" "${PF_KERNEL_DTB:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
-SOURCE_DATE_EPOCH="${PF_KERNEL_SOURCE_DATE_EPOCH:-${SOURCE_DATE_EPOCH:-}}"
-: "${SOURCE_DATE_EPOCH:?PF_KERNEL_SOURCE_DATE_EPOCH/SOURCE_DATE_EPOCH must be set (pinned kernel commit time)}"
+SOURCE_DATE_EPOCH="${PF_KERNEL_SOURCE_DATE_EPOCH:?PF_KERNEL_SOURCE_DATE_EPOCH must be set (pinned kernel commit time)}"
 export SOURCE_DATE_EPOCH
 cd /work/kernel
 
@@ -291,7 +284,6 @@ KERNEL
 # Per-IP: a133 gpu-km-tsp (pvrsrvkm.ko+dc_sunxi.ko); a523 gpu-km-tsp-a523 (mali_kbase.ko).
 # =============================================================================
 FROM ${PF_CONTAINER} AS gpu-km-build
-ARG PF_DEVICE_ID
 ARG PF_GPU_REPO
 ARG PF_GPU_MODEL
 ARG PF_GPU_KM_MODEL
@@ -306,7 +298,6 @@ ARG PF_KERNEL_SHA
 ARG PF_TOOLCHAIN_GCC_VERSION
 ARG PF_KERNEL_SOURCE_DATE_EPOCH
 ARG PF_ODYSSEY_CAPTURE=
-ARG SOURCE_DATE_EPOCH
 # The FULL built+configured kernel tree (autoconf.h + Module.symvers + generated headers): an
 # external-module build (`make -C KDIR M=…`) needs it, not just Module.symvers. Its .pf-kernel-
 # provenance carries the kernel vermagic we must match (MODVERSIONS=n → vermagic is the only gate).
@@ -374,9 +365,9 @@ if [ "${PF_GPU_MODEL}" = "open" ]; then
     install -D -m0644 "${ko}" "/out/modules/${m}"
   done
   {
-    printf 'gpu-km %s %s@%s ref=%s device=%s\n' \
+    printf 'gpu-km %s %s@%s ref=%s\n' \
       "${PF_GPU_KM_MODEL}" "${PF_GPU_KM_REPO}" "${PF_GPU_KM_SHA}" \
-      "${PF_GPU_KM_REF}" "${PF_DEVICE_ID}"
+      "${PF_GPU_KM_REF}"
     printf 'kernel.release=%s vermagic=%s\n' "${kver}" "${kvm}"
     printf 'modules=[%s]\n' "${PF_GPU_MODULES}"
     for m in ${PF_GPU_MODULES}; do printf '  %s sha256=%s\n' "${m}" "$(sha256sum "/out/modules/${m}" | cut -d' ' -f1)"; done
@@ -392,11 +383,9 @@ export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
 export ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu-
 # Deterministic module stamp (pinned to the kernel commit like the kernel stage; vermagic itself
 # is epoch-independent, but the .ko's embedded build id is not).
-SOURCE_DATE_EPOCH="${PF_KERNEL_SOURCE_DATE_EPOCH:-${SOURCE_DATE_EPOCH:-}}"
-if [ -n "$SOURCE_DATE_EPOCH" ]; then
-  export SOURCE_DATE_EPOCH KBUILD_BUILD_USER=pocketforge KBUILD_BUILD_HOST=pocketforge
-  export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%a %b %e %T UTC %Y')"
-fi
+SOURCE_DATE_EPOCH="${PF_KERNEL_SOURCE_DATE_EPOCH:?PF_KERNEL_SOURCE_DATE_EPOCH must be set}"
+export SOURCE_DATE_EPOCH KBUILD_BUILD_USER=pocketforge KBUILD_BUILD_HOST=pocketforge
+export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%a %b %e %T UTC %Y')"
 
 KDIR=/work/kernel
 [ -f "$KDIR/include/generated/autoconf.h" ] || { echo "GPU: kernel tree not configured (no autoconf.h) — the kernel stage must ship the full built tree"; exit 1; }
@@ -605,11 +594,11 @@ ENV CCACHE_DIR=/root/.cache/ccache \
 # --- 2/5 source: the platform.lock-pinned gpu-um-tsp commit, via the named build context ---
 FROM gpu-um-toolchain AS gpu-um-source
 ARG PF_GPU_UM_SHA
-ARG SOURCE_DATE_EPOCH
+ARG PF_GPU_UM_SOURCE_DATE_EPOCH
 COPY --from=gpu-um-src . /src/
 RUN <<'GPUUMSOURCE'
 set -eux
-: "${PF_GPU_UM_SHA:?}" "${SOURCE_DATE_EPOCH:?}"
+: "${PF_GPU_UM_SHA:?}" "${PF_GPU_UM_SOURCE_DATE_EPOCH:?}"
 printf '%s\n' "${PF_GPU_UM_SHA}" >/mesa-source-commit
 GPUUMSOURCE
 
@@ -618,9 +607,10 @@ GPUUMSOURCE
 # of the aarch64 link while avoiding unversioned host precompilers.
 FROM gpu-um-source AS gpu-um-native-precompilers
 WORKDIR /src
-ARG SOURCE_DATE_EPOCH
+ARG PF_GPU_UM_SOURCE_DATE_EPOCH
 RUN --mount=type=cache,id=ge8300-mesa-cross-ccache,target=/root/.cache/ccache,sharing=locked <<'GPUUMNATIVE'
 set -eux
+export SOURCE_DATE_EPOCH="${PF_GPU_UM_SOURCE_DATE_EPOCH:?}"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" meson setup build-native \
   --native-file /usr/local/share/mesa-cross/ge8300-native.ini \
   --wrap-mode=nodownload --prefix=/opt/mesa-native \
@@ -678,7 +668,7 @@ GPUUMNATIVE
 # no compiler, linker, target header, startfile, or target library.
 FROM ${PF_CONTAINER} AS gpu-um-build
 WORKDIR /src
-ARG SOURCE_DATE_EPOCH
+ARG PF_GPU_UM_SOURCE_DATE_EPOCH
 ARG PF_GPU_UM_SHA
 ARG PF_GAMESCOPE_MODE=not-shipped
 ARG PF_GAMESCOPE_SHA
@@ -697,6 +687,7 @@ COPY --from=image-src packages/pocketforge-open-gpu-stack/DEBIAN/control /tmp/po
 COPY --from=image-src packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf /tmp/10-pocketforge-zink.conf
 RUN <<'GPUUMSYSROOT'
 set -eux
+export SOURCE_DATE_EPOCH="${PF_GPU_UM_SOURCE_DATE_EPOCH:?}"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ccache g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
@@ -712,7 +703,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 PIP_ROOT_USER_ACTION=ignore python3 -m pip install --break-system-packages \
   'meson==1.7.2' 'ninja==1.11.1.4'
 chmod 0755 /usr/local/bin/aarch64-linux-gnu-pkg-config /usr/local/bin/x86_64-linux-gnu-pkg-config
-: "${PF_GPU_UM_SHA:?}" "${SOURCE_DATE_EPOCH:?}"
+: "${PF_GPU_UM_SHA:?}"
 printf '%s\n' "${PF_GPU_UM_SHA}" >/mesa-source-commit
 dpkg-query -W > /toolchain-packages.txt
 cp /etc/pocketforge-apt-snapshot-date /bookworm-apt-snapshot-date
@@ -724,6 +715,7 @@ GPUUMSYSROOT
 ENV PATH=/opt/mesa-native/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN --mount=type=cache,id=ge8300-mesa-cross-ccache,target=/root/.cache/ccache,sharing=locked <<'GPUUMBUILD'
 set -eux
+export SOURCE_DATE_EPOCH="${PF_GPU_UM_SOURCE_DATE_EPOCH:?}"
 # Execute Noble's host-only generators with their bundled loader and libraries.
 noble_loader="$(find /opt/mesa-native/noble-root -type f -name 'ld-linux-x86-64.so.2' -print -quit)"
 [ -n "${noble_loader}" ] || { echo 'FATAL gpu_um_native_runtime_missing=loader'; exit 1; }
@@ -863,7 +855,6 @@ FROM gpu-um-mesa-${PF_GPU_MODEL} AS gpu-um-mesa
 # (an absolute path into the TF-A tree fails "[Errno 2] No such file", tsp-7uy).
 # =============================================================================
 FROM ${PF_CONTAINER} AS bootchain
-ARG PF_DEVICE_ID
 ARG PF_BOOTCHAIN_MODEL
 ARG PF_UBOOT_REPO
 ARG PF_UBOOT_SHA
@@ -874,9 +865,8 @@ ARG PF_TFA_PLAT
 ARG PF_TOOLCHAIN_GCC_VERSION
 # Bootchain repro epoch: pinned to the U-BOOT commit (component reproducibility — the
 # boot-chain binary stays byte-identical from the bootchain SHAs alone, independent of
-# image-repo churn). Falls back to the image-wide SOURCE_DATE_EPOCH like the kernel stage.
+# image-repo churn). The newest U-Boot/TF-A commit epoch is required independently.
 ARG PF_BOOTCHAIN_SOURCE_DATE_EPOCH
-ARG SOURCE_DATE_EPOCH
 COPY --from=tfa-src   . /work/tfa
 COPY --from=uboot-src . /work/uboot
 RUN <<'BOOTCHAIN'
@@ -884,15 +874,14 @@ set -eux
 mkdir -p /out
 # Device gate (profile schema duality, core/profile.py: uboot.repo XOR blob_group).
 if [ "${PF_BOOTCHAIN_MODEL}" != "sunxi-spl-uboot" ]; then
-  printf 'bootchain NOT SHIPPED for device=%s (model=%s: boot chain comes from the vendor blob group via the fetch stage)\n' \
-    "${PF_DEVICE_ID}" "${PF_BOOTCHAIN_MODEL}" > /out/.pf-bootchain-provenance
+  printf 'bootchain NOT SHIPPED (model=%s: boot chain comes from the vendor blob group via the fetch stage)\n' \
+    "${PF_BOOTCHAIN_MODEL}" > /out/.pf-bootchain-provenance
   cat /out/.pf-bootchain-provenance
   exit 0
 fi
 : "${PF_UBOOT_REPO:?}" "${PF_UBOOT_SHA:?}" "${PF_UBOOT_DEFCONFIG:?}" \
   "${PF_TFA_REPO:?}" "${PF_TFA_SHA:?}" "${PF_TFA_PLAT:?}" "${PF_TOOLCHAIN_GCC_VERSION:?}"
-SOURCE_DATE_EPOCH="${PF_BOOTCHAIN_SOURCE_DATE_EPOCH:-${SOURCE_DATE_EPOCH:-}}"
-: "${SOURCE_DATE_EPOCH:?PF_BOOTCHAIN_SOURCE_DATE_EPOCH/SOURCE_DATE_EPOCH must be set (pinned bootchain commit time)}"
+SOURCE_DATE_EPOCH="${PF_BOOTCHAIN_SOURCE_DATE_EPOCH:?PF_BOOTCHAIN_SOURCE_DATE_EPOCH must be set (newest pinned bootchain commit time)}"
 export SOURCE_DATE_EPOCH
 export PATH="/opt/arm-${PF_TOOLCHAIN_GCC_VERSION}/bin:${PATH}"
 CROSS=aarch64-none-linux-gnu-
@@ -975,12 +964,10 @@ BOOTCHAIN
 # Links the closed PowerVR UM from the fetch stage (blob group), not a host LOCAL_BLOBS.
 # =============================================================================
 FROM ${PF_CONTAINER} AS sdl
-ARG PF_DEVICE_ID
 ARG PF_SOC
-ARG PF_GPU_REPO
 ARG PF_GPU_MODEL
 ARG PF_LIBSDL3_SHA
-ARG SOURCE_DATE_EPOCH
+ARG PF_LIBSDL3_SOURCE_DATE_EPOCH
 # Mount points match the canonical recipe (libsdl3-sunxifb/build/build-libsdl3.sh): source at
 # /work/src (the script builds /work/src/sdl3), blobs at /work/blobs (it links the PowerVR UM at
 # /work/blobs/tsp/<bvnc>). The UM comes from the fetch stage — NOT a host LOCAL_BLOBS/_build inject.
@@ -999,8 +986,8 @@ mkdir -p /out/lib /work/out
 # "not a133" and wrongly NOT-SHIP this a133 device component. libSDL3-sunxifb is
 # meaningful on every a133 variant; a523 (Mali) ships no sunxifb libSDL3 today.
 if [ "${PF_SOC}" != "sun50iw10p1" ]; then
-  printf 'libsdl3-sunxifb@%s NOT SHIPPED for device=%s (soc=%s; sunxifb is a133-only)\n' \
-    "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_SOC}" > /out/lib/.pf-sdl-provenance
+  printf 'libsdl3-sunxifb@%s NOT SHIPPED (soc=%s; sunxifb is a133-only)\n' \
+    "${PF_LIBSDL3_SHA}" "${PF_SOC}" > /out/lib/.pf-sdl-provenance
   cat /out/lib/.pf-sdl-provenance
   exit 0
 fi
@@ -1018,9 +1005,9 @@ fi
 if [ "${PF_GPU_MODEL}" = "open" ]; then
   /usr/local/bin/prepare-sdl-kmsdrm-sysroot
 fi
-# Deterministic timestamp (image commit epoch, resolved from the pinned SHA — never wall-clock);
+# Deterministic component timestamp (SDL commit epoch — never wall-clock);
 # cmake/gcc honour SOURCE_DATE_EPOCH. Per-lib bit-for-bit repro is finished under B6 (tsp-1dl.6).
-if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+export SOURCE_DATE_EPOCH="${PF_LIBSDL3_SOURCE_DATE_EPOCH:?}"
 # sdl is SELECTED for every a133 variant. The sunxifb backend's build recipe links EITHER the
 # closed PowerVR UM (ddk) OR — tsp-mc9m.41.924.6 / C3, replacing the former B-deferred marker —
 # the C1 open Mesa GLX/GLES/EGL/GBM install tree (open): build-libsdl3.sh itself branches on
@@ -1045,7 +1032,7 @@ for t in testgles2 testsprite pf-gfxbench; do
 done
 ls -la /out/lib/testbin/
 {
-  printf 'libsdl3-sunxifb@%s device=%s gpu_model=%s gpu=%s\n' "${PF_LIBSDL3_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_MODEL:-ddk}" "${PF_GPU_REPO}"
+  printf 'libsdl3-sunxifb@%s soc=%s gpu_model=%s\n' "${PF_LIBSDL3_SHA}" "${PF_SOC}" "${PF_GPU_MODEL:-ddk}"
   for f in /out/lib/libSDL3-pocketforge.so*; do
     if [ -f "$f" ] && [ ! -L "$f" ]; then printf '  %s sha256=%s\n' "${f##*/}" "$(sha256sum "$f" | cut -d' ' -f1)"; fi
   done
@@ -1067,12 +1054,10 @@ SDL
 # rebuild (they are an a133-only need).
 # =============================================================================
 FROM ${PF_CONTAINER} AS wpa
-ARG PF_DEVICE_ID
 ARG PF_SOC
-ARG PF_GPU_REPO
 ARG PF_WPA_SHA
 ARG PF_TOOLCHAIN_GCC_VERSION
-ARG SOURCE_DATE_EPOCH
+ARG PF_WPA_SOURCE_DATE_EPOCH
 COPY --from=wpa-src . /work/src
 RUN <<'WPA'
 set -eux
@@ -1096,13 +1081,13 @@ find /work/src -maxdepth 1 -name .pf-source-revision -delete
 # variant. Non-a133 devices get a NOT-SHIPPED marker + an empty output the downstream
 # COPY consumes harmlessly.
 if [ "${PF_SOC}" != "sun50iw10p1" ]; then
-  printf 'wpa-supplicant-tsp@%s NOT SHIPPED for device=%s (soc=%s; xr829 roam-hysteresis fork — a133-only)\n' \
-    "${PF_WPA_SHA}" "${PF_DEVICE_ID}" "${PF_SOC}" > /out/.pf-wpa-provenance
+  printf 'wpa-supplicant-tsp@%s NOT SHIPPED (soc=%s; xr829 roam-hysteresis fork — a133-only)\n' \
+    "${PF_WPA_SHA}" "${PF_SOC}" > /out/.pf-wpa-provenance
   cat /out/.pf-wpa-provenance
   exit 0
 fi
 : "${PF_TOOLCHAIN_GCC_VERSION:?}"
-if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+export SOURCE_DATE_EPOCH="${PF_WPA_SOURCE_DATE_EPOCH:?}"
 # arm64 build deps from the frozen snapshot (sources already configured in the
 # base container; multiarch arm64 enabled there too).
 apt-get update
@@ -1158,7 +1143,7 @@ done < /tmp/needed.txt
 install -m 0755 wpa_supplicant /out/wpa_supplicant
 cp .config /out/config.used
 {
-  printf 'wpa-supplicant-tsp@%s device=%s gpu=%s\n' "${PF_WPA_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}"
+  printf 'wpa-supplicant-tsp@%s soc=%s\n' "${PF_WPA_SHA}" "${PF_SOC}"
   printf '  wpa_supplicant sha256=%s\n' "$(sha256sum /out/wpa_supplicant | cut -d' ' -f1)"
 } > /out/.pf-wpa-provenance
 cat /out/.pf-wpa-provenance
@@ -1173,13 +1158,24 @@ WPA
 # =============================================================================
 FROM ${PF_CONTAINER} AS cloud-init
 ARG PF_CLOUD_INIT_SHA
-ARG SOURCE_DATE_EPOCH
+ARG PF_CLOUD_INIT_SOURCE_DATE_EPOCH
 COPY --from=cloud-init-src . /work/src
-COPY --from=image-src . /work/image
+COPY --from=image-src tests/test-cloud-init-firstboot.sh /work/image/tests/test-cloud-init-firstboot.sh
+COPY --from=image-src tests/fixtures/cloud-init-firstboot /work/image/tests/fixtures/cloud-init-firstboot
+COPY --from=image-src build/Dockerfile.pf /work/image/build/Dockerfile.pf
+COPY --from=image-src scripts/build-rootfs.sh /work/image/scripts/build-rootfs.sh
+COPY --from=image-src scripts/build-sd-image.sh /work/image/scripts/build-sd-image.sh
+COPY --from=image-src scripts/generate-build-id.sh /work/image/scripts/generate-build-id.sh
+COPY --from=image-src Makefile /work/image/Makefile
+COPY --from=image-src rootfs-packages.txt /work/image/rootfs-packages.txt
+COPY --from=image-src boards/tsp/boot-resource /work/image/boards/tsp/boot-resource
+COPY --from=image-src rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-firstboot.conf /work/image/rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-firstboot.conf
+COPY --from=image-src rootfs-overlay/etc/ssh/sshd_config.d/00-pocketforge.conf /work/image/rootfs-overlay/etc/ssh/sshd_config.d/00-pocketforge.conf
+COPY --from=image-src rootfs-overlay/etc/systemd/system/ssh.service.d/pocketforge-firstboot.conf /work/image/rootfs-overlay/etc/systemd/system/ssh.service.d/pocketforge-firstboot.conf
 RUN <<'CLOUD_INIT'
 set -eux
 : "${PF_CLOUD_INIT_SHA:?}"
-: "${SOURCE_DATE_EPOCH:?}"
+export SOURCE_DATE_EPOCH="${PF_CLOUD_INIT_SOURCE_DATE_EPOCH:?}"
 case "${PF_CLOUD_INIT_SHA}" in
   *[!0-9a-f]*|???????????????????????????????????????|?????????????????????????????????????????*)
     echo "FATAL: PF_CLOUD_INIT_SHA must be exactly 40 lowercase hex characters" >&2
@@ -1260,9 +1256,7 @@ FROM platform-inputs-${PF_GPU_MODEL} AS platform-inputs
 # platform.lock-selected source archive inside the owned build container.
 # =============================================================================
 FROM ${PF_CONTAINER} AS runtime
-ARG PF_DEVICE_ID
 ARG PF_SOC
-ARG PF_GPU_REPO
 ARG PF_RUNTIME_SHA
 ARG PF_GPU_MODEL
 ARG PF_APP_RUNTIME_FAMILY=
@@ -1271,7 +1265,7 @@ ARG PF_APP_PLATFORM_VERSION=
 ARG PF_APP_CAPABILITIES=
 ARG PF_DEVICE_DESCRIPTOR_ID=
 ARG PF_DEVICE_DESCRIPTOR_SHA256=
-ARG SOURCE_DATE_EPOCH
+ARG PF_RUNTIME_SOURCE_DATE_EPOCH
 ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 COPY --from=runtime-src . /work/runtime
 COPY --from=platform-inputs /out /work/platform-inputs
@@ -1289,7 +1283,7 @@ mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
 # Open: exactly devices/a133/capabilities.toml with the pinned digest (prints its path).
 DESCRIPTOR="$(check-device-descriptor "${PF_GPU_MODEL:-ddk}" /work/platform-inputs \
   "${PF_DEVICE_DESCRIPTOR_ID}" "${PF_DEVICE_DESCRIPTOR_SHA256}")"
-if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+export SOURCE_DATE_EPOCH="${PF_RUNTIME_SOURCE_DATE_EPOCH:?}"
 cd /work/runtime
 # Build the SDK for every device: hwprobe is a separate build-graph input even
 # where runtime daemons are not shipped in that device's rootfs.
@@ -1314,8 +1308,8 @@ render-platform-capabilities \
 # downstream COPY consumes harmlessly. (a523's own input substrate + its install into
 # build-rootfs-a523.sh are a separate future bead — see DECISION-runtime-stage.md.)
 if [ "${PF_SOC}" != "sun50iw10p1" ]; then
-  printf 'runtime@%s NOT SHIPPED for device=%s (soc=%s; pf-input-decode is the A133 pad-MCU decoder — a133-only)\n' \
-    "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_SOC}" > /out/.pf-runtime-provenance
+  printf 'runtime@%s NOT SHIPPED (soc=%s; pf-input-decode is the A133 pad-MCU decoder — a133-only)\n' \
+    "${PF_RUNTIME_SHA}" "${PF_SOC}" > /out/.pf-runtime-provenance
   cat /out/.pf-runtime-provenance
   exit 0
 fi
@@ -1341,7 +1335,7 @@ install -D -m 0755 "${BIN}" /out/bin/pf-input-decode
 install -D -m 0644 crates/pf-input-decode/systemd/pf-input-decode.service /out/systemd/pf-input-decode.service
 # Provenance: pf-input-decode always (a133 baseline); the open-only F13/F07 shas are appended below.
 {
-  printf 'runtime@%s device=%s gpu=%s target=%s\n' "${PF_RUNTIME_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" "${PF_RUNTIME_TARGET}"
+  printf 'runtime@%s soc=%s gpu_model=%s target=%s\n' "${PF_RUNTIME_SHA}" "${PF_SOC}" "${PF_GPU_MODEL:-ddk}" "${PF_RUNTIME_TARGET}"
   printf '  pf-input-decode sha256=%s\n' "$(sha256sum /out/bin/pf-input-decode | cut -d' ' -f1)"
 } > /out/.pf-runtime-provenance
 # F13/F07 userspace stack (pf-session-authorityd + pf-prefsd) — OPEN-ONLY (tsp-mc9m.41.924.4 /
@@ -1453,11 +1447,12 @@ ARG PF_FFMPEG_ORIG_ASC_SHA256
 ARG PF_FFMPEG_DEBIAN_SHA256
 ARG PF_FFMPEG_PATCH_SERIES_SHA256
 ARG PF_FFMPEG_UAPI_SHA
-ARG SOURCE_DATE_EPOCH
+ARG PF_FFMPEG_SOURCE_DATE_EPOCH
 COPY --from=image-src build/platform-runtimes/steamlink-ffmpeg59/v1 /work/runtime-definition
 COPY --from=kernel-src . /work/kernel-uapi
 RUN <<'STEAMLINK_FFMPEG59'
 set -eux
+export SOURCE_DATE_EPOCH="${PF_FFMPEG_SOURCE_DATE_EPOCH:?}"
 # These are build/test dependencies only. The pinned build-container apt sources
 # point at the frozen Bookworm snapshot; none of these bytes reach /out.
 apt-get update
@@ -1539,13 +1534,13 @@ FROM cts-bundle-${PF_CTS_BUNDLE_MODE} AS cts-bundle
 FROM ${PF_CONTAINER} AS sdl-static
 ARG PF_SIM_SHA
 ARG PF_LIBSDL3_SHA
-ARG SOURCE_DATE_EPOCH
+ARG PF_SDL_STATIC_SOURCE_DATE_EPOCH
 COPY --from=sim-src . /work/sim
 COPY --from=sdl-src . /work/sdl-source
 RUN <<'SDLSTATIC'
 set -eux
-: "${PF_SIM_SHA:?}" "${PF_LIBSDL3_SHA:?}" "${SOURCE_DATE_EPOCH:?}"
-export SOURCE_DATE_EPOCH
+: "${PF_SIM_SHA:?}" "${PF_LIBSDL3_SHA:?}"
+export SOURCE_DATE_EPOCH="${PF_SDL_STATIC_SOURCE_DATE_EPOCH:?}"
 cmake -S /work/sdl-source/sdl3 -B /work/build/sdl-static -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=/opt/cmake/toolchain-arm-10.3-2021.07.cmake \
@@ -1574,14 +1569,14 @@ ARG PF_HWPROBE_SHA
 ARG PF_RUNTIME_SHA
 ARG PF_SIM_SHA
 ARG PF_LIBSDL3_SHA
-ARG SOURCE_DATE_EPOCH
+ARG PF_HWPROBE_SOURCE_DATE_EPOCH
 COPY --from=hwprobe-src . /work/hwprobe
 COPY --from=runtime /out/sdk /work/runtime-sdk
 COPY --from=sdl-static /out /work/sdl-static
 RUN <<'HWPROBE'
 set -eux
-: "${PF_HWPROBE_SHA:?}" "${PF_RUNTIME_SHA:?}" "${PF_SIM_SHA:?}" "${PF_LIBSDL3_SHA:?}" "${SOURCE_DATE_EPOCH:?}"
-export SOURCE_DATE_EPOCH
+: "${PF_HWPROBE_SHA:?}" "${PF_RUNTIME_SHA:?}" "${PF_SIM_SHA:?}" "${PF_LIBSDL3_SHA:?}"
+export SOURCE_DATE_EPOCH="${PF_HWPROBE_SOURCE_DATE_EPOCH:?}"
 make -C /work/hwprobe \
   CC=aarch64-none-linux-gnu-gcc \
   STRIP=aarch64-none-linux-gnu-strip \
@@ -1689,7 +1684,7 @@ POOLSUITEFETCH
 
 FROM poolsuite-toolchain AS poolsuite-dev
 ARG PF_POOLSUITE_SHA
-ARG SOURCE_DATE_EPOCH
+ARG PF_POOLSUITE_SOURCE_DATE_EPOCH
 ENV CARGO_HOME=/opt/poolsuite-cargo-home \
     CARGO_INCREMENTAL=0
 COPY --from=poolsuite-src . /work/poolsuite
@@ -1706,7 +1701,7 @@ set -eux
   echo 'FATAL: poolsuite-src is empty or lacks ci/device-build.sh; dev builds require the staged PF_POOLSUITE_SHA' >&2
   exit 1
 }
-if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+export SOURCE_DATE_EPOCH="${PF_POOLSUITE_SOURCE_DATE_EPOCH:?}"
 ./ci/device-build.sh --offline
 APP=target/aarch64-unknown-linux-gnu/release/ps-app
 test -f "${APP}"
@@ -1839,9 +1834,9 @@ RECOVERYNONE
 # this stage can affect the closed/a523 byte-identical output.
 FROM ${PF_CONTAINER} AS recovery-open
 ARG PF_RECOVERY_SHA=443a84e47c96d83de967948844d8e5eaa41d7413
-ARG SOURCE_DATE_EPOCH
+ARG PF_RECOVERY_SOURCE_DATE_EPOCH
 ENV CARGO_NET_OFFLINE=true CARGO_NET_LOCKED=1
-COPY --from=image-src . /work/image
+COPY --from=image-src apps/pocketforge-recovery-entry /work/image/apps/pocketforge-recovery-entry
 COPY --from=recovery-src . /work/image/recovery
 RUN <<'RECOVERY'
 set -eux
@@ -1850,7 +1845,7 @@ set -eux
   echo "FATAL: recovery source must stay pinned to product-010 F15 (443a84e)" >&2
   exit 1
 }
-export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+export SOURCE_DATE_EPOCH="${PF_RECOVERY_SOURCE_DATE_EPOCH:?}"
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
 mkdir -p /work/image/.cargo
 cat > /work/image/.cargo/config.toml <<'CARGOCFG'
@@ -1913,11 +1908,9 @@ LAUNCHERNONE
 # reference) for every ddk build. The digest-pinned Rust toolchain + committed Cargo.lock +
 # --locked make the source/tool/dependency selection deterministic.
 FROM ${PF_CONTAINER} AS launcher-open
-ARG PF_DEVICE_ID
-ARG PF_GPU_REPO
 ARG PF_LAUNCHER_SHA
 ARG PF_RUNTIME_SHA
-ARG SOURCE_DATE_EPOCH
+ARG PF_LAUNCHER_SOURCE_DATE_EPOCH
 ARG PF_RUNTIME_TARGET=aarch64-unknown-linux-musl
 ENV CARGO_NET_OFFLINE=true CARGO_NET_LOCKED=1
 COPY --from=launcher-src . /work/launcher
@@ -1934,7 +1927,7 @@ check-launcher-runtime-contract /work/launcher /work/runtime-contract \
   pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme \
   pf-input-map pf-prefs pf-prefs-port pf-session-client \
   pf-session-authority pf-wire
-if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then export SOURCE_DATE_EPOCH; fi
+export SOURCE_DATE_EPOCH="${PF_LAUNCHER_SOURCE_DATE_EPOCH:?}"
 # Pin rust-lld as the aarch64-unknown-linux-musl linker (the launcher repo's
 # .cargo/config.toml configures vendored/offline sources but no musl linker). Without it, cargo
 # drives the x86_64 host `cc` -> host ld against the aarch64 self-contained crt objects and fails with
@@ -1952,7 +1945,7 @@ E_MACHINE="$(od -An -tx1 -j18 -N2 "${BIN}" | tr -d ' ')"
 if grep -qa 'ld-musl\|ld-linux' "${BIN}"; then echo "FATAL: pf-shell is dynamically linked (expected static musl)"; exit 1; fi
 install -D -m 0755 "${BIN}" /out/bin/pf-shell
 {
-  printf 'launcher@%s device=%s gpu=%s target=%s\n' "${PF_LAUNCHER_SHA}" "${PF_DEVICE_ID}" "${PF_GPU_REPO}" "${PF_RUNTIME_TARGET}"
+  printf 'launcher@%s runtime@%s target=%s\n' "${PF_LAUNCHER_SHA}" "${PF_RUNTIME_SHA}" "${PF_RUNTIME_TARGET}"
   printf '  pf-shell sha256=%s\n' "$(sha256sum /out/bin/pf-shell | cut -d' ' -f1)"
 } > /out/.pf-launcher-provenance
 cat /out/.pf-launcher-provenance
@@ -2027,6 +2020,44 @@ esac
 GAMESCOPE
 
 FROM gamescope-${PF_GAMESCOPE_MODE} AS gamescope
+
+# Byte-repro test boundaries. These source-free scratch aliases are pruned from
+# normal `--target export` builds. Ephemeral CI selects one with `--target
+# component-test-<name> --output type=local` to hash exactly the producer's
+# /out tree for the image-epoch positive control and component-epoch negative
+# control, without spending the rootfs/assemble budget (tsp-mc9m.41.995.56 A5).
+FROM scratch AS component-test-fetch
+COPY --from=fetch /out /
+FROM scratch AS component-test-kernel
+COPY --from=kernel /out /
+FROM scratch AS component-test-gpu-km
+COPY --from=gpu-km /out /
+FROM scratch AS component-test-gpu-um
+COPY --from=gpu-um-mesa /out /
+FROM scratch AS component-test-bootchain
+COPY --from=bootchain /out /
+FROM scratch AS component-test-sdl
+COPY --from=sdl /out /
+FROM scratch AS component-test-wpa
+COPY --from=wpa /out /
+FROM scratch AS component-test-cloud-init
+COPY --from=cloud-init /out /
+FROM scratch AS component-test-runtime
+COPY --from=runtime /out /
+FROM scratch AS component-test-ffmpeg
+COPY --from=platform-runtime-steamlink-ffmpeg59 /out /
+FROM scratch AS component-test-sdl-static
+COPY --from=sdl-static /out /
+FROM scratch AS component-test-hwprobe
+COPY --from=hwprobe /out /
+FROM scratch AS component-test-poolsuite
+COPY --from=poolsuite /out /
+FROM scratch AS component-test-recovery
+COPY --from=recovery /out /
+FROM scratch AS component-test-launcher
+COPY --from=launcher /out /
+FROM scratch AS component-test-gamescope
+COPY --from=gamescope /out /
 
 # =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by

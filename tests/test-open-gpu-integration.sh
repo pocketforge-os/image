@@ -20,7 +20,8 @@ open_gpu_units='pocketforge-menu.service pf-shell-selected.service pf-foreground
 
 # Literal Dockerfile variables are intentional in these structural assertions.
 # shellcheck disable=SC2016
-grep -F 'COPY --from=vendor-manifest-src public /work/vm/public' "$dockerfile" >/dev/null
+grep -F 'type=bind,from=vendor-manifest-src,source=.,target=/work/vm,ro' "$dockerfile" >/dev/null
+grep -F 'find /work/vm/public -type f -exec ipfs add' "$dockerfile" >/dev/null
 grep -F -- '--cid-version=1 --raw-leaves' "$dockerfile" >/dev/null
 grep -F 'group=pvr-fw-open-22.102.54.38' "$dockerfile" >/dev/null
 grep -F 'b571cdd90312c20fe87f14aae43484f7279859921ae3abe58e935412040c7f98' "$dockerfile" >/dev/null
