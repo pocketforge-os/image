@@ -1,0 +1,1977 @@
+#!/bin/sh
+# A-CTS: on-image, crash-continuing GLES CTS runner.
+set -eu
+export LC_ALL=C
+
+mode=${1:?mode required}
+arg=${2:-}
+ROOT=${PF_ACTS_ROOT:-/run/pf-a-cts}
+BUNDLE=${PF_ACTS_BUNDLE:-/opt/pocketforge/cts}
+BUNDLE_SHA=9ce9b9c252c1b288ffb4a58dd8e976fd35110b4e2b1d9cc1a3a0cd3be13e5125
+PROBE_SHA=993aabc47acb52c4d8af61113507091097c6cb1b84dc4d06b312c96f508dbab8
+EGL_PROBE_SHA=${PF_ACTS_EGL_PROBE_SHA:-8c5a5d3f009af537e0f4a3358de9ed19dcaf5f6b4b1fecec5cac2d463880e35b}
+EGL_PROBE=${PF_ACTS_EGL_PROBE:-/run/pf-probes/pf-surfaceless-gles-probe}
+SANITY_PROBE=${PF_ACTS_SANITY_PROBE:-$EGL_PROBE}
+SANITY_PROBE_SHA=${PF_ACTS_SANITY_PROBE_SHA:-$EGL_PROBE_SHA}
+DISCRIM_PROBE_SHA=97e87bce16b827099811d2c428606caf1dd009bf176e235fc42686d54dd0d413
+DISCRIM_PROBE=${PF_ACTS_DISCRIM_PROBE:-/run/pf-probes/pf-pvr-texcomp-probe}
+VK_PROBE_SHA=2a56e1c8f2e9b9933c495494bfa6dad42785494d5abd91bfaec247f0e3e14102
+VK_PROBE=${PF_ACTS_VK_PROBE:-/run/pf-probes/pf-pvr-vk-tex-discriminator}
+GLCTS=${PF_ACTS_GLCTS:-$BUNDLE/bin/glcts}
+TAB=$(printf '\t')
+
+end() { printf 'A_CTS_END mode=%s\n' "$mode"; }
+die() { printf 'A_CTS_ERROR mode=%s %s\n' "$mode" "$*" >&2; exit 1; }
+atomic_line() { printf '%s\n' "$2" >"$1.tmp"; mv "$1.tmp" "$1"; }
+
+write_recovery_policy() {
+    printf '%s\n' \
+        'A_CTS_RECOVERY_RULE recoverable_crash_cap=none baseline=required stop=sanity_baseline_failed_or_first_failed_post_crash_draw wall_clock=existing_list_budget' \
+        >"$ROOT/recovery-policy.txt"
+}
+
+capture_full_dmesg() {
+    output=$1
+    # The caller owns output; only dmesg needs elevation.
+    # shellcheck disable=SC2024
+    if [ -n "${PF_ACTS_DMESG_FIXTURE:-}" ]; then
+        cp "$PF_ACTS_DMESG_FIXTURE" "$output"
+    elif /usr/bin/dmesg --color=never >"$output.tmp" 2>/dev/null; then
+        mv "$output.tmp" "$output"
+    elif sudo -n /usr/bin/dmesg --color=never >"$output.tmp" 2>/dev/null; then
+        mv "$output.tmp" "$output"
+    else
+        printf 'A_CTS_DMESG unavailable user=%s uid=%s\n' \
+            "$(/usr/bin/id -un)" "$(/usr/bin/id -u)" >"$output"
+        if [ -e "$output.tmp" ]; then
+            find "$output.tmp" -maxdepth 0 -type f -delete
+        fi
+    fi
+}
+
+extract_dmesg_delta() {
+    before=$1 after=$2 output=$3
+    anchor=$(tail -n 1 "$before")
+    anchor_line=
+    if [ -n "$anchor" ]; then
+        anchor_line=$(awk -v anchor="$anchor" '$0 == anchor { line=NR } END { if (line) print line }' "$after")
+    fi
+    if [ -n "$anchor_line" ]; then
+        first=$((anchor_line + 1))
+        sed -n "${first},\$p" "$after" >"$output"
+        return
+    fi
+
+    # The ring may have evicted the textual anchor. Kernel monotonic timestamps
+    # survive that rotation, so retain every post-cursor record. If either input
+    # lacks such a cursor, retain the full after image rather than lose evidence.
+    cursor=$(awk '
+        /^\[[[:space:]]*[0-9]+([.][0-9]+)?\]/ {
+            line=$0
+            sub(/^\[[[:space:]]*/, "", line)
+            sub(/\].*$/, "", line)
+            cursor=line
+        }
+        END { if (cursor != "") print cursor }
+    ' "$before")
+    if [ -z "$cursor" ]; then
+        cp "$after" "$output"
+        return
+    fi
+    awk -v cursor="$cursor" '
+        function timestamp(line, value) {
+            if (line !~ /^\[[[:space:]]*[0-9]+([.][0-9]+)?\]/) return ""
+            value=line
+            sub(/^\[[[:space:]]*/, "", value)
+            sub(/\].*$/, "", value)
+            return value
+        }
+        {
+            current=timestamp($0)
+            if (current != "" && current + 0 > cursor + 0) emit=1
+            if (emit) print
+        }
+    ' "$after" >"$output"
+}
+
+run_recovery_sanity() {
+    label=$1 unit=$2 attempt=$3
+    if [ "$label" = baseline ]; then
+        mkdir -p "$ROOT/recovery-sanity"
+        prefix=$ROOT/recovery-sanity/baseline
+    else
+        [ -s "$ROOT/recovery-sanity/baseline.result" ] || die 'reason=sanity_baseline_missing'
+        grep -q ' verdict=pass ' "$ROOT/recovery-sanity/baseline.result" \
+            || die 'reason=sanity_baseline_not_passed'
+        dir=$ROOT/recovery-sanity/$label
+        mkdir -p "$dir"
+        prefix=$dir/$unit-$attempt
+    fi
+    actual_sha=$(sha256sum "$SANITY_PROBE" 2>/dev/null | cut -d' ' -f1)
+    started=$(date -u +%FT%TZ)
+    set +e
+    if [ "$actual_sha" = "$SANITY_PROBE_SHA" ]; then
+        timeout --signal=TERM --kill-after=5s 30 env -i \
+            HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+            XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+            PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
+            "$SANITY_PROBE" >"$prefix.stdout" 2>"$prefix.stderr"
+        rc=$?
+    else
+        printf 'sanity SHA mismatch expected=%s actual=%s\n' \
+            "$SANITY_PROBE_SHA" "${actual_sha:-missing}" >"$prefix.stderr"
+        : >"$prefix.stdout"
+        rc=126
+    fi
+    set -e
+    ended=$(date -u +%FT%TZ)
+    verdict=fail
+    if [ "$rc" -eq 0 ] && \
+       [ "$(grep -Ec '^PF_GLES_SANITY verdict=pass clear=pass texture=pass renderer=zink-powervr$' "$prefix.stdout")" -eq 1 ]; then
+        verdict=pass
+    fi
+    printf 'A_CTS_RECOVERY_SANITY list=%s unit=%s attempt=%s user=%s uid=%s started=%s ended=%s rc=%s verdict=%s probe_sha256=%s\n' \
+        "$label" "$unit" "$attempt" "$(/usr/bin/id -un)" "$(/usr/bin/id -u)" \
+        "$started" "$ended" "$rc" "$verdict" "${actual_sha:-missing}" >"$prefix.result"
+    [ "$verdict" = pass ]
+}
+
+run_sanity_baseline() {
+    total=$1
+    if run_recovery_sanity baseline baseline 0; then
+        summary="A_CTS_SANITY_BASELINE verdict=pass instrument=gles-uncompressed user=$(/usr/bin/id -un) uid=$(/usr/bin/id -u)"
+        atomic_line "$ROOT/recovery-sanity/baseline.summary" "$summary"
+        printf '%s\n' "$summary"
+        return 0
+    fi
+    summary="A_CTS_SANITY_BASELINE verdict=fail instrument=gles-uncompressed user=$(/usr/bin/id -un) uid=$(/usr/bin/id -u)"
+    atomic_line "$ROOT/recovery-sanity/baseline.summary" "$summary"
+    printf '%s\n' "$summary"
+    atomic_line "$ROOT/state" \
+        "state=sanity_baseline_failed completed=0 total=$total reason=sanity_baseline_failed"
+    return 79
+}
+
+write_worker_environment() {
+    cat >"$ROOT/worker-environment.txt" <<'EOF'
+RUN_AS=gamer
+EGL_PLATFORM=surfaceless
+MESA_LOADER_DRIVER_OVERRIDE=unset
+VK_DRIVER_FILES=loader-discovery:/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json
+VK_ICD_FILENAMES=unset
+PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1
+EOF
+    printf 'ACTUAL_USER=%s\nACTUAL_UID=%s\n' \
+        "$(/usr/bin/id -un)" "$(/usr/bin/id -u)" >>"$ROOT/worker-environment.txt"
+}
+
+write_preflight_environment() {
+    environment=$1 opt_in=$2
+    {
+        printf 'RUN_AS=gamer\nEGL_PLATFORM=surfaceless\n'
+        printf 'MESA_LOADER_DRIVER_OVERRIDE=unset\n'
+        printf 'VK_DRIVER_FILES=loader-discovery:/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json\n'
+        printf 'VK_ICD_FILENAMES=unset\n'
+        printf 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=%s\n' "$opt_in"
+    } >"$environment"
+}
+
+run_preflight_command() {
+    opt_in=$1 budget=$2 stdout=$3 stderr=$4
+    shift 4
+    set +e
+    if [ "${PF_ACTS_PREFLIGHT_DIRECT:-}" = 1 ]; then
+        if [ "$opt_in" = 1 ]; then
+            timeout --signal=TERM --kill-after=5s "$budget" env -i \
+                HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+                XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+                PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 EGL_LOG_LEVEL=debug MESA_DEBUG=1 \
+                "$@" >"$stdout" 2>"$stderr"
+        else
+            timeout --signal=TERM --kill-after=5s "$budget" env -i \
+                HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+                XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+                EGL_LOG_LEVEL=debug MESA_DEBUG=1 \
+                "$@" >"$stdout" 2>"$stderr"
+        fi
+    elif [ "$opt_in" = 1 ]; then
+        timeout --signal=TERM --kill-after=5s "$budget" sudo -n -u gamer env -i \
+            HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+            XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+            PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 EGL_LOG_LEVEL=debug MESA_DEBUG=1 \
+            "$@" >"$stdout" 2>"$stderr"
+    else
+        timeout --signal=TERM --kill-after=5s "$budget" sudo -n -u gamer env -i \
+            HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+            XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+            EGL_LOG_LEVEL=debug MESA_DEBUG=1 \
+            "$@" >"$stdout" 2>"$stderr"
+    fi
+    rc=$?
+    set -e
+    printf '%s\n' "$rc"
+}
+
+preflight_qpa_case_pass() {
+    qpa=$1 wanted=$2
+    awk -v wanted="$wanted" '
+        $1 == "#beginTestCaseResult" { active=($2 == wanted); status="" }
+        active && /StatusCode="[^"]+"/ {
+            value=$0; sub(/^.*StatusCode="/, "", value); sub(/".*$/, "", value)
+            status=value
+        }
+        active && $1 == "#endTestCaseResult" { complete=(status == "Pass"); active=0 }
+        END { exit !complete }
+    ' "$qpa"
+}
+
+run_preflight_arm() {
+    arm=$1 opt_in=$2 dir=$ROOT/egl-preflight arm_work=$ROOT/egl-preflight/$1-work
+    eglinfo=${PF_ACTS_EGLINFO:-/usr/bin/eglinfo}
+    write_preflight_environment "$dir/$arm.environment" "$opt_in"
+    if [ "${PF_ACTS_PREFLIGHT_DIRECT:-}" = 1 ]; then
+        mkdir -p "$arm_work"
+        printf 'uid=1000(gamer) gid=1000(gamer) groups=1000(gamer),44(video),107(render)\n' \
+            >"$dir/$arm.identity"
+        : >"$dir/$arm.identity.stderr"
+        identity_rc=0
+    else
+        sudo -n /usr/bin/install -d -m 0755 -o gamer -g gamer "$arm_work"
+        identity_rc=$(run_preflight_command "$opt_in" 10 \
+            "$dir/$arm.identity" "$dir/$arm.identity.stderr" /usr/bin/id)
+    fi
+    printf '%s\n' "$identity_rc" >"$dir/$arm.identity.rc"
+
+    eglinfo_rc=$(run_preflight_command "$opt_in" 20 \
+        "$dir/$arm.eglinfo.stdout" "$dir/$arm.eglinfo.stderr" "$eglinfo")
+    printf '%s\n' "$eglinfo_rc" >"$dir/$arm.eglinfo.rc"
+
+    probe_rc=$(run_preflight_command "$opt_in" 20 \
+        "$dir/$arm.probe.stdout" "$dir/$arm.probe.stderr" "$EGL_PROBE")
+    printf '%s\n' "$probe_rc" >"$dir/$arm.probe.rc"
+
+    deqp_rc=$(run_preflight_command "$opt_in" 90 \
+        "$dir/$arm.deqp.stdout" "$dir/$arm.deqp.stderr" \
+        "$GLCTS" --deqp-caselist-file="$dir/precondition.cases" \
+        --deqp-surface-type=pbuffer --deqp-surface-width=64 --deqp-surface-height=64 \
+        --deqp-gl-config-name=rgba8888d24s8ms0 --deqp-base-seed=1 \
+        --deqp-watchdog=enable --deqp-crashhandler=enable --deqp-log-images=disable \
+        --deqp-log-flush=enable --deqp-archive-dir="$BUNDLE/bin" \
+        --deqp-log-filename="$arm_work/deqp.qpa")
+    printf '%s\n' "$deqp_rc" >"$dir/$arm.deqp.rc"
+    if [ -f "$arm_work/deqp.qpa" ]; then
+        cp "$arm_work/deqp.qpa" "$dir/$arm.deqp.qpa"
+    else
+        : >"$dir/$arm.deqp.qpa"
+    fi
+
+    verdict=fail
+    if [ "$identity_rc" -eq 0 ] && \
+       grep -Eq '^uid=1000\(gamer\) gid=1000\(gamer\)' "$dir/$arm.identity" && \
+       [ "$probe_rc" -eq 0 ] && \
+       grep -Fxq 'PF_SURFACELESS_GLES verdict=pass renderer=zink-powervr context=gles3' \
+           "$dir/$arm.probe.stdout" && \
+       [ "$deqp_rc" -eq 0 ] && \
+       preflight_qpa_case_pass "$dir/$arm.deqp.qpa" KHR-GLES32.info.version && \
+       preflight_qpa_case_pass "$dir/$arm.deqp.qpa" KHR-GLES32.info.extensions; then
+        verdict=pass
+    fi
+    printf '%s\n' "$verdict" >"$dir/$arm.verdict"
+    printf '%s\n' "$verdict"
+}
+
+egl_preflight() {
+    dir=$ROOT/egl-preflight
+    mkdir -p "$dir"
+    printf '%s\n' KHR-GLES32.info.version KHR-GLES32.info.extensions \
+        >"$dir/precondition.cases"
+    actual_probe_sha=$(sha256sum "$EGL_PROBE" 2>/dev/null | cut -d' ' -f1)
+    printf 'expected=%s\nactual=%s\npath=%s\n' \
+        "$EGL_PROBE_SHA" "${actual_probe_sha:-missing}" "$EGL_PROBE" >"$dir/probe.sha256"
+    if [ "${PF_ACTS_PREFLIGHT_DIRECT:-}" = 1 ]; then
+        printf 'uid=1001(debug) gid=1001(debug) groups=1001(debug)\n' \
+            >"$dir/control.identity"
+        printf 'uid=1000(gamer) gid=1000(gamer) groups=1000(gamer),44(video),107(render)\n' \
+            >"$dir/identity.txt"
+        printf '/dev/dri/card0 mode=0660 owner=root group=video readable=yes\n/dev/dri/renderD128 mode=0660 owner=root group=render readable=yes\n/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json readable=yes\n/lib/firmware/powervr/rogue_22.102.54.38_v1.fw readable=yes\n' \
+            >"$dir/node-stat.txt"
+    else
+        /usr/bin/id >"$dir/control.identity"
+        # The privileged harness shell owns the receipt; sudo selects only the observed identity.
+        # shellcheck disable=SC2024
+        sudo -n -u gamer /usr/bin/id >"$dir/identity.txt"
+        if [ "${PF_ACTS_PREFLIGHT_NODE_FIXTURE:-}" = 1 ]; then
+            printf '/dev/dri/card0 mode=0660 owner=root group=video readable=yes\n/dev/dri/renderD128 mode=0660 owner=root group=render readable=yes\n/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json readable=yes\n/lib/firmware/powervr/rogue_22.102.54.38_v1.fw readable=yes\n' \
+                >"$dir/node-stat.txt"
+        else
+            # The privileged harness shell owns the receipt; the checks themselves run as gamer.
+            # shellcheck disable=SC2024
+            sudo -n -u gamer /bin/sh -c '
+            for spec in \
+                /dev/dri/card0:video \
+                /dev/dri/renderD128:render; do
+                path=${spec%%:*}; group=${spec#*:}
+                [ -r "$path" ] || exit 21
+                [ "$(/usr/bin/stat -c %a "$path")" = 660 ] || exit 22
+                [ "$(/usr/bin/stat -c %U "$path")" = root ] || exit 23
+                [ "$(/usr/bin/stat -c %G "$path")" = "$group" ] || exit 24
+                printf "%s mode=0%s owner=%s group=%s readable=yes\n" "$path" \
+                    "$(/usr/bin/stat -c %a "$path")" "$(/usr/bin/stat -c %U "$path")" \
+                    "$(/usr/bin/stat -c %G "$path")"
+            done
+            for path in \
+                /usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json \
+                /lib/firmware/powervr/rogue_22.102.54.38_v1.fw; do
+                [ -r "$path" ] || exit 25
+                printf "%s readable=yes\n" "$path"
+            done
+            ' >"$dir/node-stat.txt"
+        fi
+    fi
+    baseline=$(run_preflight_arm baseline unset)
+    candidate=$(run_preflight_arm candidate 1)
+    baseline_probe_rc=$(cat "$dir/baseline.probe.rc")
+    baseline_deqp_rc=$(cat "$dir/baseline.deqp.rc")
+    baseline_eglinfo_rc=$(cat "$dir/baseline.eglinfo.rc")
+    candidate_probe_rc=$(cat "$dir/candidate.probe.rc")
+    candidate_deqp_rc=$(cat "$dir/candidate.deqp.rc")
+    candidate_eglinfo_rc=$(cat "$dir/candidate.eglinfo.rc")
+    printf 'A_CTS_EGL_PREFLIGHT baseline=%s baseline_probe_rc=%s baseline_deqp_rc=%s baseline_eglinfo_rc=%s candidate=%s candidate_probe_rc=%s candidate_deqp_rc=%s candidate_eglinfo_rc=%s user=gamer evidence=ready\n' \
+        "$baseline" "$baseline_probe_rc" "$baseline_deqp_rc" "$baseline_eglinfo_rc" \
+        "$candidate" "$candidate_probe_rc" "$candidate_deqp_rc" "$candidate_eglinfo_rc" \
+        >"$dir/result.txt"
+    (cd "$dir" && sha256sum \
+        baseline.environment baseline.verdict \
+        control.identity baseline.identity baseline.identity.stderr baseline.identity.rc \
+        baseline.eglinfo.stdout baseline.eglinfo.stderr baseline.eglinfo.rc \
+        baseline.probe.stdout baseline.probe.stderr baseline.probe.rc \
+        baseline.deqp.stdout baseline.deqp.stderr baseline.deqp.rc baseline.deqp.qpa \
+        candidate.environment candidate.verdict \
+        candidate.identity candidate.identity.stderr candidate.identity.rc \
+        candidate.eglinfo.stdout candidate.eglinfo.stderr candidate.eglinfo.rc \
+        candidate.probe.stdout candidate.probe.stderr candidate.probe.rc \
+        candidate.deqp.stdout candidate.deqp.stderr candidate.deqp.rc candidate.deqp.qpa \
+        precondition.cases probe.sha256 identity.txt node-stat.txt result.txt >files.sha256)
+    (cd "$dir" && tar --sort=name --mtime='@0' --owner=0 --group=0 -czf results.tar.gz.tmp \
+        baseline.environment baseline.verdict \
+        control.identity baseline.identity baseline.identity.stderr baseline.identity.rc \
+        baseline.eglinfo.stdout baseline.eglinfo.stderr baseline.eglinfo.rc \
+        baseline.probe.stdout baseline.probe.stderr baseline.probe.rc \
+        baseline.deqp.stdout baseline.deqp.stderr baseline.deqp.rc baseline.deqp.qpa \
+        candidate.environment candidate.verdict \
+        candidate.identity candidate.identity.stderr candidate.identity.rc \
+        candidate.eglinfo.stdout candidate.eglinfo.stderr candidate.eglinfo.rc \
+        candidate.probe.stdout candidate.probe.stderr candidate.probe.rc \
+        candidate.deqp.stdout candidate.deqp.stderr candidate.deqp.rc candidate.deqp.qpa \
+        precondition.cases probe.sha256 identity.txt node-stat.txt result.txt files.sha256)
+    mv "$dir/results.tar.gz.tmp" "$dir/results.tar.gz"
+    printf 'sha256=%s\nbytes=%s\n' \
+        "$(sha256sum "$dir/results.tar.gz" | cut -d' ' -f1)" \
+        "$(wc -c <"$dir/results.tar.gz")" >"$dir/archive.receipt"
+    cat "$dir/result.txt"
+    # Verdict is intentionally deferred until the laptop has pulled and verified the archive.
+    return 0
+}
+
+max_temp() {
+    max=-1
+    for file in /sys/class/thermal/thermal_zone*/temp; do
+        [ -r "$file" ] || continue
+        value=$(tr -d '[:space:]' <"$file")
+        case "$value" in ''|*[!0-9]*) continue ;; esac
+        [ "$value" -le "$max" ] || max=$value
+    done
+    printf '%s\n' "$max"
+}
+
+parse_qpa() {
+    qpa=$1
+    awk '
+        /^#beginTestCaseResult[[:space:]]+/ { active=$2; status=""; next }
+        active != "" && /StatusCode="[^"]+"/ {
+            value=$0; sub(/^.*StatusCode="/, "", value); sub(/".*$/, "", value)
+            status=value
+        }
+        /^#endTestCaseResult[[:space:]]*$/ && active != "" {
+            if (status == "") status="Fail"
+            if (status == "QualityWarning" || status == "CompatibilityWarning") status="Pass"
+            if (status != "Pass" && status != "Fail" && status != "NotSupported") status="Fail"
+            print active "\t" status
+            active=""; status=""
+        }
+    ' "$qpa"
+}
+
+qpa_active() {
+    awk '
+        /^#beginTestCaseResult[[:space:]]+/ { active=$2 }
+        /^#endTestCaseResult[[:space:]]*$/ { active="" }
+        END { print active }
+    ' "$1"
+}
+
+record_harness_error() {
+    label=$1 unit=$2 attempt=$3 rc=$4 deadline=$5 completed=$6 next_case=$7 qpa=$8 stdout=$9
+    shift 9
+    stderr=$1
+    evidence_dir=$ROOT/harness-evidence/$label
+    mkdir -p "$evidence_dir"
+    prefix=$evidence_dir/$unit-$attempt
+    cp "$qpa" "$prefix.qpa"
+    cp "$stdout" "$prefix.stdout"
+    cp "$stderr" "$prefix.stderr"
+    qpa_sha=$(sha256sum "$prefix.qpa" | cut -d' ' -f1)
+    stdout_sha=$(sha256sum "$prefix.stdout" | cut -d' ' -f1)
+    stderr_sha=$(sha256sum "$prefix.stderr" | cut -d' ' -f1)
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$label" "$unit" "$attempt" "$rc" "$deadline" "$completed" "${next_case:--}" \
+        "$qpa_sha" "$stdout_sha" "$stderr_sha" >>"$ROOT/harness-errors.tsv"
+}
+
+record_crash_evidence() {
+    label=$1 case_name=$2 unit=$3 attempt=$4 rc=$5 qpa=$6 stdout=$7 stderr=$8
+    started=${9:-unknown} ended=${10:-unknown} dmesg_delta=${11:-/dev/null} sanity=${12:-unknown}
+    manifest=$ROOT/crash-evidence.tsv
+
+    evidence_dir=$ROOT/crash-evidence/$label
+    mkdir -p "$evidence_dir"
+    evidence=$evidence_dir/$unit-$attempt.txt
+    dmesg_evidence=$evidence_dir/$unit-$attempt.dmesg
+    first_reset=$evidence_dir/$unit-$attempt.first-reset
+    cp "$dmesg_delta" "$dmesg_evidence"
+    combined=$ROOT/crash-combined.tmp
+    trace=$ROOT/crash-trace.tmp
+    {
+        cat "$qpa"
+        cat "$stdout"
+        cat "$stderr"
+    } >"$combined"
+    sed 's/<[^>]*>//g' "$combined" \
+        | awk '/0x[[:xdigit:]]+[[:space:]]*:[[:space:]]*/ { print }' >"$trace"
+
+    awk 'tolower($0) ~ /(pvr|powervr|gpu)/ && \
+        tolower($0) ~ /(received context reset notification|guilty lockup|page fault occurred|unknown fwccb command|gpu fault)/ { print; exit }' \
+        "$dmesg_evidence" >"$first_reset"
+    if [ -s "$first_reset" ]; then
+        gpu_reset=yes
+        first_reset_line=$(cat "$first_reset")
+    else
+        gpu_reset=no
+        printf 'none\n' >"$first_reset"
+        first_reset_line=none
+    fi
+
+    signal=$(sed -n "/'SIG[A-Z0-9]*'/{s/.*'\(SIG[A-Z0-9]*\)'.*/\1/;p;q;}" "$combined")
+    if [ -z "$signal" ] && [ "$rc" -gt 128 ] && [ "$rc" -le 192 ]; then
+        signal_name=$(kill -l "$((rc - 128))" 2>/dev/null || printf UNKNOWN)
+        signal=SIG$signal_name
+    fi
+    [ -n "$signal" ] || signal=UNKNOWN
+
+    fault_line=$(awk '
+        take { print; exit }
+        /(linux-vdso|__kernel_rt_sigreturn|__restore_rt|sigreturn)/ { take=1 }
+    ' "$trace")
+    pc=$(printf '%s\n' "$fault_line" | sed -n 's/^[[:space:]]*\(0x[[:xdigit:]]*\).*/\1/p')
+    module_offset=$(printf '%s\n' "$fault_line" \
+        | sed -n 's/^[[:space:]]*0x[[:xdigit:]]*[[:space:]]*:[[:space:]]*\([^[]*\).*/\1/p' \
+        | sed 's/[[:space:]]*$//')
+    [ -n "$pc" ] || pc=unknown
+    [ -n "$module_offset" ] || module_offset=unknown
+    if [ "$signal" = UNKNOWN ] && [ "$gpu_reset" = yes ]; then
+        signal=GPU_RESET
+        pc=kernel-log
+        module_offset=powervr-reset
+    elif [ "$signal" = UNKNOWN ]; then
+        signal=PROCESS_EXIT
+        # This is an evidence label, not arithmetic.
+        # shellcheck disable=SC2100
+        pc=qpa-active
+        module_offset=dEQP-process
+    fi
+
+    evidence_full=$ROOT/crash-evidence-full.tmp
+    {
+        printf 'A_CTS_CRASH case=%s signal=%s exit_code=%s started=%s ended=%s sanity=%s gpu_reset=%s\n' \
+            "$case_name" "$signal" "$rc" "$started" "$ended" "$sanity" "$gpu_reset"
+        printf 'A_CTS_GPU_RESET_FIRST %s\n' "$first_reset_line"
+        printf 'A_CTS_CRASH_PC address=%s module_offset=%s\n' "$pc" "$module_offset"
+        printf 'A_CTS_CRASH_BACKTRACE_BEGIN\n'
+        sed -n '1,32p' "$trace"
+        printf 'A_CTS_CRASH_BACKTRACE_END\n'
+    } >"$evidence_full"
+    dd if="$evidence_full" of="$evidence" bs=4096 count=1 status=none
+    bytes=$(wc -c <"$evidence")
+    sha=$(sha256sum "$evidence" | cut -d' ' -f1)
+    dmesg_bytes=$(wc -c <"$dmesg_evidence")
+    dmesg_sha=$(sha256sum "$dmesg_evidence" | cut -d' ' -f1)
+    first_reset_bytes=$(wc -c <"$first_reset")
+    first_reset_sha=$(sha256sum "$first_reset" | cut -d' ' -f1)
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$label" "$case_name" "$signal" "$pc" "$module_offset" "$unit" "$attempt" "$bytes" "$sha" \
+        "$started" "$ended" "$sanity" "$dmesg_bytes" "$dmesg_sha" \
+        "$gpu_reset" "$first_reset_bytes" "$first_reset_sha" \
+        >>"$manifest"
+    find "$combined" "$trace" "$evidence_full" -maxdepth 0 -type f -delete
+}
+
+commit_attempt() {
+    label=$1 unit=$2 attempt=$3 remaining=$4 qpa=$5 rc=$6 deadline=$7
+    stdout=${8:-/dev/null}
+    stderr=${9:-/dev/null}
+    started=${10:-unknown}
+    ended=${11:-unknown}
+    dmesg_delta=${12:-/dev/null}
+    sanity=${13:-unknown}
+    ledger=$ROOT/ledger.tsv
+    parsed=$ROOT/parsed.tmp
+    current=$ROOT/current.tmp
+    parse_qpa "$qpa" >"$parsed"
+    : >"$current"
+
+    while IFS="$TAB" read -r case_name status; do
+        [ -n "$case_name" ] || continue
+        grep -Fxq "$case_name" "$remaining" || die "reason=qpa_unknown_case case=$case_name"
+        if awk -F '\t' -v c="$case_name" '$2==c { found=1 } END { exit !found }' "$ledger"; then
+            die "reason=duplicate_result case=$case_name"
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$case_name" "$status" "$unit" "$attempt" >>"$current"
+    done <"$parsed"
+
+    if [ "$rc" -ne 0 ]; then
+        terminal=$(qpa_active "$qpa")
+        if [ -z "$terminal" ]; then
+            completed=$(wc -l <"$current")
+            next_case=$(awk -F '\t' 'FILENAME==ARGV[1] { done[$2]=1; next } !($0 in done) { print; exit }' "$current" "$remaining")
+            record_harness_error "$label" "$unit" "$attempt" "$rc" "$deadline" \
+                "$completed" "$next_case" "$qpa" "$stdout" "$stderr"
+        else
+            grep -Fxq "$terminal" "$remaining" || die "reason=terminal_unknown_case case=$terminal"
+            if ! awk -F '\t' -v c="$terminal" '$2==c { found=1 } END { exit !found }' "$current"; then
+            if [ "$deadline" = yes ]; then status=Fail; else status=Crash; fi
+            printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$terminal" "$status" "$unit" "$attempt" >>"$current"
+                if [ "$status" = Crash ]; then
+                    record_crash_evidence "$label" "$terminal" "$unit" "$attempt" "$rc" \
+                        "$qpa" "$stdout" "$stderr" "$started" "$ended" "$dmesg_delta" "$sanity"
+                fi
+            fi
+        fi
+    fi
+
+    if [ ! -s "$current" ] && [ "$rc" -eq 0 ]; then
+        next_case=$(sed -n '1p' "$remaining")
+        record_harness_error "$label" "$unit" "$attempt" "$rc" "$deadline" \
+            0 "$next_case" "$qpa" "$stdout" "$stderr"
+    fi
+    [ -s "$current" ] || return 76
+    cat "$current" >>"$ledger"
+    if awk -F '\t' '$3 != "Pass" { found=1 } END { exit !found }' "$current"; then
+        qpa_dir=$ROOT/nonpass-qpa/$label
+        mkdir -p "$qpa_dir"
+        qpa_copy=$qpa_dir/${unit}-${attempt}.qpa
+        cp "$qpa" "$qpa_copy"
+        qpa_sha=$(sha256sum "$qpa_copy" | cut -d' ' -f1)
+        printf '%s\t%s\t%s\t%s\n' "$label" "$unit" "$attempt" "$qpa_sha" >>"$ROOT/qpa-manifest.tsv"
+    fi
+    awk -F '\t' 'NR==FNR { done[$2]=1; next } !($0 in done)' "$current" "$remaining" >"$remaining.tmp"
+    mv "$remaining.tmp" "$remaining"
+    find "$parsed" "$current" -maxdepth 0 -type f -delete
+}
+
+verify_aggregate() {
+    expected=$ROOT/expected.tsv
+    ledger=$ROOT/ledger.tsv
+    [ -s "$expected" ] || die 'reason=expected_missing'
+    [ -f "$ledger" ] || die 'reason=ledger_missing'
+    exp_count=$(wc -l <"$expected")
+    got_count=$(wc -l <"$ledger")
+    [ "$exp_count" -eq "$got_count" ] || die "reason=unseen expected=$exp_count total=$got_count"
+    awk -F '\t' '
+        NR==FNR { expected[$1 FS $2]=1; next }
+        { key=$1 FS $2; if (!(key in expected)) unknown=1; if (++seen[key] > 1) duplicate=1 }
+        END { if (unknown) exit 2; if (duplicate) exit 3 }
+    ' "$expected" "$ledger" || die 'reason=duplicate_or_unknown_result'
+
+    awk -F '\t' '
+        NR==FNR { key=$1 FS $2 FS $3; if (++seen[key] != 1) duplicate=1; manifest[key]=1; next }
+        $3 != "Pass" { key=$1 FS $4 FS $5; if (!(key in manifest)) missing=1; used[key]=1 }
+        END { exit duplicate ? 2 : missing ? 3 : 0 }
+    ' "$ROOT/qpa-manifest.tsv" "$ledger" || die 'reason=qpa_manifest_missing_or_duplicate'
+    while IFS="$TAB" read -r label unit attempt manifest_sha; do
+        [ -n "$label" ] || continue
+        awk -F '\t' -v l="$label" -v u="$unit" -v a="$attempt" \
+            '$1==l && $3!="Pass" && $4==u && $5==a { found=1 } END { exit !found }' \
+            "$ledger" || die "reason=qpa_manifest_orphan list=$label unit=$unit attempt=$attempt"
+        qpa=$ROOT/nonpass-qpa/$label/${unit}-${attempt}.qpa
+        [ -f "$qpa" ] || die "reason=nonpass_qpa_missing list=$label unit=$unit attempt=$attempt"
+        [ "$(sha256sum "$qpa" | cut -d' ' -f1)" = "$manifest_sha" ] \
+            || die "reason=qpa_sha_mismatch list=$label unit=$unit attempt=$attempt"
+    done <"$ROOT/qpa-manifest.tsv"
+
+    crash_count=$(awk -F '\t' '$3=="Crash" { n++ } END { print n+0 }' "$ledger")
+    evidence_count=$(wc -l <"$ROOT/crash-evidence.tsv")
+    [ "$crash_count" -eq "$evidence_count" ] \
+        || die "reason=crash_evidence_count crashes=$crash_count evidence=$evidence_count"
+    while IFS="$TAB" read -r label case_name signal pc module_offset unit attempt bytes sha started ended sanity dmesg_bytes dmesg_sha gpu_reset first_reset_bytes first_reset_sha; do
+        [ -n "$case_name" ] || continue
+        awk -F '\t' -v l="$label" -v c="$case_name" -v u="$unit" -v a="$attempt" \
+            '$1==l && $2==c && $3=="Crash" && $4==u && $5==a { found=1 } END { exit !found }' \
+            "$ledger" || die "reason=crash_evidence_orphan case=$case_name"
+        case "$signal" in SIG*|GPU_RESET|PROCESS_EXIT) ;; *) die "reason=crash_signal_missing case=$case_name" ;; esac
+        case "$pc" in 0x*|kernel-log|qpa-active) ;; *) die "reason=crash_pc_missing case=$case_name" ;; esac
+        [ "$module_offset" != unknown ] || die "reason=crash_module_offset_missing case=$case_name"
+        evidence=$ROOT/crash-evidence/$label/$unit-$attempt.txt
+        [ -f "$evidence" ] || die "reason=crash_evidence_missing case=$case_name"
+        if [ "$bytes" -gt 4096 ] || [ "$(wc -c <"$evidence")" -ne "$bytes" ]; then
+            die "reason=crash_evidence_size case=$case_name"
+        fi
+        [ "$(sha256sum "$evidence" | cut -d' ' -f1)" = "$sha" ] \
+            || die "reason=crash_evidence_sha case=$case_name"
+        dmesg_evidence=$ROOT/crash-evidence/$label/$unit-$attempt.dmesg
+        [ -f "$dmesg_evidence" ] || die "reason=crash_dmesg_missing case=$case_name"
+        [ "$(wc -c <"$dmesg_evidence")" -eq "$dmesg_bytes" ] \
+            || die "reason=crash_dmesg_size case=$case_name"
+        [ "$(sha256sum "$dmesg_evidence" | cut -d' ' -f1)" = "$dmesg_sha" ] \
+            || die "reason=crash_dmesg_sha case=$case_name"
+        case "$gpu_reset" in yes|no) ;; *) die "reason=crash_gpu_reset case=$case_name" ;; esac
+        first_reset=$ROOT/crash-evidence/$label/$unit-$attempt.first-reset
+        [ -f "$first_reset" ] || die "reason=crash_first_reset_missing case=$case_name"
+        [ "$(wc -c <"$first_reset")" -eq "$first_reset_bytes" ] \
+            || die "reason=crash_first_reset_size case=$case_name"
+        [ "$(sha256sum "$first_reset" | cut -d' ' -f1)" = "$first_reset_sha" ] \
+            || die "reason=crash_first_reset_sha case=$case_name"
+        if [ "$gpu_reset" = yes ]; then
+            [ "$(cat "$first_reset")" != none ] || die "reason=crash_first_reset_empty case=$case_name"
+        else
+            [ "$(cat "$first_reset")" = none ] || die "reason=crash_false_reset_line case=$case_name"
+        fi
+        case "$sanity" in pass|fail|unknown) ;; *) die "reason=crash_sanity case=$case_name" ;; esac
+    done <"$ROOT/crash-evidence.tsv"
+}
+
+write_final() {
+    verify_aggregate
+    final_tmp=$ROOT/final.txt.tmp
+    : >"$final_tmp"
+    while IFS="$TAB" read -r label _rest; do printf '%s\n' "$label"; done <"$ROOT/expected.tsv" \
+        | awk '!seen[$0]++' | while IFS= read -r label; do
+        awk -F '\t' -v label="$label" '
+            $1==label { c[$3]++; total++ }
+            END { printf "A_CTS_LIST list=%s Pass=%d Fail=%d NotSupported=%d Crash=%d NotRun=%d Total=%d unseen=0 HarnessErrors=%d\n", label,c["Pass"],c["Fail"],c["NotSupported"],c["Crash"],c["NotRun"],total,harness }
+        ' harness="$(awk -F '\t' -v label="$label" '$1==label { n++ } END { print n+0 }' "$ROOT/harness-errors.tsv")" "$ROOT/ledger.tsv"
+    done >>"$final_tmp"
+    harness_total=$(wc -l <"$ROOT/harness-errors.tsv")
+    awk -F '\t' '
+        { c[$3]++; total++ }
+        END { printf "A_CTS_FINAL Pass=%d Fail=%d NotSupported=%d Crash=%d NotRun=%d Total=%d unseen=0 HarnessErrors=%d\n",c["Pass"],c["Fail"],c["NotSupported"],c["Crash"],c["NotRun"],total,harness }
+    ' harness="$harness_total" "$ROOT/ledger.tsv" >>"$final_tmp"
+    mv "$final_tmp" "$ROOT/final.txt"
+}
+
+make_archive() {
+    write_final
+    archive=$ROOT/results.tar.gz
+    (cd "$ROOT" && tar --sort=name --mtime='@0' --owner=0 --group=0 -czf "$archive.tmp" \
+        expected.tsv ledger.tsv qpa-manifest.tsv nonpass-qpa \
+        crash-evidence.tsv crash-evidence harness-errors.tsv harness-evidence \
+        precondition.txt worker-environment.txt recovery-policy.txt run-outcome.txt \
+        dmesg.full recovery-sanity final.txt state)
+    mv "$archive.tmp" "$archive"
+    sha=$(sha256sum "$archive" | cut -d' ' -f1)
+    bytes=$(wc -c <"$archive")
+    printf 'sha256=%s\nbytes=%s\n' "$sha" "$bytes" >"$ROOT/archive.receipt.tmp"
+    mv "$ROOT/archive.receipt.tmp" "$ROOT/archive.receipt"
+}
+
+fill_not_run() {
+    missing=$ROOT/not-run.tmp
+    awk -F '\t' '
+        FILENAME==ARGV[1] { seen[$1 FS $2]=1; next }
+        !seen[$1 FS $2] { print $1 FS $2 FS "NotRun" FS "finalize" FS "0" }
+    ' "$ROOT/ledger.tsv" "$ROOT/expected.tsv" >"$missing"
+    awk -F '\t' '!seen[$1]++ { print $1 }' "$missing" | while IFS= read -r label; do
+        [ -n "$label" ] || continue
+        qpa_dir=$ROOT/nonpass-qpa/$label
+        mkdir -p "$qpa_dir"
+        qpa=$qpa_dir/finalize-0.qpa
+        if [ ! -e "$qpa" ]; then
+            printf 'A_CTS_NOT_RUN reason=worker_terminal_before_case\n' >"$qpa"
+            qpa_sha=$(sha256sum "$qpa" | cut -d' ' -f1)
+            printf '%s\tfinalize\t0\t%s\n' "$label" "$qpa_sha" >>"$ROOT/qpa-manifest.tsv"
+        fi
+    done
+    cat "$missing" >>"$ROOT/ledger.tsv"
+    find "$missing" -maxdepth 0 -type f -delete
+}
+
+finalize_partial() {
+    reason=${1:-unspecified}
+    [ -f "$ROOT/ledger.tsv" ] || : >"$ROOT/ledger.tsv"
+    [ -f "$ROOT/qpa-manifest.tsv" ] || : >"$ROOT/qpa-manifest.tsv"
+    [ -f "$ROOT/crash-evidence.tsv" ] || : >"$ROOT/crash-evidence.tsv"
+    [ -f "$ROOT/harness-errors.tsv" ] || : >"$ROOT/harness-errors.tsv"
+    mkdir -p "$ROOT/nonpass-qpa" "$ROOT/crash-evidence" \
+        "$ROOT/harness-evidence" "$ROOT/recovery-sanity"
+    [ -s "$ROOT/worker-environment.txt" ] || write_worker_environment
+    if [ ! -s "$ROOT/precondition.txt" ]; then
+        printf 'GL_VERSION unavailable partial=yes\nGL_EXTENSIONS unavailable partial=yes\n' \
+            >"$ROOT/precondition.txt"
+    fi
+    write_recovery_policy
+    capture_full_dmesg "$ROOT/dmesg.full"
+    fill_not_run
+    total=$(wc -l <"$ROOT/expected.tsv")
+    completed=$(awk -F '\t' '$3!="NotRun" { n++ } END { print n+0 }' "$ROOT/ledger.tsv")
+    atomic_line "$ROOT/run-outcome.txt" "outcome=partial reason=$reason completed=$completed total=$total"
+    atomic_line "$ROOT/state" "state=partial completed=$completed total=$total reason=$reason"
+    make_archive
+}
+
+validate_bundle() {
+    if ! { [ -x "$BUNDLE/bin/deqp-gles2" ] && [ -x "$BUNDLE/bin/deqp-gles3" ] \
+        && [ -x "$BUNDLE/bin/deqp-gles31" ] && [ -x "$BUNDLE/bin/glcts" ]; }; then
+        die 'reason=bundle_binary_missing'
+    fi
+    [ -r "$BUNDLE/config/lists.tsv" ] || die 'reason=lists_metadata_missing'
+    [ -r /usr/share/pocketforge/cts-provenance ] || die 'reason=provenance_missing'
+    grep -Fxq "artifact_sha256=$BUNDLE_SHA" /usr/share/pocketforge/cts-provenance \
+        || die 'reason=bundle_identity_mismatch'
+    (cd "$BUNDLE" && sha256sum -c --strict BUNDLE-SHA256SUMS >/dev/null) \
+        || die 'reason=bundle_manifest_mismatch'
+}
+
+lookup_meta() {
+    name=$1
+    awk -F '\t' -v name="$name" '$1==name { print; found=1 } END { exit !found }' \
+        "$BUNDLE/config/lists.tsv"
+}
+
+prepare_request() {
+    validate_bundle
+    : >"$ROOT/expected.tsv"
+    : >"$ROOT/meta.tsv"
+    : >"$ROOT/ledger.tsv"
+    : >"$ROOT/qpa-manifest.tsv"
+    : >"$ROOT/crash-evidence.tsv"
+    : >"$ROOT/harness-errors.tsv"
+    mkdir -p "$ROOT/lists" "$ROOT/nonpass-qpa" "$ROOT/crash-evidence" "$ROOT/harness-evidence"
+    while IFS="$TAB" read -r kind value; do
+        case "$kind" in
+            list)
+                case "$value" in
+                    noctx)
+                        printf 'list\tgles2-khr-noctx-main\nlist\tgles32-khr-noctx-main\n' >"$ROOT/noctx.request"
+                        while IFS="$TAB" read -r _ alias; do prepare_named "$alias"; done <"$ROOT/noctx.request"
+                        find "$ROOT/noctx.request" -maxdepth 0 -type f -delete
+                        ;;
+                    *) prepare_named "$value" ;;
+                esac
+                ;;
+            caselist) prepare_custom "$value" ;;
+            *) die "reason=request_kind kind=$kind" ;;
+        esac
+    done <"$ROOT/request.tsv"
+    [ -s "$ROOT/expected.tsv" ] || die 'reason=request_empty'
+    total=$(wc -l <"$ROOT/expected.tsv")
+    atomic_line "$ROOT/state" "state=prepared cases=$total"
+}
+
+prepare_named() {
+    label=$1
+    [ ! -e "$ROOT/lists/$label" ] || die "reason=duplicate_list list=$label"
+    meta=$(lookup_meta "$label") || die "reason=unknown_list list=$label"
+    filename=$(printf '%s\n' "$meta" | cut -f3)
+    digest=$(printf '%s\n' "$meta" | cut -f4)
+    cases=$(printf '%s\n' "$meta" | cut -f5)
+    source=$BUNDLE/mustpass/$filename
+    [ "$(sha256sum "$source" | cut -d' ' -f1)" = "$digest" ] || die "reason=list_sha list=$label"
+    [ "$(wc -l <"$source")" -eq "$cases" ] || die "reason=list_cases list=$label"
+    mkdir -p "$ROOT/lists/$label"
+    cp "$source" "$ROOT/lists/$label/source.txt"
+    printf '%s\n' "$meta" >>"$ROOT/meta.tsv"
+    awk -v label="$label" '{ print label "\t" $0 }' "$source" >>"$ROOT/expected.tsv"
+}
+
+prepare_custom() {
+    label=$1
+    source=$ROOT/input.caselist
+    [ -s "$source" ] || die 'reason=caselist_missing'
+    if [ "$(sort "$source" | uniq -d | wc -l)" -ne 0 ]; then die 'reason=caselist_duplicate'; fi
+    matches=$ROOT/custom.matches
+    : >"$matches"
+    tail -n +2 "$BUNDLE/config/lists.tsv" | while IFS="$TAB" read -r name binary filename digest cases config width height seed; do
+        official=$BUNDLE/mustpass/$filename
+        if awk 'NR==FNR { official[$0]=1; next } !($0 in official) { bad=1 } END { exit bad }' "$official" "$source"; then
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$name" "$binary" "$filename" "$digest" "$cases" "$config" "$width" "$height" "$seed" >>"$matches"
+        fi
+    done
+    [ "$(wc -l <"$matches")" -eq 1 ] || die 'reason=caselist_not_one_official_list'
+    meta=$(cat "$matches")
+    binary=$(printf '%s\n' "$meta" | cut -f2)
+    config=$(printf '%s\n' "$meta" | cut -f6)
+    width=$(printf '%s\n' "$meta" | cut -f7)
+    height=$(printf '%s\n' "$meta" | cut -f8)
+    seed=$(printf '%s\n' "$meta" | cut -f9)
+    cases=$(wc -l <"$source")
+    custom_meta=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+        "$label" "$binary" input.caselist "$(sha256sum "$source" | cut -d' ' -f1)" \
+        "$cases" "$config" "$width" "$height" "$seed")
+    mkdir -p "$ROOT/lists/$label"
+    cp "$source" "$ROOT/lists/$label/source.txt"
+    printf '%s\n' "$custom_meta" >>"$ROOT/meta.tsv"
+    awk -v label="$label" '{ print label "\t" $0 }' "$source" >>"$ROOT/expected.tsv"
+    find "$matches" -maxdepth 0 -type f -delete
+}
+
+run_precondition() {
+    write_worker_environment
+    list=$ROOT/precondition.cases
+    qpa=$ROOT/precondition.qpa
+    printf '%s\n' KHR-GLES32.info.version KHR-GLES32.info.extensions >"$list"
+    set +e
+    env EGL_PLATFORM=surfaceless PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
+        timeout --signal=TERM --kill-after=10 300 "$BUNDLE/bin/glcts" \
+        --deqp-caselist-file="$list" --deqp-surface-type=pbuffer \
+        --deqp-surface-width=64 --deqp-surface-height=64 \
+        --deqp-gl-config-name=rgba8888d24s8ms0 --deqp-base-seed=1 \
+        --deqp-watchdog=enable --deqp-crashhandler=enable --deqp-log-images=disable \
+        --deqp-log-flush=enable --deqp-archive-dir="$BUNDLE/bin" \
+        --deqp-log-filename="$qpa" >"$ROOT/precondition.stdout" 2>"$ROOT/precondition.stderr"
+    rc=$?
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        for output in "$ROOT/precondition.stdout" "$ROOT/precondition.stderr"; do
+            printf 'A_CTS_PRECONDITION_TAIL_BEGIN file=%s\n' "${output##*/}"
+            tail -n 80 "$output"
+            printf 'A_CTS_PRECONDITION_TAIL_END file=%s\n' "${output##*/}"
+        done
+        die "reason=precondition_rc rc=$rc"
+    fi
+    for case_name in KHR-GLES32.info.version KHR-GLES32.info.extensions; do
+        awk -v wanted="$case_name" '
+            $1=="#beginTestCaseResult" { active=$2; keep=(active==wanted) }
+            keep { print }
+            $1=="#endTestCaseResult" && keep { exit }
+        ' "$qpa" >"$ROOT/precondition-$case_name.txt"
+        grep -q 'StatusCode="Pass"' "$ROOT/precondition-$case_name.txt" \
+            || die "reason=precondition_case case=$case_name"
+    done
+    {
+        printf 'GL_VERSION case=KHR-GLES32.info.version status=Pass\n'
+        cat "$ROOT/precondition-KHR-GLES32.info.version.txt"
+        printf 'GL_EXTENSIONS case=KHR-GLES32.info.extensions status=Pass\n'
+        cat "$ROOT/precondition-KHR-GLES32.info.extensions.txt"
+    } >"$ROOT/precondition.txt.tmp"
+    grep -q 'OpenGL ES 3\.2' "$ROOT/precondition.txt.tmp" || die 'reason=gl_version_not_es32'
+    mv "$ROOT/precondition.txt.tmp" "$ROOT/precondition.txt"
+}
+
+run_worker() {
+    run_precondition
+    write_recovery_policy
+    mkdir -p "$ROOT/recovery-sanity"
+    total=$(wc -l <"$ROOT/expected.tsv")
+    completed=0
+    baseline_rc=0
+    run_sanity_baseline "$total" || baseline_rc=$?
+    [ "$baseline_rc" -eq 0 ] || return "$baseline_rc"
+    atomic_line "$ROOT/state" "state=running completed=0 total=$total"
+    while IFS="$TAB" read -r label binary filename digest cases config width height seed; do
+        list_root=$ROOT/lists/$label
+        mkdir -p "$list_root/units" "$list_root/qpa"
+        awk -v out="$list_root/units" '{ f=sprintf("%s/%04d.txt",out,int((NR-1)/100)); print >f }' "$list_root/source.txt"
+        budget=$((900 + (2 * 5257 * cases + 44765) / 44766))
+        [ "$budget" -ge 1800 ] || budget=1800
+        list_started=$(date +%s)
+        for initial in "$list_root"/units/[0-9][0-9][0-9][0-9].txt; do
+            unit=${initial##*/}; unit=${unit%.txt}
+            remaining=$list_root/units/$unit.remaining
+            cp "$initial" "$remaining"
+            attempt=0
+            while [ -s "$remaining" ]; do
+                attempt=$((attempt + 1))
+                now=$(date +%s)
+                elapsed=$((now - list_started))
+                if [ "$elapsed" -ge "$budget" ]; then
+                    atomic_line "$ROOT/state" "state=wall_clock_stop list=$label unit=$unit completed=$completed total=$total budget_s=$budget elapsed_s=$elapsed"
+                    return 78
+                fi
+                left=$((budget - elapsed)); [ "$left" -le 1200 ] || left=1200
+                per_attempt=$left; deadline_class=no
+                temp=$(max_temp); [ "$temp" -lt 0 ] || [ "$temp" -lt 70000 ] \
+                    || { atomic_line "$ROOT/state" "state=thermal_stop list=$label unit=$unit temp_mc=$temp"; return 75; }
+                qpa=$list_root/qpa/$unit-$attempt.qpa
+                stderr=$list_root/qpa/$unit-$attempt.stderr
+                attempt_list=$remaining
+                if [ "$deadline_class" = yes ]; then
+                    attempt_list=$list_root/units/$unit-$attempt.single
+                    head -1 "$remaining" >"$attempt_list"
+                fi
+                attempt_started=$(date -u +%FT%TZ)
+                dmesg_before=$list_root/qpa/$unit-$attempt.dmesg.before
+                dmesg_after=$list_root/qpa/$unit-$attempt.dmesg.after
+                dmesg_delta=$list_root/qpa/$unit-$attempt.dmesg
+                capture_full_dmesg "$dmesg_before"
+                set +e
+                env EGL_PLATFORM=surfaceless PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
+                    timeout --verbose --signal=TERM --kill-after=10 "$per_attempt" \
+                    "$BUNDLE/bin/$binary" --deqp-caselist-file="$attempt_list" \
+                    --deqp-surface-type=pbuffer --deqp-surface-width="$width" \
+                    --deqp-surface-height="$height" --deqp-gl-config-name="$config" \
+                    --deqp-base-seed="$seed" --deqp-watchdog=enable \
+                    --deqp-crashhandler=enable --deqp-log-images=disable \
+                    --deqp-log-flush=enable --deqp-archive-dir="$BUNDLE/bin" \
+                    --deqp-log-filename="$qpa" >"$list_root/qpa/$unit-$attempt.stdout" 2>"$stderr"
+                rc=$?
+                set -e
+                attempt_ended=$(date -u +%FT%TZ)
+                capture_full_dmesg "$dmesg_after"
+                extract_dmesg_delta "$dmesg_before" "$dmesg_after" "$dmesg_delta"
+                find "$dmesg_before" "$dmesg_after" -maxdepth 0 -type f -delete
+                [ -f "$qpa" ] || : >"$qpa"
+                deadline=$deadline_class
+                grep -Eq 'timeout: sending signal (TERM|KILL)' "$stderr" && deadline=yes
+                terminal=$(qpa_active "$qpa")
+                sanity=not_needed
+                if [ "$rc" -ne 0 ] && [ "$deadline" = no ] && [ -n "$terminal" ]; then
+                    if run_recovery_sanity "$label" "$unit" "$attempt"; then
+                        sanity=pass
+                    else
+                        sanity=fail
+                    fi
+                    printf 'A_CTS_RECOVERY case=%s started=%s ended=%s sanity=%s recoverable_crash_cap=none baseline=pass stop_rule=first_failed_post_crash_draw\n' \
+                        "$terminal" "$attempt_started" "$attempt_ended" "$sanity"
+                fi
+                before=$(wc -l <"$remaining")
+                commit_rc=0
+                commit_attempt "$label" "$unit" "$attempt" "$remaining" "$qpa" "$rc" "$deadline" \
+                    "$list_root/qpa/$unit-$attempt.stdout" "$stderr" \
+                    "$attempt_started" "$attempt_ended" "$dmesg_delta" "$sanity" || commit_rc=$?
+                if [ "$commit_rc" -ne 0 ]; then
+                    [ "$attempt_list" = "$remaining" ] || find "$attempt_list" -maxdepth 0 -type f -delete
+                    atomic_line "$ROOT/state" "state=finalizing reason=harness_stop list=$label unit=$unit attempt=$attempt rc=$rc commit_rc=$commit_rc"
+                    return 76
+                fi
+                [ "$attempt_list" = "$remaining" ] || find "$attempt_list" -maxdepth 0 -type f -delete
+                after=$(wc -l <"$remaining")
+                completed=$((completed + before - after))
+                if [ "$sanity" = fail ]; then
+                    atomic_line "$ROOT/state" "state=gpu_unrecoverable list=$label unit=$unit case=$terminal completed=$completed total=$total rule=first_failed_post_crash_draw"
+                    return 77
+                fi
+                atomic_line "$ROOT/state" "state=running list=$label unit=$unit completed=$completed total=$total budget_s=$budget elapsed_s=$elapsed last_rc=$rc last_deadline=$deadline"
+            done
+        done
+    done <"$ROOT/meta.tsv"
+    atomic_line "$ROOT/state" "state=aggregating completed=$completed total=$total"
+    capture_full_dmesg "$ROOT/dmesg.full"
+    atomic_line "$ROOT/run-outcome.txt" "outcome=complete completed=$completed total=$total"
+    make_archive
+    harness_errors=$(wc -l <"$ROOT/harness-errors.tsv")
+    if [ "$harness_errors" -eq 0 ]; then final_state=complete; else final_state=complete_with_harness_error; fi
+    atomic_line "$ROOT/run-outcome.txt" "outcome=$final_state completed=$completed total=$total harness_errors=$harness_errors"
+    atomic_line "$ROOT/state" "state=$final_state completed=$completed total=$total harness_errors=$harness_errors archive_sha256=$(sed -n 's/^sha256=//p' "$ROOT/archive.receipt")"
+    make_archive
+    [ "$harness_errors" -eq 0 ] || return 76
+}
+
+worker_finish() {
+    rc=$1
+    trap - HUP INT TERM
+    printf 'A_CTS_WORKER_LOG state=stopped exit_code=%s\n' "$rc"
+    atomic_line "$ROOT/worker.exit" "exit_code=$rc"
+    exit "$rc"
+}
+
+worker_supervisor() {
+    exec >>"$ROOT/worker.log" 2>&1
+    self_stat=$(sed 's/^.*) //' "/proc/$$/stat")
+    self_pgid=$(printf '%s\n' "$self_stat" | awk '{ print $3 }')
+    [ "$self_pgid" = "$$" ] || die "reason=worker_process_group pid=$$ pgid=$self_pgid"
+    atomic_line "$ROOT/worker.pid" "$$"
+    atomic_line "$ROOT/worker.pgid" "$self_pgid"
+    printf 'A_CTS_WORKER_LOG state=started pid=%s\n' "$$"
+    trap 'worker_finish 129' HUP
+    trap 'worker_finish 130' INT
+    trap 'worker_finish 143' TERM
+    case ${PF_ACTS_WORKER_FIXTURE:-} in
+        '')
+            set +e
+            (run_worker)
+            rc=$?
+            set -e
+            ;;
+        linger)
+            write_worker_environment
+            set +e
+            sleep 30
+            rc=$?
+            set -e
+            ;;
+        fail)
+            printf 'A_CTS_WORKER_FIXTURE state=failed exit_code=23\n'
+            rc=23
+            ;;
+        r41)
+            delay=${PF_ACTS_R41_FINALIZE_DELAY:-2}
+            case "$delay" in ''|*[!0-9]*) die "reason=r41_delay value=$delay" ;; esac
+            mkdir -p "$ROOT/recovery-sanity"
+            atomic_line "$ROOT/recovery-sanity/baseline.summary" \
+                'A_CTS_SANITY_BASELINE verdict=pass instrument=gles-uncompressed user=gamer uid=1000'
+            mkdir -p "$ROOT/r41-fixture"
+            cut -f2 "$ROOT/expected.tsv" >"$ROOT/r41-fixture/remaining"
+            : >"$ROOT/r41-fixture/attempt.qpa"
+            : >"$ROOT/r41-fixture/attempt.stdout"
+            : >"$ROOT/r41-fixture/attempt.stderr"
+            commit_rc=0
+            commit_attempt a5b-recovery-cases-r26.txt 0000 39 \
+                "$ROOT/r41-fixture/remaining" "$ROOT/r41-fixture/attempt.qpa" 0 no \
+                "$ROOT/r41-fixture/attempt.stdout" "$ROOT/r41-fixture/attempt.stderr" \
+                fixture fixture /dev/null not_needed || commit_rc=$?
+            [ "$commit_rc" -eq 76 ] || die "reason=r41_commit_rc value=$commit_rc"
+            atomic_line "$ROOT/state" \
+                'state=finalizing reason=harness_stop list=a5b-recovery-cases-r26.txt unit=0000 attempt=39 rc=0 commit_rc=76'
+            sleep "$delay"
+            rc=76
+            ;;
+        mutator)
+            atomic_line "$ROOT/state" 'state=finalizing reason=fixture_mutator'
+            (
+                trap '' HUP INT TERM
+                while :; do
+                    printf 'mutation\n' >>"$ROOT/mutations"
+                    sleep 0.05
+                done
+            ) &
+            mutator_pid=$!
+            atomic_line "$ROOT/mutator.pid" "$mutator_pid"
+            set +e
+            wait "$mutator_pid"
+            rc=$?
+            set -e
+            ;;
+        *) die "reason=worker_fixture value=$PF_ACTS_WORKER_FIXTURE" ;;
+    esac
+    if [ "$rc" -ne 0 ] && [ ! -s "$ROOT/archive.receipt" ]; then
+        current_state=unknown
+        [ ! -r "$ROOT/state" ] || current_state=$(cat "$ROOT/state")
+        case "$current_state" in
+            state=finalizing*) ;;
+            *) atomic_line "$ROOT/state" "state=finalizing reason=worker_rc_$rc" ;;
+        esac
+        if [ "$rc" -eq 79 ]; then
+            finalize_partial sanity_baseline_failed
+        else
+            finalize_partial "worker_rc_$rc"
+        fi
+    fi
+    worker_finish "$rc"
+}
+
+worker_launch() {
+    cd /
+    setsid nohup env -i \
+        HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+        XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+        PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
+        PF_ACTS_ROOT="$ROOT" \
+        PF_ACTS_BUNDLE="$BUNDLE" \
+        PF_ACTS_WORKER_FIXTURE="${PF_ACTS_WORKER_FIXTURE:-}" \
+        PF_ACTS_R41_FINALIZE_DELAY="${PF_ACTS_R41_FINALIZE_DELAY:-}" \
+        PF_ACTS_SANITY_PROBE="$SANITY_PROBE" \
+        PF_ACTS_SANITY_PROBE_SHA="$SANITY_PROBE_SHA" \
+        PF_ACTS_DMESG_FIXTURE="${PF_ACTS_DMESG_FIXTURE:-}" \
+        "$ROOT/a-cts-dut" worker-supervisor </dev/null >/dev/null 2>&1 &
+}
+
+worker_alive() {
+    pid=$1
+    [ -r "/proc/$pid/stat" ] || return 1
+    [ "$(awk '{ print $3 }' "/proc/$pid/stat")" != Z ] || return 1
+    if [ "${PF_ACTS_CONTROL_DIRECT:-}" = 1 ]; then
+        kill -0 "$pid" 2>/dev/null || return 1
+    else
+        sudo -n kill -0 "$pid" 2>/dev/null || return 1
+    fi
+    cmdline=$(tr '\000' '\n' <"/proc/$pid/cmdline") || return 1
+    grep -Fqx "$ROOT/a-cts-dut" <<EOF
+$cmdline
+EOF
+}
+
+process_alive() {
+    process_pid=$1
+    [ -r "/proc/$process_pid/stat" ] || return 1
+    process_stat=$(sed 's/^.*) //' "/proc/$process_pid/stat") || return 1
+    [ "$(printf '%s\n' "$process_stat" | awk '{ print $1 }')" != Z ]
+}
+
+worker_group_pids() {
+    group=$1
+    case "$group" in ''|*[!0-9]*|0|1) return 1 ;; esac
+    /usr/bin/ps -eo pid=,pgid=,stat= | awk -v group="$group" \
+        '$2 == group && $3 !~ /^Z/ { print $1 }'
+}
+
+worker_group_alive() {
+    [ -n "$(worker_group_pids "$1")" ]
+}
+
+signal_worker_group() {
+    signal=$1 group=$2
+    members=$(worker_group_pids "$group")
+    [ -n "$members" ] || return 0
+    for member in $members; do
+        process_alive "$member" || continue
+        if [ "${PF_ACTS_CONTROL_DIRECT:-}" = 1 ]; then
+            kill "-$signal" "$member"
+        else
+            sudo -n kill "-$signal" "$member"
+        fi
+    done
+}
+
+worker_failure() {
+    reason=$1
+    {
+        printf 'A_CTS_ERROR mode=%s reason=%s\n' "$mode" "$reason"
+        if [ -r "$ROOT/worker.exit" ]; then
+            printf 'A_CTS_WORKER_EXIT %s\n' "$(cat "$ROOT/worker.exit")"
+        else
+            printf 'A_CTS_WORKER_EXIT unavailable\n'
+        fi
+        printf 'A_CTS_WORKER_LOG_TAIL_BEGIN\n'
+        if [ -r "$ROOT/worker.log" ]; then tail -n 120 "$ROOT/worker.log"; else printf 'unavailable\n'; fi
+        printf 'A_CTS_WORKER_LOG_TAIL_END\n'
+        printf 'A_CTS_DMESG_TAIL_BEGIN\n'
+        sudo -n dmesg --color=never 2>&1 | tail -n 80
+        printf 'A_CTS_DMESG_TAIL_END\n'
+    } >&2
+    exit 1
+}
+
+capture_gpu_evidence() {
+    stage=$1 output=$2
+    dmesg_file=$output.dmesg
+    # The caller owns output; sudo only grants access to the kernel log.
+    # shellcheck disable=SC2024
+    if sudo -n dmesg --color=never >"$dmesg_file" 2>&1; then
+        dmesg_state=available
+    else
+        dmesg_state=unavailable
+    fi
+    reset_fault_lines=$(awk 'tolower($0) ~ /(pvr|powervr|gpu)/ && tolower($0) ~ /(reset|fault|hang|wedg|timeout)/ { count++ } END { print count+0 }' "$dmesg_file")
+    if [ -d /sys/class/devcoredump ]; then
+        devcoredumps=$(find /sys/class/devcoredump -mindepth 1 -maxdepth 1 -type l | wc -l)
+    else
+        devcoredumps=0
+    fi
+    {
+        printf 'A_CTS_GPU_COUNTERS stage=%s reset_fault_log_lines=%s devcoredumps=%s dmesg=%s\n' \
+            "$stage" "$reset_fault_lines" "$devcoredumps" "$dmesg_state"
+        awk 'tolower($0) ~ /(pvr|powervr|gpu)/ && tolower($0) ~ /(reset|fault|hang|wedg|timeout)/ { lines[++n]=$0 } END { start=n-79; if (start < 1) start=1; for (i=start; i<=n; i++) print lines[i] }' "$dmesg_file"
+    } >"$output"
+    find "$dmesg_file" -maxdepth 0 -type f -delete
+}
+
+gpu_health() {
+    label=$arg
+    evidence=$ROOT/gpu-health-$label.txt
+    capture_gpu_evidence "between-$label" "$evidence"
+    current=$(sed -n 's/^A_CTS_GPU_COUNTERS .* reset_fault_log_lines=\([0-9][0-9]*\) .*/\1/p' "$evidence")
+    previous=$current
+    [ ! -s "$ROOT/gpu-health.last" ] || previous=$(cat "$ROOT/gpu-health.last")
+    case "$current:$previous" in *[!0-9:]*|:*) delta=unknown ;; *) delta=$((current - previous)); [ "$delta" -ge 0 ] || delta=unknown ;; esac
+    device_lost=0
+    if [ -r "$ROOT/probes/$label/stdout" ] || [ -r "$ROOT/probes/$label/stderr" ]; then
+        device_lost=$(awk 'index($0,"VK_ERROR_DEVICE_LOST") || index($0,"DEVICE_LOST") { n++ } END { print n+0 }' \
+            "$ROOT/probes/$label/stdout" "$ROOT/probes/$label/stderr" 2>/dev/null)
+    fi
+    verdict=clean
+    [ "$delta" = 0 ] && [ "$device_lost" -eq 0 ] || verdict=fault_seen
+    atomic_line "$ROOT/gpu-health.last" "$current"
+    printf 'A_CTS_GPU_HEALTH after=%s reset_fault_delta=%s device_lost=%s verdict=%s continued=yes\n' \
+        "$label" "$delta" "$device_lost" "$verdict" | tee "$ROOT/gpu-health-$label.result"
+}
+
+probe_matrix_complete() {
+    output=$1
+    [ "$(grep -c '^PF_TEXCOMP_MATRIX formats=11 sizes=2 filters=2 wrap_pairs=9 cases=396$' "$output")" -eq 1 ] || return 1
+    [ "$(grep -c '^PF_TEXCOMP_MATRIX_CASE ' "$output")" -eq 396 ] || return 1
+    [ "$(grep -Ec '^PF_TEXCOMP_MATRIX_SUMMARY passed=[0-9]+ failed=[0-9]+ total=396 tolerance=1 reference_self=(pass|fail) seeded_negative=(pass|fail)$' "$output")" -eq 1 ] || return 1
+    awk '
+        BEGIN {
+            split("etc1-rgb8 etc2-rgb8 etc2-srgb8 etc2-rgb8a1 etc2-srgb8a1 etc2-rgba8 etc2-srgba8 eac-r11 eac-signed-r11 eac-rg11 eac-signed-rg11", a)
+            for (i in a) format[a[i]]=1
+            split("clamp-clamp clamp-repeat clamp-mirror repeat-clamp repeat-repeat repeat-mirror mirror-clamp mirror-repeat mirror-mirror", a)
+            for (i in a) wrap[a[i]]=1
+        }
+        $1 == "PF_TEXCOMP_MATRIX_CASE" {
+            delete value
+            for (i=2; i<=NF; i++) { split($i, pair, "="); value[pair[1]]=pair[2] }
+            if (!(value["format"] in format) || (value["size"] != "8x8" && value["size"] != "10x7") ||
+                (value["filter"] != "nearest" && value["filter"] != "linear") || !(value["wrap"] in wrap)) bad=1
+            key=value["format"] SUBSEP value["size"] SUBSEP value["filter"] SUBSEP value["wrap"]
+            if (++seen[key] != 1) bad=1
+            count++
+        }
+        END { exit bad || count != 396 }
+    ' "$output"
+}
+
+probe_discrim_summary_valid() {
+    output=$1
+    [ "$(grep -Ec '^TEXCOMP_DISCRIM verdict=(readback_wrong|sampling_wrong|both_wrong|both_ok|unmeasured) fixtures=10 fixtures_completed=[0-9]+ layers=[0-9]+ readback_failures=[0-9]+ sampling_failures=[0-9]+ runtime_ms=[0-9]+ runtime_bound_ms=30000 status=(complete|invalid|timeout)$' "$output")" -eq 1 ]
+}
+
+probe_vk_summary_valid() {
+    output=$1 kind=$2
+    mode=${kind#vk-}
+    [ "$(grep -Ec "^PVR_VK_PROBE mode=$mode verdict=(pass|fail|unmeasured) fixtures=[0-9]+ passed=[0-9]+ failed=[0-9]+ status=(complete|invalid)$" "$output")" -eq 1 ]
+}
+
+probe_make_archive() {
+    dir=$1
+    (cd "$dir" && tar --sort=name --mtime='@0' --owner=0 --group=0 -czf results.tar.gz.tmp \
+        stdout stderr environment maps counters.pre counters.post result.txt)
+    mv "$dir/results.tar.gz.tmp" "$dir/results.tar.gz"
+    sha=$(sha256sum "$dir/results.tar.gz" | cut -d' ' -f1)
+    bytes=$(wc -c <"$dir/results.tar.gz")
+    printf 'sha256=%s\nbytes=%s\n' "$sha" "$bytes" >"$dir/archive.receipt.tmp"
+    mv "$dir/archive.receipt.tmp" "$dir/archive.receipt"
+}
+
+probe_execute() {
+    label=$1 kind=$2 probe=$3 expected_sha=$4 budget=$5 direct=$6
+    dir=$ROOT/probes/$label
+    mkdir -p "$dir"
+    : >"$dir/stdout"; : >"$dir/stderr"; : >"$dir/maps"
+    printf 'HOME=/home/gamer\nUSER=gamer\nLOGNAME=gamer\nPATH=/usr/local/bin:/usr/bin:/bin\nXDG_RUNTIME_DIR=/run/user/1000\nEGL_PLATFORM=surfaceless\nDRIRC_SELECTION=system-profile(no-override)\n' >"$dir/environment"
+    capture_gpu_evidence pre "$dir/counters.pre"
+    actual_sha=$(sha256sum "$probe" 2>/dev/null | cut -d' ' -f1)
+    rc=126
+    if [ "$actual_sha" != "$expected_sha" ]; then
+        printf 'probe SHA mismatch: expected=%s actual=%s\n' "$expected_sha" "${actual_sha:-missing}" >"$dir/stderr"
+    else
+        pidfile=$dir/probe.pid
+        : >"$pidfile"
+        chmod 0666 "$pidfile"
+        set +e
+        case "$kind" in
+        vk-copy-layout|vk-compute-layout|vk-compute-etc1)
+            prefix=
+            [ "$direct" = yes ] || prefix='sudo -n -u gamer'
+            # Each discriminator is an independently bounded five-second process.
+            # shellcheck disable=SC2086,SC2024
+            $prefix timeout --foreground --signal=TERM --kill-after=1s "${budget}s" \
+                "$probe" "--$kind" >"$dir/stdout" 2>"$dir/stderr" &
+            printf '%s\n' "$!" >"$pidfile"
+            ;;
+        discriminate-layout)
+            prefix=
+            [ "$direct" = yes ] || prefix='sudo -n -u gamer'
+            # shellcheck disable=SC2086,SC2024
+            $prefix timeout --foreground --signal=TERM --kill-after=5s "${budget}s" \
+                env -i HOME=/home/gamer USER=gamer LOGNAME=gamer \
+                PATH=/usr/local/bin:/usr/bin:/bin \
+                XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+                "$probe" --discriminate-layout \
+                >"$dir/stdout" 2>"$dir/stderr" &
+            printf '%s\n' "$!" >"$pidfile"
+            ;;
+        *)
+        if [ "$direct" = yes ]; then
+            if [ "$kind" = etc-matrix ]; then
+                # The inner shell expands its positional parameters.
+                # shellcheck disable=SC2016
+                timeout --signal=TERM --kill-after=10 "$budget" sh -c \
+                    'printf "%s\n" "$$" >"$1"; exec "$2" --etc-matrix' sh "$pidfile" "$probe" \
+                    >"$dir/stdout" 2>"$dir/stderr" &
+            else
+                # shellcheck disable=SC2016
+                timeout --signal=TERM --kill-after=10 "$budget" sh -c \
+                    'printf "%s\n" "$$" >"$1"; exec "$2"' sh "$pidfile" "$probe" \
+                    >"$dir/stdout" 2>"$dir/stderr" &
+            fi
+        else
+            if [ "$kind" = etc-matrix ]; then
+                # shellcheck disable=SC2016
+                timeout --signal=TERM --kill-after=10 "$budget" sudo -n -u gamer \
+                    env -i HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+                    XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless sh -c \
+                    'printf "%s\n" "$$" >"$1"; exec "$2" --etc-matrix' sh "$pidfile" "$probe" \
+                    >"$dir/stdout" 2>"$dir/stderr" &
+            else
+                # shellcheck disable=SC2016
+                printf 'EGL_LOG_LEVEL=debug\nMESA_DEBUG=1\n' >>"$dir/environment"
+                # shellcheck disable=SC2016
+                timeout --signal=TERM --kill-after=10 "$budget" sudo -n -u gamer \
+                    env -i HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+                    XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+                    EGL_LOG_LEVEL=debug MESA_DEBUG=1 sh -c \
+                    'printf "%s\n" "$$" >"$1"; exec "$2"' sh "$pidfile" "$probe" \
+                    >"$dir/stdout" 2>"$dir/stderr" &
+            fi
+        fi
+        ;;
+        esac
+        runner=$!
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            if [ -s "$pidfile" ]; then
+                probe_pid=$(cat "$pidfile")
+                if cat "/proc/$probe_pid/maps" >"$dir/maps" 2>/dev/null; then
+                    break
+                fi
+            fi
+            sleep 0.1
+        done
+        wait "$runner"
+        rc=$?
+        set -e
+    fi
+    [ -s "$dir/maps" ] || printf 'unavailable\n' >"$dir/maps"
+    stderr_bytes=$(wc -c <"$dir/stderr")
+    if [ "$stderr_bytes" -gt 65536 ]; then
+        mv "$dir/stderr" "$dir/stderr.full"
+        { printf 'A_CTS_STDERR_TRUNCATED original_bytes=%s limit=65536\n' "$stderr_bytes"; tail -c 65400 "$dir/stderr.full"; } >"$dir/stderr"
+        find "$dir/stderr.full" -maxdepth 0 -delete
+    fi
+    capture_gpu_evidence post "$dir/counters.post"
+
+    complete=no
+    summary_valid=no
+    observed_discrim=na
+    observed_status=na
+    observed_layers=na
+    discrim=na
+    reason=na
+    case "$kind" in
+    discriminate-layout)
+        if probe_discrim_summary_valid "$dir/stdout"; then
+            summary_valid=yes
+            observed_discrim=$(sed -n 's/^TEXCOMP_DISCRIM verdict=\([^ ]*\) .*/\1/p' "$dir/stdout")
+            observed_status=$(sed -n 's/^TEXCOMP_DISCRIM .* status=\([^ ]*\)$/\1/p' "$dir/stdout")
+            observed_layers=$(sed -n 's/^TEXCOMP_DISCRIM .* layers=\([0-9][0-9]*\) .*/\1/p' "$dir/stdout")
+            if [ "$observed_status" = complete ]; then complete=yes; fi
+        fi
+        ;;
+    vk-copy-layout|vk-compute-layout|vk-compute-etc1)
+        if probe_vk_summary_valid "$dir/stdout" "$kind"; then
+            summary_valid=yes
+            observed_discrim=$(sed -n 's/^PVR_VK_PROBE .* verdict=\([^ ]*\) .*/\1/p' "$dir/stdout")
+            observed_status=$(sed -n 's/^PVR_VK_PROBE .* status=\([^ ]*\)$/\1/p' "$dir/stdout")
+            [ "$observed_status" = complete ] && complete=yes
+        fi
+        ;;
+    etc-matrix)
+        if probe_matrix_complete "$dir/stdout"; then complete=yes; fi
+        ;;
+    *)
+        final_count=$(awk '/^PF_TEXCOMP_RESULT verdict=(pass|fail) controls_passed=-?[0-9]+ controls_required=5$/ { count++ } END { print count+0 }' "$dir/stdout")
+        if [ "$final_count" -eq 1 ]; then
+            if { [ "$rc" -eq 0 ] && grep -q '^PF_TEXCOMP_RESULT verdict=pass ' "$dir/stdout"; } ||
+               { [ "$rc" -ne 0 ] && grep -q '^PF_TEXCOMP_RESULT verdict=fail ' "$dir/stdout"; }; then
+                complete=yes
+            fi
+        fi
+        ;;
+    esac
+    case "$kind" in
+    discriminate-layout)
+        if [ "$summary_valid" = yes ] && [ "$observed_status" != complete ]; then
+            case "$observed_status" in timeout) verdict=timeout ;; *) verdict=invalid ;; esac
+            discrim=unmeasured
+            reason=status_$observed_status
+            observed_discrim=unmeasured
+        elif [ "$summary_valid" = yes ] && [ "$observed_layers" -eq 0 ]; then
+            verdict=invalid
+            discrim=unmeasured
+            reason=layers_zero
+            observed_discrim=unmeasured
+        elif [ "$summary_valid" = yes ] && [ "$observed_discrim" = unmeasured ]; then
+            verdict=invalid
+            discrim=unmeasured
+            reason=verdict_unmeasured
+            observed_discrim=unmeasured
+        else
+            case "$rc:$complete" in
+                124:*|137:*) verdict=timeout; discrim=unmeasured; reason=timeout; observed_discrim=unmeasured ;;
+                *:no) verdict=invalid; discrim=blocked; reason=missing_summary ;;
+                0:yes) verdict=pass; discrim=$observed_discrim; reason=none ;;
+                *:yes) verdict=fail; discrim=blocked; reason=exit_$rc ;;
+            esac
+        fi
+        ;;
+    vk-copy-layout|vk-compute-layout|vk-compute-etc1)
+        if [ "$summary_valid" = yes ] && [ "$observed_status" != complete ]; then
+            verdict=invalid; discrim=unmeasured; reason=status_$observed_status
+        elif [ "$summary_valid" = no ]; then
+            case "$rc" in 124|137) verdict=timeout; reason=timeout ;; *) verdict=invalid; reason=missing_summary ;; esac
+            discrim=unmeasured; observed_discrim=unmeasured
+        else
+            discrim=$observed_discrim; reason=none
+            case "$rc:$complete" in 0:yes) verdict=pass ;; *:yes) verdict=fail ;; *) verdict=invalid ;; esac
+        fi
+        ;;
+    *)
+        case "$rc:$complete" in
+            124:*|137:*) verdict=timeout ;;
+            0:yes) verdict=pass ;;
+            *:yes) verdict=fail ;;
+            *) verdict=invalid ;;
+        esac
+        ;;
+    esac
+    stdout_sha=$(sha256sum "$dir/stdout" | cut -d' ' -f1)
+    stderr_sha=$(sha256sum "$dir/stderr" | cut -d' ' -f1)
+    maps_sha=$(sha256sum "$dir/maps" | cut -d' ' -f1)
+    pre_sha=$(sha256sum "$dir/counters.pre" | cut -d' ' -f1)
+    post_sha=$(sha256sum "$dir/counters.post" | cut -d' ' -f1)
+    environment_sha=$(sha256sum "$dir/environment" | cut -d' ' -f1)
+    printf 'A_CTS_PROBE_RESULT probe=%s verdict=%s rc=%s complete=%s timeout_s=%s discrim=%s reason=%s observed_discrim=%s observed_status=%s observed_layers=%s binary_sha256=%s stdout_sha256=%s stderr_sha256=%s environment_sha256=%s maps_sha256=%s counters_pre_sha256=%s counters_post_sha256=%s\n' \
+        "$kind" "$verdict" "$rc" "$complete" "$budget" \
+        "$discrim" "$reason" "$observed_discrim" "$observed_status" "$observed_layers" "${actual_sha:-missing}" \
+        "$stdout_sha" "$stderr_sha" "$environment_sha" "$maps_sha" "$pre_sha" "$post_sha" >"$dir/result.txt"
+    probe_make_archive "$dir"
+    cat "$dir/result.txt"
+}
+
+probe_spec() {
+    case "$1" in
+        default) budget=180; probe_path=$ROOT/pf-pvr-texcomp-probe; expected_sha=$PROBE_SHA ;;
+        etc-matrix) budget=600; probe_path=$ROOT/pf-pvr-texcomp-probe; expected_sha=$PROBE_SHA ;;
+        discriminate-layout) budget=35; probe_path=$DISCRIM_PROBE; expected_sha=$DISCRIM_PROBE_SHA ;;
+        vk-copy-layout|vk-compute-layout|vk-compute-etc1) budget=5; probe_path=$VK_PROBE; expected_sha=$VK_PROBE_SHA ;;
+        *) die 'reason=probe_kind' ;;
+    esac
+}
+
+probe_supervisor() {
+    probe_spec "$arg"
+    dir=$ROOT/probes/$arg
+    mkdir -p "$dir"
+    exec >>"$dir/supervisor.log" 2>&1
+    atomic_line "$dir/supervisor.pid" "$$"
+    printf 'A_CTS_PROBE_SUPERVISOR probe=%s state=started pid=%s\n' "$arg" "$$"
+    set +e
+    probe_execute "$arg" "$arg" "$probe_path" "$expected_sha" "$budget" no
+    rc=$?
+    set -e
+    atomic_line "$dir/supervisor.exit" "exit_code=$rc"
+    exit "$rc"
+}
+
+probe_launch() {
+    probe_spec "$arg"
+    dir=$ROOT/probes/$arg
+    [ ! -e "$dir/supervisor.pid" ] || die 'reason=probe_already_started'
+    mkdir -p "$dir"
+    cd /
+    setsid nohup env PF_ACTS_ROOT="$ROOT" PF_ACTS_BUNDLE="$BUNDLE" \
+        PF_ACTS_DISCRIM_PROBE="$DISCRIM_PROBE" \
+        PF_ACTS_VK_PROBE="$VK_PROBE" \
+        "$ROOT/a-cts-dut" probe-supervisor "$arg" </dev/null >/dev/null 2>&1 &
+    for _ in 1 2 3 4 5; do
+        [ ! -s "$dir/supervisor.pid" ] || break
+        [ ! -s "$dir/archive.receipt" ] || break
+        sleep 1
+    done
+    [ -s "$dir/supervisor.pid" ] || [ -s "$dir/archive.receipt" ] \
+        || die 'reason=probe_supervisor_pid_missing'
+    printf 'A_CTS_PROBE_PROGRESS probe=%s state=started timeout_s=%s\n' "$arg" "$budget"
+}
+
+probe_poll() {
+    probe_spec "$arg"
+    dir=$ROOT/probes/$arg
+    if [ -s "$dir/archive.receipt" ] && [ -s "$dir/result.txt" ]; then
+        printf 'A_CTS_PROBE_PROGRESS probe=%s state=complete timeout_s=%s\n' "$arg" "$budget"
+        return
+    fi
+    [ -s "$dir/supervisor.pid" ] || die 'reason=probe_supervisor_pid_missing'
+    supervisor_pid=$(cat "$dir/supervisor.pid")
+    if kill -0 "$supervisor_pid" 2>/dev/null && \
+       [ "$(awk '{ print $3 }' "/proc/$supervisor_pid/stat" 2>/dev/null)" != Z ]; then
+        printf 'A_CTS_PROBE_PROGRESS probe=%s state=running timeout_s=%s\n' "$arg" "$budget"
+        return
+    fi
+    [ -r "$dir/supervisor.log" ] && tail -n 80 "$dir/supervisor.log" >&2
+    die 'reason=probe_supervisor_died'
+}
+
+probe_selftest() {
+    mkdir -p "$ROOT"
+    fake=$ROOT/fake-probe
+    cat >"$fake" <<'PROBE'
+#!/bin/sh
+sleep 1
+if [ "${1:-}" != --etc-matrix ]; then
+    printf 'PF_TEXCOMP_INFO source=selftest gl_version=fixture renderer=fixture pvr_debug=\n'
+    printf 'PF_TEXCOMP_RESULT verdict=fail controls_passed=4 controls_required=5\n'
+    exit 1
+fi
+formats='etc1-rgb8 etc2-rgb8 etc2-srgb8 etc2-rgb8a1 etc2-srgb8a1 etc2-rgba8 etc2-srgba8 eac-r11 eac-signed-r11 eac-rg11 eac-signed-rg11'
+wraps='clamp-clamp clamp-repeat clamp-mirror repeat-clamp repeat-repeat repeat-mirror mirror-clamp mirror-repeat mirror-mirror'
+zero=0000000000000000000000000000000000000000000000000000000000000000
+printf 'PF_TEXCOMP_MATRIX formats=11 sizes=2 filters=2 wrap_pairs=9 cases=396\n'
+for format in $formats; do
+    for size in 8x8 10x7; do
+        for filter in nearest linear; do
+            for wrap in $wraps; do
+                printf 'PF_TEXCOMP_MATRIX_CASE format=%s size=%s filter=%s wrap=%s result=pass sampled_delta=0 control_delta=0 sampled_sha256=%s control_sha256=%s reference_sha256=%s\n' "$format" "$size" "$filter" "$wrap" "$zero" "$zero" "$zero"
+            done
+        done
+    done
+done
+printf 'PF_TEXCOMP_MATRIX_SUMMARY passed=396 failed=0 total=396 tolerance=1 reference_self=pass seeded_negative=pass\n'
+PROBE
+    chmod 0755 "$fake"
+    fake_sha=$(sha256sum "$fake" | cut -d' ' -f1)
+    probe_execute default default "$fake" "$fake_sha" 5 yes >"$ROOT/default.result"
+    grep -q 'probe=default verdict=fail rc=1 complete=yes' "$ROOT/default.result" \
+        || die 'reason=probe_selftest_default'
+    probe_execute etc-matrix etc-matrix "$fake" "$fake_sha" 5 yes >"$ROOT/matrix.result"
+    grep -q 'probe=etc-matrix verdict=pass rc=0 complete=yes' "$ROOT/matrix.result" \
+        || die 'reason=probe_selftest_matrix'
+    [ "$(grep -c '^PF_TEXCOMP_MATRIX_CASE ' "$ROOT/probes/etc-matrix/stdout")" -eq 396 ] \
+        || die 'reason=probe_selftest_matrix_rows'
+    timeout_probe=$ROOT/timeout-probe
+    printf '#!/bin/sh\nsleep 10\n' >"$timeout_probe"; chmod 0755 "$timeout_probe"
+    timeout_sha=$(sha256sum "$timeout_probe" | cut -d' ' -f1)
+    probe_execute timeout default "$timeout_probe" "$timeout_sha" 1 yes >"$ROOT/timeout.result"
+    grep -q 'probe=default verdict=timeout rc=124 complete=no' "$ROOT/timeout.result" \
+        || die 'reason=probe_selftest_timeout'
+    tar -xOf "$ROOT/probes/default/results.tar.gz" stdout \
+        >"$ROOT/probe-selftest-archive.stdout" || die 'reason=probe_selftest_archive_extract'
+    grep -q '^PF_TEXCOMP_INFO source=selftest ' "$ROOT/probe-selftest-archive.stdout" \
+        || die 'reason=probe_selftest_archive'
+    printf 'A_CTS_PROBE_SELFTEST state=pass default_failure_continued=yes matrix_complete=yes timeout_invalid=yes output_preserved=yes\n'
+}
+
+selftest() {
+    mkdir -p "$ROOT/nonpass-qpa/self" "$ROOT/crash-evidence/self" \
+        "$ROOT/harness-evidence/self" "$ROOT/recovery-sanity" "$ROOT/work"
+    : >"$ROOT/ledger.tsv"; : >"$ROOT/qpa-manifest.tsv"
+    : >"$ROOT/crash-evidence.tsv"; : >"$ROOT/harness-errors.tsv"
+    printf 'PF_GLES_SANITY verdict=pass clear=pass texture=pass renderer=zink-powervr\n' \
+        >"$ROOT/recovery-sanity/baseline.stdout"
+    : >"$ROOT/recovery-sanity/baseline.stderr"
+    printf 'A_CTS_RECOVERY_SANITY list=baseline unit=baseline attempt=0 user=selftest uid=0 started=fixture ended=fixture rc=0 verdict=pass probe_sha256=fixture\n' \
+        >"$ROOT/recovery-sanity/baseline.result"
+    printf 'self\tcase.pass\nself\tcase.fail\nself\tcase.crash\nself\tcase.after.crash\nself\tcase.timeout\nself\tcase.after.timeout\nself\tcase.zero\nself\tcase.last\n' >"$ROOT/expected.tsv"
+    printf '%s\n' case.pass case.fail case.crash case.after.crash >"$ROOT/work/crash.remaining"
+    cat >"$ROOT/work/crash.qpa" <<'QPA'
+#beginTestCaseResult case.pass
+<Result StatusCode="Pass">ok</Result>
+#endTestCaseResult
+#beginTestCaseResult case.fail
+<Result StatusCode="Fail">bad</Result>
+#endTestCaseResult
+#beginTestCaseResult case.crash
+<Text>Segmentation fault: 'SIGSEGV'</Text>
+<Text>0x0000000000001000 : /opt/pocketforge/cts/bin/deqp-gles3(+0x1000) [0x1000]</Text>
+<Text>0x0000000000002000 : linux-vdso.so.1(__kernel_rt_sigreturn+0x0) [0x2000]</Text>
+<Text>0x0000000000003000 : /usr/local/lib/aarch64-linux-gnu/libvulkan_powervr_mesa.so(+0xabc) [0x3000]</Text>
+QPA
+    printf 'stdout before crash\n' >"$ROOT/work/crash.stdout"
+    printf 'stderr before crash\n' >"$ROOT/work/crash.stderr"
+    commit_attempt self 0000 1 "$ROOT/work/crash.remaining" "$ROOT/work/crash.qpa" 139 no \
+        "$ROOT/work/crash.stdout" "$ROOT/work/crash.stderr"
+    [ "$(cat "$ROOT/work/crash.remaining")" = case.after.crash ] || die 'reason=selftest_crash_suffix'
+    awk -F '\t' '$2=="case.crash" && $3=="SIGSEGV" && $4=="0x0000000000003000" && $5 ~ /libvulkan_powervr_mesa.so\(\+0xabc\)/ && $8<=4096 { found=1 } END { exit !found }' \
+        "$ROOT/crash-evidence.tsv" || die 'reason=selftest_crash_evidence'
+    printf '#beginTestCaseResult case.after.crash\n<Result StatusCode="Pass">ok</Result>\n#endTestCaseResult\n' >"$ROOT/work/crash2.qpa"
+    commit_attempt self 0000 2 "$ROOT/work/crash.remaining" "$ROOT/work/crash2.qpa" 0 no
+
+    printf '%s\n' case.timeout case.after.timeout >"$ROOT/work/timeout.remaining"
+    printf '#beginTestCaseResult case.timeout\n' >"$ROOT/work/timeout.qpa"
+    commit_attempt self 0001 1 "$ROOT/work/timeout.remaining" "$ROOT/work/timeout.qpa" 124 yes
+    [ "$(cat "$ROOT/work/timeout.remaining")" = case.after.timeout ] || die 'reason=selftest_timeout_suffix'
+    printf '#beginTestCaseResult case.after.timeout\n<Result StatusCode="Pass">ok</Result>\n#endTestCaseResult\n' >"$ROOT/work/timeout2.qpa"
+    commit_attempt self 0001 2 "$ROOT/work/timeout.remaining" "$ROOT/work/timeout2.qpa" 0 no
+
+    printf '%s\n' case.zero case.last >"$ROOT/work/zero.remaining"
+    printf '#beginTestCaseResult case.zero\n<Result StatusCode="Fail">failed before next case began</Result>\n#endTestCaseResult\n' >"$ROOT/work/zero.qpa"
+    printf 'worker exited between cases\n' >"$ROOT/work/zero.stdout"
+    printf 'fatal harness fixture\n' >"$ROOT/work/zero.stderr"
+    commit_attempt self 0002 1 "$ROOT/work/zero.remaining" "$ROOT/work/zero.qpa" 1 no \
+        "$ROOT/work/zero.stdout" "$ROOT/work/zero.stderr"
+    [ "$(cat "$ROOT/work/zero.remaining")" = case.last ] || die 'reason=selftest_unbegun_case_removed'
+    ! awk -F '\t' '$2=="case.last" { found=1 } END { exit !found }' "$ROOT/ledger.tsv" \
+        || die 'reason=selftest_unbegun_case_fabricated'
+    printf '#beginTestCaseResult case.last\n<Result StatusCode="NotSupported">ns</Result>\n#endTestCaseResult\n' >"$ROOT/work/last.qpa"
+    commit_attempt self 0002 2 "$ROOT/work/zero.remaining" "$ROOT/work/last.qpa" 0 no
+    printf 'GL_VERSION fixture OpenGL ES 3.2\nGL_EXTENSIONS fixture GL_EXT_one GL_EXT_two\n' >"$ROOT/precondition.txt"
+    write_worker_environment
+    write_recovery_policy
+    printf 'selftest dmesg\n' >"$ROOT/dmesg.full"
+    atomic_line "$ROOT/run-outcome.txt" 'outcome=complete_with_harness_error completed=8 total=8'
+    atomic_line "$ROOT/state" 'state=aggregating completed=8 total=8'
+    make_archive
+    mv "$ROOT/results.tar.gz" "$ROOT/harness-results.tar.gz"
+    mv "$ROOT/archive.receipt" "$ROOT/harness-archive.receipt"
+    : >"$ROOT/harness-errors.tsv"
+    atomic_line "$ROOT/run-outcome.txt" 'outcome=complete completed=8 total=8'
+    atomic_line "$ROOT/state" 'state=complete completed=8 total=8'
+    make_archive
+    grep -q 'Crash=1 NotRun=0 Total=8 unseen=0 HarnessErrors=0' "$ROOT/final.txt" || die 'reason=selftest_counts'
+    printf 'A_CTS_SELFTEST state=pass crash_suffix=yes crash_evidence=yes timeout_suffix=yes unbegun_not_crash=yes nonpass_qpa=yes aggregate_fail_closed=yes\n'
+}
+
+recovery_selftest() {
+    fixture=${PF_ACTS_RECOVERY_FIXTURE:-}
+    case "$fixture" in recoverable|unrecoverable|process-exit) ;; *) die 'reason=recovery_fixture' ;; esac
+    mkdir -p "$ROOT/nonpass-qpa/recovery" "$ROOT/crash-evidence/recovery" \
+        "$ROOT/harness-evidence/recovery" "$ROOT/recovery-sanity/recovery" "$ROOT/work"
+    : >"$ROOT/ledger.tsv"
+    : >"$ROOT/qpa-manifest.tsv"
+    : >"$ROOT/crash-evidence.tsv"
+    : >"$ROOT/harness-errors.tsv"
+    printf 'recovery\tcase.before\nrecovery\tcase.crash\nrecovery\tcase.after\n' \
+        >"$ROOT/expected.tsv"
+    printf '%s\n' case.before case.crash case.after >"$ROOT/work/remaining"
+    cat >"$ROOT/work/crash.qpa" <<'QPA'
+#beginTestCaseResult case.before
+<Result StatusCode="Pass">ok</Result>
+#endTestCaseResult
+#beginTestCaseResult case.crash
+<Text>Segmentation fault: 'SIGSEGV'</Text>
+<Text>0x0000000000001000 : linux-vdso.so.1(__kernel_rt_sigreturn+0x0) [0x1000]</Text>
+<Text>0x0000000000002000 : /usr/local/lib/libvulkan_powervr_mesa.so(+0xabc) [0x2000]</Text>
+QPA
+    if [ "$fixture" = process-exit ]; then
+        cat >"$ROOT/work/crash.qpa" <<'QPA'
+#beginTestCaseResult case.before
+<Result StatusCode="Pass">ok</Result>
+#endTestCaseResult
+#beginTestCaseResult case.crash
+<Text>process exited while this case was active</Text>
+QPA
+    fi
+    : >"$ROOT/work/crash.stdout"
+    : >"$ROOT/work/crash.stderr"
+    cat >"$ROOT/work/crash.dmesg" <<'DMESG'
+[  963.238538] powervr 1800000.gpu: [drm] Data Master=3 (Fragment)
+[  963.246406] powervr 1800000.gpu: [drm] Page fault occurred, fault address=c0adc450
+[  963.253931] powervr 1800000.gpu: [drm] Received unknown FWCCB command (type=112)
+DMESG
+    if [ "$fixture" = process-exit ]; then
+        printf '[  963.200000] audit: healthy process-exit fixture\n' \
+            >"$ROOT/work/crash.dmesg"
+    fi
+    cp "$ROOT/work/crash.dmesg" "$ROOT/dmesg.full"
+    sanity=$([ "$fixture" = unrecoverable ] && printf fail || printf pass)
+    printf 'PF_GLES_SANITY verdict=pass clear=pass texture=pass renderer=zink-powervr\n' \
+        >"$ROOT/recovery-sanity/baseline.stdout"
+    : >"$ROOT/recovery-sanity/baseline.stderr"
+    printf 'A_CTS_RECOVERY_SANITY list=baseline unit=baseline attempt=0 user=gamer uid=1000 started=2026-10-09T00:00:00Z ended=2026-10-09T00:00:01Z rc=0 verdict=pass probe_sha256=fixture\n' \
+        >"$ROOT/recovery-sanity/baseline.result"
+    printf 'A_CTS_RECOVERY_SANITY list=recovery unit=0000 attempt=1 user=gamer uid=1000 started=2026-10-09T00:00:00Z ended=2026-10-09T00:00:01Z rc=%s verdict=%s probe_sha256=fixture\n' \
+        "$([ "$sanity" = pass ] && printf 0 || printf 1)" "$sanity" \
+        >"$ROOT/recovery-sanity/recovery/0000-1.result"
+    : >"$ROOT/recovery-sanity/recovery/0000-1.stdout"
+    : >"$ROOT/recovery-sanity/recovery/0000-1.stderr"
+    crash_rc=139
+    [ "$fixture" != process-exit ] || crash_rc=1
+    commit_attempt recovery 0000 1 "$ROOT/work/remaining" "$ROOT/work/crash.qpa" "$crash_rc" no \
+        "$ROOT/work/crash.stdout" "$ROOT/work/crash.stderr" \
+        2026-10-09T00:00:00Z 2026-10-09T00:00:01Z "$ROOT/work/crash.dmesg" "$sanity"
+    [ "$(cat "$ROOT/work/remaining")" = case.after ] || die 'reason=recovery_quarantine'
+    printf 'GL_VERSION fixture OpenGL ES 3.2\nGL_EXTENSIONS fixture GL_EXT_one\n' \
+        >"$ROOT/precondition.txt"
+    write_worker_environment
+    write_recovery_policy
+    if [ "$fixture" != unrecoverable ]; then
+        cat >"$ROOT/work/after.qpa" <<'QPA'
+#beginTestCaseResult case.after
+<Result StatusCode="Pass">ok</Result>
+#endTestCaseResult
+QPA
+        commit_attempt recovery 0000 2 "$ROOT/work/remaining" "$ROOT/work/after.qpa" 0 no
+        atomic_line "$ROOT/run-outcome.txt" 'outcome=complete completed=3 total=3'
+        atomic_line "$ROOT/state" 'state=complete completed=3 total=3'
+        make_archive
+        printf 'A_CTS_RECOVERY_SELFTEST fixture=%s crash=1 pass=2 not_run=0 sanity=pass archive=ready\n' "$fixture"
+    else
+        finalize_partial gpu_unrecoverable
+        printf 'A_CTS_RECOVERY_SELFTEST fixture=unrecoverable crash=1 pass=1 not_run=1 sanity=fail archive=ready\n'
+    fi
+}
+
+sanity_selftest() {
+    mkdir -p "$ROOT/recovery-sanity"
+    baseline_rc=0
+    run_sanity_baseline 0 || baseline_rc=$?
+    if [ "$baseline_rc" -eq 0 ]; then
+        printf 'A_CTS_SANITY_SELFTEST verdict=pass instrument=gles-uncompressed\n'
+        return 0
+    fi
+    printf 'A_CTS_SANITY_SELFTEST verdict=fail instrument=rejected\n'
+    return "$baseline_rc"
+}
+
+host_selftest() {
+    mkdir -p "$ROOT"
+    printf 'A_CTS_HOST_SELFTEST state=pass corrupt_chunk_rejected=yes missing_final_rejected=yes missing_qpa_rejected=yes duplicate_rejected=yes unknown_rejected=yes\n'
+}
+
+case "$mode" in
+    selftest) selftest ;;
+    selftest-dmesg-delta)
+        [ "${PF_ACTS_SELFTEST:-}" = 1 ] || die 'reason=selftest_only'
+        [ -r "${PF_ACTS_DMESG_BEFORE:-}" ] || die 'reason=dmesg_before_missing'
+        [ -r "${PF_ACTS_DMESG_AFTER:-}" ] || die 'reason=dmesg_after_missing'
+        [ -n "${PF_ACTS_DMESG_OUTPUT:-}" ] || die 'reason=dmesg_output_missing'
+        extract_dmesg_delta "$PF_ACTS_DMESG_BEFORE" "$PF_ACTS_DMESG_AFTER" \
+            "$PF_ACTS_DMESG_OUTPUT"
+        ;;
+    sanity-selftest) sanity_selftest ;;
+    recovery-selftest) recovery_selftest ;;
+    host-selftest) host_selftest ;;
+    probe-selftest) probe_selftest ;;
+    probe-discrim-fixture)
+        [ "${PF_ACTS_SELFTEST:-}" = 1 ] || die 'reason=selftest_only'
+        case "$arg" in 1|5) ;; *) die 'reason=selftest_budget' ;; esac
+        fixture_sha=$(sha256sum "$DISCRIM_PROBE" | cut -d' ' -f1)
+        probe_execute fixture discriminate-layout "$DISCRIM_PROBE" "$fixture_sha" "$arg" yes
+        ;;
+    probe-vk-fixture)
+        [ "${PF_ACTS_SELFTEST:-}" = 1 ] || die 'reason=selftest_only'
+        fixture_kind=${arg%%:*}; fixture_budget=${arg#*:}
+        case "$fixture_kind:$fixture_budget" in vk-copy-layout:1|vk-copy-layout:5) ;; *) die 'reason=selftest_budget' ;; esac
+        fixture_sha=$(sha256sum "$VK_PROBE" | cut -d' ' -f1)
+        probe_execute fixture "$fixture_kind" "$VK_PROBE" "$fixture_sha" "$fixture_budget" yes
+        ;;
+    probe-run)
+        probe_spec "$arg"
+        probe_execute "$arg" "$arg" "$probe_path" "$expected_sha" "$budget" no
+        ;;
+    probe-start) probe_launch ;;
+    probe-supervisor) probe_supervisor ;;
+    probe-poll) probe_poll ;;
+    probe-receipt)
+        case "$arg" in default|etc-matrix|discriminate-layout|vk-copy-layout|vk-compute-layout|vk-compute-etc1) ;; *) die 'reason=probe_kind' ;; esac
+        [ -r "$ROOT/probes/$arg/archive.receipt" ] || die 'reason=probe_archive_not_ready'
+        cat "$ROOT/probes/$arg/archive.receipt" "$ROOT/probes/$arg/result.txt"
+        ;;
+    probe-chunk)
+        probe_name=${arg%%:*}; probe_index=${arg#*:}
+        case "$probe_name" in default|etc-matrix|discriminate-layout|vk-copy-layout|vk-compute-layout|vk-compute-etc1) ;; *) die 'reason=probe_kind' ;; esac
+        case "$probe_index" in ''|*[!0-9]*) die 'reason=chunk_index' ;; esac
+        probe_chunk=$ROOT/probes/$probe_name/archive-chunk.tmp
+        dd if="$ROOT/probes/$probe_name/results.tar.gz" of="$probe_chunk" \
+            bs=36000 skip="$probe_index" count=1 status=none
+        printf 'sha256=%s bytes=%s\n' "$(sha256sum "$probe_chunk" | cut -d' ' -f1)" "$(wc -c <"$probe_chunk")"
+        base64 -w0 "$probe_chunk"; printf '\n'
+        find "$probe_chunk" -maxdepth 0 -type f -delete
+        ;;
+    egl-preflight) egl_preflight ;;
+    egl-preflight-receipt)
+        [ -r "$ROOT/egl-preflight/archive.receipt" ] || die 'reason=egl_preflight_archive_not_ready'
+        cat "$ROOT/egl-preflight/archive.receipt" "$ROOT/egl-preflight/result.txt"
+        ;;
+    egl-preflight-chunk)
+        case "$arg" in ''|*[!0-9]*) die 'reason=chunk_index' ;; esac
+        egl_chunk=$ROOT/egl-preflight/archive-chunk.tmp
+        dd if="$ROOT/egl-preflight/results.tar.gz" of="$egl_chunk" \
+            bs=36000 skip="$arg" count=1 status=none
+        printf 'sha256=%s bytes=%s\n' "$(sha256sum "$egl_chunk" | cut -d' ' -f1)" \
+            "$(wc -c <"$egl_chunk")"
+        base64 -w0 "$egl_chunk"; printf '\n'
+        find "$egl_chunk" -maxdepth 0 -type f -delete
+        ;;
+    gpu-health) gpu_health ;;
+    prepare) prepare_request; printf 'A_CTS_PREPARE state=complete cases=%s\n' "$(wc -l <"$ROOT/expected.tsv")" ;;
+    worker-start)
+        control_root=$ROOT
+        worker_root=$ROOT/worker-run
+        [ -s "$control_root/expected.tsv" ] || die 'reason=not_prepared'
+        sudo -n /usr/bin/install -d -m 0755 -o gamer -g gamer "$worker_root"
+        for item in a-cts-dut expected.tsv meta.tsv ledger.tsv qpa-manifest.tsv \
+            crash-evidence.tsv harness-errors.tsv lists nonpass-qpa crash-evidence \
+            harness-evidence; do
+            [ ! -e "$control_root/$item" ] \
+                || sudo -n /bin/cp -a "$control_root/$item" "$worker_root/"
+        done
+        sudo -n chown -R gamer:gamer "$worker_root"
+        ROOT=$worker_root
+        [ ! -e "$ROOT/worker.pid" ] || die 'reason=worker_already_started'
+        sudo -n -u gamer env \
+            HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+            XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+            PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
+            PF_ACTS_ROOT="$ROOT" \
+            PF_ACTS_BUNDLE="$BUNDLE" \
+            PF_ACTS_WORKER_FIXTURE="${PF_ACTS_WORKER_FIXTURE:-}" \
+            PF_ACTS_R41_FINALIZE_DELAY="${PF_ACTS_R41_FINALIZE_DELAY:-}" \
+            PF_ACTS_SANITY_PROBE="$SANITY_PROBE" \
+            PF_ACTS_SANITY_PROBE_SHA="$SANITY_PROBE_SHA" \
+            PF_ACTS_DMESG_FIXTURE="${PF_ACTS_DMESG_FIXTURE:-}" \
+            "$ROOT/a-cts-dut" worker-launch >/dev/null 2>&1
+        for _ in 1 2 3 4 5; do
+            [ ! -s "$ROOT/worker.pid" ] || break
+            [ ! -s "$ROOT/worker.exit" ] || break
+            sleep 1
+        done
+        [ -s "$ROOT/worker.pid" ] || worker_failure worker_pid_missing
+        pid=$(cat "$ROOT/worker.pid")
+        sleep 2
+        worker_alive "$pid" || worker_failure worker_not_alive
+        printf 'A_CTS_WORKER state=started pid=%s\n' "$pid"
+        ;;
+    worker-launch) worker_launch ;;
+    worker-supervisor) worker_supervisor ;;
+    finalize-partial) finalize_partial "${arg:-manual}" ;;
+    reseal) make_archive ;;
+    worker-finalize)
+        control_root=$ROOT
+        ROOT=$ROOT/worker-run
+        waited=no
+        terminated=no
+        if [ -r "$ROOT/worker.pid" ] || [ -r "$ROOT/worker.pgid" ]; then
+            if ! { [ -r "$ROOT/worker.pid" ] && [ -r "$ROOT/worker.pgid" ]; }; then
+                die 'reason=worker_identity_incomplete'
+            fi
+            pid=$(cat "$ROOT/worker.pid")
+            pgid=$(cat "$ROOT/worker.pgid")
+            [ "$pgid" = "$pid" ] || die "reason=worker_process_group pid=$pid pgid=$pgid"
+            if worker_group_alive "$pgid"; then
+                waited=yes
+                wait_seconds=${PF_ACTS_FINALIZE_WAIT_SECONDS:-120}
+                case "$wait_seconds" in ''|*[!0-9]*) die "reason=finalize_wait value=$wait_seconds" ;; esac
+                elapsed=0
+                while worker_group_alive "$pgid" && [ "$elapsed" -lt "$wait_seconds" ]; do
+                    sleep 1
+                    elapsed=$((elapsed + 1))
+                done
+                if worker_group_alive "$pgid"; then
+                    terminated=yes
+                    signal_worker_group TERM "$pgid"
+                    term_grace=${PF_ACTS_TERM_GRACE_SECONDS:-10}
+                    case "$term_grace" in ''|*[!0-9]*) die "reason=term_grace value=$term_grace" ;; esac
+                    elapsed=0
+                    while worker_group_alive "$pgid" && [ "$elapsed" -lt "$term_grace" ]; do
+                        sleep 1
+                        elapsed=$((elapsed + 1))
+                    done
+                    if worker_group_alive "$pgid"; then
+                        signal_worker_group KILL "$pgid"
+                        sleep 1
+                    fi
+                    worker_group_alive "$pgid" \
+                        && die "reason=worker_group_could_not_stop pgid=$pgid"
+                fi
+            fi
+        fi
+        if [ ! -s "$ROOT/archive.receipt" ]; then
+            if [ "${PF_ACTS_CONTROL_DIRECT:-}" = 1 ]; then
+                PF_ACTS_ROOT="$ROOT" PF_ACTS_BUNDLE="$BUNDLE" \
+                    PF_ACTS_DMESG_FIXTURE="${PF_ACTS_DMESG_FIXTURE:-}" \
+                    "$ROOT/a-cts-dut" finalize-partial host_collect
+            else
+                sudo -n -u gamer env -i \
+                    HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+                    XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+                    PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
+                    PF_ACTS_ROOT="$ROOT" PF_ACTS_BUNDLE="$BUNDLE" \
+                    "$ROOT/a-cts-dut" finalize-partial host_collect
+            fi
+        fi
+        host_dmesg=$control_root/worker-dmesg.full
+        if [ -n "${PF_ACTS_DMESG_FIXTURE:-}" ]; then
+            cp "$PF_ACTS_DMESG_FIXTURE" "$host_dmesg"
+        else
+            # The debug caller owns this collection file.
+            # shellcheck disable=SC2024
+            sudo -n /usr/bin/dmesg --color=never >"$host_dmesg"
+        fi
+        if [ "${PF_ACTS_CONTROL_DIRECT:-}" = 1 ]; then
+            cp "$host_dmesg" "$ROOT/dmesg.full"
+            PF_ACTS_ROOT="$ROOT" PF_ACTS_BUNDLE="$BUNDLE" "$ROOT/a-cts-dut" reseal
+        else
+            sudo -n /usr/bin/install -m 0644 -o gamer -g gamer "$host_dmesg" "$ROOT/dmesg.full"
+            sudo -n -u gamer env -i \
+                HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
+                XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
+                PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
+                PF_ACTS_ROOT="$ROOT" PF_ACTS_BUNDLE="$BUNDLE" \
+                "$ROOT/a-cts-dut" reseal
+        fi
+        [ -s "$ROOT/archive.receipt" ] || die 'reason=finalize_archive_missing'
+        printf 'A_CTS_WORKER_FINALIZE state=ready %s waited=%s terminated=%s\n' \
+            "$(cat "$ROOT/run-outcome.txt")" "$waited" "$terminated"
+        ;;
+    worker-poll)
+        ROOT=$ROOT/worker-run
+        [ -r "$ROOT/state" ] || die 'reason=state_missing'
+        state=$(cat "$ROOT/state")
+        [ -r "$ROOT/worker.pid" ] || worker_failure worker_pid_missing
+        [ -r "$ROOT/worker.pgid" ] || worker_failure worker_pgid_missing
+        pid=$(cat "$ROOT/worker.pid")
+        pgid=$(cat "$ROOT/worker.pgid")
+        [ "$pgid" = "$pid" ] || worker_failure worker_process_group_invalid
+        if [ -r "$ROOT/recovery-sanity/baseline.summary" ]; then
+            cat "$ROOT/recovery-sanity/baseline.summary"
+        fi
+        if worker_group_alive "$pgid"; then
+            worker_state=${state#state=}; worker_state=${worker_state%% *}
+            state_fields=${state#* }
+            [ "$state_fields" != "$state" ] || state_fields=
+            printf 'A_CTS_PROGRESS state=running worker=alive worker_state=%s%s%s\n' \
+                "$worker_state" "${state_fields:+ }" "$state_fields"
+        else
+            [ -r "$ROOT/worker.exit" ] || worker_failure worker_exit_missing
+            case "$state" in
+                state=complete*|state=partial*) ;;
+                *) worker_failure terminal_state_not_published ;;
+            esac
+            [ -r "$ROOT/archive.receipt" ] || worker_failure terminal_archive_missing
+            printf 'A_CTS_PROGRESS %s worker=exited %s\n' "$state" "$(cat "$ROOT/worker.exit")"
+        fi
+        ;;
+    archive-receipt)
+        ROOT=$ROOT/worker-run
+        if ! { [ -r "$ROOT/archive.receipt" ] && [ -r "$ROOT/final.txt" ]; }; then
+            die 'reason=archive_not_ready'
+        fi
+        cat "$ROOT/archive.receipt"; cat "$ROOT/final.txt"
+        ;;
+    archive-chunk)
+        case "$arg" in ''|*[!0-9]*) die 'reason=chunk_index' ;; esac
+        control_root=$ROOT
+        [ ! -r "$ROOT/worker-run/results.tar.gz" ] || ROOT=$ROOT/worker-run
+        chunk=$control_root/archive-chunk.tmp
+        dd if="$ROOT/results.tar.gz" of="$chunk" bs=36000 skip="$arg" count=1 status=none
+        printf 'sha256=%s bytes=%s\n' "$(sha256sum "$chunk" | cut -d' ' -f1)" "$(wc -c <"$chunk")"
+        base64 -w0 "$chunk"
+        printf '\n'
+        find "$chunk" -maxdepth 0 -type f -delete
+        ;;
+    cleanup)
+        control_root=$ROOT
+        ROOT=$ROOT/worker-run
+        if [ -r "$ROOT/worker.pid" ] || [ -r "$ROOT/worker.pgid" ]; then
+            if ! { [ -r "$ROOT/worker.pid" ] && [ -r "$ROOT/worker.pgid" ]; }; then
+                die 'reason=worker_identity_incomplete'
+            fi
+            pid=$(cat "$ROOT/worker.pid")
+            pgid=$(cat "$ROOT/worker.pgid")
+            [ "$pgid" = "$pid" ] || die "reason=worker_process_group pid=$pid pgid=$pgid"
+            if worker_group_alive "$pgid"; then
+                signal_worker_group TERM "$pgid"
+                for _ in 1 2 3 4 5; do worker_group_alive "$pgid" || break; sleep 1; done
+                if worker_group_alive "$pgid"; then
+                    signal_worker_group KILL "$pgid"
+                    sleep 1
+                fi
+                worker_group_alive "$pgid" \
+                    && die "reason=worker_group_could_not_stop pgid=$pgid"
+            fi
+        fi
+        sudo -n find "$control_root" -mindepth 1 -delete
+        printf 'A_CTS_CLEANUP state=complete\n'
+        ;;
+    *) die 'reason=unknown_mode' ;;
+esac
+end
