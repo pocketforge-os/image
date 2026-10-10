@@ -66,6 +66,7 @@ recovery = blocks["recovery-open"]
 assert "COPY --from=image-src . /work/image" not in cloud
 assert "COPY --from=image-src . /work/image" not in recovery
 assert "COPY --from=image-src tests/test-cloud-init-firstboot.sh" in cloud
+assert "COPY --from=image-src scripts/generate-build-id.sh" in cloud
 assert "COPY --from=image-src apps/pocketforge-recovery-entry" in recovery
 
 profile_only_args = {

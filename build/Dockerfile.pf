@@ -1165,6 +1165,7 @@ COPY --from=image-src tests/fixtures/cloud-init-firstboot /work/image/tests/fixt
 COPY --from=image-src build/Dockerfile.pf /work/image/build/Dockerfile.pf
 COPY --from=image-src scripts/build-rootfs.sh /work/image/scripts/build-rootfs.sh
 COPY --from=image-src scripts/build-sd-image.sh /work/image/scripts/build-sd-image.sh
+COPY --from=image-src scripts/generate-build-id.sh /work/image/scripts/generate-build-id.sh
 COPY --from=image-src Makefile /work/image/Makefile
 COPY --from=image-src rootfs-packages.txt /work/image/rootfs-packages.txt
 COPY --from=image-src boards/tsp/boot-resource /work/image/boards/tsp/boot-resource
