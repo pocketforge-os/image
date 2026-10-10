@@ -6,7 +6,7 @@ fail() { printf 'A_CTS_VERIFY FAIL %s\n' "$*" >&2; exit 1; }
 for file in expected.tsv ledger.tsv precondition.txt worker-environment.txt recovery-policy.txt run-outcome.txt dmesg.full final.txt state; do
     [[ -s "$ROOT/$file" ]] || fail "reason=missing_file file=$file"
 done
-for file in qpa-manifest.tsv crash-evidence.tsv harness-errors.tsv; do
+for file in qpa-manifest.tsv crash-evidence.tsv gpu-reset-events.tsv harness-errors.tsv recovery-wait.tsv; do
     [[ -f "$ROOT/$file" ]] || fail "reason=missing_file file=$file"
 done
 grep -q '^GL_VERSION ' "$ROOT/precondition.txt" || fail reason=gl_version_missing
@@ -19,8 +19,36 @@ case "$outcome" in
     partial) ;;
     *) fail reason=run_outcome ;;
 esac
-grep -qx 'A_CTS_RECOVERY_RULE recoverable_crash_cap=none baseline=required stop=sanity_baseline_failed_or_first_failed_post_crash_draw wall_clock=existing_list_budget' \
+grep -qx 'A_CTS_RECOVERY_RULE reset_case_cap=64 observed_rate=1/68 projected_full=43 retry_delays_s=1,2,4,8,15 probe_timeout_s=10 recovery_window_s=105 baseline=required stop=sanity_baseline_failed_or_retry_exhausted_or_reset_cap wall_clock=existing_list_budget' \
     "$ROOT/recovery-policy.txt" || fail reason=recovery_policy
+while IFS=$'\t' read -r retry delay verdict started ended result_path extra; do
+    [[ -z ${extra:-} ]] || fail reason=recovery_wait_fields
+    case "$retry:$delay" in 1:1|2:2|3:4|4:8|5:15) ;; *) fail reason=recovery_wait_schedule ;; esac
+    case "$verdict" in pass|fail) ;; *) fail reason=recovery_wait_verdict ;; esac
+    [[ $started == ????-??-??T??:??:??Z && $ended == ????-??-??T??:??:??Z ]] \
+        || fail reason=recovery_wait_timestamp
+    result="$ROOT/$result_path"
+    [[ -s $result ]] || fail reason=recovery_wait_result
+    prefix=${result%.result}
+    [[ -f $prefix.stdout && -f $prefix.stderr ]] || fail reason=recovery_wait_streams
+    grep -q " verdict=$verdict " "$result" || fail reason=recovery_wait_result_verdict
+done <"$ROOT/recovery-wait.tsv"
+while IFS=$'\t' read -r label unit attempt reset_count case_hint started ended bytes sha extra; do
+    [[ -z ${extra:-} ]] || fail reason=gpu_reset_event_fields
+    [[ $reset_count =~ ^[0-9]+$ && $reset_count -ge 1 && $reset_count -le 64 ]] \
+        || fail reason=gpu_reset_event_count
+    [[ -n $case_hint ]] || fail reason=gpu_reset_event_case
+    [[ $started == ????-??-??T??:??:??Z && $ended == ????-??-??T??:??:??Z ]] \
+        || fail reason=gpu_reset_event_timestamp
+    event="$ROOT/gpu-reset-events/$label/$unit-$attempt.dmesg"
+    [[ -s $event && $(wc -c <"$event") -eq $bytes ]] \
+        || fail reason=gpu_reset_event_size
+    [[ $(sha256sum "$event" | cut -d' ' -f1) == "$sha" ]] \
+        || fail reason=gpu_reset_event_sha
+    awk 'tolower($0) ~ /(pvr|powervr|gpu)/ && \
+        tolower($0) ~ /(received context reset notification|guilty lockup|page fault occurred|unknown fwccb command|gpu fault)/ { found=1 } \
+        END { exit !found }' "$event" || fail reason=gpu_reset_event_signature
+done <"$ROOT/gpu-reset-events.tsv"
 for line in \
     'RUN_AS=gamer' \
     'EGL_PLATFORM=surfaceless' \
@@ -91,6 +119,9 @@ while IFS=$'\t' read -r label case_name signal pc module_offset unit attempt byt
         || fail "reason=crash_first_reset_sha case=$case_name"
     if [[ $gpu_reset == yes ]]; then
         [[ $(cat "$first_reset") != none ]] || fail "reason=crash_first_reset_empty case=$case_name"
+        awk -F '\t' -v l="$label" -v u="$unit" -v a="$attempt" \
+            '$1==l && $2==u && $3==a { found=1 } END { exit !found }' \
+            "$ROOT/gpu-reset-events.tsv" || fail "reason=gpu_reset_event_missing case=$case_name"
     else
         [[ $(cat "$first_reset") == none ]] || fail "reason=crash_false_reset_line case=$case_name"
     fi
