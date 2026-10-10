@@ -267,7 +267,7 @@ pull_egl_preflight() {
 }
 
 collect_worker_results() {
-    local expected_outcome=$1 remote archive_sha archive_bytes chunks index outcome_line outcome
+    local expected_outcome=$1 remote archive_sha archive_bytes chunks index outcome_line outcome verify_rc
     STAGE=worker-finalize
     dutexec worker-finalize 300 "$R/cmds/worker-finalize.txt" || stop worker-finalize
     # This is a stage label, not arithmetic.
@@ -301,9 +301,16 @@ collect_worker_results() {
         || stop archive-sha
     mkdir -p "$R/results/unpacked"
     tar -xzf "$R/results/results.tar.gz" -C "$R/results/unpacked" || stop archive-unpack
+    set +e
     "$K/verify-results.sh" "$R/results/unpacked" \
-        >"$R/results/host-verifier.txt" 2>"$R/results/host-verifier.stderr" \
-        || stop host-aggregate
+        >"$R/results/host-verifier.txt" 2>"$R/results/host-verifier.stderr"
+    verify_rc=$?
+    set -e
+    if [[ $verify_rc -ne 0 ]]; then
+        tee -a "$R/run.log" <"$R/results/host-verifier.txt"
+        tee -a "$R/run.log" <"$R/results/host-verifier.stderr" >&2
+        stop "worker-verdict-invalid rc=$verify_rc archive_sha256=$archive_sha archive_bytes=$archive_bytes evidence=collected"
+    fi
     outcome_line=$("$K/response-select" worker-run-outcome \
         '^outcome=(complete|complete_with_harness_error|partial)( .*)?$' \
         "$R/results/unpacked/run-outcome.txt") || stop worker-outcome-cardinality

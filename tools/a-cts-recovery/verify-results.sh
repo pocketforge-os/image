@@ -85,19 +85,33 @@ done <"$ROOT/ledger.tsv"
 crash_count=$(awk -F '\t' '$3=="Crash" { n++ } END { print n+0 }' "$ROOT/ledger.tsv")
 evidence_count=$(wc -l <"$ROOT/crash-evidence.tsv")
 [[ $crash_count -eq $evidence_count ]] || fail reason=crash_evidence_count
+incomplete_count=$(awk -F '\t' '$18=="crash_evidence_incomplete" { n++ } END { print n+0 }' \
+    "$ROOT/crash-evidence.tsv")
 if [[ $outcome == complete || $outcome == complete_with_harness_error || $crash_count -gt 0 ]]; then
     [[ -s $ROOT/recovery-sanity/baseline.result ]] || fail reason=sanity_baseline_missing
     grep -q ' verdict=pass ' "$ROOT/recovery-sanity/baseline.result" \
         || fail reason=sanity_baseline_failed
 fi
-while IFS=$'\t' read -r label case_name signal pc module_offset unit attempt bytes sha started ended sanity dmesg_bytes dmesg_sha gpu_reset first_reset_bytes first_reset_sha; do
+while IFS=$'\t' read -r label case_name signal pc module_offset unit attempt bytes sha started ended sanity dmesg_bytes dmesg_sha gpu_reset first_reset_bytes first_reset_sha evidence_status extra; do
     [[ -n $case_name ]] || continue
+    [[ -z ${extra:-} ]] || fail "reason=crash_evidence_fields case=$case_name"
     awk -F '\t' -v l="$label" -v c="$case_name" -v u="$unit" -v a="$attempt" \
         '$1==l && $2==c && $3=="Crash" && $4==u && $5==a { found=1 } END { exit !found }' \
         "$ROOT/ledger.tsv" || fail "reason=crash_evidence_orphan case=$case_name"
     case "$signal" in SIG*|GPU_RESET|PROCESS_EXIT) ;; *) fail "reason=crash_signal_missing case=$case_name" ;; esac
-    case "$pc" in 0x*|kernel-log|qpa-active) ;; *) fail "reason=crash_pc_missing case=$case_name" ;; esac
-    [[ $module_offset != unknown ]] || fail "reason=crash_module_offset_missing case=$case_name"
+    case "$evidence_status" in
+        complete)
+            case "$pc" in 0x*|kernel-log|qpa-active) ;; *) fail "reason=crash_pc_missing case=$case_name" ;; esac
+            [[ $module_offset != unknown ]] \
+                || fail "reason=crash_module_offset_missing case=$case_name"
+            ;;
+        crash_evidence_incomplete)
+            if [[ $pc != unknown && $module_offset != unknown ]]; then
+                fail "reason=crash_evidence_incomplete_without_gap case=$case_name"
+            fi
+            ;;
+        *) fail "reason=crash_evidence_status case=$case_name" ;;
+    esac
     evidence="$ROOT/crash-evidence/$label/$unit-$attempt.txt"
     [[ -f $evidence ]] || fail "reason=crash_evidence_missing case=$case_name"
     [[ $bytes -le 4096 && $(wc -c <"$evidence") -eq $bytes ]] \
@@ -145,5 +159,8 @@ awk -F '\t' '
 ' harness="$(wc -l <"$ROOT/harness-errors.tsv")" "$ROOT/ledger.tsv" >>"$computed"
 cmp -s "$computed" "$ROOT/final.txt" || fail reason=final_mismatch
 grep -Eq '^state=(complete|complete_with_harness_error|aggregating|partial) ' "$ROOT/state" || fail reason=state_not_complete
+if [[ $incomplete_count -gt 0 ]]; then
+    fail "outcome=$outcome verdict=invalid reason=crash_evidence_incomplete cases=$incomplete_count evidence=verified final_match=yes qpa_match=yes"
+fi
 printf 'A_CTS_VERIFY PASS outcome=%s expected=%s nonpass=%s final_match=yes qpa_match=yes crash_evidence=%s\n' \
     "$outcome" "$expected" "$(awk -F '\t' '$3!="Pass" { n++ } END { print n+0 }' "$ROOT/ledger.tsv")" "$evidence_count"
