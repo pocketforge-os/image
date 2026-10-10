@@ -44,11 +44,54 @@ KNOWN_CAPABILITIES = {
 ROOT_KEYS = {
     "schema",
     "format",
+    "distribution",
     "digest",
     "platform-runtime",
     "platform-runtime-abi",
     "platform-runtime-version",
     "library-paths",
+}
+
+PLATFORM_BASE_ABI_SONAMES = {
+    "ld-linux-aarch64.so.1",
+    "libc.so.6",
+    "libdl.so.2",
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libstdc++.so.6",
+}
+
+PLATFORM_REQUIRED_SONAMES = {
+    "dri_gbm.so": "usr/local/lib/gbm/dri_gbm.so",
+    "libEGL.so.1": "usr/lib/aarch64-linux-gnu/libEGL.so.1",
+    "libEGL_mesa.so.0": "usr/local/lib/libEGL_mesa.so.0",
+    "libGLESv2.so.2": "usr/lib/aarch64-linux-gnu/libGLESv2.so.2",
+    "libdril_dri.so": "usr/local/lib/dri/libdril_dri.so",
+    "libdrm.so.2": "usr/lib/aarch64-linux-gnu/libdrm.so.2",
+    "libgbm.so.1": "usr/local/lib/libgbm.so.1",
+    "libvulkan.so.1": "usr/lib/aarch64-linux-gnu/libvulkan.so.1",
+    "libvulkan_powervr_mesa.so": "usr/local/lib/libvulkan_powervr_mesa.so",
+    "libwayland-client.so.0": "usr/lib/aarch64-linux-gnu/libwayland-client.so.0",
+    "libwayland-egl.so.1": "usr/lib/aarch64-linux-gnu/libwayland-egl.so.1",
+    "libxkbcommon.so.0": "usr/lib/aarch64-linux-gnu/libxkbcommon.so.0",
+}
+
+PLATFORM_DISCOVERY_PATHS = {
+    "usr/share/glvnd/egl_vendor.d/50_mesa.json": (
+        "/run/pocketforge/platform-runtime/usr/local/lib/libEGL_mesa.so.0"
+    ),
+    "usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json": (
+        "/run/pocketforge/platform-runtime/usr/local/lib/"
+        "libvulkan_powervr_mesa.so"
+    ),
+}
+
+PLATFORM_REQUIRED_DATA = {
+    "usr/local/lib/dri/zink_dri.so",
+    "usr/local/share/drirc.d/10-pocketforge-zink.conf",
+    *PLATFORM_DISCOVERY_PATHS,
 }
 
 RESOURCE_PREFIXES = {
@@ -83,6 +126,7 @@ CAPABILITY_OUTCOMES = {
 
 REFUSAL_EXIT = {
     "runtime_root_missing": 66,
+    "runtime_root_metadata_missing": 66,
     "platform_runtime_missing": 66,
     "required_resource_missing": 66,
     "sandbox_render_failed": 74,
@@ -279,6 +323,112 @@ def platform_manifest_digest(platform_root: Path) -> str:
     return hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()
 
 
+def require_platform_abi(platform_root: Path) -> None:
+    abi_path = platform_root / "abi.json"
+    if not abi_path.is_file() or abi_path.is_symlink():
+        refuse(
+            "platform_runtime_incompatible",
+            f"Debian 13 platform ABI manifest is absent or not regular: {abi_path}",
+        )
+    try:
+        value = json.loads(abi_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        refuse("platform_runtime_incompatible", f"invalid platform ABI manifest: {error}")
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        refuse("platform_runtime_incompatible", "platform ABI schema_version must be 1")
+    if value.get("host_distribution") != "debian-12":
+        refuse(
+            "platform_runtime_incompatible",
+            "platform ABI host_distribution must be debian-12",
+        )
+
+    base = value.get("base_abi_sonames")
+    if (
+        not isinstance(base, list)
+        or any(not isinstance(item, str) for item in base)
+        or set(base) != PLATFORM_BASE_ABI_SONAMES
+        or len(base) != len(PLATFORM_BASE_ABI_SONAMES)
+    ):
+        refuse(
+            "platform_runtime_incompatible",
+            "platform ABI base SONAME ownership differs",
+        )
+
+    sonames = value.get("sonames")
+    if not isinstance(sonames, dict) or any(
+        not isinstance(soname, str) or not isinstance(relative, str)
+        for soname, relative in sonames.items()
+    ):
+        refuse("platform_runtime_incompatible", "platform ABI sonames map is invalid")
+    if PLATFORM_BASE_ABI_SONAMES.intersection(sonames):
+        refuse(
+            "platform_runtime_incompatible",
+            "platform ABI slice claims an app-root base SONAME",
+        )
+    for soname, relative in sonames.items():
+        path = PurePosixPath(relative)
+        if path.is_absolute() or ".." in path.parts or str(path) != relative:
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI has a non-canonical SONAME path: {soname}",
+            )
+        provider = platform_root / relative
+        if not provider.is_file() or provider.is_symlink():
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI SONAME provider is absent or not regular: {relative}",
+            )
+    for soname, expected in PLATFORM_REQUIRED_SONAMES.items():
+        if sonames.get(soname) != expected:
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI SONAME ownership differs: {soname}",
+            )
+
+    discovery = value.get("json_library_paths")
+    if not isinstance(discovery, dict) or any(
+        not isinstance(relative, str) or not isinstance(runtime_path, str)
+        for relative, runtime_path in discovery.items()
+    ):
+        refuse(
+            "platform_runtime_incompatible",
+            "platform ABI discovery-path map is invalid",
+        )
+    for relative, expected in PLATFORM_DISCOVERY_PATHS.items():
+        if discovery.get(relative) != expected:
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI discovery ownership differs: {relative}",
+            )
+        discovery_file = platform_root / relative
+        if not discovery_file.is_file() or discovery_file.is_symlink():
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI discovery file is absent or not regular: {relative}",
+            )
+
+    data = value.get("data")
+    if not isinstance(data, dict) or any(
+        not isinstance(relative, str)
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        for relative, digest in data.items()
+    ):
+        refuse("platform_runtime_incompatible", "platform ABI data map is invalid")
+    for relative in PLATFORM_REQUIRED_DATA:
+        data_file = platform_root / relative
+        if (
+            not data_file.is_file()
+            or data_file.is_symlink()
+            or data.get(relative)
+            != sha256_file(data_file, "platform_runtime_missing")
+        ):
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI data ownership differs: {relative}",
+            )
+
+
 def require_artifacts(
     *,
     app_id: str,
@@ -287,12 +437,47 @@ def require_artifacts(
     platform_digest: str,
     app_root_store: Path,
     platform_runtime_store: Path,
+    distribution: str,
 ) -> None:
     root_image = app_root_store / app_id / f"sha256-{app_digest}.raw"
     if not root_image.is_file() or root_image.is_symlink():
         refuse("runtime_root_missing", f"runtime root is absent or not a regular file: {root_image}")
     if sha256_file(root_image) != app_digest:
         refuse("runtime_root_digest_mismatch", f"runtime root digest differs: {root_image}")
+
+    metadata_path = root_image.with_suffix(".metadata.json")
+    if metadata_path.exists():
+        if not metadata_path.is_file() or metadata_path.is_symlink():
+            refuse(
+                "runtime_root_metadata_missing",
+                f"runtime root metadata is not a regular file: {metadata_path}",
+            )
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            refuse("runtime_root_invalid", f"invalid runtime root metadata: {error}")
+        if not isinstance(metadata, dict) or metadata.get("schema_version") != 1:
+            refuse("runtime_root_invalid", "runtime root metadata schema_version must be 1")
+        if metadata.get("sha256") != app_digest:
+            refuse("runtime_root_digest_mismatch", "runtime root metadata digest differs")
+        if metadata.get("distribution") != distribution:
+            refuse(
+                "runtime_root_distribution_mismatch",
+                "runtime root metadata distribution differs",
+            )
+        expected_suite = {"debian-12": "bookworm", "debian-13": "trixie"}[
+            distribution
+        ]
+        if metadata.get("suite") != expected_suite or metadata.get("architecture") != "arm64":
+            refuse(
+                "runtime_root_distribution_mismatch",
+                "runtime root suite/architecture differs",
+            )
+    elif distribution != "debian-12":
+        refuse(
+            "runtime_root_metadata_missing",
+            f"runtime root metadata is absent: {metadata_path}",
+        )
 
     platform_dir = platform.replace("/", "-")
     platform_root = platform_runtime_store / platform_dir / f"sha256-{platform_digest}"
@@ -316,6 +501,8 @@ def require_artifacts(
             "platform_runtime_digest_mismatch",
             f"platform runtime identity differs: {platform_root}",
         )
+    if distribution == "debian-13":
+        require_platform_abi(platform_root)
     if platform_manifest_digest(platform_root) != platform_digest:
         refuse(
             "platform_runtime_digest_mismatch",
@@ -347,6 +534,12 @@ def render(
         refuse("runtime_root_invalid", "runtime.root schema must be 1")
     if root.get("format") != "squashfs":
         refuse("runtime_root_invalid", "only squashfs runtime roots are accepted")
+    distribution = root.get("distribution", "debian-12")
+    if distribution not in {"debian-12", "debian-13"}:
+        refuse(
+            "runtime_root_invalid",
+            "runtime.root distribution must be debian-12 or debian-13",
+        )
 
     app_id = require_string(app.get("id"), "app.id")
     if not valid_app_id(app_id):
@@ -381,6 +574,7 @@ def render(
         platform_digest=platform_hex,
         app_root_store=app_root_store,
         platform_runtime_store=platform_runtime_store,
+        distribution=distribution,
     )
 
     requirements = capability_requirements(app.get("use", []))
@@ -453,18 +647,21 @@ def render(
         f"/usr/lib/pocketforge/platform-runtimes/{platform_dir}/sha256-{platform_hex}"
     )
     app_root = f"/opt/pocketforge/apps/{app_id}"
-    ld_paths = [f"{app_root}/{item}" for item in lib_paths]
-    ld_paths.extend(
-        [
-            "/run/pocketforge/platform-runtime/usr/local/lib",
-            "/run/pocketforge/platform-runtime/usr/lib/aarch64-linux-gnu",
-            "/usr/lib/aarch64-linux-gnu",
-            "/lib/aarch64-linux-gnu",
-        ]
-    )
+    app_ld_paths = [f"{app_root}/{item}" for item in lib_paths]
+    platform_ld_paths = [
+        "/run/pocketforge/platform-runtime/usr/local/lib",
+        "/run/pocketforge/platform-runtime/usr/lib/aarch64-linux-gnu",
+    ]
+    root_ld_paths = ["/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu"]
+    if distribution == "debian-13":
+        ld_paths = platform_ld_paths + app_ld_paths + root_ld_paths
+    else:
+        ld_paths = app_ld_paths + platform_ld_paths + root_ld_paths
 
     lines = [
         "# Generated by render-app-runtime-root.py; DO NOT EDIT.",
+        f"# runtime root distribution: {distribution} "
+        f"({'trixie' if distribution == 'debian-13' else 'bookworm'})",
         "[Service]",
         f"RootImage=/var/lib/pocketforge/app-roots/{app_id}/sha256-{app_digest}.raw",
         "RootImageOptions=ro",
@@ -483,6 +680,15 @@ def render(
         f"BindReadOnlyPaths={app_root}/app.toml",
         f'Environment="LD_LIBRARY_PATH={":".join(ld_paths)}"',
     ]
+    if distribution == "debian-13":
+        lines.extend(
+            [
+                'Environment="VK_DRIVER_FILES=/run/pocketforge/platform-runtime/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"',
+                'Environment="__EGL_VENDOR_LIBRARY_FILENAMES=/run/pocketforge/platform-runtime/usr/share/glvnd/egl_vendor.d/50_mesa.json"',
+                'Environment="LIBGL_DRIVERS_PATH=/run/pocketforge/platform-runtime/usr/local/lib/dri"',
+                'Environment="GBM_BACKENDS_PATH=/run/pocketforge/platform-runtime/usr/local/lib/gbm"',
+            ]
+        )
     needs_network = launch.get("needs_network", False)
     if not isinstance(needs_network, bool):
         refuse("descriptor_invalid", "launch.needs_network must be boolean")

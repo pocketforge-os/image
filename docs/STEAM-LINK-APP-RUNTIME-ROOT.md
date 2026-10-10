@@ -1,6 +1,7 @@
-# Per-app Bookworm runtime roots for `pf-app@`
+# Per-app Debian runtime roots for `pf-app@`
 
-Status: offline design and host-QEMU prototype for `tsp-mc9m.41.996.1`.
+Status: offline design and host-QEMU prototypes for `tsp-mc9m.41.996.1` and
+the Debian 13 ABI extension in `tsp-mc9m.41.996.8`.
 This document does not claim an A133 result, redistribution permission, or a
 production implementation. The production schema, parser, reason-code, and
 unit changes are intentionally deferred while the governing `tsp-f3fm.202`
@@ -105,6 +106,7 @@ platform-version = "20"
 [runtime.root]
 schema = 1
 format = "squashfs"
+distribution = "debian-13"
 digest = "sha256:<64 lowercase hex>"
 platform-runtime = "pocketforge/bookworm-aarch64"
 platform-runtime-abi = "1"
@@ -124,8 +126,11 @@ unit with no generated drop-in. This is the compatibility default and is
 covered by a byte-independent “action=unchanged” test. Poolsuite therefore
 continues on the verified host root.
 
-When present, every field above is required except `library-paths`, whose
-default is an empty array. Unknown fields are refused. `schema` is exactly 1;
+When present, every field above is required except `distribution` and
+`library-paths`. `distribution` defaults to `debian-12` for descriptors and
+Bookworm images created before this extension; its only accepted values are
+`debian-12` and `debian-13`. A scalar `root` remains invalid. `library-paths`
+defaults to an empty array. Unknown fields are refused. `schema` is exactly 1;
 `format` is exactly `squashfs`; both identities use lowercase SHA-256. Library
 paths must be unique canonical relative paths: no empty, absolute, `.`, `..`,
 or normalized-different value. They are expanded only below the fixed app
@@ -149,9 +154,11 @@ Installed content is root-owned, non-symlinked, and content addressed:
 ```text
 /opt/pocketforge/apps/<app-id>/app.toml
 /var/lib/pocketforge/app-roots/<app-id>/sha256-<root-digest>.raw
+/var/lib/pocketforge/app-roots/<app-id>/sha256-<root-digest>.metadata.json
 /usr/lib/pocketforge/platform-runtimes/
   pocketforge-bookworm-aarch64/sha256-<manifest-digest>/
     .manifest-sha256
+    abi.json
     usr/local/lib/...
     usr/lib/aarch64-linux-gnu/...
 ```
@@ -177,10 +184,16 @@ Compatibility requires all of the following:
 
 1. The existing device `family`, `abi`, and `platform-version` checks pass.
 2. Root `schema` and `format` are supported and its image digest matches.
+   Debian 13 roots additionally require a regular metadata sidecar whose
+   distribution, Trixie suite, arm64 architecture, and digest all match.
 3. Platform-runtime id and ABI match an installed entry exactly.
 4. The descriptor's platform-runtime version equals that entry's manifest
    digest exactly. There is no “newer is probably compatible” fallback.
-5. All required capabilities have concrete resources in the trusted host
+5. Debian 13 additionally requires the selected platform tree's `abi.json` to
+   identify a Debian 12 host build, preserve the exact eight-object base ABI
+   in the app root, and own every required graphics/WSI SONAME and relocated
+   discovery path at its expected regular file.
+6. All required capabilities have concrete resources in the trusted host
    inventory. Optional capabilities retain the existing parser semantics and
    receive resources only when advertised by the device contract.
 
@@ -190,6 +203,33 @@ processes retain their already-mounted objects. Rollback republishes the prior
 reference; garbage collection removes only objects that are unreferenced by
 installed descriptors, rollback history, and running units. A partially
 installed version is never selected.
+
+### Debian 12/13 bind-mount ABI
+
+Debian 13 is a forward-only app-root change. The host platform slice remains
+built against Debian 12 so its required symbol versions are no newer than the
+Trixie base ABI. No Trixie library may leak into that slice. The root builder
+maps `debian-12` to Bookworm and `debian-13` to Trixie at a required Debian
+snapshot, always for arm64, and records that selection beside the squashfs.
+
+| ABI owner | Supplied objects or resources | Mounted/resolved from |
+| --- | --- | --- |
+| App root | `ld-linux-aarch64.so.1`, libc, libm, libpthread, libdl, librt, libstdc++, and libgcc_s | selected Bookworm or Trixie squashfs |
+| Host graphics provider | PowerVR Vulkan ICD, Mesa EGL vendor, GBM, and DRI modules | read-only platform runtime under `/run/pocketforge/platform-runtime/usr/local/lib` |
+| Host neutral graphics/WSI | GLVND EGL/GLES, Vulkan loader, libdrm, Wayland client/EGL, and xkbcommon plus their recursive non-base dependencies | read-only Debian 12 platform runtime |
+| Host discovery policy | relocated Vulkan ICD JSON, relocated GLVND JSON, and Zink `drirc` policy | read-only platform runtime `usr/share` trees |
+| Application stack | WPE/WebKit, Steam Link, and other app-specific libraries | selected app root and its validated app library paths |
+| Session/device ABI | exact Wayland/Xwayland/audio/broker sockets and exact allowed render/input/media/sound device nodes | trusted host inventory; never copied into either userspace tree |
+
+For Debian 13, platform library directories precede app-specific and root
+directories in `LD_LIBRARY_PATH`. `VK_DRIVER_FILES`,
+`__EGL_VENDOR_LIBRARY_FILENAMES`, `LIBGL_DRIVERS_PATH`, and
+`GBM_BACKENDS_PATH` point only into the platform mount. The platform builder
+also relocates absolute `ICD.library_path` fields into that mount, recursively
+copies every non-base `DT_NEEDED` provider, and records the exact SONAME/path
+map plus root-provided set in `abi.json`. The loader verifier refuses missing
+objects, platform objects shadowed by Trixie, or a base ABI object resolved
+from the platform slice.
 
 ## Same-unit rendering and refusal behavior
 
@@ -241,6 +281,8 @@ Proposed new reason codes extend, rather than replace, runtime's current enum:
 | `runtime_root_invalid` | 65 | unknown field, schema/format/id, or malformed identity |
 | `runtime_root_invalid_library_path` | 65 | non-canonical, escaping, or duplicate library path |
 | `runtime_root_missing` | 66 | selected root is absent, non-regular, or a symlink |
+| `runtime_root_metadata_missing` | 66 | a Debian 13 root has no regular identity sidecar |
+| `runtime_root_distribution_mismatch` | 65 | sidecar distribution, suite, or architecture differs |
 | `runtime_root_digest_mismatch` | 65 | stored root bytes differ from the descriptor |
 | `platform_runtime_missing` | 66 | selected platform runtime/identity marker is absent |
 | `platform_runtime_incompatible` | 65 | id, ABI, or exact version is incompatible |
@@ -425,6 +467,34 @@ compositor, real ALSA device, controller, codec node, PowerVR host stack, Steam
 account, or stream is exercised. Reaching the same remote-client idle marker
 demonstrates loader/startup closure only.
 
+### Debian 13 arm64 QEMU-user evidence (2026-10-10)
+
+This extension was exercised without a device or privileged container. A
+rootless `mmdebstrap --mode=fakechroot` build at Debian snapshot
+`20260601T000000Z` produced an arm64 Trixie squashfs of 46,526,464 bytes with
+SHA-256
+`fc8c5d2275d41563ec75e193b70935557c2e6f428c1944dafcc9f51cfc92b71c`.
+The Debian 12 host slice came from the existing source-owned open-provider
+root at `gpu-um-tsp@fd904962ec4726d038cf5b5e895598ac48081cce`, whose
+provenance records Bookworm snapshot `20260601T000000Z`, and produced ABI
+manifest SHA-256
+`13863136dcd5ddbc6697f830593e735b43374a81cdf61dc2d37712dbf2fa422a`.
+
+An arm64 dynamic probe with SHA-256
+`6f07633872f2115713b915b8d4568b7395502f7f4aab7be4fa4fdda68416c833`
+was launched under QEMU-user from the extracted Trixie root. It opened the
+host PowerVR ICD, Vulkan loader, EGL/GLES, GBM, libdrm, Wayland, and xkbcommon
+objects from the platform mount while libc, libstdc++, libm, pthread, libgcc_s,
+and the interpreter resolved from Trixie. The positive loader trace SHA-256 is
+`6b77f1ddaee297c238ff61eba1de308f1c6f477ea918e03abab3db9cbb213723`.
+In the same matrix, a Trixie-shadowed `libdrm.so.2` and a removed platform
+`libdrm.so.2` both failed verification before acceptance.
+
+This is laptop QEMU-user loader/open evidence, not A133 device evidence. With
+no render node it cannot prove a PowerVR ioctl path or print the selected
+physical driver name; that check is pre-registered for coordinator-scheduled
+bench execution.
+
 ## Security boundary and residual attack surface
 
 The boundary is a systemd mount/user/device namespace around an unprivileged
@@ -449,6 +519,11 @@ ownership, or A133 performance.
 `tests/test-app-runtime-root.sh` covers:
 
 - exact legacy behavior when `runtime.root` is omitted;
+- Bookworm/Trixie selector mapping and invalid-selector refusal;
+- recursive host-platform closure construction and a missing dependency
+  negative control;
+- positive, missing, and Trixie-shadowed loader traces in one ABI matrix;
+- Debian 13 metadata matching and platform-first loader/discovery paths;
 - deterministic root drop-in rendering and fail-closed hardening directives;
 - every current canonical capability plus proposed `video-decode` having an
   explicit resource or no-direct-device outcome;
@@ -477,6 +552,14 @@ It exited 1 with `FAILED (errors=13)` because
 `scripts/render-app-runtime-root.py` was absent. The initial namespace negative
 control also failed until the writable state bind was isolated beneath a
 read-only host view. The committed suite is the GREEN regression gate.
+
+For the Debian 13 extension, the named RED tests were
+`test_debian_13_root_is_selected_and_host_runtime_wins` and
+`test_root_distribution_metadata_must_match`; both initially failed because
+the renderer rejected `distribution` as an unknown field. After the selector,
+metadata, builder, and loader ABI changes, the same invocation passed all 13
+renderer cases and all 3 ABI cases (the container lacked bubblewrap, so the
+pre-existing namespace case remained explicitly skipped there).
 
 ## Landing plan and current blocker
 
