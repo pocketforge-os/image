@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+K=$(cd "$(dirname "$0")" && pwd)
+label=${1:?chunk label}
+response=${2:?normalized DutExec stdout}
+output=${3:?decoded output}
+encoded=$output.b64
+
+cleanup() {
+    [[ ! -e $encoded ]] || find "$encoded" -maxdepth 0 -type f -delete
+}
+trap cleanup EXIT
+
+metadata=$("$K/response-select" "$label-metadata" \
+    '^sha256=[0-9a-f]{64} bytes=[0-9]+$' "$response")
+payload=$("$K/response-select" "$label-base64" \
+    '^[A-Za-z0-9+/]+={0,2}$' "$response")
+chunk_sha=${metadata#sha256=}; chunk_sha=${chunk_sha%% bytes=*}
+chunk_bytes=${metadata##* bytes=}
+
+printf '%s\n' "$payload" >"$encoded"
+base64 -d <"$encoded" >"$output"
+[[ $(wc -c <"$output") == "$chunk_bytes" ]] || {
+    printf 'A_CTS_CHUNK_HOST chunk=%s verdict=invalid reason=bytes expected=%s actual=%s\n' \
+        "$label" "$chunk_bytes" "$(wc -c <"$output")" >&2
+    exit 67
+}
+actual_sha=$(sha256sum "$output" | cut -d' ' -f1)
+[[ $actual_sha == "$chunk_sha" ]] || {
+    printf 'A_CTS_CHUNK_HOST chunk=%s verdict=invalid reason=sha expected=%s actual=%s\n' \
+        "$label" "$chunk_sha" "$actual_sha" >&2
+    exit 68
+}
+printf 'A_CTS_CHUNK_HOST chunk=%s verdict=verified sha256=%s bytes=%s identity_tolerated=yes\n' \
+    "$label" "$actual_sha" "$chunk_bytes"
