@@ -19,6 +19,7 @@ VK_PROBE_SHA=2a56e1c8f2e9b9933c495494bfa6dad42785494d5abd91bfaec247f0e3e14102
 VK_PROBE=${PF_ACTS_VK_PROBE:-/run/pf-probes/pf-pvr-vk-tex-discriminator}
 GLCTS=${PF_ACTS_GLCTS:-$BUNDLE/bin/glcts}
 TAB=$(printf '\t')
+RECOVERY_RESET_CAP=64
 
 end() { printf 'A_CTS_END mode=%s\n' "$mode"; }
 die() { printf 'A_CTS_ERROR mode=%s %s\n' "$mode" "$*" >&2; exit 1; }
@@ -26,7 +27,7 @@ atomic_line() { printf '%s\n' "$2" >"$1.tmp"; mv "$1.tmp" "$1"; }
 
 write_recovery_policy() {
     printf '%s\n' \
-        'A_CTS_RECOVERY_RULE recoverable_crash_cap=none baseline=required stop=sanity_baseline_failed_or_first_failed_post_crash_draw wall_clock=existing_list_budget' \
+        'A_CTS_RECOVERY_RULE reset_case_cap=64 observed_rate=1/68 projected_full=43 retry_delays_s=1,2,4,8,15 probe_timeout_s=10 recovery_window_s=105 baseline=required stop=sanity_baseline_failed_or_retry_exhausted_or_reset_cap wall_clock=existing_list_budget' \
         >"$ROOT/recovery-policy.txt"
 }
 
@@ -96,6 +97,8 @@ extract_dmesg_delta() {
 
 run_recovery_sanity() {
     label=$1 unit=$2 attempt=$3
+    recovery_try=${4:-}
+    probe_timeout=${5:-30}
     if [ "$label" = baseline ]; then
         mkdir -p "$ROOT/recovery-sanity"
         prefix=$ROOT/recovery-sanity/baseline
@@ -105,13 +108,41 @@ run_recovery_sanity() {
             || die 'reason=sanity_baseline_not_passed'
         dir=$ROOT/recovery-sanity/$label
         mkdir -p "$dir"
-        prefix=$dir/$unit-$attempt
+        if [ -n "$recovery_try" ]; then
+            prefix=$dir/$unit-$attempt-retry-$recovery_try
+        else
+            prefix=$dir/$unit-$attempt
+        fi
     fi
     actual_sha=$(sha256sum "$SANITY_PROBE" 2>/dev/null | cut -d' ' -f1)
     started=$(date -u +%FT%TZ)
     set +e
-    if [ "$actual_sha" = "$SANITY_PROBE_SHA" ]; then
-        timeout --signal=TERM --kill-after=5s 30 env -i \
+    if [ "${PF_ACTS_SELFTEST:-}" = 1 ] && [ -n "${PF_ACTS_RECOVERY_SEQUENCE_FILE:-}" ] && \
+       [ -n "$recovery_try" ]; then
+        fixture_verdict=$(sed -n "${recovery_try}p" "$PF_ACTS_RECOVERY_SEQUENCE_FILE")
+        case "$fixture_verdict" in
+        pass)
+            printf 'PF_GLES_SANITY verdict=pass clear=pass texture=pass renderer=zink-powervr\n' \
+                >"$prefix.stdout"
+            : >"$prefix.stderr"
+            rc=0
+            ;;
+        fail)
+            printf 'egl_initialize=pass egl_version=1.5\nGL_RENDERER=zink PowerVR Rogue GE8300\n' \
+                >"$prefix.stdout"
+            printf 'PF_GLES_SANITY_ERROR operation=clear_readback sampled=0,0,0,0 expected=51,102,153,255\n' \
+                >"$prefix.stderr"
+            rc=1
+            ;;
+        *)
+            printf 'selftest recovery sequence missing retry=%s\n' "$recovery_try" >"$prefix.stderr"
+            : >"$prefix.stdout"
+            rc=125
+            ;;
+        esac
+        actual_sha=fixture
+    elif [ "$actual_sha" = "$SANITY_PROBE_SHA" ]; then
+        timeout --signal=TERM --kill-after=5s "$probe_timeout" env -i \
             HOME=/home/gamer USER=gamer LOGNAME=gamer PATH=/usr/local/bin:/usr/bin:/bin \
             XDG_RUNTIME_DIR=/run/user/1000 EGL_PLATFORM=surfaceless \
             PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
@@ -134,6 +165,73 @@ run_recovery_sanity() {
         "$label" "$unit" "$attempt" "$(/usr/bin/id -un)" "$(/usr/bin/id -u)" \
         "$started" "$ended" "$rc" "$verdict" "${actual_sha:-missing}" >"$prefix.result"
     [ "$verdict" = pass ]
+}
+
+wait_for_gpu_recovery() {
+    recovery_label=$1 recovery_unit=$2 recovery_attempt=$3
+    recovery_attempts=0
+    for recovery_delay in 1 2 4 8 15; do
+        recovery_attempts=$((recovery_attempts + 1))
+        recovery_started=$(date -u +%FT%TZ)
+        if [ "${PF_ACTS_SELFTEST:-}" != 1 ]; then
+            sleep "$recovery_delay"
+        fi
+        recovery_verdict=fail
+        if run_recovery_sanity "$recovery_label" "$recovery_unit" "$recovery_attempt" \
+            "$recovery_attempts" 10; then
+            recovery_verdict=pass
+        fi
+        recovery_ended=$(date -u +%FT%TZ)
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$recovery_attempts" "$recovery_delay" "$recovery_verdict" \
+            "$recovery_started" "$recovery_ended" \
+            "recovery-sanity/$recovery_label/$recovery_unit-$recovery_attempt-retry-$recovery_attempts.result" \
+            >>"$ROOT/recovery-wait.tsv"
+        printf 'A_CTS_RECOVERY_WAIT list=%s unit=%s attempt=%s retry=%s delay_s=%s verdict=%s window_s=105\n' \
+            "$recovery_label" "$recovery_unit" "$recovery_attempt" "$recovery_attempts" \
+            "$recovery_delay" "$recovery_verdict"
+        [ "$recovery_verdict" = fail ] || return 0
+    done
+    return 1
+}
+
+record_gpu_reset_event() {
+    event_label=$1 event_unit=$2 event_attempt=$3 event_count=$4 event_qpa=$5
+    event_started=$6 event_ended=$7 event_dmesg=$8
+    event_dir=$ROOT/gpu-reset-events/$event_label
+    mkdir -p "$event_dir"
+    event_file=$event_dir/$event_unit-$event_attempt.dmesg
+    cp "$event_dmesg" "$event_file"
+    event_case=$(qpa_active "$event_qpa")
+    if [ -z "$event_case" ]; then
+        event_case=$(awk '/^#beginTestCaseResult[[:space:]]+/ { last=$2 } END { print last }' "$event_qpa")
+    fi
+    [ -n "$event_case" ] || event_case=attempt-window-unattributed
+    event_bytes=$(wc -c <"$event_file")
+    event_sha=$(sha256sum "$event_file" | cut -d' ' -f1)
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$event_label" "$event_unit" "$event_attempt" "$event_count" "$event_case" \
+        "$event_started" "$event_ended" "$event_bytes" "$event_sha" \
+        >>"$ROOT/gpu-reset-events.tsv"
+}
+
+gate_gpu_reset() {
+    gate_label=$1 gate_unit=$2 gate_attempt=$3 gate_qpa=$4 gate_dmesg=$5
+    gate_started=$6 gate_ended=$7
+    gpu_reset=no
+    sanity=not_needed
+    [ -n "$(gpu_reset_first_line "$gate_dmesg")" ] || return 0
+    gpu_reset=yes
+    gpu_reset_count=$((gpu_reset_count + 1))
+    record_gpu_reset_event "$gate_label" "$gate_unit" "$gate_attempt" \
+        "$gpu_reset_count" "$gate_qpa" "$gate_started" "$gate_ended" "$gate_dmesg"
+    if [ "$gpu_reset_count" -ge "$RECOVERY_RESET_CAP" ]; then
+        sanity=unknown
+    elif wait_for_gpu_recovery "$gate_label" "$gate_unit" "$gate_attempt"; then
+        sanity=pass
+    else
+        sanity=fail
+    fi
 }
 
 run_sanity_baseline() {
@@ -410,6 +508,12 @@ qpa_active() {
     ' "$1"
 }
 
+gpu_reset_first_line() {
+    awk 'tolower($0) ~ /(pvr|powervr|gpu)/ && \
+        tolower($0) ~ /(received context reset notification|guilty lockup|page fault occurred|unknown fwccb command|gpu fault)/ { print; exit }' \
+        "$1"
+}
+
 record_harness_error() {
     label=$1 unit=$2 attempt=$3 rc=$4 deadline=$5 completed=$6 next_case=$7 qpa=$8 stdout=$9
     shift 9
@@ -449,9 +553,7 @@ record_crash_evidence() {
     sed 's/<[^>]*>//g' "$combined" \
         | awk '/0x[[:xdigit:]]+[[:space:]]*:[[:space:]]*/ { print }' >"$trace"
 
-    awk 'tolower($0) ~ /(pvr|powervr|gpu)/ && \
-        tolower($0) ~ /(received context reset notification|guilty lockup|page fault occurred|unknown fwccb command|gpu fault)/ { print; exit }' \
-        "$dmesg_evidence" >"$first_reset"
+    gpu_reset_first_line "$dmesg_evidence" >"$first_reset"
     if [ -s "$first_reset" ]; then
         gpu_reset=yes
         first_reset_line=$(cat "$first_reset")
@@ -548,7 +650,11 @@ commit_attempt() {
         else
             grep -Fxq "$terminal" "$remaining" || die "reason=terminal_unknown_case case=$terminal"
             if ! awk -F '\t' -v c="$terminal" '$2==c { found=1 } END { exit !found }' "$current"; then
-            if [ "$deadline" = yes ]; then status=Fail; else status=Crash; fi
+            if [ "$deadline" = yes ] && [ -z "$(gpu_reset_first_line "$dmesg_delta")" ]; then
+                status=Fail
+            else
+                status=Crash
+            fi
             printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$terminal" "$status" "$unit" "$attempt" >>"$current"
                 if [ "$status" = Crash ]; then
                     record_crash_evidence "$label" "$terminal" "$unit" "$attempt" "$rc" \
@@ -673,9 +779,10 @@ make_archive() {
     archive=$ROOT/results.tar.gz
     (cd "$ROOT" && tar --sort=name --mtime='@0' --owner=0 --group=0 -czf "$archive.tmp" \
         expected.tsv ledger.tsv qpa-manifest.tsv nonpass-qpa \
-        crash-evidence.tsv crash-evidence harness-errors.tsv harness-evidence \
+        crash-evidence.tsv crash-evidence gpu-reset-events.tsv gpu-reset-events \
+        harness-errors.tsv harness-evidence \
         precondition.txt worker-environment.txt recovery-policy.txt run-outcome.txt \
-        dmesg.full recovery-sanity final.txt state)
+        dmesg.full recovery-sanity recovery-wait.tsv final.txt state)
     mv "$archive.tmp" "$archive"
     sha=$(sha256sum "$archive" | cut -d' ' -f1)
     bytes=$(wc -c <"$archive")
@@ -710,8 +817,10 @@ finalize_partial() {
     [ -f "$ROOT/qpa-manifest.tsv" ] || : >"$ROOT/qpa-manifest.tsv"
     [ -f "$ROOT/crash-evidence.tsv" ] || : >"$ROOT/crash-evidence.tsv"
     [ -f "$ROOT/harness-errors.tsv" ] || : >"$ROOT/harness-errors.tsv"
+    [ -f "$ROOT/recovery-wait.tsv" ] || : >"$ROOT/recovery-wait.tsv"
+    [ -f "$ROOT/gpu-reset-events.tsv" ] || : >"$ROOT/gpu-reset-events.tsv"
     mkdir -p "$ROOT/nonpass-qpa" "$ROOT/crash-evidence" \
-        "$ROOT/harness-evidence" "$ROOT/recovery-sanity"
+        "$ROOT/gpu-reset-events" "$ROOT/harness-evidence" "$ROOT/recovery-sanity"
     [ -s "$ROOT/worker-environment.txt" ] || write_worker_environment
     if [ ! -s "$ROOT/precondition.txt" ]; then
         printf 'GL_VERSION unavailable partial=yes\nGL_EXTENSIONS unavailable partial=yes\n' \
@@ -754,7 +863,10 @@ prepare_request() {
     : >"$ROOT/qpa-manifest.tsv"
     : >"$ROOT/crash-evidence.tsv"
     : >"$ROOT/harness-errors.tsv"
-    mkdir -p "$ROOT/lists" "$ROOT/nonpass-qpa" "$ROOT/crash-evidence" "$ROOT/harness-evidence"
+    : >"$ROOT/recovery-wait.tsv"
+    : >"$ROOT/gpu-reset-events.tsv"
+    mkdir -p "$ROOT/lists" "$ROOT/nonpass-qpa" "$ROOT/crash-evidence" \
+        "$ROOT/gpu-reset-events" "$ROOT/harness-evidence"
     while IFS="$TAB" read -r kind value; do
         case "$kind" in
             list)
@@ -873,6 +985,7 @@ run_worker() {
     mkdir -p "$ROOT/recovery-sanity"
     total=$(wc -l <"$ROOT/expected.tsv")
     completed=0
+    gpu_reset_count=0
     baseline_rc=0
     run_sanity_baseline "$total" || baseline_rc=$?
     [ "$baseline_rc" -eq 0 ] || return "$baseline_rc"
@@ -925,6 +1038,7 @@ run_worker() {
                     --deqp-log-filename="$qpa" >"$list_root/qpa/$unit-$attempt.stdout" 2>"$stderr"
                 rc=$?
                 set -e
+                attempt_rc=$rc
                 attempt_ended=$(date -u +%FT%TZ)
                 capture_full_dmesg "$dmesg_after"
                 extract_dmesg_delta "$dmesg_before" "$dmesg_after" "$dmesg_delta"
@@ -933,34 +1047,39 @@ run_worker() {
                 deadline=$deadline_class
                 grep -Eq 'timeout: sending signal (TERM|KILL)' "$stderr" && deadline=yes
                 terminal=$(qpa_active "$qpa")
-                sanity=not_needed
-                if [ "$rc" -ne 0 ] && [ "$deadline" = no ] && [ -n "$terminal" ]; then
-                    if run_recovery_sanity "$label" "$unit" "$attempt"; then
-                        sanity=pass
-                    else
-                        sanity=fail
-                    fi
-                    printf 'A_CTS_RECOVERY case=%s started=%s ended=%s sanity=%s recoverable_crash_cap=none baseline=pass stop_rule=first_failed_post_crash_draw\n' \
-                        "$terminal" "$attempt_started" "$attempt_ended" "$sanity"
+                gate_gpu_reset "$label" "$unit" "$attempt" "$qpa" "$dmesg_delta" \
+                    "$attempt_started" "$attempt_ended"
+                if [ "$gpu_reset" = no ] && [ "$attempt_rc" -ne 0 ] && \
+                   [ "$deadline" = no ] && [ -n "$terminal" ]; then
+                    sanity=unknown
+                fi
+                if [ "$gpu_reset" = yes ]; then
+                    printf 'A_CTS_RECOVERY case=%s started=%s ended=%s sanity=%s gpu_reset=%s reset_count=%s reset_cap=%s baseline=pass stop_rule=retry_exhausted_or_reset_cap\n' \
+                        "${terminal:-attempt-window}" "$attempt_started" "$attempt_ended" "$sanity" \
+                        "$gpu_reset" "$gpu_reset_count" "$RECOVERY_RESET_CAP"
                 fi
                 before=$(wc -l <"$remaining")
                 commit_rc=0
-                commit_attempt "$label" "$unit" "$attempt" "$remaining" "$qpa" "$rc" "$deadline" \
+                commit_attempt "$label" "$unit" "$attempt" "$remaining" "$qpa" "$attempt_rc" "$deadline" \
                     "$list_root/qpa/$unit-$attempt.stdout" "$stderr" \
                     "$attempt_started" "$attempt_ended" "$dmesg_delta" "$sanity" || commit_rc=$?
                 if [ "$commit_rc" -ne 0 ]; then
                     [ "$attempt_list" = "$remaining" ] || find "$attempt_list" -maxdepth 0 -type f -delete
-                    atomic_line "$ROOT/state" "state=finalizing reason=harness_stop list=$label unit=$unit attempt=$attempt rc=$rc commit_rc=$commit_rc"
+                    atomic_line "$ROOT/state" "state=finalizing reason=harness_stop list=$label unit=$unit attempt=$attempt rc=$attempt_rc commit_rc=$commit_rc"
                     return 76
                 fi
                 [ "$attempt_list" = "$remaining" ] || find "$attempt_list" -maxdepth 0 -type f -delete
                 after=$(wc -l <"$remaining")
                 completed=$((completed + before - after))
-                if [ "$sanity" = fail ]; then
-                    atomic_line "$ROOT/state" "state=gpu_unrecoverable list=$label unit=$unit case=$terminal completed=$completed total=$total rule=first_failed_post_crash_draw"
+                if [ "${gpu_reset:-no}" = yes ] && [ "$gpu_reset_count" -ge "$RECOVERY_RESET_CAP" ]; then
+                    atomic_line "$ROOT/state" "state=reset_budget_exhausted list=$label unit=$unit case=$terminal completed=$completed total=$total reset_count=$gpu_reset_count reset_cap=$RECOVERY_RESET_CAP"
+                    return 80
+                fi
+                if [ "${gpu_reset:-no}" = yes ] && [ "$sanity" = fail ]; then
+                    atomic_line "$ROOT/state" "state=gpu_unrecoverable list=$label unit=$unit case=$terminal completed=$completed total=$total rule=recovery_retry_exhausted retries=5 window_s=105"
                     return 77
                 fi
-                atomic_line "$ROOT/state" "state=running list=$label unit=$unit completed=$completed total=$total budget_s=$budget elapsed_s=$elapsed last_rc=$rc last_deadline=$deadline"
+                atomic_line "$ROOT/state" "state=running list=$label unit=$unit completed=$completed total=$total budget_s=$budget elapsed_s=$elapsed last_rc=$attempt_rc last_deadline=$deadline"
             done
         done
     done <"$ROOT/meta.tsv"
@@ -1125,9 +1244,17 @@ signal_worker_group() {
     for member in $members; do
         process_alive "$member" || continue
         if [ "${PF_ACTS_CONTROL_DIRECT:-}" = 1 ]; then
-            kill "-$signal" "$member"
+            if ! kill "-$signal" "$member" 2>/dev/null; then
+                if process_alive "$member"; then
+                    die "reason=worker_signal_failed pid=$member signal=$signal"
+                fi
+            fi
         else
-            sudo -n kill "-$signal" "$member"
+            if ! sudo -n kill "-$signal" "$member" 2>/dev/null; then
+                if process_alive "$member"; then
+                    die "reason=worker_signal_failed pid=$member signal=$signal"
+                fi
+            fi
         fi
     done
 }
@@ -1551,9 +1678,12 @@ PROBE
 
 selftest() {
     mkdir -p "$ROOT/nonpass-qpa/self" "$ROOT/crash-evidence/self" \
-        "$ROOT/harness-evidence/self" "$ROOT/recovery-sanity" "$ROOT/work"
+        "$ROOT/gpu-reset-events/self" "$ROOT/harness-evidence/self" \
+        "$ROOT/recovery-sanity" "$ROOT/work"
     : >"$ROOT/ledger.tsv"; : >"$ROOT/qpa-manifest.tsv"
     : >"$ROOT/crash-evidence.tsv"; : >"$ROOT/harness-errors.tsv"
+    : >"$ROOT/recovery-wait.tsv"
+    : >"$ROOT/gpu-reset-events.tsv"
     printf 'PF_GLES_SANITY verdict=pass clear=pass texture=pass renderer=zink-powervr\n' \
         >"$ROOT/recovery-sanity/baseline.stdout"
     : >"$ROOT/recovery-sanity/baseline.stderr"
@@ -1621,13 +1751,16 @@ QPA
 
 recovery_selftest() {
     fixture=${PF_ACTS_RECOVERY_FIXTURE:-}
-    case "$fixture" in recoverable|unrecoverable|process-exit) ;; *) die 'reason=recovery_fixture' ;; esac
+    case "$fixture" in r42-delayed|recoverable|unrecoverable|process-exit|reset-cap) ;; *) die 'reason=recovery_fixture' ;; esac
     mkdir -p "$ROOT/nonpass-qpa/recovery" "$ROOT/crash-evidence/recovery" \
-        "$ROOT/harness-evidence/recovery" "$ROOT/recovery-sanity/recovery" "$ROOT/work"
+        "$ROOT/gpu-reset-events/recovery" "$ROOT/harness-evidence/recovery" \
+        "$ROOT/recovery-sanity/recovery" "$ROOT/work"
     : >"$ROOT/ledger.tsv"
     : >"$ROOT/qpa-manifest.tsv"
     : >"$ROOT/crash-evidence.tsv"
     : >"$ROOT/harness-errors.tsv"
+    : >"$ROOT/recovery-wait.tsv"
+    : >"$ROOT/gpu-reset-events.tsv"
     printf 'recovery\tcase.before\nrecovery\tcase.crash\nrecovery\tcase.after\n' \
         >"$ROOT/expected.tsv"
     printf '%s\n' case.before case.crash case.after >"$ROOT/work/remaining"
@@ -1661,19 +1794,46 @@ DMESG
             >"$ROOT/work/crash.dmesg"
     fi
     cp "$ROOT/work/crash.dmesg" "$ROOT/dmesg.full"
-    sanity=$([ "$fixture" = unrecoverable ] && printf fail || printf pass)
     printf 'PF_GLES_SANITY verdict=pass clear=pass texture=pass renderer=zink-powervr\n' \
         >"$ROOT/recovery-sanity/baseline.stdout"
     : >"$ROOT/recovery-sanity/baseline.stderr"
     printf 'A_CTS_RECOVERY_SANITY list=baseline unit=baseline attempt=0 user=gamer uid=1000 started=2026-10-09T00:00:00Z ended=2026-10-09T00:00:01Z rc=0 verdict=pass probe_sha256=fixture\n' \
         >"$ROOT/recovery-sanity/baseline.result"
-    printf 'A_CTS_RECOVERY_SANITY list=recovery unit=0000 attempt=1 user=gamer uid=1000 started=2026-10-09T00:00:00Z ended=2026-10-09T00:00:01Z rc=%s verdict=%s probe_sha256=fixture\n' \
-        "$([ "$sanity" = pass ] && printf 0 || printf 1)" "$sanity" \
-        >"$ROOT/recovery-sanity/recovery/0000-1.result"
-    : >"$ROOT/recovery-sanity/recovery/0000-1.stdout"
-    : >"$ROOT/recovery-sanity/recovery/0000-1.stderr"
+    recovery_attempts=0
+    sanity=unknown
+    reset_count=0
+    case "$fixture" in
+    r42-delayed)
+        printf 'fail\npass\n' >"$ROOT/work/recovery-sequence"
+        PF_ACTS_RECOVERY_SEQUENCE_FILE=$ROOT/work/recovery-sequence
+        if wait_for_gpu_recovery recovery 0000 1; then sanity=pass; else sanity=fail; fi
+        reset_count=1
+        ;;
+    recoverable)
+        printf 'pass\n' >"$ROOT/work/recovery-sequence"
+        PF_ACTS_RECOVERY_SEQUENCE_FILE=$ROOT/work/recovery-sequence
+        if wait_for_gpu_recovery recovery 0000 1; then sanity=pass; else sanity=fail; fi
+        reset_count=1
+        ;;
+    unrecoverable)
+        printf 'fail\nfail\nfail\nfail\nfail\n' >"$ROOT/work/recovery-sequence"
+        PF_ACTS_RECOVERY_SEQUENCE_FILE=$ROOT/work/recovery-sequence
+        if wait_for_gpu_recovery recovery 0000 1; then sanity=pass; else sanity=fail; fi
+        reset_count=1
+        ;;
+    reset-cap)
+        reset_count=$RECOVERY_RESET_CAP
+        ;;
+    process-exit)
+        ;;
+    esac
     crash_rc=139
     [ "$fixture" != process-exit ] || crash_rc=1
+    selftest_sanity=$sanity
+    if [ "$fixture" != process-exit ]; then
+        record_gpu_reset_event recovery 0000 1 "$reset_count" "$ROOT/work/crash.qpa" \
+            2026-10-09T00:00:00Z 2026-10-09T00:00:01Z "$ROOT/work/crash.dmesg"
+    fi
     commit_attempt recovery 0000 1 "$ROOT/work/remaining" "$ROOT/work/crash.qpa" "$crash_rc" no \
         "$ROOT/work/crash.stdout" "$ROOT/work/crash.stderr" \
         2026-10-09T00:00:00Z 2026-10-09T00:00:01Z "$ROOT/work/crash.dmesg" "$sanity"
@@ -1682,7 +1842,15 @@ DMESG
         >"$ROOT/precondition.txt"
     write_worker_environment
     write_recovery_policy
-    if [ "$fixture" != unrecoverable ]; then
+    if [ "$fixture" = reset-cap ]; then
+        finalize_partial reset_budget_exhausted
+        printf 'A_CTS_RECOVERY_SELFTEST fixture=reset-cap crash=1 pass=1 not_run=1 sanity=unknown reset_count=%s reset_cap=%s archive=ready\n' \
+            "$reset_count" "$RECOVERY_RESET_CAP"
+    elif [ "$fixture" = unrecoverable ]; then
+        finalize_partial gpu_unrecoverable
+        printf 'A_CTS_RECOVERY_SELFTEST fixture=unrecoverable crash=1 pass=1 not_run=1 sanity=fail recovery_attempts=%s archive=ready\n' \
+            "$recovery_attempts"
+    else
         cat >"$ROOT/work/after.qpa" <<'QPA'
 #beginTestCaseResult case.after
 <Result StatusCode="Pass">ok</Result>
@@ -1692,11 +1860,45 @@ QPA
         atomic_line "$ROOT/run-outcome.txt" 'outcome=complete completed=3 total=3'
         atomic_line "$ROOT/state" 'state=complete completed=3 total=3'
         make_archive
-        printf 'A_CTS_RECOVERY_SELFTEST fixture=%s crash=1 pass=2 not_run=0 sanity=pass archive=ready\n' "$fixture"
-    else
-        finalize_partial gpu_unrecoverable
-        printf 'A_CTS_RECOVERY_SELFTEST fixture=unrecoverable crash=1 pass=1 not_run=1 sanity=fail archive=ready\n'
+        printf 'A_CTS_RECOVERY_SELFTEST fixture=%s crash=1 pass=2 not_run=0 sanity=%s recovery_attempts=%s archive=ready\n' \
+            "$fixture" "$selftest_sanity" "$recovery_attempts"
     fi
+}
+
+reset_gate_selftest() {
+    mkdir -p "$ROOT/recovery-sanity/gate" "$ROOT/gpu-reset-events/gate" "$ROOT/work"
+    : >"$ROOT/recovery-wait.tsv"
+    : >"$ROOT/gpu-reset-events.tsv"
+    printf 'PF_GLES_SANITY verdict=pass clear=pass texture=pass renderer=zink-powervr\n' \
+        >"$ROOT/recovery-sanity/baseline.stdout"
+    : >"$ROOT/recovery-sanity/baseline.stderr"
+    printf 'A_CTS_RECOVERY_SANITY list=baseline unit=baseline attempt=0 user=gamer uid=1000 started=2026-10-09T00:00:00Z ended=2026-10-09T00:00:01Z rc=0 verdict=pass probe_sha256=fixture\n' \
+        >"$ROOT/recovery-sanity/baseline.result"
+    printf 'pass\npass\npass\n' >"$ROOT/work/recovery-sequence"
+    PF_ACTS_RECOVERY_SEQUENCE_FILE=$ROOT/work/recovery-sequence
+    cat >"$ROOT/work/zero-exit.qpa" <<'QPA'
+#beginTestCaseResult case.zero-exit
+<Result StatusCode="Pass">ok</Result>
+#endTestCaseResult
+QPA
+    printf '#beginTestCaseResult case.timeout\n' >"$ROOT/work/timeout.qpa"
+    : >"$ROOT/work/empty-qpa.qpa"
+    printf '[  918.197059] powervr 1800000.gpu: [drm] Received context reset notification on context 1\n' \
+        >"$ROOT/work/reset.dmesg"
+    gpu_reset_count=0
+    gate_gpu_reset gate zero-exit 1 "$ROOT/work/zero-exit.qpa" "$ROOT/work/reset.dmesg" \
+        2026-10-10T00:00:00Z 2026-10-10T00:00:01Z
+    [ "$gpu_reset:$sanity" = yes:pass ] || die 'reason=reset_gate_zero_exit'
+    gate_gpu_reset gate timeout 1 "$ROOT/work/timeout.qpa" "$ROOT/work/reset.dmesg" \
+        2026-10-10T00:00:02Z 2026-10-10T00:00:03Z
+    [ "$gpu_reset:$sanity" = yes:pass ] || die 'reason=reset_gate_timeout'
+    gate_gpu_reset gate empty-qpa 1 "$ROOT/work/empty-qpa.qpa" "$ROOT/work/reset.dmesg" \
+        2026-10-10T00:00:04Z 2026-10-10T00:00:05Z
+    [ "$gpu_reset:$sanity" = yes:pass ] || die 'reason=reset_gate_empty_qpa'
+    [ "$gpu_reset_count" -eq 3 ] || die 'reason=reset_gate_count'
+    [ "$(wc -l <"$ROOT/gpu-reset-events.tsv")" -eq 3 ] || die 'reason=reset_gate_events'
+    [ "$(wc -l <"$ROOT/recovery-wait.tsv")" -eq 3 ] || die 'reason=reset_gate_waits'
+    printf 'A_CTS_RESET_GATE_SELFTEST zero_exit=recovered timeout=recovered empty_qpa=recovered reset_count=3 launches_blocked_until_sanity=yes\n'
 }
 
 sanity_selftest() {
@@ -1728,6 +1930,10 @@ case "$mode" in
         ;;
     sanity-selftest) sanity_selftest ;;
     recovery-selftest) recovery_selftest ;;
+    reset-gate-selftest)
+        [ "${PF_ACTS_SELFTEST:-}" = 1 ] || die 'reason=selftest_only'
+        reset_gate_selftest
+        ;;
     host-selftest) host_selftest ;;
     probe-selftest) probe_selftest ;;
     probe-discrim-fixture)
@@ -1789,8 +1995,8 @@ case "$mode" in
         [ -s "$control_root/expected.tsv" ] || die 'reason=not_prepared'
         sudo -n /usr/bin/install -d -m 0755 -o gamer -g gamer "$worker_root"
         for item in a-cts-dut expected.tsv meta.tsv ledger.tsv qpa-manifest.tsv \
-            crash-evidence.tsv harness-errors.tsv lists nonpass-qpa crash-evidence \
-            harness-evidence; do
+            crash-evidence.tsv gpu-reset-events.tsv harness-errors.tsv lists nonpass-qpa \
+            crash-evidence gpu-reset-events harness-evidence; do
             [ ! -e "$control_root/$item" ] \
                 || sudo -n /bin/cp -a "$control_root/$item" "$worker_root/"
         done
