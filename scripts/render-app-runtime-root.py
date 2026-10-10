@@ -52,6 +52,48 @@ ROOT_KEYS = {
     "library-paths",
 }
 
+PLATFORM_BASE_ABI_SONAMES = {
+    "ld-linux-aarch64.so.1",
+    "libc.so.6",
+    "libdl.so.2",
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libstdc++.so.6",
+}
+
+PLATFORM_REQUIRED_SONAMES = {
+    "dri_gbm.so": "usr/local/lib/gbm/dri_gbm.so",
+    "libEGL.so.1": "usr/lib/aarch64-linux-gnu/libEGL.so.1",
+    "libEGL_mesa.so.0": "usr/local/lib/libEGL_mesa.so.0",
+    "libGLESv2.so.2": "usr/lib/aarch64-linux-gnu/libGLESv2.so.2",
+    "libdril_dri.so": "usr/local/lib/dri/libdril_dri.so",
+    "libdrm.so.2": "usr/lib/aarch64-linux-gnu/libdrm.so.2",
+    "libgbm.so.1": "usr/local/lib/libgbm.so.1",
+    "libvulkan.so.1": "usr/lib/aarch64-linux-gnu/libvulkan.so.1",
+    "libvulkan_powervr_mesa.so": "usr/local/lib/libvulkan_powervr_mesa.so",
+    "libwayland-client.so.0": "usr/lib/aarch64-linux-gnu/libwayland-client.so.0",
+    "libwayland-egl.so.1": "usr/lib/aarch64-linux-gnu/libwayland-egl.so.1",
+    "libxkbcommon.so.0": "usr/lib/aarch64-linux-gnu/libxkbcommon.so.0",
+}
+
+PLATFORM_DISCOVERY_PATHS = {
+    "usr/share/glvnd/egl_vendor.d/50_mesa.json": (
+        "/run/pocketforge/platform-runtime/usr/local/lib/libEGL_mesa.so.0"
+    ),
+    "usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json": (
+        "/run/pocketforge/platform-runtime/usr/local/lib/"
+        "libvulkan_powervr_mesa.so"
+    ),
+}
+
+PLATFORM_REQUIRED_DATA = {
+    "usr/local/lib/dri/zink_dri.so",
+    "usr/local/share/drirc.d/10-pocketforge-zink.conf",
+    *PLATFORM_DISCOVERY_PATHS,
+}
+
 RESOURCE_PREFIXES = {
     "audio-devices": ("/dev/snd/",),
     "audio-sockets": ("/run/pocketforge/session/",),
@@ -281,6 +323,112 @@ def platform_manifest_digest(platform_root: Path) -> str:
     return hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()
 
 
+def require_platform_abi(platform_root: Path) -> None:
+    abi_path = platform_root / "abi.json"
+    if not abi_path.is_file() or abi_path.is_symlink():
+        refuse(
+            "platform_runtime_incompatible",
+            f"Debian 13 platform ABI manifest is absent or not regular: {abi_path}",
+        )
+    try:
+        value = json.loads(abi_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        refuse("platform_runtime_incompatible", f"invalid platform ABI manifest: {error}")
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        refuse("platform_runtime_incompatible", "platform ABI schema_version must be 1")
+    if value.get("host_distribution") != "debian-12":
+        refuse(
+            "platform_runtime_incompatible",
+            "platform ABI host_distribution must be debian-12",
+        )
+
+    base = value.get("base_abi_sonames")
+    if (
+        not isinstance(base, list)
+        or any(not isinstance(item, str) for item in base)
+        or set(base) != PLATFORM_BASE_ABI_SONAMES
+        or len(base) != len(PLATFORM_BASE_ABI_SONAMES)
+    ):
+        refuse(
+            "platform_runtime_incompatible",
+            "platform ABI base SONAME ownership differs",
+        )
+
+    sonames = value.get("sonames")
+    if not isinstance(sonames, dict) or any(
+        not isinstance(soname, str) or not isinstance(relative, str)
+        for soname, relative in sonames.items()
+    ):
+        refuse("platform_runtime_incompatible", "platform ABI sonames map is invalid")
+    if PLATFORM_BASE_ABI_SONAMES.intersection(sonames):
+        refuse(
+            "platform_runtime_incompatible",
+            "platform ABI slice claims an app-root base SONAME",
+        )
+    for soname, relative in sonames.items():
+        path = PurePosixPath(relative)
+        if path.is_absolute() or ".." in path.parts or str(path) != relative:
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI has a non-canonical SONAME path: {soname}",
+            )
+        provider = platform_root / relative
+        if not provider.is_file() or provider.is_symlink():
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI SONAME provider is absent or not regular: {relative}",
+            )
+    for soname, expected in PLATFORM_REQUIRED_SONAMES.items():
+        if sonames.get(soname) != expected:
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI SONAME ownership differs: {soname}",
+            )
+
+    discovery = value.get("json_library_paths")
+    if not isinstance(discovery, dict) or any(
+        not isinstance(relative, str) or not isinstance(runtime_path, str)
+        for relative, runtime_path in discovery.items()
+    ):
+        refuse(
+            "platform_runtime_incompatible",
+            "platform ABI discovery-path map is invalid",
+        )
+    for relative, expected in PLATFORM_DISCOVERY_PATHS.items():
+        if discovery.get(relative) != expected:
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI discovery ownership differs: {relative}",
+            )
+        discovery_file = platform_root / relative
+        if not discovery_file.is_file() or discovery_file.is_symlink():
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI discovery file is absent or not regular: {relative}",
+            )
+
+    data = value.get("data")
+    if not isinstance(data, dict) or any(
+        not isinstance(relative, str)
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        for relative, digest in data.items()
+    ):
+        refuse("platform_runtime_incompatible", "platform ABI data map is invalid")
+    for relative in PLATFORM_REQUIRED_DATA:
+        data_file = platform_root / relative
+        if (
+            not data_file.is_file()
+            or data_file.is_symlink()
+            or data.get(relative)
+            != sha256_file(data_file, "platform_runtime_missing")
+        ):
+            refuse(
+                "platform_runtime_incompatible",
+                f"platform ABI data ownership differs: {relative}",
+            )
+
+
 def require_artifacts(
     *,
     app_id: str,
@@ -353,6 +501,8 @@ def require_artifacts(
             "platform_runtime_digest_mismatch",
             f"platform runtime identity differs: {platform_root}",
         )
+    if distribution == "debian-13":
+        require_platform_abi(platform_root)
     if platform_manifest_digest(platform_root) != platform_digest:
         refuse(
             "platform_runtime_digest_mismatch",

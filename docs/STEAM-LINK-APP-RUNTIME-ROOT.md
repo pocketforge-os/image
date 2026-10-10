@@ -189,7 +189,11 @@ Compatibility requires all of the following:
 3. Platform-runtime id and ABI match an installed entry exactly.
 4. The descriptor's platform-runtime version equals that entry's manifest
    digest exactly. There is no “newer is probably compatible” fallback.
-5. All required capabilities have concrete resources in the trusted host
+5. Debian 13 additionally requires the selected platform tree's `abi.json` to
+   identify a Debian 12 host build, preserve the exact eight-object base ABI
+   in the app root, and own every required graphics/WSI SONAME and relocated
+   discovery path at its expected regular file.
+6. All required capabilities have concrete resources in the trusted host
    inventory. Optional capabilities retain the existing parser semantics and
    receive resources only when advertised by the device contract.
 
@@ -553,7 +557,7 @@ For the Debian 13 extension, the named RED tests were
 `test_debian_13_root_is_selected_and_host_runtime_wins` and
 `test_root_distribution_metadata_must_match`; both initially failed because
 the renderer rejected `distribution` as an unknown field. After the selector,
-metadata, builder, and loader ABI changes, the same invocation passed all 11
+metadata, builder, and loader ABI changes, the same invocation passed all 13
 renderer cases and all 3 ABI cases (the container lacked bubblewrap, so the
 pre-existing namespace case remained explicitly skipped there).
 
