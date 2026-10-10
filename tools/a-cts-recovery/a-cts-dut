@@ -600,11 +600,17 @@ record_crash_evidence() {
         pc=qpa-active
         module_offset=dEQP-process
     fi
+    if [ "$pc" = unknown ] || [ "$module_offset" = unknown ]; then
+        evidence_status=crash_evidence_incomplete
+    else
+        evidence_status=complete
+    fi
 
     evidence_full=$ROOT/crash-evidence-full.tmp
     {
         printf 'A_CTS_CRASH case=%s signal=%s exit_code=%s started=%s ended=%s sanity=%s gpu_reset=%s\n' \
             "$case_name" "$signal" "$rc" "$started" "$ended" "$sanity" "$gpu_reset"
+        printf 'A_CTS_CRASH_EVIDENCE status=%s\n' "$evidence_status"
         printf 'A_CTS_GPU_RESET_FIRST %s\n' "$first_reset_line"
         printf 'A_CTS_CRASH_PC address=%s module_offset=%s\n' "$pc" "$module_offset"
         printf 'A_CTS_CRASH_BACKTRACE_BEGIN\n'
@@ -618,10 +624,10 @@ record_crash_evidence() {
     dmesg_sha=$(sha256sum "$dmesg_evidence" | cut -d' ' -f1)
     first_reset_bytes=$(wc -c <"$first_reset")
     first_reset_sha=$(sha256sum "$first_reset" | cut -d' ' -f1)
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$label" "$case_name" "$signal" "$pc" "$module_offset" "$unit" "$attempt" "$bytes" "$sha" \
         "$started" "$ended" "$sanity" "$dmesg_bytes" "$dmesg_sha" \
-        "$gpu_reset" "$first_reset_bytes" "$first_reset_sha" \
+        "$gpu_reset" "$first_reset_bytes" "$first_reset_sha" "$evidence_status" \
         >>"$manifest"
     find "$combined" "$trace" "$evidence_full" -maxdepth 0 -type f -delete
 }
@@ -745,14 +751,25 @@ verify_aggregate() {
     evidence_count=$(wc -l <"$ROOT/crash-evidence.tsv")
     [ "$crash_count" -eq "$evidence_count" ] \
         || die "reason=crash_evidence_count crashes=$crash_count evidence=$evidence_count"
-    while IFS="$TAB" read -r label case_name signal pc module_offset unit attempt bytes sha started ended sanity dmesg_bytes dmesg_sha gpu_reset first_reset_bytes first_reset_sha; do
+    while IFS="$TAB" read -r label case_name signal pc module_offset unit attempt bytes sha started ended sanity dmesg_bytes dmesg_sha gpu_reset first_reset_bytes first_reset_sha evidence_status extra; do
         [ -n "$case_name" ] || continue
+        [ -z "${extra:-}" ] || die "reason=crash_evidence_fields case=$case_name"
         awk -F '\t' -v l="$label" -v c="$case_name" -v u="$unit" -v a="$attempt" \
             '$1==l && $2==c && $3=="Crash" && $4==u && $5==a { found=1 } END { exit !found }' \
             "$ledger" || die "reason=crash_evidence_orphan case=$case_name"
         case "$signal" in SIG*|GPU_RESET|PROCESS_EXIT) ;; *) die "reason=crash_signal_missing case=$case_name" ;; esac
-        case "$pc" in 0x*|kernel-log|qpa-active) ;; *) die "reason=crash_pc_missing case=$case_name" ;; esac
-        [ "$module_offset" != unknown ] || die "reason=crash_module_offset_missing case=$case_name"
+        case "$evidence_status" in
+        complete)
+            case "$pc" in 0x*|kernel-log|qpa-active) ;; *) die "reason=crash_pc_missing case=$case_name" ;; esac
+            [ "$module_offset" != unknown ] || die "reason=crash_module_offset_missing case=$case_name"
+            ;;
+        crash_evidence_incomplete)
+            if [ "$pc" != unknown ] && [ "$module_offset" != unknown ]; then
+                die "reason=crash_evidence_incomplete_without_gap case=$case_name"
+            fi
+            ;;
+        *) die "reason=crash_evidence_status case=$case_name" ;;
+        esac
         evidence=$ROOT/crash-evidence/$label/$unit-$attempt.txt
         [ -f "$evidence" ] || die "reason=crash_evidence_missing case=$case_name"
         if [ "$bytes" -gt 4096 ] || [ "$(wc -c <"$evidence")" -ne "$bytes" ]; then
@@ -783,7 +800,9 @@ verify_aggregate() {
 }
 
 write_final() {
-    verify_aggregate
+    # Finalization materializes the ledger before any semantic verdict. The
+    # laptop-side verifier checks hashes, counts, and crash evidence only after
+    # results.tar.gz has been collected.
     final_tmp=$ROOT/final.txt.tmp
     : >"$final_tmp"
     while IFS="$TAB" read -r label _rest; do printf '%s\n' "$label"; done <"$ROOT/expected.tsv" \
