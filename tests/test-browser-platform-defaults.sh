@@ -208,6 +208,64 @@ printf '[Coredump]\nProcessSizeMax=\n' \
     > "${blanked}/etc/systemd/coredump.conf.d/zz-blank.conf"
 expect_reject "${blanked}" 'ProcessSizeMax is unset' --expect-pf-app
 
+# systemd allows whitespace around '=': a spaced raise in a vendor drop-in is
+# effective and must be rejected, for each key.
+spaced="${tmp}/neg-coredump-spaced-vendor"
+seed_rootfs "${spaced}"
+mkdir -p "${spaced}/usr/lib/systemd/coredump.conf.d"
+printf '[Coredump]\nProcessSizeMax = 2G\nExternalSizeMax = infinity\n' \
+    > "${spaced}/usr/lib/systemd/coredump.conf.d/zz-spaced.conf"
+expect_reject "${spaced}" 'ProcessSizeMax' --expect-pf-app
+
+spacedext="${tmp}/neg-coredump-spaced-external"
+seed_rootfs "${spacedext}"
+printf '[Coredump]\nExternalSizeMax = 2G\n' \
+    > "${spacedext}/etc/systemd/coredump.conf.d/zz-spaced-ext.conf"
+expect_reject "${spacedext}" 'ExternalSizeMax' --expect-pf-app
+
+# Spaced syntax (positive control): a compliant spaced-only config must be
+# understood and accepted (the base drop-in is overwritten; an unparsed spaced
+# assignment would look unset and fail closed).
+spacedok="${tmp}/pos-coredump-spaced-compliant"
+seed_rootfs "${spacedok}"
+printf '[Coredump]\nProcessSizeMax = 32M\nExternalSizeMax = 32M\n' \
+    > "${spacedok}/etc/systemd/coredump.conf.d/pocketforge.conf"
+"${verifier}" "${spacedok}" --expect-pf-app
+
+# /dev/null drop-in mask: the symlinked /etc file hides the raising /usr/lib
+# vendor file of the same name, leaving the cap unset (still rejected, and
+# rejected as unset — proving the mask, not the vendor file, was selected).
+devnull="${tmp}/neg-coredump-devnull-dropin-mask"
+seed_rootfs "${devnull}"
+find "${devnull}/etc/systemd/coredump.conf.d" -mindepth 1 -delete
+mkdir -p "${devnull}/usr/lib/systemd/coredump.conf.d"
+printf '[Coredump]\nProcessSizeMax=2G\nExternalSizeMax=2G\n' \
+    > "${devnull}/usr/lib/systemd/coredump.conf.d/zz-vendor.conf"
+ln -s /dev/null "${devnull}/etc/systemd/coredump.conf.d/zz-vendor.conf"
+expect_reject "${devnull}" 'ProcessSizeMax is unset' --expect-pf-app
+
+# /dev/null main-file mask: the masked /etc main file hides the compliant
+# /usr/lib main file, so the effective config is unset (fail closed).
+devnullmain="${tmp}/neg-coredump-devnull-main-mask"
+seed_rootfs "${devnullmain}"
+find "${devnullmain}/etc/systemd/coredump.conf.d" -mindepth 1 -delete
+mkdir -p "${devnullmain}/usr/lib/systemd"
+ln -s /dev/null "${devnullmain}/etc/systemd/coredump.conf"
+printf '[Coredump]\nProcessSizeMax=1M\nExternalSizeMax=1M\n' \
+    > "${devnullmain}/usr/lib/systemd/coredump.conf"
+expect_reject "${devnullmain}" 'ProcessSizeMax is unset' --expect-pf-app
+
+# Symlinked drop-in (positive control): a symlink to a regular file elsewhere
+# is valid config and must be parsed, not skipped.
+symlinkok="${tmp}/pos-coredump-symlink-dropin"
+seed_rootfs "${symlinkok}"
+printf '[Coredump]\nProcessSizeMax=64M\nExternalSizeMax=64M\n' \
+    > "${symlinkok}/vendor-real-coredump.conf"
+find "${symlinkok}/etc/systemd/coredump.conf.d/pocketforge.conf" -delete
+ln -s ../../../vendor-real-coredump.conf \
+    "${symlinkok}/etc/systemd/coredump.conf.d/pocketforge.conf"
+"${verifier}" "${symlinkok}" --expect-pf-app
+
 # An exactly-64MiB cap expressed differently must still pass (positive control
 # for the size parser, same run).
 kibi="${tmp}/pos-coredump-kib"
