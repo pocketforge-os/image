@@ -1292,14 +1292,19 @@ RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
 cargo build --offline --locked --release --target aarch64-unknown-linux-gnu -p libpocketforge
 install -D -m 0644 include/pocketforge.h /out/sdk/include/pocketforge.h
 install -D -m 0644 target/aarch64-unknown-linux-gnu/release/libpocketforge.a /out/sdk/lib/libpocketforge.a
-# The four platform-owned inputs exist only for A133-open. The renderer rejects
-# missing, malformed, unknown, duplicated, or unsorted values; rejects any
-# PF_APP_* value on every other profile; and parses its own schema-v1 output
-# back to the exact input tuple before the file can enter /out.
+# The four platform-owned identity inputs exist only for A133-open, and the
+# schema-2 device facts (memory, graphics maxima, derived inputs, display) come
+# from the sha-verified staged descriptor checked above (empty on every other
+# profile). The renderer rejects missing, malformed, unknown, duplicated, or
+# unsorted values; rejects any PF_APP_* value or descriptor on every other
+# profile; validates every vocabulary against the pinned runtime source; and
+# parses its own schema-v2 output back to the exact contract before the file
+# can enter /out.
 render-platform-capabilities \
   --soc "${PF_SOC}" \
   --gpu-model "${PF_GPU_MODEL:-ddk}" \
   --runtime-source /work/runtime \
+  --descriptor "${DESCRIPTOR}" \
   --output /out/share/platform-capabilities.toml
 # Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
 # proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). pf-input-decode
