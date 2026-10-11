@@ -220,4 +220,148 @@ find "$work/nodwarf-out/pf-debuginfo" -type f | grep -q . \
     && { echo "FAIL: DWARF-free tree produced store entries" >&2; exit 1; }
 echo "PASS finalize: DWARF-free rootfs (a523 row) finalizes with an empty store"
 
+# --- 10. symlink controls: rootfs symlinks are NEVER inspected, recorded or
+# modified (browser-eval finding: the walkers followed file symlinks via
+# os.path.isfile, gating external targets, binding external build-ids to
+# in-image symlink paths and letting objcopy/strip mutate files outside the
+# rootfs). Classes covered: relative in-rootfs, absolute outside, relative
+# escaping, dangling, closed-prefix file symlink, closed-prefix dir symlink.
+ext="$work/ext"
+mkdir -p "$ext"
+cat >"$work/ext.c" <<'EOF'
+int main(void) { volatile int marker = 42; return marker - 42; }
+EOF
+# external targets live OUTSIDE any rootfs tree; they must stay byte-identical.
+cc -g -o "$ext/external-debug" "$work/ext.c"
+cc -Wl,--build-id=none -o "$ext/external-noid" "$work/ext.c"
+ext_id=$(readelf -n "$ext/external-debug" 2>/dev/null \
+    | awk '/Build ID/ {gsub("^[ \t]+",""); print $NF}')
+[ -n "$ext_id" ] || { echo "FAIL: external -g fixture carries no build-id" >&2; exit 1; }
+sha256sum "$ext/external-debug" "$ext/external-noid" >"$work/ext.sha256"
+
+linkroot="$work/linkroot"
+mkdir -p "$linkroot/usr/bin" "$linkroot/usr/lib/pvr-rogue"
+# positive control: a regular in-rootfs ELF that must still be gated and split.
+cc -g -o "$linkroot/usr/bin/pf-real-debug" "$work/good.c"
+real_id=$(readelf -n "$linkroot/usr/bin/pf-real-debug" 2>/dev/null \
+    | awk '/Build ID/ {gsub("^[ \t]+",""); print $NF}')
+[ -n "$real_id" ] || { echo "FAIL: in-rootfs -g fixture carries no build-id" >&2; exit 1; }
+[ "$real_id" != "$ext_id" ] \
+    || { echo "FAIL: fixture build-ids collide; controls not distinguishable" >&2; exit 1; }
+ln -s pf-real-debug                  "$linkroot/usr/bin/alias-rel"        # relative, in-rootfs
+ln -s "$ext/external-debug"          "$linkroot/usr/bin/alias-abs"        # absolute, outside rootfs
+ln -s "$ext/external-noid"           "$linkroot/usr/bin/alias-abs-noid"   # absolute, outside, no id
+ln -s ../../../ext/external-noid     "$linkroot/usr/bin/alias-rel-esc"    # relative, escaping rootfs
+ln -s nowhere-fast                   "$linkroot/usr/bin/alias-dangling"   # dangling
+ln -s "$ext/external-debug"          "$linkroot/usr/lib/pvr-rogue/libalias.so" # closed-prefix file
+ln -s "$ext"                         "$linkroot/usr/lib/pvr-link"         # closed-prefix dir
+
+snapshot_links() (
+    cd "$1" && find . -type l | LC_ALL=C sort | while read -r l; do
+        printf '%s -> %s\n' "$l" "$(readlink "$l")"
+    done
+)
+snapshot_links "$linkroot" >"$work/links-before.txt"
+
+# 10a. check: symlinks are skipped, never gated; closed evidence counts only
+# regular files physically inside the rootfs.
+if ! python3 "$elfbuildid" check "$linkroot" --closed-paths \
+        "$linkroot/usr/lib/pvr-rogue" "$linkroot/usr/lib/pvr-link" \
+        >"$work/check-links.log" 2>&1; then
+    echo "FAIL: check followed a rootfs symlink (gate must skip symlinks):" >&2
+    cat "$work/check-links.log" >&2
+    exit 1
+fi
+grep -F 'checked=1 closed=0 missing=0' "$work/check-links.log" >/dev/null \
+    || { echo "FAIL: wrong symlink walk counts: $(cat "$work/check-links.log")" >&2; exit 1; }
+if grep -F 'alias' "$work/check-links.log" >/dev/null; then
+    echo "FAIL: check inspected a symlink path" >&2
+    exit 1
+fi
+
+# 10b. manifest: only the regular in-rootfs ELF gets a row; no symlink path is
+# recorded and no external build-id is bound into the image.
+python3 "$elfbuildid" manifest "$linkroot" --closed-paths \
+    "$linkroot/usr/lib/pvr-rogue" "$linkroot/usr/lib/pvr-link" \
+    >"$work/manifest-links.tsv"
+rows=$(grep -cv '^#' "$work/manifest-links.tsv")
+[ "$rows" = 1 ] || { echo "FAIL: manifest has $rows rows, want exactly 1" >&2; exit 1; }
+grep -P "^${real_id}\t/usr/bin/pf-real-debug$" "$work/manifest-links.tsv" >/dev/null \
+    || { echo "FAIL: regular in-rootfs ELF missing from manifest (positive control)" >&2; exit 1; }
+if grep -F 'alias' "$work/manifest-links.tsv" >/dev/null; then
+    echo "FAIL: symlink path recorded in the manifest" >&2
+    exit 1
+fi
+if grep -F "$ext_id" "$work/manifest-links.tsv" >/dev/null; then
+    echo "FAIL: external symlink target's build-id bound into the image" >&2
+    exit 1
+fi
+# check/manifest never modify the tree: every symlink is untouched.
+snapshot_links "$linkroot" >"$work/links-after-check.txt"
+cmp "$work/links-before.txt" "$work/links-after-check.txt" >/dev/null \
+    || { echo "FAIL: check/manifest modified a symlink" >&2; exit 1; }
+
+# 10c. gating positive+negative in one invocation: a regular build-id-less
+# in-rootfs ELF is STILL gated, while a symlink to an external build-id-less
+# ELF is never inspected (not cited, not gated).
+gateroot="$work/gateroot"
+mkdir -p "$gateroot/usr/bin"
+cp "$work/nobuildid" "$gateroot/usr/bin/pf-real-bad"
+ln -s "$ext/external-noid" "$gateroot/usr/bin/alias-gate"
+if python3 "$elfbuildid" check "$gateroot" >"$work/check-gate.log" 2>&1; then
+    echo "FAIL: regular in-rootfs ELF without build-id was not gated (positive control)" >&2
+    exit 1
+fi
+grep -F '/usr/bin/pf-real-bad' "$work/check-gate.log" >/dev/null \
+    || { echo "FAIL: gate did not cite the regular build-id-less ELF" >&2; exit 1; }
+if grep -F 'alias-gate' "$work/check-gate.log" >/dev/null; then
+    echo "FAIL: check inspected/gated a symlink path" >&2
+    exit 1
+fi
+
+# 10d. split: operates only on regular in-rootfs ELFs; external targets stay
+# byte-identical; every symlink survives with its exact link text.
+cp -a "$linkroot" "$work/linkroot-split"
+store_links="$work/store-links"
+if ! python3 "$elfbuildid" split "$work/linkroot-split" "$store_links" --closed-paths \
+        "$work/linkroot-split/usr/lib/pvr-rogue" "$work/linkroot-split/usr/lib/pvr-link" \
+        >"$work/split-links.log" 2>&1; then
+    echo "FAIL: split followed a rootfs symlink:" >&2
+    cat "$work/split-links.log" >&2
+    exit 1
+fi
+grep -F 'scanned=1' "$work/split-links.log" >/dev/null \
+    || { echo "FAIL: split scanned more than the one regular ELF: $(cat "$work/split-links.log")" >&2; exit 1; }
+sha256sum -c --strict --quiet "$work/ext.sha256" \
+    || { echo "FAIL: split mutated an external symlink target (byte-identity lost)" >&2; exit 1; }
+if [ -e "$store_links/buildid/${ext_id:0:2}/${ext_id:2}" ]; then
+    echo "FAIL: split created a store entry for an external symlink target" >&2
+    exit 1
+fi
+# positive control: the regular in-rootfs -g ELF IS split.
+[ -f "$store_links/buildid/${real_id:0:2}/${real_id:2}/debuginfo" ] \
+    || { echo "FAIL: regular in-rootfs -g ELF was not split (positive control)" >&2; exit 1; }
+if ! readelf -S "$store_links/buildid/${real_id:0:2}/${real_id:2}/debuginfo" 2>/dev/null \
+        | grep -Fq '.debug_info'; then
+    echo "FAIL: store entry for the regular ELF carries no DWARF" >&2
+    exit 1
+fi
+if ! readelf -n "$work/linkroot-split/usr/bin/pf-real-debug" | grep -Fq 'Build ID'; then
+    echo "FAIL: shipped regular ELF lost its build-id during split" >&2
+    exit 1
+fi
+if readelf -S "$work/linkroot-split/usr/bin/pf-real-debug" 2>/dev/null | grep -Fq '.debug_info'; then
+    echo "FAIL: shipped regular ELF still carries DWARF after split" >&2
+    exit 1
+fi
+snapshot_links "$work/linkroot-split" >"$work/links-after-split.txt"
+cmp "$work/links-before.txt" "$work/links-after-split.txt" >/dev/null \
+    || { echo "FAIL: split replaced or retargeted a symlink" >&2; exit 1; }
+if [ ! -L "$work/linkroot-split/usr/bin/alias-dangling" ] \
+        || [ -e "$work/linkroot-split/usr/bin/alias-dangling" ]; then
+    echo "FAIL: dangling symlink was resolved, replaced or removed" >&2
+    exit 1
+fi
+echo "PASS symlinks: check/manifest/split skip every symlink class; external targets byte-identical; regular ELF still gated and split"
+
 echo "test-elf-buildid=ALL PASS"
