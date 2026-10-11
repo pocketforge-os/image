@@ -76,11 +76,16 @@ printf '%s\n' '[Unit]' 'Description=runtime broker unit fixture' '[Install]' \
     'WantedBy=multi-user.target' > "${runtime}/systemd/pf-input-broker.service"
 printf '[identity]\nid = "a133"\n' > "${runtime}/share/devices/a133/capabilities.toml"
 printf '%s\n' \
-    'schema_version = 1' \
+    'schema_version = 2' \
     'runtime_family = "pocketforge/a133-powervr"' \
     'runtime_abi = "1"' \
     'platform_version = "20"' \
     'supported_capabilities = ["audio", "entropy", "input", "settings"]' \
+    'physical_memory_mib = 970' \
+    'app_memory_budget_mib = 600' \
+    'gles_max = "3.0"' \
+    'inputs = ["buttons", "dpad", "stick", "two_sticks"]' \
+    'display = { width = 1280, height = 720 }' \
     > "${runtime}/share/platform-capabilities.toml"
 
 # A pre-existing boot enable link for the broker (what `systemctl enable` of the
