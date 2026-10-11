@@ -27,6 +27,16 @@ PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
 ReadWritePaths=/var/lib/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
+# No session bus (bd: tsp-ihne1.5). Wayland apps get text only through
+# gamescope's text-input protocol. The address defeats libdbus/GDBus autolaunch
+# and the $XDG_RUNTIME_DIR/bus lookup. The private input-method bus is
+# invisible, and every X11 input-method door is hidden under an empty tmpfs; an
+# X11 app's door drop-in (/usr/share/pocketforge/ime/pf-app-door.conf) binds
+# back only its own. Input processes run as pf-ime, so an app can neither trace
+# them nor read their memory or environment.
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/pf-no-session-bus
+InaccessiblePaths=-/run/pf-ime
+TemporaryFileSystem=/run/pf-ime-door:ro
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
