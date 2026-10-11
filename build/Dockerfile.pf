@@ -2377,8 +2377,95 @@ esac
 ASM
 
 # =============================================================================
+# debuginfo — verify + bundle the cr-symbols store (bd tsp-ihne1.33).
+# The v1 symbol store is PRIVATE to cr-server: these bytes never reach GitHub
+# artifacts; they ride `pf build`'s local export beside the image. Every store
+# entry round-trips through a real debuginfod server+client here, so a store
+# the server cannot resolve fails the build. Sandboxed (no privilege).
+# =============================================================================
+FROM ${PF_CONTAINER} AS debuginfo
+ARG PF_DEVICE_ID
+ARG PF_VARIANT=dev
+ARG PF_IMAGE_SHA
+ARG SOURCE_DATE_EPOCH
+COPY --from=rootfs /out/pf-debuginfo /work/pf-debuginfo
+COPY --from=rootfs /out/pf-elf-build-id-manifest.tsv /work/pf-elf-build-id-manifest.tsv
+RUN <<'DEBUGINFO'
+set -eux
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends debuginfod elfutils
+mkdir -p /out /tmp/did-home
+chown nobody:nogroup /tmp/did-home
+[ -s /work/pf-elf-build-id-manifest.tsv ] \
+  || { echo "DEBUGINFO FAIL: build-id manifest empty or missing"; exit 1; }
+find /work/pf-debuginfo -type f | grep -q . \
+  || { echo "DEBUGINFO FAIL: symbol store is empty"; exit 1; }
+
+# Serve the store; resolve EVERY debuginfo entry through the debuginfod
+# protocol (the same client cr-server's symboliser uses). debuginfod refuses
+# to run as root, so it runs as nobody with a writable cache home. -F enables
+# ELF/DWARF file scanning; -d names the (writable) sqlite database. HOME is
+# exported too: the client writes its probe cache under $XDG_CACHE_HOME.
+runuser -u nobody -- env HOME=/tmp/did-home XDG_CACHE_HOME=/tmp/did-home \
+  debuginfod -F -d /tmp/did-home/debuginfod.sqlite /work/pf-debuginfo \
+  >/tmp/debuginfod.log 2>&1 &
+server=$!
+cleanup_debuginfod() { kill "$server" 2>/dev/null || true; }
+trap cleanup_debuginfod EXIT
+
+resolved=0
+# Give the server a grace period to bind and run its initial scan: a client
+# that probes too early can cache the refusal and stay poisoned.
+sleep 5
+for d in $(find /work/pf-debuginfo -type f | sort); do
+  rest="$(basename "$(dirname "$d")")"
+  aa="$(basename "$(dirname "$(dirname "$d")")")"
+  id="${aa}${rest}"
+  up=0
+  fetched=""
+  while [ "$up" -lt 90 ]; do
+    if fetched="$(runuser -u nobody -- env HOME=/tmp/did-home XDG_CACHE_HOME=/tmp/did-home \
+        DEBUGINFOD_URLS=http://127.0.0.1:8002/ \
+        debuginfod-find debuginfo "$id" 2>/dev/null)" && [ -n "$fetched" ]; then
+      up=90
+    else
+      sleep 1
+      up=$((up + 1))
+    fi
+  done
+  if [ -z "$fetched" ] || [ ! -s "$fetched" ]; then
+    echo "DEBUGINFO FAIL: debuginfod never resolved store entry $id"; tail -20 /tmp/debuginfod.log; exit 1
+  fi
+  cmp "$d" "$fetched" \
+    || { echo "DEBUGINFO FAIL: debuginfod returned different bytes for $id"; exit 1; }
+  resolved=$((resolved + 1))
+done
+[ "$resolved" -gt 0 ]
+
+# Bundle the store deterministically (name-sorted, epoch-clamped, root-owned).
+tar --sort=name --numeric-owner --owner=0 --group=0 \
+  --mtime="@${SOURCE_DATE_EPOCH:-1700000000}" \
+  -cf "/out/pf-debuginfo-${PF_DEVICE_ID}-${PF_VARIANT}.tar" -C /work pf-debuginfo
+( cd /out && sha256sum "pf-debuginfo-${PF_DEVICE_ID}-${PF_VARIANT}.tar" \
+    > "pf-debuginfo-${PF_DEVICE_ID}-${PF_VARIANT}.tar.sha256" )
+cp /work/pf-elf-build-id-manifest.tsv /out/pf-elf-build-id-manifest.tsv
+( cd /out && sha256sum pf-elf-build-id-manifest.tsv > pf-elf-build-id-manifest.tsv.sha256 )
+{
+  printf 'device=%s\n' "${PF_DEVICE_ID}"
+  printf 'variant=%s\n' "${PF_VARIANT}"
+  printf 'image_sha=%s\n' "${PF_IMAGE_SHA}"
+  printf 'manifest_lines=%s\n' "$(grep -cv '^#' /work/pf-elf-build-id-manifest.tsv)"
+  printf 'store_files=%s\n' "$(find /work/pf-debuginfo -type f | wc -l)"
+  printf 'store_bytes=%s\n' "$(du -sb /work/pf-debuginfo | cut -f1)"
+  printf 'resolved_via_debuginfod=%s\n' "$resolved"
+} > /out/.pf-debuginfo-provenance
+cat /out/.pf-debuginfo-provenance
+DEBUGINFO
+
+# =============================================================================
 # export — the flashable artifact(s) only (FROM scratch → nothing but /out).
 # `pf build … --output type=local,dest=$PF_OUT_DIR` extracts this stage.
 # =============================================================================
 FROM scratch AS export
 COPY --from=assemble /out/ /
+COPY --from=debuginfo /out/ /
