@@ -2398,49 +2398,49 @@ mkdir -p /out /tmp/did-home
 chown nobody:nogroup /tmp/did-home
 [ -s /work/pf-elf-build-id-manifest.tsv ] \
   || { echo "DEBUGINFO FAIL: build-id manifest empty or missing"; exit 1; }
-find /work/pf-debuginfo -type f | grep -q . \
-  || { echo "DEBUGINFO FAIL: symbol store is empty"; exit 1; }
+store_entries="$(find /work/pf-debuginfo -type f | sort)"
 
-# Serve the store; resolve EVERY debuginfo entry through the debuginfod
-# protocol (the same client cr-server's symboliser uses). debuginfod refuses
-# to run as root, so it runs as nobody with a writable cache home. -F enables
-# ELF/DWARF file scanning; -d names the (writable) sqlite database. HOME is
-# exported too: the client writes its probe cache under $XDG_CACHE_HOME.
-runuser -u nobody -- env HOME=/tmp/did-home XDG_CACHE_HOME=/tmp/did-home \
-  debuginfod -F -d /tmp/did-home/debuginfod.sqlite /work/pf-debuginfo \
-  >/tmp/debuginfod.log 2>&1 &
-server=$!
-cleanup_debuginfod() { kill "$server" 2>/dev/null || true; }
-trap cleanup_debuginfod EXIT
-
+# Every supported matrix row must still produce its image when the rootfs owned
+# NO symbolizable DWARF inputs (a523 ships no -g-built owned ELF, so its store
+# is legitimately empty). With entries present, every one of them must resolve.
 resolved=0
-# Give the server a grace period to bind and run its initial scan: a client
-# that probes too early can cache the refusal and stay poisoned.
-sleep 5
-for d in $(find /work/pf-debuginfo -type f | sort); do
-  rest="$(basename "$(dirname "$d")")"
-  aa="$(basename "$(dirname "$(dirname "$d")")")"
-  id="${aa}${rest}"
-  up=0
-  fetched=""
-  while [ "$up" -lt 90 ]; do
-    if fetched="$(runuser -u nobody -- env HOME=/tmp/did-home XDG_CACHE_HOME=/tmp/did-home \
-        DEBUGINFOD_URLS=http://127.0.0.1:8002/ \
-        debuginfod-find debuginfo "$id" 2>/dev/null)" && [ -n "$fetched" ]; then
-      up=90
-    else
-      sleep 1
-      up=$((up + 1))
+if [ -n "$store_entries" ]; then
+  runuser -u nobody -- env HOME=/tmp/did-home XDG_CACHE_HOME=/tmp/did-home \
+    debuginfod -F -d /tmp/did-home/debuginfod.sqlite /work/pf-debuginfo \
+    >/tmp/debuginfod.log 2>&1 &
+  server=$!
+  cleanup_debuginfod() { kill "$server" 2>/dev/null || true; }
+  trap cleanup_debuginfod EXIT
+
+  # Give the server a grace period to bind and run its initial scan: a client
+  # that probes too early can cache the refusal and stay poisoned.
+  sleep 5
+  for d in $store_entries; do
+    rest="$(basename "$(dirname "$d")")"
+    aa="$(basename "$(dirname "$(dirname "$d")")")"
+    id="${aa}${rest}"
+    up=0
+    fetched=""
+    while [ "$up" -lt 90 ]; do
+      if fetched="$(runuser -u nobody -- env HOME=/tmp/did-home XDG_CACHE_HOME=/tmp/did-home \
+          DEBUGINFOD_URLS=http://127.0.0.1:8002/ \
+          debuginfod-find debuginfo "$id" 2>/dev/null)" && [ -n "$fetched" ]; then
+        up=90
+      else
+        sleep 1
+        up=$((up + 1))
+      fi
+    done
+    if [ -z "$fetched" ] || [ ! -s "$fetched" ]; then
+      echo "DEBUGINFO FAIL: debuginfod never resolved store entry $id"; tail -20 /tmp/debuginfod.log; exit 1
     fi
+    cmp "$d" "$fetched" \
+      || { echo "DEBUGINFO FAIL: debuginfod returned different bytes for $id"; exit 1; }
+    resolved=$((resolved + 1))
   done
-  if [ -z "$fetched" ] || [ ! -s "$fetched" ]; then
-    echo "DEBUGINFO FAIL: debuginfod never resolved store entry $id"; tail -20 /tmp/debuginfod.log; exit 1
-  fi
-  cmp "$d" "$fetched" \
-    || { echo "DEBUGINFO FAIL: debuginfod returned different bytes for $id"; exit 1; }
-  resolved=$((resolved + 1))
-done
-[ "$resolved" -gt 0 ]
+fi
+store_files="$(find /work/pf-debuginfo -type f | wc -l)"
+[ "${store_files:-0}" -eq 0 ] || [ "$resolved" -gt 0 ]
 
 # Bundle the store deterministically (name-sorted, epoch-clamped, root-owned).
 tar --sort=name --numeric-owner --owner=0 --group=0 \
@@ -2455,7 +2455,7 @@ cp /work/pf-elf-build-id-manifest.tsv /out/pf-elf-build-id-manifest.tsv
   printf 'variant=%s\n' "${PF_VARIANT}"
   printf 'image_sha=%s\n' "${PF_IMAGE_SHA}"
   printf 'manifest_lines=%s\n' "$(grep -cv '^#' /work/pf-elf-build-id-manifest.tsv)"
-  printf 'store_files=%s\n' "$(find /work/pf-debuginfo -type f | wc -l)"
+  printf 'store_files=%s\n' "${store_files:-0}"
   printf 'store_bytes=%s\n' "$(du -sb /work/pf-debuginfo | cut -f1)"
   printf 'resolved_via_debuginfod=%s\n' "$resolved"
 } > /out/.pf-debuginfo-provenance

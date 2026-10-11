@@ -205,4 +205,19 @@ grep -E 'FAIL|FATAL|no GNU build-id' "$work/finalize-bad.log" >/dev/null
 grep -F '/usr/bin/pf-bad3' "$work/finalize-bad.log" >/dev/null
 echo "PASS finalize: on-device manifest + artifacts emitted; gates a bad ELF (build acceptance test)"
 
+# --- 9. empty-store positive control: a rootfs with NO DWARF-bearing owned
+# ELF (the a523 matrix row) must still finalize: empty store, manifest intact.
+mkdir -p "$work/nodwarf/usr/bin"
+cc -o "$work/nodwarf/usr/bin/pf-stripped-app" "$work/good.c"
+objcopy --strip-debug "$work/nodwarf/usr/bin/pf-stripped-app"
+mkdir -p "$work/nodwarf-out"
+"$finalize" "$work/nodwarf" "$work/nodwarf-out" >"$work/nodwarf.log"
+[ -f "$work/nodwarf-out/pf-elf-build-id-manifest.tsv" ] \
+    || { echo "FAIL: manifest missing for the DWARF-free tree" >&2; exit 1; }
+[ -d "$work/nodwarf-out/pf-debuginfo/buildid" ] \
+    || { echo "FAIL: store dir missing for the DWARF-free tree" >&2; exit 1; }
+find "$work/nodwarf-out/pf-debuginfo" -type f | grep -q . \
+    && { echo "FAIL: DWARF-free tree produced store entries" >&2; exit 1; }
+echo "PASS finalize: DWARF-free rootfs (a523 row) finalizes with an empty store"
+
 echo "test-elf-buildid=ALL PASS"

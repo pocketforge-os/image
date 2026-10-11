@@ -281,6 +281,9 @@ def cmd_manifest(args):
 def cmd_split(args):
     root = os.path.abspath(args.root)
     store = os.path.abspath(args.store)
+    # The store exists even when the tree owns no DWARF-bearing ELF (a523 row);
+    # callers rely on <store>/buildid as the canonical empty-store shape.
+    os.makedirs(os.path.join(store, "buildid"), exist_ok=True)
     n_debug = 0
     n_scanned = 0
     n_missing = 0
