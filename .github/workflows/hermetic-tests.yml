@@ -116,6 +116,7 @@ jobs:
             tests/test-hwprobe-variant-stage.sh
             tests/test-initrd-selfflash-watchdog.sh
             tests/test-initrd-volatile-root.sh
+            tests/test-input-harness-selftest.sh
             tests/test-kernel-build-identity.sh
             tests/test-kernel-module-form.sh
             tests/test-launcher-runtime-contract.sh

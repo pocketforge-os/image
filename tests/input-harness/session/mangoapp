@@ -1,0 +1,30 @@
+#!/bin/bash
+# Trusted-client screenshot relay. gamescope --mangoapp launches the
+# binary named "mangoapp" through gamescopereaper, which hands it a
+# trusted Wayland connection (WAYLAND_SOCKET fd). We block on a FIFO;
+# each command is executed via `exec gamescopectl`, consuming the
+# trusted fd. gamescopectl exits, the reaper respawns us with a fresh
+# trusted fd, and we block on the FIFO again.
+set -u
+
+fifo="${PF_MANGO_FIFO:-/run/pf-mango.fifo}"
+
+# One command per spawn; wait for the driver to request something.
+if ! read -r -t "${PF_MANGO_WAIT_SECONDS:-600}" cmd < "$fifo"; then
+	# Timeout or empty: exit so the reaper respawns a fresh trusted fd.
+	exit 0
+fi
+
+set -- $cmd
+verb="${1:-}"
+case "$verb" in
+	screenshot)
+		path="${2:?screenshot needs a path}"
+		type="${3:-4}"
+		exec gamescopectl screenshot "$path" "$type"
+		;;
+	*)
+		echo "mangoapp: unknown command: $cmd" >&2
+		exit 0
+		;;
+esac

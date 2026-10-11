@@ -1,0 +1,141 @@
+# PocketForge input harness (tsp-ihne1.2)
+#
+# Builds our gamescope fork (pinned in pins.env) with the EIS input
+# emulation backend, the harness tools/clients, and a slim runtime with
+# lavapipe so everything runs headless with no GPU and no privileged mode.
+#
+# Never runs in privileged mode and never starts an init/systemd PID 1;
+# blast radius is documented in tests/input-harness/README.md.
+
+ARG BASE_IMAGE=debian@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+
+# ---------------------------------------------------------------------------
+# Stage 1: gamescope (fork @ pinned commit)
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE} AS gamescope-builder
+ARG GAMESCOPE_URL=https://github.com/pocketforge-os/gamescope.git
+ARG GAMESCOPE_COMMIT=d18b60bc9580c9bb81036746b0c1c001c20cc9a2
+
+RUN apt-get update -qq \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+      meson ninja-build git cmake pkg-config g++ python3-pip \
+      glslang-tools libvulkan-dev libwayland-dev wayland-protocols \
+      libxkbcommon-dev libdrm-dev libinput-dev libudev-dev libcap-dev \
+      libpixman-1-dev libseat-dev libdecor-0-dev liblcms2-dev luajit \
+      libx11-dev libxmu-dev libxcomposite-dev libxrender-dev libxres-dev \
+      libxtst-dev libxdamage-dev libxcursor-dev libxext-dev libxfixes-dev \
+      libxxf86vm-dev libxi-dev libxrandr-dev libeis-dev libsdl2-dev \
+      libavif-dev libpipewire-0.3-dev libbenchmark-dev catch2 hwdata \
+      libegl-dev libgles-dev xwayland x11-xkb-utils \
+ && find /var/lib/apt/lists -mindepth 1 -delete
+
+RUN git clone "${GAMESCOPE_URL}" /src/gamescope \
+ && git -C /src/gamescope checkout "${GAMESCOPE_COMMIT}" \
+ && git -C /src/gamescope submodule update --init --recursive
+
+RUN meson setup /src/gamescope/build /src/gamescope \
+      -Dinput_emulation=enabled \
+      -Denable_openvr_support=false \
+      --force-fallback-for=libdisplay-info,libliftoff,vkroots,wlroots \
+      --werror --auto-features=enabled \
+ && ninja -C /src/gamescope/build \
+ && DESTDIR=/opt/gamescope-install ninja -C /src/gamescope/build install
+
+# ---------------------------------------------------------------------------
+# Stage 2: harness tools + clients
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE} AS client-builder
+
+RUN apt-get update -qq \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+      gcc g++ pkg-config make \
+      libwayland-dev wayland-protocols libgtk-4-dev libgtk-3-dev \
+      qt6-base-dev libsdl3-dev libsdl2-dev libx11-dev libxkbcommon-dev \
+      libei-dev \
+ && find /var/lib/apt/lists -mindepth 1 -delete
+
+COPY tests/input-harness/tools /src/tools
+COPY tests/input-harness/clients /src/clients
+
+RUN set -eux; \
+    mkdir -p /src/build /opt/harness/bin /opt/harness/lib; \
+    XDG_XML=/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml; \
+    wayland-scanner client-header "$XDG_XML" /src/build/xdg-shell-client-protocol.h; \
+    wayland-scanner private-code "$XDG_XML" /src/build/xdg-shell-protocol.c; \
+    gcc -O1 -Wall -fPIC -shared -o /opt/harness/lib/libpf-transcript.so \
+        /src/tools/transcript.c -lpthread; \
+    gcc -O1 -Wall -fPIC -shared -o /opt/harness/lib/libpf-transcript-preload.so \
+        /src/tools/transcript-preload.c /src/tools/transcript.c \
+        $(pkg-config --cflags wayland-client) \
+        -lwayland-client -ldl -lpthread; \
+    TX="-L/opt/harness/lib -lpf-transcript -Wl,-rpath,/harness/lib"; \
+    gcc -O1 -Wall -o /opt/harness/bin/fake-input /src/tools/fake-input.c; \
+    gcc -O1 -Wall -o /opt/harness/bin/eis-bridge /src/tools/eis-bridge.c \
+        $(pkg-config --cflags --libs libei-1.0); \
+    gcc -O1 -I/opt/harness/lib -o /opt/harness/bin/gtk4-text \
+        /src/clients/gtk4-text.c $(pkg-config --cflags --libs gtk4) $TX; \
+    g++ -O1 -fPIC -I/opt/harness/lib -o /opt/harness/bin/qt6-text \
+        /src/clients/qt6-text.cpp \
+        $(pkg-config --cflags --libs Qt6Widgets) $TX; \
+    gcc -O1 -I/opt/harness/lib -o /opt/harness/bin/sdl3-text \
+        /src/clients/sdl3-text.c $(pkg-config --cflags --libs sdl3) $TX; \
+    gcc -O1 -I/opt/harness/lib -o /opt/harness/bin/sdl2-game \
+        /src/clients/sdl2-game.c $(pkg-config --cflags --libs sdl2) $TX; \
+    gcc -O1 -I/opt/harness/lib -o /opt/harness/bin/x11-gtk \
+        /src/clients/x11-gtk.c $(pkg-config --cflags --libs gtk+-3.0) $TX; \
+    gcc -O1 -I/opt/harness/lib -o /opt/harness/bin/xim-only \
+        /src/clients/xim-only.c -lX11 $TX; \
+    gcc -O1 -I/opt/harness/lib -I/src/build -o /opt/harness/bin/no-im \
+        /src/clients/no-im.c /src/build/xdg-shell-protocol.c \
+        -lwayland-client $TX; \
+    gcc -O1 -I/opt/harness/lib -o /opt/harness/bin/broken-client \
+        /src/clients/broken-client.c $TX; \
+    for f in /opt/harness/bin/* /opt/harness/lib/*.so; do \
+        if ldd "$f" | grep -q "not found"; then \
+            echo "MISSING SHARED DEPS: $f"; ldd "$f"; exit 1; \
+        fi; \
+    done
+
+# ---------------------------------------------------------------------------
+# Stage 3: runtime
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE}
+
+RUN apt-get update -qq \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+      libvulkan1 mesa-vulkan-drivers vulkan-tools \
+      xwayland x11-xkb-utils xkb-data hwdata \
+      libinput10 libeis1 libei1 libseat1 libcap2 libpixman-1-0 \
+      libwayland-client0 libwayland-cursor0 libwayland-server0 \
+      libxkbcommon0 libx11-6 libxmu6 libxcomposite1 libxrender1 libxres1 \
+      libxtst6 libxdamage1 libxcursor1 libxext6 libxfixes3 libxxf86vm1 \
+      libxi6 libxrandr2 libdecor-0-0 liblcms2-2 libavif16 \
+      libpipewire-0.3-0 luajit libsdl2-2.0-0 libsdl3-0 libegl1 libgles2 libwayland-egl1 \
+      libgtk-4-1 libgtk-3-0t64 libqt6widgets6 qt6-wayland \
+      fontconfig fonts-dejavu-core python3 ca-certificates \
+ && fc-cache -f \
+ && find /var/lib/apt/lists -mindepth 1 -delete
+
+COPY --from=gamescope-builder /opt/gamescope-install/ /
+COPY --from=client-builder /opt/harness/ /harness/
+COPY tests/input-harness/session /harness/session
+COPY tests/input-harness/report /harness/report
+COPY tests/input-harness/validate /harness/validate
+
+RUN set -eux; \
+    chmod +x /harness/session/entry.sh /harness/session/udev-shim.sh \
+             /harness/session/driver.py /harness/session/mangoapp; \
+    ln -sf /harness/session/mangoapp /usr/local/bin/mangoapp; \
+    if ldd /usr/local/bin/gamescope | grep -q "not found"; then \
+        ldd /usr/local/bin/gamescope; exit 1; \
+    fi; \
+    for f in /harness/bin/*; do \
+        if ldd "$f" | grep -q "not found"; then ldd "$f"; exit 1; fi; \
+    done; \
+    echo "runtime linkage smoke test ok"
+
+ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+    GALLIUM_DRIVER=llvmpipe \
+    XKB_DEFAULT_RULES=evdev
+
+ENTRYPOINT ["/harness/session/entry.sh"]
