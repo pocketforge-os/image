@@ -164,3 +164,6 @@ jobs:
 
       - name: Check component cache keys
         run: python3 tests/test-component-cache-keys.py
+
+      - name: Check owned ELF producer build-id policy
+        run: python3 tests/test-owned-elf-buildid-producers.py
