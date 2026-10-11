@@ -15,18 +15,18 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# Runtime#108 source-owns the SystemMenu input contract that launcher#154 vendors.
+# Runtime#109 source-owns the preference authority contract that launcher#155 vendors.
 # The guard therefore admits only the exact compatible merged pair and rejects
 # both the preceding pair and either crossed generation.
-expected_runtime=de890215bd97eb0b5b63287a51e8b9a2e18d1125
-expected_launcher=95302865bc584ce5e1c96e09df387aa5f58455f6
-prior_runtime=5738f3d5e108b52186b129a5db1c62a878278b19
-prior_launcher=73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5
-old_launcher=ab9fb7fde36e633add69b94c36bf1213f7cff5d9
+expected_runtime=4b71a503909090219c3a01c1718e9e772e0d488b
+expected_launcher=d46dbb48e610e10cc4d01562fedcdf7cdfae0f7d
+prior_runtime=de890215bd97eb0b5b63287a51e8b9a2e18d1125
+prior_launcher=95302865bc584ce5e1c96e09df387aa5f58455f6
+old_launcher=73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5
 pre149_launcher=ca22de0ed3cec46c73f2de44aa6e570e109695d8
 pre148_launcher=d26dfa1162e601100c3a18956b5ce4a2ddc7427f
 pre147_launcher=7a2b792d0813fc8fb5c2915bdc00ef976b0cc986
-older_runtime=0955d8a83ee59df89eaba79ffee9e99e4f52384c
+older_runtime=5738f3d5e108b52186b129a5db1c62a878278b19
 pre146_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
 pre145_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
 older_launcher=bb8c9bc8c9ea15238d08cfee5376049bf67cf855
