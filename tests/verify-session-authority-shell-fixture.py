@@ -46,7 +46,6 @@ UNIT_NAME = re.compile(r"[A-Za-z0-9:_.@\\-]+\.(?:service|target|device|path|moun
 NOT_MODELLED = {
     "dev-fb0.device": "the harness's /dev/fb0 is a tmpfiles regular file; no device unit",
     "pf-input-decode.service": "the gamepad decoder; the harness feeds input through the fake broker",
-    "pf-prefsd.service": "preference daemon; no part in the grab order",
     "pocketforge-boot-animator.service": "boot splash, stopped by ExecStartPre before ExecStart; "
                                          "it never grabs input (bd tsp-3rd3.12)",
     "pocketforge-menu.service": "an alternative panel owner, never enabled with the shell",
