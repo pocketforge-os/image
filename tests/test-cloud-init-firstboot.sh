@@ -190,7 +190,12 @@ for path in sorted(target.rglob("*")):
 finalized = seed_dir("finalize")
 pocketforge.finalize_persistent_seed(finalized, cache_paths=[])
 consumed_text = (finalized / "network-config").read_text(encoding="utf-8")
-assert "correct horse" not in consumed_text and "cellar horse" not in consumed_text
+for path in sorted(finalized.rglob("*")):
+    if path.is_file():
+        blob = path.read_bytes()
+        assert b"correct horse battery staple" not in blob, path
+        assert b"cellar horse battery staple" not in blob, path
+        assert b"Y29ycmVjdCBob3JzZSBiYXR0ZXJ5IHN0YXBsZQ==" not in blob, path
 assert "pocketforge_seed_consumed: true" in consumed_text
 assert "hidden: true" in consumed_text
 reloaded = pocketforge.load_seed(finalized)
