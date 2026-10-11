@@ -41,22 +41,26 @@ test "$launcher_guard" = "$expected_launcher"
 new_guard_accepts() {
     test "$1" = "$runtime_guard" && test "$2" = "$launcher_guard"
 }
+reject_guard_pair() {
+    if new_guard_accepts "$1" "$2"; then
+        echo "FAIL: stale/crossed guard pair was accepted: runtime=$1 launcher=$2" >&2
+        exit 1
+    fi
+}
 # The production guards accept exactly the compatible target pair. Keeping both
 # preceding identities together is still invalid because their source trees
 # drift at pf-session-authority; crossing either generation is invalid too.
 new_guard_accepts "$expected_runtime" "$expected_launcher"
-! new_guard_accepts "$prior_runtime" "$prior_launcher"
-! new_guard_accepts "$expected_runtime" "$old_launcher"
-! new_guard_accepts "$expected_runtime" "$prior_launcher"
-! new_guard_accepts "$prior_runtime" "$expected_launcher"
-! new_guard_accepts "$older_runtime" "$expected_launcher"
-! new_guard_accepts "$oldest_runtime" "$expected_launcher"
-! new_guard_accepts "$expected_runtime" "$pre149_launcher"
-! new_guard_accepts "$expected_runtime" "$pre148_launcher"
-! new_guard_accepts "$expected_runtime" "$pre147_launcher"
-! new_guard_accepts "$expected_runtime" "$pre146_launcher"
-! new_guard_accepts "$expected_runtime" "$pre145_launcher"
-! new_guard_accepts "$expected_runtime" "$older_launcher"
+reject_guard_pair "$prior_runtime" "$prior_launcher"
+reject_guard_pair "$expected_runtime" "$old_launcher"
+reject_guard_pair "$expected_runtime" "$older_launcher"
+reject_guard_pair "$older_runtime" "$expected_launcher"
+reject_guard_pair "$oldest_runtime" "$expected_launcher"
+reject_guard_pair "$expected_runtime" "$pre149_launcher"
+reject_guard_pair "$expected_runtime" "$pre148_launcher"
+reject_guard_pair "$expected_runtime" "$pre147_launcher"
+reject_guard_pair "$expected_runtime" "$pre146_launcher"
+reject_guard_pair "$expected_runtime" "$pre145_launcher"
 
 grep -F -- '--no-default-features -p pf-shell' "$dockerfile" >/dev/null
 if grep -E 'cargo build .*--features[ =][^#]*(desktop-sim)' "$dockerfile"; then
