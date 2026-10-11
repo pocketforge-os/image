@@ -25,6 +25,7 @@ RUN apt-get update -qq \
       libx11-dev libxmu-dev libxcomposite-dev libxrender-dev libxres-dev \
        libxtst-dev libxdamage-dev libxcursor-dev libxext-dev libxfixes-dev \
        libxxf86vm-dev libxi-dev libxrandr-dev libeis-dev libsdl2-dev \
+       libluajit-5.1-dev \
        libxcb-composite0-dev libxcb-xfixes0-dev libxcb-render0-dev \
        libxcb-ewmh-dev libxcb-icccm4-dev libxcb-res0-dev libxcb-errors-dev \
        libavif-dev libpipewire-0.3-dev libbenchmark-dev catch2 hwdata \
