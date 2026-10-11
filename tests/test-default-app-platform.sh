@@ -40,6 +40,7 @@ import sys
 
 path, variant = sys.argv[1], sys.argv[2]
 version = 'schema_version = 2\n'
+suffix = ''
 memory = '[memory]\nphysical_mib = 970\napp_budget_mib = 600\n'
 graphics = '[graphics]\ngles_max = "3.0"\n'
 screens = ('[[screens]]\nrole = "primary"\npresent = "portrait"\nrotation = "cw90"\n'
@@ -70,6 +71,13 @@ elif variant == "no-budget":
     memory = "[memory]\nphysical_mib = 970\n"
 elif variant == "v1":
     version = "schema_version = 1\n"
+elif variant == "v3":
+    version = "schema_version = 3\n"
+    suffix = ('\n[input_profile]\n'
+              'device_class = "two_stick"\n'
+              'reserved_controls = ["guide"]\n')
+elif variant == "v4":
+    version = "schema_version = 4\n"
 elif variant == "no-primary":
     screens = screens.replace('role = "primary"', 'role = "secondary"')
 elif variant == "two-primary":
@@ -85,7 +93,7 @@ elif variant == "vulkan-bad":
 else:
     raise SystemExit(f"unknown descriptor variant {variant!r}")
 with open(path, "w", encoding="utf-8") as handle:
-    handle.write(version + memory + graphics + screens + inputs)
+    handle.write(version + memory + graphics + screens + inputs + suffix)
 PY
 }
 
@@ -123,6 +131,15 @@ assert parsed == {
     "display": {"width": 1280, "height": 720},
 }, parsed
 PY
+
+# Descriptor v3 adds [input_profile] while retaining the v2 memory/graphics,
+# screen, and input facts consumed here. The renderer deliberately ignores the
+# router-owned input profile and produces the identical image contract.
+v3_descriptor="${tmp}/descriptor-v3.toml"
+v3_output="${tmp}/open-v3/usr/share/pocketforge/platform-capabilities.toml"
+write_descriptor "${v3_descriptor}" v3
+render_open "${v3_descriptor}" "${v3_output}"
+cmp "${output}" "${v3_output}"
 
 # A screen touch table derives the touch token; the derived order stays the
 # runtime KNOWN_INPUTS declaration order.
@@ -212,7 +229,7 @@ assert_fatal env \
 # Every schema-2 device fact is derived from the staged descriptor; each missing,
 # malformed, or off-vocabulary fact fails closed in the same invocation as the
 # positives above.
-for variant in no-memory no-budget v1 no-primary two-primary system-only \
+for variant in no-memory no-budget v1 v4 no-primary two-primary system-only \
     unknown-kind gles-bad vulkan-bad; do
     bad_descriptor="${tmp}/${variant}.toml"
     write_descriptor "${bad_descriptor}" "${variant}"
@@ -282,4 +299,4 @@ grep -F 'render-platform-capabilities' "${dockerfile}" >/dev/null
 # The build passes the sha-verified staged descriptor from check-device-descriptor.
 grep -F -- '--descriptor "${DESCRIPTOR}"' "${dockerfile}" >/dev/null
 
-echo 'default-app platform contract: PASS (schema-2 round trip, descriptor-derived device facts, fail-closed vocabularies and scope)'
+echo 'default-app platform contract: PASS (schema-2/v3 equivalence, descriptor-derived device facts, fail-closed versions, vocabularies and scope)'

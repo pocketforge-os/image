@@ -22,6 +22,8 @@ APP_INPUTS = (
 # Contract schema 2 (runtime pf-app-manifest parse_platform_contract): these
 # facts are required on every schema-2 contract; gles_max/vulkan_max are the
 # only optional ones and are omitted unless the descriptor declares them.
+# Platform descriptor schemas 2 and 3 carry the same source facts; descriptor
+# v3's input_profile is owned by the input router and is not consumed here.
 VOCABULARY_CONSTANTS = (
     "KNOWN_CAPABILITIES",
     "KNOWN_INPUTS",
@@ -81,9 +83,9 @@ def load_descriptor(path: Path) -> dict:
         descriptor = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
         fatal(f"cannot read device descriptor at {path}: {error}")
-    if descriptor.get("schema_version") != 2:
+    if descriptor.get("schema_version") not in (2, 3):
         fatal(
-            "device descriptor schema_version must be 2 "
+            "device descriptor schema_version must be 2 or 3 "
             f"([memory]/[graphics] are descriptor-v2 facts): "
             f"{descriptor.get('schema_version')!r}"
         )
