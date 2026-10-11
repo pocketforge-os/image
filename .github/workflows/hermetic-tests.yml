@@ -111,6 +111,7 @@ jobs:
             tests/test-default-app-rootfs.sh
             tests/test-dma-heap-udev-policy.sh
             tests/test-dockerfile-pf-transforms.sh
+            tests/test-elf-buildid.sh
             tests/test-gamescope-package-path.sh
             tests/test-gamescope-pvr-cache.sh
             tests/test-hwprobe-variant-stage.sh

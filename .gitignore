@@ -28,3 +28,6 @@ boards/tsp-s/boot-resource/wifi.txt
 *.swp
 *~
 .DS_Store
+
+# Python
+__pycache__/
