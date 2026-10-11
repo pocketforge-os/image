@@ -125,6 +125,12 @@ workflow has no docker daemon); it is not wired into CI yet.
   into the host session. Mitigations: the daemon destroys its devices on
   stdin EOF, the driver always destroys them in `finally`, and `run.sh`
   refuses to start without `/dev/uinput`.
+- `--device-cgroup-rule "c 13:* rmw"` lets the container open input event
+  nodes (major 13). It is required because the fake devices are created
+  through `/dev/uinput` **after** container start, so they are not in the
+  `--device` allow-list and every `open()` of `/dev/input/eventN` would
+  fail with EPERM. Scope: input event devices only — still no
+  `--privileged`, and no access to disks, DRM or other majors.
 - `--network none` at run time (build needs network; the run does not).
 - No device, node, labgrid or PSU actions; laptop only.
 

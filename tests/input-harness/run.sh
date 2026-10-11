@@ -61,6 +61,7 @@ docker run --rm \
 	--label pf.bead=tsp-ihne1.2 \
 	--network none \
 	--device /dev/uinput \
+	--device-cgroup-rule "c 13:* rmw" \
 	-v /dev/input:/dev/input \
 	-v "$OUT":/out \
 	-e HOST_UID="$(id -u)" \
