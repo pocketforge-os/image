@@ -555,6 +555,10 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
         probe["authority_connect"] != "ok" and probe["authority_mode"] == "0o0",
         f"app can reach the session authority (InaccessiblePaths ineffective): {probe}",
     )
+    require(
+        probe["uinput_open"] != "ok",
+        f"app can open /dev/uinput and create a built-in-controller lookalike: {probe}",
+    )
     # Positive control, same run: the same uid OUTSIDE the unit sandbox can connect,
     # so the refusal above is the unit's InaccessiblePaths=, not socket permissions.
     outside = command(
@@ -565,6 +569,17 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     )
     require(outside.stdout.strip() == "ok", f"positive control failed: gamer outside pf-app@ "
             f"cannot reach the authority: rc={outside.returncode} {outside.stderr.strip()}")
+    outside_uinput = command(
+        "setpriv", "--reuid=gamer", "--regid=gamer", "--init-groups", "python3", "-c",
+        "import os; fd = os.open('/dev/uinput', os.O_WRONLY | os.O_CLOEXEC); "
+        "os.close(fd); print('ok')",
+        check=False,
+    )
+    require(
+        outside_uinput.stdout.strip() == "ok",
+        "positive control failed: gamer outside pf-app@ cannot open the 0666 fake /dev/uinput: "
+        f"rc={outside_uinput.returncode} {outside_uinput.stderr.strip()}",
+    )
     outside_prefsd = command(
         "setpriv", "--reuid=gamer", "--regid=gamer", "--init-groups", "python3", "-c",
         "import socket; s = socket.socket(socket.AF_UNIX); "

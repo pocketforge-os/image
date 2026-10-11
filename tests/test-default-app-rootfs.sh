@@ -6,6 +6,7 @@ installer="${root}/scripts/install-default-app-support.sh"
 unit="${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
 dockerfile="${root}/build/Dockerfile.pf"
 rootfs_builder="${root}/scripts/build-rootfs.sh"
+live_harness="${root}/tests/test-session-authority-systemd.sh"
 tmp="$(mktemp -d)"
 trap 'find "${tmp}" -mindepth 1 -delete; rmdir "${tmp}"' EXIT
 
@@ -45,6 +46,7 @@ PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
 ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
+InaccessiblePaths=-/dev/uinput
 InaccessiblePaths=/run/pocketforge/prefsd.sock
 KillMode=control-group
 KillSignal=SIGTERM
@@ -58,6 +60,13 @@ assert actual == expected
 assert "[Install]" not in actual
 assert "pf-pref-writer" not in actual
 PY
+
+expected_unit_sha256="$(sed -n 's/^app_unit_sha256=//p' "${live_harness}")"
+actual_unit_sha256="$(sha256sum "${unit}" | awk '{print $1}')"
+if [ "${actual_unit_sha256}" != "${expected_unit_sha256}" ]; then
+    echo "live harness app-unit digest drift: expected ${expected_unit_sha256}, got ${actual_unit_sha256}" >&2
+    exit 1
+fi
 
 rootfs="${tmp}/open-rootfs"
 runtime="${tmp}/open-runtime"
