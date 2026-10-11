@@ -34,8 +34,15 @@ shift 2
 [ "${1:-}" != "--closed-paths" ] || shift
 CLOSED_PATHS=("$@")
 if [ "${#CLOSED_PATHS[@]}" -eq 0 ]; then
-    # Default closed-vendor roots: PowerVR rogue UM (a133) and closed libmali (a523).
-    CLOSED_PATHS=("${ROOTFS}/usr/lib/pvr-rogue" "${ROOTFS}/usr/lib/mali")
+    # Default closed-vendor roots: PowerVR rogue UM (a133), closed libmali
+    # (a523), and unmodified redistributable PowerVR firmware staged from the
+    # vendor-manifest/CAR input. Firmware is not an owned link product even
+    # when its opaque payload happens to begin with the ELF magic bytes.
+    CLOSED_PATHS=(
+        "${ROOTFS}/usr/lib/pvr-rogue"
+        "${ROOTFS}/usr/lib/mali"
+        "${ROOTFS}/usr/lib/firmware/powervr"
+    )
 fi
 
 [ -d "$ROOTFS" ] || { echo "finalize: ROOTFS $ROOTFS is not a directory" >&2; exit 2; }
