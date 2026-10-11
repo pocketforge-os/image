@@ -20,25 +20,96 @@ ROOT_CONTENT = b"hermetic runtime root fixture\n"
 DIGEST = "sha256:" + hashlib.sha256(ROOT_CONTENT).hexdigest()
 PLATFORM_CONTENT = b"hermetic platform runtime fixture\n"
 PLATFORM_PATH = "usr/lib/aarch64-linux-gnu/libplatform.so"
-PLATFORM_MANIFEST = (
-    f"{hashlib.sha256(PLATFORM_CONTENT).hexdigest()}  {PLATFORM_PATH}\n".encode()
-)
+BASE_ABI_SONAMES = [
+    "ld-linux-aarch64.so.1",
+    "libc.so.6",
+    "libdl.so.2",
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libstdc++.so.6",
+]
+PLATFORM_SONAMES = {
+    "dri_gbm.so": "usr/local/lib/gbm/dri_gbm.so",
+    "libEGL.so.1": "usr/lib/aarch64-linux-gnu/libEGL.so.1",
+    "libEGL_mesa.so.0": "usr/local/lib/libEGL_mesa.so.0",
+    "libGLESv2.so.2": "usr/lib/aarch64-linux-gnu/libGLESv2.so.2",
+    "libdril_dri.so": "usr/local/lib/dri/libdril_dri.so",
+    "libdrm.so.2": "usr/lib/aarch64-linux-gnu/libdrm.so.2",
+    "libgbm.so.1": "usr/local/lib/libgbm.so.1",
+    "libvulkan.so.1": "usr/lib/aarch64-linux-gnu/libvulkan.so.1",
+    "libvulkan_powervr_mesa.so": "usr/local/lib/libvulkan_powervr_mesa.so",
+    "libwayland-client.so.0": "usr/lib/aarch64-linux-gnu/libwayland-client.so.0",
+    "libwayland-egl.so.1": "usr/lib/aarch64-linux-gnu/libwayland-egl.so.1",
+    "libxkbcommon.so.0": "usr/lib/aarch64-linux-gnu/libxkbcommon.so.0",
+}
+DISCOVERY_PATHS = {
+    "usr/share/glvnd/egl_vendor.d/50_mesa.json": (
+        "/run/pocketforge/platform-runtime/usr/local/lib/libEGL_mesa.so.0"
+    ),
+    "usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json": (
+        "/run/pocketforge/platform-runtime/usr/local/lib/"
+        "libvulkan_powervr_mesa.so"
+    ),
+}
+PLATFORM_DATA_FILES = {
+    "usr/local/lib/dri/zink_dri.so": b"hermetic zink DRI module\n",
+    "usr/local/share/drirc.d/10-pocketforge-zink.conf": b"hermetic drirc policy\n",
+    **{path: b"{}\n" for path in DISCOVERY_PATHS},
+}
+PLATFORM_ABI = {
+    "schema_version": 1,
+    "host_distribution": "debian-12",
+    "base_abi_sonames": BASE_ABI_SONAMES,
+    "sonames": PLATFORM_SONAMES,
+    "json_library_paths": DISCOVERY_PATHS,
+    "data": {
+        path: hashlib.sha256(content).hexdigest()
+        for path, content in PLATFORM_DATA_FILES.items()
+    },
+}
+PLATFORM_FILES = {
+    PLATFORM_PATH: PLATFORM_CONTENT,
+    "abi.json": (
+        json.dumps(PLATFORM_ABI, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode(),
+    **{
+        path: f"hermetic {soname}\n".encode()
+        for soname, path in PLATFORM_SONAMES.items()
+    },
+    **PLATFORM_DATA_FILES,
+}
+PLATFORM_MANIFEST = "".join(
+    f"{hashlib.sha256(content).hexdigest()}  {path}\n"
+    for path, content in sorted(PLATFORM_FILES.items())
+).encode()
 PLATFORM_VERSION = "sha256:" + hashlib.sha256(PLATFORM_MANIFEST).hexdigest()
 
 
-def manifest(*, root: bool = True, capabilities: tuple[str, ...] = ()) -> str:
+def manifest(
+    *,
+    root: bool = True,
+    distribution: str | None = None,
+    platform_version: str = PLATFORM_VERSION,
+    capabilities: tuple[str, ...] = (),
+) -> str:
     caps = ", ".join(json.dumps(value) for value in capabilities)
     root_table = ""
     if root:
+        distribution_line = (
+            f'distribution = "{distribution}"\n' if distribution is not None else ""
+        )
         root_table = textwrap.dedent(
             f"""
             [runtime.root]
             schema = 1
             format = "squashfs"
+            {distribution_line}
             digest = "{DIGEST}"
             platform-runtime = "pocketforge/bookworm-aarch64"
             platform-runtime-abi = "1"
-            platform-runtime-version = "{PLATFORM_VERSION}"
+            platform-runtime-version = "{platform_version}"
             library-paths = ["lib", "Qt-5.14.1/lib"]
             """
         )
@@ -66,12 +137,12 @@ def manifest(*, root: bool = True, capabilities: tuple[str, ...] = ()) -> str:
     )
 
 
-def inventory() -> dict[str, object]:
+def inventory(platform_version: str = PLATFORM_VERSION) -> dict[str, object]:
     return {
         "schema_version": 1,
         "platform_runtime": "pocketforge/bookworm-aarch64",
         "platform_runtime_abi": "1",
-        "platform_runtime_version": PLATFORM_VERSION,
+        "platform_runtime_version": platform_version,
         "resources": {
             "audio-devices": ["/dev/snd/controlC0", "/dev/snd/pcmC0D0p"],
             "audio-sockets": ["/run/pocketforge/session/audio-0"],
@@ -108,13 +179,51 @@ class RendererTest(unittest.TestCase):
             / f"sha256-{PLATFORM_VERSION.removeprefix('sha256:')}"
         )
         platform_path.mkdir(parents=True)
-        platform_content = platform_path / PLATFORM_PATH
-        platform_content.parent.mkdir(parents=True)
-        platform_content.write_bytes(PLATFORM_CONTENT)
+        for relative, content in PLATFORM_FILES.items():
+            platform_content = platform_path / relative
+            platform_content.parent.mkdir(parents=True, exist_ok=True)
+            platform_content.write_bytes(content)
         (platform_path / ".manifest-sha256").write_text(
             PLATFORM_VERSION.removeprefix("sha256:") + "\n", encoding="ascii"
         )
         self.inventory.write_text(json.dumps(inventory()), encoding="utf-8")
+
+    def write_root_metadata(self, distribution: str) -> None:
+        root_path = next(self.app_root_store.rglob("*.raw"))
+        root_path.with_suffix(".metadata.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "distribution": distribution,
+                    "suite": {"debian-12": "bookworm", "debian-13": "trixie"}[
+                        distribution
+                    ],
+                    "architecture": "arm64",
+                    "sha256": DIGEST.removeprefix("sha256:"),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def select_current_platform_tree(self) -> str:
+        platform_path = next(
+            path for path in self.platform_store.rglob("sha256-*") if path.is_dir()
+        )
+        digest = hashlib.sha256()
+        for path in sorted(platform_path.rglob("*")):
+            relative = path.relative_to(platform_path).as_posix()
+            if relative == ".manifest-sha256" or path.is_dir():
+                continue
+            digest.update(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {relative}\n".encode())
+        version = "sha256:" + digest.hexdigest()
+        (platform_path / ".manifest-sha256").write_text(
+            version.removeprefix("sha256:") + "\n", encoding="ascii"
+        )
+        selected_path = platform_path.parent / f"sha256-{version.removeprefix('sha256:')}"
+        if selected_path != platform_path:
+            platform_path.rename(selected_path)
+        self.inventory.write_text(json.dumps(inventory(version)), encoding="utf-8")
+        return version
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -180,6 +289,81 @@ class RendererTest(unittest.TestCase):
         self.assertIn("DeviceAllow=/dev/snd/controlC0 rw", unit)
         self.assertNotIn("/dev/video", unit)
         self.assertNotIn("/dev/media", unit)
+
+    def test_debian_13_root_is_selected_and_host_runtime_wins(self) -> None:
+        self.write_root_metadata("debian-13")
+        self.render(manifest(distribution="debian-13"))
+        unit = self.output.read_text(encoding="utf-8")
+        self.assertIn("# runtime root distribution: debian-13 (trixie)", unit)
+        self.assertIn(
+            'Environment="VK_DRIVER_FILES=/run/pocketforge/platform-runtime/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"',
+            unit,
+        )
+        self.assertIn(
+            'Environment="__EGL_VENDOR_LIBRARY_FILENAMES=/run/pocketforge/platform-runtime/usr/share/glvnd/egl_vendor.d/50_mesa.json"',
+            unit,
+        )
+        ld_line = next(
+            line for line in unit.splitlines() if line.startswith('Environment="LD_LIBRARY_PATH=')
+        )
+        platform_index = ld_line.index("/run/pocketforge/platform-runtime")
+        app_index = ld_line.index("/opt/pocketforge/apps/org.pocketforge.steamlink")
+        self.assertLess(platform_index, app_index)
+
+    def test_debian_13_platform_abi_is_required_and_owned(self) -> None:
+        self.write_root_metadata("debian-13")
+        self.render(manifest(distribution="debian-13"))
+
+        platform_path = next(
+            path for path in self.platform_store.rglob("sha256-*") if path.is_dir()
+        )
+        abi_path = platform_path / "abi.json"
+        abi_path.unlink()
+        legacy_version = self.select_current_platform_tree()
+        result = self.render(
+            manifest(distribution="debian-13", platform_version=legacy_version),
+            expect=65,
+        )
+        self.assertIn("reason=platform_runtime_incompatible", result.stderr)
+        self.assertFalse(self.output.exists())
+
+        platform_path = next(
+            path for path in self.platform_store.rglob("sha256-*") if path.is_dir()
+        )
+        abi_path = platform_path / "abi.json"
+        bad_abi = json.loads(json.dumps(PLATFORM_ABI))
+        bad_abi["sonames"]["libdrm.so.2"] = "usr/lib/libdrm.so.2"
+        abi_path.write_text(json.dumps(bad_abi), encoding="utf-8")
+        bad_version = self.select_current_platform_tree()
+        result = self.render(
+            manifest(distribution="debian-13", platform_version=bad_version),
+            expect=65,
+        )
+        self.assertIn("reason=platform_runtime_incompatible", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_debian_12_platform_abi_remains_optional(self) -> None:
+        platform_path = next(
+            path for path in self.platform_store.rglob("sha256-*") if path.is_dir()
+        )
+        (platform_path / "abi.json").unlink()
+        legacy_version = self.select_current_platform_tree()
+        self.render(manifest(platform_version=legacy_version))
+        self.assertTrue(self.output.is_file())
+
+    def test_root_distribution_metadata_must_match(self) -> None:
+        result = self.render(manifest(distribution="debian-13"), expect=66)
+        self.assertIn("reason=runtime_root_metadata_missing", result.stderr)
+        self.assertFalse(self.output.exists())
+
+        self.write_root_metadata("debian-12")
+        result = self.render(manifest(distribution="debian-13"), expect=65)
+        self.assertIn("reason=runtime_root_distribution_mismatch", result.stderr)
+        self.assertFalse(self.output.exists())
+
+        result = self.render(manifest(distribution="debian-14"), expect=65)
+        self.assertIn("reason=runtime_root_invalid", result.stderr)
+        self.assertFalse(self.output.exists())
 
     def test_every_declared_capability_has_an_explicit_resource_outcome(self) -> None:
         capabilities = (

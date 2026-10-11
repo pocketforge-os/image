@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "host_distribution": "debian-12",
+  "library_dirs": [
+    "usr/local/lib",
+    "usr/lib/aarch64-linux-gnu",
+    "lib/aarch64-linux-gnu"
+  ],
+  "base_sonames": [
+    "ld-linux-aarch64.so.1",
+    "libc.so.6",
+    "libdl.so.2",
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libstdc++.so.6"
+  ],
+  "seeds": [
+    "usr/local/lib/gbm/dri_gbm.so",
+    "usr/local/lib/dri/libdril_dri.so",
+    "usr/local/lib/libEGL_mesa.so.0",
+    "usr/local/lib/libgallium_dri.so",
+    "usr/local/lib/libgbm.so.1",
+    "usr/local/lib/libvulkan_powervr_mesa.so",
+    "usr/lib/aarch64-linux-gnu/libdrm.so.2",
+    "usr/lib/aarch64-linux-gnu/libEGL.so.1",
+    "usr/lib/aarch64-linux-gnu/libGLESv2.so.2",
+    "usr/lib/aarch64-linux-gnu/libvulkan.so.1",
+    "usr/lib/aarch64-linux-gnu/libwayland-client.so.0",
+    "usr/lib/aarch64-linux-gnu/libwayland-egl.so.1",
+    "usr/lib/aarch64-linux-gnu/libxkbcommon.so.0"
+  ],
+  "data": [
+    "usr/local/lib/dri/zink_dri.so",
+    "usr/local/share/drirc.d/10-pocketforge-zink.conf",
+    "usr/share/glvnd/egl_vendor.d/50_mesa.json",
+    "usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+  ],
+  "json_library_paths": {
+    "usr/share/glvnd/egl_vendor.d/50_mesa.json": "/run/pocketforge/platform-runtime/usr/local/lib/libEGL_mesa.so.0",
+    "usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json": "/run/pocketforge/platform-runtime/usr/local/lib/libvulkan_powervr_mesa.so"
+  }
+}
