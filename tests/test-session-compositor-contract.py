@@ -190,6 +190,8 @@ require(input_contract.get("menu_rows_source") == "in-ipc-versioned-data"
         and input_contract.get("menu_overflow_fold_source") ==
         "in-ipc-versioned-data",
         "system-menu rows and overflow folding must be data-driven")
+require(input_contract.get("menu_contract_bead") == "tsp-ihne1.36",
+        "system-menu provider protocol must cite the in-ipc contract")
 require(not input_contract["menu_forwarded_to_client"]
         and not input_contract["gamescope_opens_physical_gamepad"]
         and not input_contract["gamescope_opens_broker_gamepad"]

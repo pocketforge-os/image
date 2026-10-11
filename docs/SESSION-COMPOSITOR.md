@@ -330,10 +330,10 @@ the broker fd directly. An acknowledged provider may report `shown` when its fra
 committed; v1 logs it but does not enforce a deadline or health watch. The provider's
 `return` message and every fallback use one SafeReturn intake. Unknown optional v1 fields
 are additive; changed meanings or new mandatory fields require a new major version. A
-versioned `in-ipc` contract owns the data for system-menu rows and overflow folding; this
-image embeds neither a row list nor a parallel fold policy. In overlay mode later G2 work
-may route sanitized navigation to the trusted overlay. No second open, second grab, or
-dual delivery is allowed. Power
+versioned `in-ipc` contract (`tsp-ihne1.36`) owns the data for system-menu rows and
+overflow folding; this image embeds neither a row list nor a parallel fold policy. In
+overlay mode later G2 work may route sanitized navigation to the trusted overlay. No
+second open, second grab, or dual delivery is allowed. Power
 and other device-class system keys use a distinct protected device/path and
 never enter the app stream. G1 has no input integration; this work begins in G2.
 
