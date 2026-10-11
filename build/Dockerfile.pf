@@ -1609,6 +1609,8 @@ RUN <<'HWPROBE'
 set -eux
 : "${PF_HWPROBE_SHA:?}" "${PF_RUNTIME_SHA:?}" "${PF_SIM_SHA:?}" "${PF_LIBSDL3_SHA:?}"
 export SOURCE_DATE_EPOCH="${PF_HWPROBE_SOURCE_DATE_EPOCH:?}"
+# Command-line make variables replace `?=` defaults, so retain the
+# pf-hwprobe Makefile's required static-link flag while adding the build ID.
 make -C /work/hwprobe \
   CC=aarch64-none-linux-gnu-gcc \
   STRIP=aarch64-none-linux-gnu-strip \
@@ -1616,8 +1618,6 @@ make -C /work/hwprobe \
   SDL3_STATIC=/work/sdl-static/lib/libSDL3.a \
   PF_INCLUDE=/work/runtime-sdk/include \
   PF_STATIC=/work/runtime-sdk/lib/libpocketforge.a \
-  # Command-line make variables replace `?=` defaults, so retain the
-  # pf-hwprobe Makefile's required static-link flag while adding the build ID.
   LDFLAGS="-static -Wl,--build-id=sha1" \
   OUT_DIR=/out/bin
 test "$(od -An -tx1 -j18 -N2 /out/bin/pf-hwprobe | tr -d ' ')" = b700

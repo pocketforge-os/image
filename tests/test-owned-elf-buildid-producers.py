@@ -24,7 +24,9 @@ def verify(dockerfile: str, rootfs: str, finalizer: str) -> None:
         ),
         "hwprobe Make stage": (
             dockerfile,
-            'LDFLAGS="-static -Wl,--build-id=sha1" \\' + "\n" + '  OUT_DIR=/out/bin',
+            'PF_STATIC=/work/runtime-sdk/lib/libpocketforge.a \\' + "\n"
+            '  LDFLAGS="-static -Wl,--build-id=sha1" \\' + "\n"
+            '  OUT_DIR=/out/bin',
         ),
         "hwprobe artifact build-id assertion": (
             dockerfile,
