@@ -1341,6 +1341,11 @@ if [ -f "${SHELL_BIN}" ] || [ -f "${AUTHORITY_BIN}" ]; then
         done
         ln -sf /etc/systemd/system/pf-shell-selected.service \
             "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-shell-selected.service"
+        # pf-shell links pf-render, which memory-maps its production fonts from
+        # /usr/share/fonts/pocketforge at runtime (tsp-ihne1.12: no binary embeds
+        # font bytes). The fonts are staged by the open-gated runtime stage, so
+        # they ship exactly when pf-shell does; a missing face fails closed here.
+        "${SRC_DIR}/scripts/install-shell-fonts.sh" "${RUNTIME_DIR}" "${ROOTFS}"
         [ -f "${LAUNCHER_DIR}/.pf-launcher-provenance" ] && \
             install -D -m 0644 "${LAUNCHER_DIR}/.pf-launcher-provenance" "${ROOTFS}/usr/share/pocketforge/launcher-provenance"
         echo "[customize] F13 pf-shell selected framebuffer owner installed and enabled"
