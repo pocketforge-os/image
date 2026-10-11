@@ -166,13 +166,40 @@ require(input_contract["physical_gamepad_owner"] == "pf-input-broker",
         "broker must be the sole physical gamepad owner")
 require(input_contract["transport"] == "uinput-SCM_RIGHTS",
         "input fd transport changed")
+require(input_contract.get("menu_action") == "SystemMenu",
+        "Menu must remain the protected SystemMenu action")
+require(input_contract.get("menu_provider_protocol_version") == 1
+        and input_contract.get("menu_provider_socket") == "/run/pocketforge/system-menu.sock"
+        and input_contract.get("menu_provider_trust") == "same-service-uid",
+        "system-menu provider registration contract changed")
+require(input_contract.get("menu_ack_timeout_ms") == 250,
+        "system-menu acknowledgement timeout changed")
+require(input_contract.get("menu_shown_policy") == "accepted-and-logged"
+        and not input_contract.get("menu_shown_deadline_enforced", True)
+        and not input_contract.get("menu_health_watch_enforced", True),
+        "unapproved shown deadline or health-watch policy was enabled")
+require(input_contract.get("menu_fallback") == "safe_return-shared-intake"
+        and input_contract.get("menu_return_path") == "safe_return-shared-intake",
+        "fallback and menu Return must share one authority path")
+require(input_contract.get("menu_protocol_unknown_optional_fields") == "ignore"
+        and input_contract.get("menu_protocol_breaking_change") == "new-major-version",
+        "provider protocol lost its additive-versioning rule")
+require("declared_future_items" not in input_contract,
+        "image must not embed a system-menu row list")
+require(input_contract.get("menu_rows_source") == "in-ipc-versioned-data"
+        and input_contract.get("menu_overflow_fold_source") ==
+        "in-ipc-versioned-data",
+        "system-menu rows and overflow folding must be data-driven")
+require(input_contract.get("menu_contract_bead") == "tsp-ihne1.36",
+        "system-menu provider protocol must cite the in-ipc contract")
 require(not input_contract["menu_forwarded_to_client"]
         and not input_contract["gamescope_opens_physical_gamepad"]
         and not input_contract["gamescope_opens_broker_gamepad"]
         and not input_contract["dual_delivery"],
         "protected input isolation was weakened")
 require("EVIOCGRAB" in default_apps and "SCM_RIGHTS" in default_apps
-        and "BTN_MODE" in default_apps,
+        and "BTN_MODE" in default_apps and "system_menu" in default_apps
+        and "250 ms" in default_apps,
         "existing broker evidence disappeared")
 
 xwayland = data["xwayland"]

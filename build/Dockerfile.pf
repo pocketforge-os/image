@@ -1277,7 +1277,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "5738f3d5e108b52186b129a5db1c62a878278b19" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "4b71a503909090219c3a01c1718e9e772e0d488b" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # file exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml with the pinned digest (prints its path).
@@ -1292,14 +1292,19 @@ RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
 cargo build --offline --locked --release --target aarch64-unknown-linux-gnu -p libpocketforge
 install -D -m 0644 include/pocketforge.h /out/sdk/include/pocketforge.h
 install -D -m 0644 target/aarch64-unknown-linux-gnu/release/libpocketforge.a /out/sdk/lib/libpocketforge.a
-# The four platform-owned inputs exist only for A133-open. The renderer rejects
-# missing, malformed, unknown, duplicated, or unsorted values; rejects any
-# PF_APP_* value on every other profile; and parses its own schema-v1 output
-# back to the exact input tuple before the file can enter /out.
+# The four platform-owned identity inputs exist only for A133-open, and the
+# schema-2 device facts (memory, graphics maxima, derived inputs, display) come
+# from the sha-verified staged descriptor checked above (empty on every other
+# profile). The renderer rejects missing, malformed, unknown, duplicated, or
+# unsorted values; rejects any PF_APP_* value or descriptor on every other
+# profile; validates every vocabulary against the pinned runtime source; and
+# parses its own schema-v2 output back to the exact contract before the file
+# can enter /out.
 render-platform-capabilities \
   --soc "${PF_SOC}" \
   --gpu-model "${PF_GPU_MODEL:-ddk}" \
   --runtime-source /work/runtime \
+  --descriptor "${DESCRIPTOR}" \
   --output /out/share/platform-capabilities.toml
 # Device gate (tsp-mc9m.41.924.2 / B2): declarative is-a133 signal, NOT the PF_GPU_REPO
 # proxy (a133-open's PF_GPU_REPO="" used to misread as "not a133"). pf-input-decode
@@ -1417,6 +1422,21 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   OBJDUMP=aarch64-none-linux-gnu-objdump READELF=aarch64-none-linux-gnu-readelf \
     check-libpocketforge "${CDYLIB}" abi/libpocketforge.v1.abi
   install -D -m 0644 "${CDYLIB}" /out/lib/libpocketforge.so.1
+  # (4) On-disk production fonts for the pf-shell text stack (tsp-ihne1.12).
+  #     pf-shell links pf-render, which memory-maps its fonts from
+  #     /usr/share/fonts/pocketforge — no shipped binary embeds font bytes.
+  #     v1 stages exactly the two Latin faces the runtime goldens pin plus their
+  #     OFL licenses, from the pinned runtime checkout (single source of truth:
+  #     the same bytes the runtime test suite measures with). CJK collections
+  #     install only with their languages later (design/input-layer #l10n), so
+  #     they are deliberately NOT staged; install-shell-fonts.sh in the rootfs
+  #     builder fails closed on any deviation from this exact set.
+  for font in "Manrope[wght].ttf" "Manrope-OFL.txt" \
+      "Fraunces[SOFT,WONK,opsz,wght].ttf" "Fraunces-OFL.txt"; do
+    [ -f "crates/pf-text-raster/fonts/${font}" ] || {
+      echo "FATAL: shell font missing from runtime checkout: crates/pf-text-raster/fonts/${font}"; exit 1; }
+    install -D -m 0644 "crates/pf-text-raster/fonts/${font}" "/out/share/fonts/pocketforge/${font}"
+  done
   {
     printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
     printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
@@ -1424,6 +1444,11 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     printf '  pf-input-broker sha256=%s\n' "$(sha256sum /out/bin/pf-input-broker | cut -d' ' -f1)"
     printf '  libpocketforge.so.1 sha256=%s\n' "$(sha256sum /out/lib/libpocketforge.so.1 | cut -d' ' -f1)"
     printf '  devices/%s/capabilities.toml sha256=%s\n' "${PF_DEVICE_DESCRIPTOR_ID}" "${DESCRIPTOR_SHA256}"
+    for font in "Manrope[wght].ttf" "Manrope-OFL.txt" \
+        "Fraunces[SOFT,WONK,opsz,wght].ttf" "Fraunces-OFL.txt"; do
+      printf '  fonts/pocketforge/%s sha256=%s\n' "${font}" \
+        "$(sha256sum "/out/share/fonts/pocketforge/${font}" | cut -d' ' -f1)"
+    done
   } >> /out/.pf-runtime-provenance
 fi
 cat /out/.pf-runtime-provenance
@@ -1919,7 +1944,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "d46dbb48e610e10cc4d01562fedcdf7cdfae0f7d" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fourteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
@@ -2377,8 +2402,95 @@ esac
 ASM
 
 # =============================================================================
+# debuginfo — verify + bundle the cr-symbols store (bd tsp-ihne1.33).
+# The v1 symbol store is PRIVATE to cr-server: these bytes never reach GitHub
+# artifacts; they ride `pf build`'s local export beside the image. Every store
+# entry round-trips through a real debuginfod server+client here, so a store
+# the server cannot resolve fails the build. Sandboxed (no privilege).
+# =============================================================================
+FROM ${PF_CONTAINER} AS debuginfo
+ARG PF_DEVICE_ID
+ARG PF_VARIANT=dev
+ARG PF_IMAGE_SHA
+ARG SOURCE_DATE_EPOCH
+COPY --from=rootfs /out/pf-debuginfo /work/pf-debuginfo
+COPY --from=rootfs /out/pf-elf-build-id-manifest.tsv /work/pf-elf-build-id-manifest.tsv
+RUN <<'DEBUGINFO'
+set -eux
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends debuginfod elfutils
+mkdir -p /out /tmp/did-home
+chown nobody:nogroup /tmp/did-home
+[ -s /work/pf-elf-build-id-manifest.tsv ] \
+  || { echo "DEBUGINFO FAIL: build-id manifest empty or missing"; exit 1; }
+store_entries="$(find /work/pf-debuginfo -type f | sort)"
+
+# Every supported matrix row must still produce its image when the rootfs owned
+# NO symbolizable DWARF inputs (a523 ships no -g-built owned ELF, so its store
+# is legitimately empty). With entries present, every one of them must resolve.
+resolved=0
+if [ -n "$store_entries" ]; then
+  runuser -u nobody -- env HOME=/tmp/did-home XDG_CACHE_HOME=/tmp/did-home \
+    debuginfod -F -d /tmp/did-home/debuginfod.sqlite /work/pf-debuginfo \
+    >/tmp/debuginfod.log 2>&1 &
+  server=$!
+  cleanup_debuginfod() { kill "$server" 2>/dev/null || true; }
+  trap cleanup_debuginfod EXIT
+
+  # Give the server a grace period to bind and run its initial scan: a client
+  # that probes too early can cache the refusal and stay poisoned.
+  sleep 5
+  for d in $store_entries; do
+    rest="$(basename "$(dirname "$d")")"
+    aa="$(basename "$(dirname "$(dirname "$d")")")"
+    id="${aa}${rest}"
+    up=0
+    fetched=""
+    while [ "$up" -lt 90 ]; do
+      if fetched="$(runuser -u nobody -- env HOME=/tmp/did-home XDG_CACHE_HOME=/tmp/did-home \
+          DEBUGINFOD_URLS=http://127.0.0.1:8002/ \
+          debuginfod-find debuginfo "$id" 2>/dev/null)" && [ -n "$fetched" ]; then
+        up=90
+      else
+        sleep 1
+        up=$((up + 1))
+      fi
+    done
+    if [ -z "$fetched" ] || [ ! -s "$fetched" ]; then
+      echo "DEBUGINFO FAIL: debuginfod never resolved store entry $id"; tail -20 /tmp/debuginfod.log; exit 1
+    fi
+    cmp "$d" "$fetched" \
+      || { echo "DEBUGINFO FAIL: debuginfod returned different bytes for $id"; exit 1; }
+    resolved=$((resolved + 1))
+  done
+fi
+store_files="$(find /work/pf-debuginfo -type f | wc -l)"
+[ "${store_files:-0}" -eq 0 ] || [ "$resolved" -gt 0 ]
+
+# Bundle the store deterministically (name-sorted, epoch-clamped, root-owned).
+tar --sort=name --numeric-owner --owner=0 --group=0 \
+  --mtime="@${SOURCE_DATE_EPOCH:-1700000000}" \
+  -cf "/out/pf-debuginfo-${PF_DEVICE_ID}-${PF_VARIANT}.tar" -C /work pf-debuginfo
+( cd /out && sha256sum "pf-debuginfo-${PF_DEVICE_ID}-${PF_VARIANT}.tar" \
+    > "pf-debuginfo-${PF_DEVICE_ID}-${PF_VARIANT}.tar.sha256" )
+cp /work/pf-elf-build-id-manifest.tsv /out/pf-elf-build-id-manifest.tsv
+( cd /out && sha256sum pf-elf-build-id-manifest.tsv > pf-elf-build-id-manifest.tsv.sha256 )
+{
+  printf 'device=%s\n' "${PF_DEVICE_ID}"
+  printf 'variant=%s\n' "${PF_VARIANT}"
+  printf 'image_sha=%s\n' "${PF_IMAGE_SHA}"
+  printf 'manifest_lines=%s\n' "$(grep -cv '^#' /work/pf-elf-build-id-manifest.tsv)"
+  printf 'store_files=%s\n' "${store_files:-0}"
+  printf 'store_bytes=%s\n' "$(du -sb /work/pf-debuginfo | cut -f1)"
+  printf 'resolved_via_debuginfod=%s\n' "$resolved"
+} > /out/.pf-debuginfo-provenance
+cat /out/.pf-debuginfo-provenance
+DEBUGINFO
+
+# =============================================================================
 # export — the flashable artifact(s) only (FROM scratch → nothing but /out).
 # `pf build … --output type=local,dest=$PF_OUT_DIR` extracts this stage.
 # =============================================================================
 FROM scratch AS export
 COPY --from=assemble /out/ /
+COPY --from=debuginfo /out/ /

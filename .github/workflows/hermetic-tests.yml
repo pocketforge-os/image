@@ -112,6 +112,7 @@ jobs:
             tests/test-default-app-rootfs.sh
             tests/test-dma-heap-udev-policy.sh
             tests/test-dockerfile-pf-transforms.sh
+            tests/test-elf-buildid.sh
             tests/test-gamescope-package-path.sh
             tests/test-gamescope-pvr-cache.sh
             tests/test-hwprobe-variant-stage.sh
@@ -140,6 +141,7 @@ jobs:
             tests/test-sdl-kmsdrm-sysroot.sh
             tests/test-session-authority-systemd-safety.sh
             tests/test-session-compositor-contract.sh
+            tests/test-shell-fonts.sh
             tests/test-steamlink-ffmpeg59-runtime.sh
             tests/test-userdata-partition.sh
             tests/test-uboot-logo.sh

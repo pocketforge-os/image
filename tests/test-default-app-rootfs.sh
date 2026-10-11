@@ -16,8 +16,8 @@ from pathlib import Path
 expected = """[Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-foreground.target
-BindsTo=pf-input-broker.service
-After=local-fs.target pocketforge-foreground.target pf-input-broker.service
+BindsTo=pf-input-broker.service pf-prefsd.service
+After=local-fs.target pocketforge-foreground.target pf-input-broker.service pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
 ConditionPathExists=/dev/fb0
@@ -45,6 +45,7 @@ PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
 ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
+InaccessiblePaths=/run/pocketforge/prefsd.sock
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
@@ -55,6 +56,7 @@ Nice=-5
 actual = Path(sys.argv[1]).read_text()
 assert actual == expected
 assert "[Install]" not in actual
+assert "pf-pref-writer" not in actual
 PY
 
 rootfs="${tmp}/open-rootfs"
@@ -79,11 +81,16 @@ printf '%s\n' '[Unit]' 'Description=runtime broker unit fixture' '[Install]' \
     'WantedBy=multi-user.target' > "${runtime}/systemd/pf-input-broker.service"
 printf '[identity]\nid = "a133"\n' > "${runtime}/share/devices/a133/capabilities.toml"
 printf '%s\n' \
-    'schema_version = 1' \
+    'schema_version = 2' \
     'runtime_family = "pocketforge/a133-powervr"' \
     'runtime_abi = "1"' \
     'platform_version = "20"' \
     'supported_capabilities = ["audio", "entropy", "input", "settings"]' \
+    'physical_memory_mib = 970' \
+    'app_memory_budget_mib = 600' \
+    'gles_max = "3.0"' \
+    'inputs = ["buttons", "dpad", "stick", "two_sticks"]' \
+    'display = { width = 1280, height = 720 }' \
     > "${runtime}/share/platform-capabilities.toml"
 
 # A pre-existing boot enable link for the broker (what `systemctl enable` of the

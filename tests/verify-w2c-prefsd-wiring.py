@@ -7,6 +7,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
+WRITER_GROUP = "pf-pref-writer"
+RUNTIME_SHA = "4b71a503909090219c3a01c1718e9e772e0d488b"
+LAUNCHER_SHA = "d46dbb48e610e10cc4d01562fedcdf7cdfae0f7d"
 
 
 def text(path: Path) -> str:
@@ -25,6 +28,19 @@ for relative in (
     assert f"Environment=PF_PREFSD_SOCK={SOCKET}" in unit, relative
     assert "Requires=pf-prefsd.service" not in unit, relative
 
+for relative in ("pf-shell-selected.service", "pf-foreground@.service"):
+    unit = text(SYSTEMD / relative)
+    assert WRITER_GROUP in unit, f"{relative} lacks {WRITER_GROUP}"
+
+app = text(SYSTEMD / "pf-app@.service")
+assert WRITER_GROUP not in app, "the app template inherited preference-write authority"
+
+rootfs_builder = text(ROOT / "scripts/build-rootfs.sh")
+assert 'chroot "$ROOTFS" getent group pf-pref-writer' in rootfs_builder
+assert 'chroot "$ROOTFS" groupadd --system pf-pref-writer' in rootfs_builder
+assert not re.search(r"usermod[^\n]*pf-pref-writer[^\n]*gamer", rootfs_builder)
+assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
+
 assert text(ROOT / "rootfs-overlay/etc/environment").strip() == f"PF_PREFSD_SOCK={SOCKET}"
 
 dockerfile = text(ROOT / "build/Dockerfile.pf")
@@ -34,8 +50,8 @@ runtime_guard = re.findall(
     dockerfile,
     flags=re.MULTILINE,
 )
-assert runtime_guard == ["5738f3d5e108b52186b129a5db1c62a878278b19"], (
-    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 5738f3d5, "
+assert runtime_guard == [RUNTIME_SHA], (
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 4b71a503, "
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
@@ -45,14 +61,16 @@ assert "2ad0ca76efc984ad80a167759cfcf23657fb0c78" not in dockerfile
 assert "0955d8a83ee59df89eaba79ffee9e99e4f52384c" not in dockerfile
 assert "7536aa1f5af76f0220b582ee68e29e254251fd76" not in dockerfile
 assert "1dd87ecc2952584a7ef1473c5dcb872662b7c0cb" not in dockerfile
+assert "5738f3d5e108b52186b129a5db1c62a878278b19" not in dockerfile
+assert "de890215bd97eb0b5b63287a51e8b9a2e18d1125" not in dockerfile
 launcher_guard = re.findall(
     r'^\[ "\$\{PF_LAUNCHER_SHA\}" = "([0-9a-f]{40})" \] '
     r'\|\| \{ echo "FATAL: F13 launcher pin drift: \$\{PF_LAUNCHER_SHA\}"; exit 1; \}$',
     dockerfile,
     flags=re.MULTILINE,
 )
-assert launcher_guard == ["73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5"], (
-    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher 73cda6ce, "
+assert launcher_guard == [LAUNCHER_SHA], (
+    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher d46dbb48, "
     f"found: {launcher_guard}"
 )
 assert "ab9fb7fde36e633add69b94c36bf1213f7cff5d9" not in dockerfile
@@ -62,6 +80,8 @@ assert "7a2b792d0813fc8fb5c2915bdc00ef976b0cc986" not in dockerfile
 assert "1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77" not in dockerfile
 assert "96feb08c110b090f85d822c9f69e52b407103ad5" not in dockerfile
 assert "1ef9671afdd687d53f61a91e92c51da9fb614293" not in dockerfile
+assert "73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5" not in dockerfile
+assert "95302865bc584ce5e1c96e09df387aa5f58455f6" not in dockerfile
 assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
 assert "systemd/pf-prefsd.service /out/systemd/pf-prefsd.service" in dockerfile

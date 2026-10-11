@@ -2,8 +2,9 @@
 """Static contract for default-app input delivery (bd: tsp-f3fm.202.1.4, B4).
 
 Checks the unit wiring the ruling fixed, the cross-file path agreements (descriptor,
-acquire socket, SafeReturn socket), the A133-open-only Dockerfile structure, and that
-docs/DEFAULT-APPS.md shows the exact directives that ship.
+acquire socket, System Menu provider socket, SafeReturn fallback socket), the
+A133-open-only Dockerfile structure, and that docs/DEFAULT-APPS.md shows the exact
+directives that ship.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 APP_UNIT = SYSTEMD / "pf-app@.service"
+SELECTED_UNIT = SYSTEMD / "pf-shell-selected.service"
+FOREGROUND_UNIT = SYSTEMD / "pf-foreground@.service"
 BROKER_DROPIN = SYSTEMD / "pf-input-broker.service.d/10-app-session.conf"
 SHELL_DROPIN = SYSTEMD / "pf-shell-selected.service.d/10-input-broker.conf"
 DOC = ROOT / "docs/DEFAULT-APPS.md"
@@ -22,6 +25,9 @@ DOCKERFILE = ROOT / "build/Dockerfile.pf"
 DESCRIPTOR = "/usr/share/pocketforge/devices/a133/capabilities.toml"
 BROKER_SOCK = "/run/pocketforge/input-broker.sock"
 AUTHORITY_SOCK = "/run/pocketforge/session-authority.sock"
+PREFSD_SOCK = "/run/pocketforge/prefsd.sock"
+PREF_WRITER_GROUP = "pf-pref-writer"
+SYSTEM_MENU_SOCK = "/run/pocketforge/system-menu.sock"
 
 
 def directives(text: str) -> list[tuple[str, str, str]]:
@@ -62,6 +68,8 @@ def directive_text(entries: list[tuple[str, str, str]]) -> str:
 
 
 app = directives(APP_UNIT.read_text())
+selected = directives(SELECTED_UNIT.read_text())
+foreground = directives(FOREGROUND_UNIT.read_text())
 broker = directives(BROKER_DROPIN.read_text())
 shell = directives(SHELL_DROPIN.read_text())
 
@@ -69,15 +77,33 @@ shell = directives(SHELL_DROPIN.read_text())
 # BindsTo=, not Requires= (bd: tsp-f3fm.202.1.6): Requires= does not stop the app when
 # the broker exits by itself mid-session, and the app would keep the panel with no
 # Menu intake (real-systemd harness, case (b)).
-assert values(app, "Unit", "BindsTo") == ["pf-input-broker.service"], "pf-app@ must be BindsTo= the broker"
+assert values(app, "Unit", "BindsTo") == [
+    "pf-input-broker.service",
+    "pf-prefsd.service",
+], "pf-app@ must follow both security authorities"
 assert "pf-input-broker.service" not in values(app, "Unit", "Requires"), "broker belongs in BindsTo=, not Requires="
 assert "pf-input-broker.service" in values(app, "Unit", "After"), "pf-app@ must order After the broker"
+assert "pf-prefsd.service" in values(app, "Unit", "After"), "pf-app@ must order After prefsd"
 assert "pocketforge-foreground.target" in values(app, "Unit", "Requires")
 environment = values(app, "Service", "Environment")
 assert f"PF_DESCRIPTOR={DESCRIPTOR}" in environment, environment
 assert f"PF_BROKER_SOCK={BROKER_SOCK}" in environment, environment
-assert values(app, "Service", "InaccessiblePaths") == [f"-{AUTHORITY_SOCK}"]
+assert values(app, "Service", "InaccessiblePaths") == [
+    f"-{AUTHORITY_SOCK}",
+    PREFSD_SOCK,
+]
+assert PREF_WRITER_GROUP not in values(app, "Service", "SupplementaryGroups")
+for name, trusted in (("selected shell", selected), ("foreground shell", foreground)):
+    assert PREF_WRITER_GROUP in values(trusted, "Service", "SupplementaryGroups"), (
+        f"{name} must receive the dedicated preference-writer group"
+    )
 assert not any(section == "Install" for section, _, _ in app), "pf-app@ must stay dormant"
+
+rootfs_builder = (ROOT / "scripts/build-rootfs.sh").read_text()
+assert 'chroot "$ROOTFS" getent group pf-pref-writer' in rootfs_builder
+assert 'chroot "$ROOTFS" groupadd --system pf-pref-writer' in rootfs_builder
+assert not re.search(r"usermod[^\n]*pf-pref-writer[^\n]*gamer", rootfs_builder)
+assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
 
 # Broker drop-in: exactly the ruling's directives plus the Condition->Assert fix.
 assert broker == [
@@ -94,13 +120,16 @@ assert broker == [
     ("Service", "ExecStart", ""),
     ("Service", "ExecStart", "/usr/bin/pf-input-broker --descriptor " + DESCRIPTOR
      + " --acquire-sock " + BROKER_SOCK + " --source /dev/input/pf-gamepad"
-     + " --safe-return-sock " + AUTHORITY_SOCK),
+     + " --safe-return-sock " + AUTHORITY_SOCK
+     + " --system-menu-sock " + SYSTEM_MENU_SOCK),
 ], broker
 exec_start = values(broker, "Service", "ExecStart")
 flags = dict(zip(exec_start[1::2], exec_start[2::2]))
 assert flags["--descriptor"] == DESCRIPTOR == environment[environment.index(f"PF_DESCRIPTOR={DESCRIPTOR}")].split("=", 1)[1]
 assert flags["--acquire-sock"] == BROKER_SOCK
 assert flags["--safe-return-sock"] == values(app, "Service", "InaccessiblePaths")[0].lstrip("-")
+assert flags["--system-menu-sock"] == SYSTEM_MENU_SOCK
+assert flags["--system-menu-sock"] not in (flags["--acquire-sock"], flags["--safe-return-sock"])
 assert shell == [("Unit", "After", "pf-input-broker.service")], shell
 
 
@@ -139,7 +168,7 @@ doc = DOC.read_text()
 for heading in (
     "### R1: the one staged device descriptor",
     "### Input delivery",
-    "### Protected Safe Return during app sessions",
+    "### Protected System Menu and return fallback during app sessions",
     "### Updated units",
     "### Failure modes (amendment)",
     "### Sequence (B1-B6)",

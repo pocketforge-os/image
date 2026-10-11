@@ -757,6 +757,12 @@ chroot "$ROOTFS" groupadd -g 27 plugdev 2>/dev/null || chroot "$ROOTFS" groupmod
 chroot "$ROOTFS" groupadd -g 105 input  2>/dev/null || true
 chroot "$ROOTFS" groupadd -g 106 render 2>/dev/null || true
 chroot "$ROOTFS" groupadd -g 1000 gamer 2>/dev/null || true
+# Socket-bound preference-write authority is assigned by the trusted service
+# units below, never through gamer's global supplementary groups. Creation must
+# fail closed because the runtime daemon resolves this name before accepting.
+if ! chroot "$ROOTFS" getent group pf-pref-writer >/dev/null; then
+    chroot "$ROOTFS" groupadd --system pf-pref-writer
+fi
 chroot "$ROOTFS" useradd -u 1000 -g 1000 -m -d /home/gamer -s /bin/bash gamer
 chroot "$ROOTFS" usermod -aG audio,input,video,render,plugdev gamer
 chroot "$ROOTFS" passwd -l gamer
@@ -1325,6 +1331,11 @@ if [ -f "${SHELL_BIN}" ] || [ -f "${AUTHORITY_BIN}" ]; then
         done
         ln -sf /etc/systemd/system/pf-shell-selected.service \
             "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-shell-selected.service"
+        # pf-shell links pf-render, which memory-maps its production fonts from
+        # /usr/share/fonts/pocketforge at runtime (tsp-ihne1.12: no binary embeds
+        # font bytes). The fonts are staged by the open-gated runtime stage, so
+        # they ship exactly when pf-shell does; a missing face fails closed here.
+        "${SRC_DIR}/scripts/install-shell-fonts.sh" "${RUNTIME_DIR}" "${ROOTFS}"
         [ -f "${LAUNCHER_DIR}/.pf-launcher-provenance" ] && \
             install -D -m 0644 "${LAUNCHER_DIR}/.pf-launcher-provenance" "${ROOTFS}/usr/share/pocketforge/launcher-provenance"
         echo "[customize] F13 pf-shell selected framebuffer owner installed and enabled"
@@ -1818,15 +1829,16 @@ CROSS_STRIP="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-strip"
 # links only libc and is installed only in the a133-open-7x rootfs.
 if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then
     PF_BT_ATTACH_BIN="${WORK}/xr829-hciattach"
-    "${CROSS_CC}" -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+    "${CROSS_CC}" -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
         -std=gnu11 -static-libgcc \
         -I"${SRC_DIR}/third_party/xradio-hciattach" \
         -o "${PF_BT_ATTACH_BIN}" \
         "${SRC_DIR}/third_party/xradio-hciattach/main.c" \
         "${SRC_DIR}/third_party/xradio-hciattach/hciattach_xradio.c"
-    "${CROSS_STRIP}" "${PF_BT_ATTACH_BIN}"
+    # Debug info (cr-symbols): the finalize-elf-debuginfo step splits it into the
+    # build-id symbol store and strips the shipped binary right before ext4 assembly.
     export PF_BT_ATTACH_BIN
-    echo "  XR829 attach helper: $(stat -c '%s bytes' "${PF_BT_ATTACH_BIN}")"
+    echo "  XR829 attach helper: $(stat -c '%s bytes' "${PF_BT_ATTACH_BIN}") (stripped at finalize)"
 else
     PF_BT_ATTACH_BIN=""
     export PF_BT_ATTACH_BIN
@@ -1834,14 +1846,15 @@ fi
 if [ "${PF_HAS_DISPLAY}" = 1 ]; then
 echo "  Cross-compiling pocketforge-boot-animator (aarch64)..."
 "${CROSS_CC}" \
-    -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+    -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -static-libgcc \
     -I"${ANIMATOR_SRC_DIR}/src" \
     -o "${PF_ANIMATOR_BIN}" \
     "${ANIMATOR_SRC_DIR}/src/main.c" \
     -lm
-"${CROSS_STRIP}" "${PF_ANIMATOR_BIN}"
-echo "    -> $(du -h "${PF_ANIMATOR_BIN}" | awk '{print $1}') stripped"
+# Debug info (cr-symbols): finalize-elf-debuginfo splits it into the build-id
+# symbol store and strips the shipped binary right before ext4 assembly.
+echo "    -> $(du -h "${PF_ANIMATOR_BIN}" | awk '{print $1}') (stripped at finalize)"
 export PF_ANIMATOR_BIN
 
 # ---- Crop the boot animation frames (bd: tsp-3rd3.6) ------------------------
@@ -1870,13 +1883,14 @@ PLACEHOLDER_SRC_DIR="${SRC_DIR}/apps/pocketforge-placeholder"
 PF_PLACEHOLDER_BIN="${WORK}/pocketforge-placeholder"
 echo "  Cross-compiling pocketforge-placeholder (aarch64)..."
 "${CROSS_CC}" \
-    -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+    -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -static-libgcc \
     -I"${PLACEHOLDER_SRC_DIR}/src" \
     -o "${PF_PLACEHOLDER_BIN}" \
     "${PLACEHOLDER_SRC_DIR}/src/main.c"
-"${CROSS_STRIP}" "${PF_PLACEHOLDER_BIN}"
-echo "    -> $(du -h "${PF_PLACEHOLDER_BIN}" | awk '{print $1}') stripped"
+# Debug info (cr-symbols): split into the build-id symbol store + stripped
+# shipped copy by finalize-elf-debuginfo, right before ext4 assembly.
+echo "    -> $(du -h "${PF_PLACEHOLDER_BIN}" | awk '{print $1}') (stripped at finalize)"
 export PF_PLACEHOLDER_BIN
 
 # ---- Cross-compile the MVP static menu (bd: tsp-ga7s.1) --------------------
@@ -1890,13 +1904,14 @@ MENU_SRC_DIR="${SRC_DIR}/apps/pocketforge-menu"
 PF_MENU_BIN="${WORK}/pocketforge-menu"
 echo "  Cross-compiling pocketforge-menu (aarch64)..."
 "${CROSS_CC}" \
-    -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+    -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -static-libgcc \
     -I"${MENU_SRC_DIR}/src" \
     -o "${PF_MENU_BIN}" \
     "${MENU_SRC_DIR}/src/main.c"
-"${CROSS_STRIP}" "${PF_MENU_BIN}"
-echo "    -> $(du -h "${PF_MENU_BIN}" | awk '{print $1}') stripped"
+# Debug info (cr-symbols): split into the build-id symbol store + stripped
+# shipped copy by finalize-elf-debuginfo, right before ext4 assembly.
+echo "    -> $(du -h "${PF_MENU_BIN}" | awk '{print $1}') (stripped at finalize)"
 export PF_MENU_BIN
 else
     PF_ANIMATOR_BIN=""
@@ -2023,6 +2038,17 @@ fi
 if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then
     "${SRC_DIR}/scripts/verify-rootfs-bluetooth.sh" "${ROOTFS_EXTRACTED}"
 fi
+
+# --- ELF build-ids, debuginfo split, image build-id manifest (bd tsp-ihne1.33) ---
+# Gate: every ELF in the assembled rootfs outside the closed vendor dirs must
+# carry a GNU build-id, or the build fails. DWARF-carrying owned binaries are
+# split into the debuginfod-compatible symbol store under OUT_DIR/pf-debuginfo
+# (private to cr-server; hosting is wired by tsp-ihne1.34) and the shipped
+# copies are stripped here, right before ext4 assembly.
+echo "[cr-symbols] ELF build-id gate + debuginfo split + image build-id manifest"
+PF_OBJCOPY="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-objcopy" \
+PF_STRIP="${CROSS_STRIP}" \
+    "${SRC_DIR}/scripts/finalize-elf-debuginfo.sh" "${ROOTFS_EXTRACTED}" "${OUT_DIR}"
 
 # Report rootfs size
 ROOTFS_DU="$(du -sm "${ROOTFS_EXTRACTED}" | cut -f1)"
