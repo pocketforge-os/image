@@ -58,7 +58,7 @@ static void handle_ei_events(void)
 				EI_DEVICE_CAP_POINTER_ABSOLUTE,
 				EI_DEVICE_CAP_KEYBOARD,
 				EI_DEVICE_CAP_BUTTON,
-				EI_DEVICE_CAP_SCROLL, 0);
+				EI_DEVICE_CAP_SCROLL, NULL);
 		} else if (type == EI_EVENT_DEVICE_ADDED) {
 			g_dev = ei_event_get_device(event);
 		} else if (type == EI_EVENT_DEVICE_REMOVED) {

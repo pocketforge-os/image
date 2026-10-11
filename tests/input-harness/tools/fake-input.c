@@ -11,6 +11,7 @@
  * On EOF the device is destroyed and the daemon exits 0.
  */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
@@ -55,26 +56,34 @@ static void emit_event(int type, int code, int value)
 	wr(&ev);
 }
 
-static void find_event_node(const char *sysname, char *out, size_t outsz)
+/* Resolve /dev/input/eventN for a uinput sysfs name ("input42"). The node
+ * appears asynchronously after UI_CREATE, so retry for ~3s. Returns 0 on
+ * success, -1 (with a message on stderr) when no node showed up. */
+static int find_event_node(const char *sysname, char *out, size_t outsz)
 {
 	char dir[256];
-	/* sysname is like "input42"; resolve its device dir */
 	snprintf(dir, sizeof dir, "/sys/devices/virtual/input/%s", sysname);
-	char cmd[512];
-	snprintf(cmd, sizeof cmd,
-		 "ls %s 2>/dev/null | grep -m1 '^event'", dir);
-	FILE *fp = popen(cmd, "r");
-	if (fp) {
-		char name[64];
-		if (fgets(name, sizeof name, fp)) {
-			name[strcspn(name, "\n")] = '\0';
-			snprintf(out, outsz, "/dev/input/%s", name);
+	for (int attempt = 0; attempt < 60; attempt++) {
+		DIR *d = opendir(dir);
+		if (d) {
+			struct dirent *ent;
+			while ((ent = readdir(d)) != NULL) {
+				if (!strncmp(ent->d_name, "event", 5) &&
+				    ent->d_name[5] >= '0' &&
+				    ent->d_name[5] <= '9') {
+					snprintf(out, outsz, "/dev/input/%s",
+						 ent->d_name);
+					closedir(d);
+					return 0;
+				}
+			}
+			closedir(d);
 		}
-		pclose(fp);
+		usleep(50000);
 	}
-	if (!out[0])
-		fprintf(stderr, "fake-input: cannot find event node for %s\n",
-			sysname);
+	fprintf(stderr, "fake-input: no event node for %s within 3s\n",
+		sysname);
+	return -1;
 }
 
 int main(int argc, char **argv)
@@ -174,12 +183,14 @@ int main(int argc, char **argv)
 		die("UI_CREATE");
 
 	char sysname[64] = "";
-	if (ioctl(g_fd, UI_GET_SYSNAME(64), sysname) < 0)
+	if (ioctl(g_fd, UI_GET_SYSNAME(64), sysname) < 0) {
 		fprintf(stderr, "fake-input: UI_GET_SYSNAME: %s\n",
 			strerror(errno));
-	char node[128] = "";
-	if (sysname[0])
-		find_event_node(sysname, node, sizeof node);
+		return 1;
+	}
+	char node[300] = "";
+	if (find_event_node(sysname, node, sizeof node) != 0)
+		return 1;
 	usleep(100000); /* let the kernel settle */
 
 	printf("{\"kind\":\"%s\",\"name\":\"%s\",\"event_node\":\"%s\"}\n",

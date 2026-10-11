@@ -5,6 +5,7 @@
 #include "../tools/transcript.h"
 
 #include <SDL3/SDL.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -50,11 +51,11 @@ int main(int argc, char **argv)
 		    purpose);
 
 	SDL_Event ev;
-	SDL_bool last_shown = SDL_FALSE;
+	bool last_shown = false;
 	Uint64 deadline = SDL_GetTicks() + 120000;
 	while (SDL_GetTicks() < deadline) {
 		if (!SDL_WaitEventTimeout(&ev, 200)) {
-			SDL_bool shown = SDL_ScreenKeyboardShown(win);
+			bool shown = SDL_ScreenKeyboardShown(win);
 			if (shown != last_shown) {
 				last_shown = shown;
 				pf_tx_emitf("screen_keyboard",

@@ -22,8 +22,9 @@ static GtkInputPurpose parse_purpose(const char *s)
 
 static gboolean on_focus_in(GtkWidget *w, GdkEvent *ev, gpointer data)
 {
-	(void)w; (void)data;
-	pf_tx_emitf("enter", ",\"serial\":%lu", (unsigned long)ev->focus.serial);
+	(void)w; (void)ev;
+	/* GdkEventFocus carries no protocol serial; the schema allows 0. */
+	pf_tx_emitf("enter", ",\"serial\":0");
 	pf_tx_emitf("content",
 		    ",\"source\":\"set\",\"hints\":[\"none\"],\"purpose\":\"%s\"",
 		    data ? (char *)data : "url");
@@ -32,8 +33,8 @@ static gboolean on_focus_in(GtkWidget *w, GdkEvent *ev, gpointer data)
 
 static gboolean on_focus_out(GtkWidget *w, GdkEvent *ev, gpointer data)
 {
-	(void)w; (void)data;
-	pf_tx_emitf("leave", ",\"serial\":%lu", (unsigned long)ev->focus.serial);
+	(void)w; (void)ev; (void)data;
+	pf_tx_emitf("leave", ",\"serial\":0");
 	return FALSE;
 }
 
@@ -81,6 +82,12 @@ int main(int argc, char **argv)
 	pf_tx_arm_sigterm();
 
 	gtk_init(&argc, &argv);
+
+	/* No XIM server runs in the harness session and the driver forces
+	 * GTK_IM_MODULE=simple, so GTK commits locally through
+	 * im-context-simple; record that no wire IM protocol is in play. */
+	pf_tx_emitf("im_state",
+		    ",\"protocol\":\"none\",\"state\":\"unavailable\"");
 
 	const char *purpose = getenv("PF_TX_PURPOSE");
 	if (!purpose || !*purpose)

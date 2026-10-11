@@ -220,16 +220,29 @@ def section_asset_audit(work):
         )
         require("--rm" in text, "run.sh does not run containers with --rm")
         for entry in ("session/entry.sh", "session/driver.py", "session/mangoapp", "session/udev-shim.sh"):
-            if os.path.exists(os.path.join(HARNESS, entry)):
-                bash_or_py = entry.endswith((".sh", ".py"))
-                if bash_or_py:
-                    proc = subprocess.run(
-                        (["bash", "-n"] if entry.endswith(".sh") else [sys.executable, "-B", "-m", "py_compile"])
-                        + [os.path.join(HARNESS, entry)],
-                        capture_output=True,
-                        text=True,
-                    )
-                    require(proc.returncode == 0, f"{entry} fails syntax check:\n{proc.stderr}")
+            path = os.path.join(HARNESS, entry)
+            if not os.path.exists(path):
+                continue
+            if entry.endswith(".py"):
+                # Compile in memory: `-m py_compile` would write a
+                # __pycache__/*.pyc into the source tree, and this test
+                # must never dirty the checkout it runs from.
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        "-c",
+                        "import sys; compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec')",
+                        path,
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+            else:
+                proc = subprocess.run(
+                    ["bash", "-n", path], capture_output=True, text=True
+                )
+            require(proc.returncode == 0, f"{entry} fails syntax check:\n{proc.stderr}")
 
     # pins.env must pin the fork by full commit sha.
     pins_path = os.path.join(HARNESS, "pins.env")

@@ -28,3 +28,7 @@ boards/tsp-s/boot-resource/wifi.txt
 *.swp
 *~
 .DS_Store
+
+# Python bytecode caches (never commit; tests must not dirty the tree)
+__pycache__/
+*.pyc

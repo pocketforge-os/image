@@ -153,7 +153,12 @@ def check_client(client, transcript_dir):
     if problems:
         first = str(problems[0])
         if spec.expect_invalid:
-            return "PASS", f"negative_control=confirmed invalid_lines={len(problems)} first={first}"
+            # The negative control fired: a real client with this transcript
+            # would get `FAIL reason=transcript_invalid`; show that verdict.
+            return (
+                "PASS",
+                f"negative_control=confirmed caught=FAIL invalid_lines={len(problems)} first={first}",
+            )
         return "FAIL", f"reason=transcript_invalid hint={first}"
     if spec.expect_invalid:
         return "FAIL", "reason=negative_control_not_triggered hint=broken-client transcript validated clean"

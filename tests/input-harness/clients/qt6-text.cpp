@@ -39,8 +39,8 @@ public:
 				pf_tx_emitf("content",
 					    ",\"source\":\"set\",\"hints\":[\"none\"],\"purpose\":\"%s\"",
 					    purpose_name());
-				pf_tx_emitf("im_state",
-					    ",\"protocol\":\"text-input-v3\",\"state\":\"enabled\"");
+				/* text-input-v3 availability is recorded
+				 * truthfully by the preload interposer. */
 			} else if (ev->type() == QEvent::FocusOut) {
 				pf_tx_emitf("leave", ",\"serial\":0");
 			} else if (ev->type() == QEvent::KeyPress ||
@@ -55,9 +55,6 @@ public:
 					    ev->type() == QEvent::KeyPress ? "pressed" : "released",
 					    (unsigned)ke->modifiers().toInt());
 			}
-		}
-		if (ev->type() == QEvent::Show && obj == g_edit) {
-			// fallthrough: mapped handled by widget subclass below
 		}
 		return QObject::eventFilter(obj, ev);
 	}

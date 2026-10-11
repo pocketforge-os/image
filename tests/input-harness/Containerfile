@@ -33,9 +33,13 @@ RUN git clone "${GAMESCOPE_URL}" /src/gamescope \
  && git -C /src/gamescope checkout "${GAMESCOPE_COMMIT}" \
  && git -C /src/gamescope submodule update --init --recursive
 
+# Headless harness scope: no WSI layer (that is for gamescope nested under
+# another compositor; it is also what drags in x11-xcb) and no unit tests.
 RUN meson setup /src/gamescope/build /src/gamescope \
       -Dinput_emulation=enabled \
       -Denable_openvr_support=false \
+      -Denable_gamescope_wsi_layer=false \
+      -Denable_tests=false \
       --force-fallback-for=libdisplay-info,libliftoff,vkroots,wlroots \
       --werror --auto-features=enabled \
  && ninja -C /src/gamescope/build \
@@ -91,7 +95,7 @@ RUN set -eux; \
     gcc -O1 -I/opt/harness/lib -o /opt/harness/bin/broken-client \
         /src/clients/broken-client.c $TX; \
     for f in /opt/harness/bin/* /opt/harness/lib/*.so; do \
-        if ldd "$f" | grep -q "not found"; then \
+        if LD_LIBRARY_PATH=/opt/harness/lib ldd "$f" | grep -q "not found"; then \
             echo "MISSING SHARED DEPS: $f"; ldd "$f"; exit 1; \
         fi; \
     done

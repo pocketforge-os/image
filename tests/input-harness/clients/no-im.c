@@ -37,10 +37,6 @@ static void on_sigterm(int sig)
 	g_stop = 1;
 }
 
-static void noop(void)
-{
-}
-
 static void xdg_surface_configure(void *data, struct xdg_surface *xs,
 				  uint32_t serial)
 {
@@ -75,17 +71,17 @@ static void xdg_toplevel_bounds(void *data, struct xdg_toplevel *tl,
 	(void)data; (void)tl; (void)width; (void)height;
 }
 
-static void xdg_toplevel_caps(void *data, struct xdg_toplevel *tl,
-			      uint32_t caps)
+static void xdg_toplevel_wm_caps(void *data, struct xdg_toplevel *tl,
+				 struct wl_array *capabilities)
 {
-	(void)data; (void)tl; (void)caps;
+	(void)data; (void)tl; (void)capabilities;
 }
 
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 	.configure = xdg_toplevel_configure,
 	.close = xdg_toplevel_close,
 	.configure_bounds = xdg_toplevel_bounds,
-	.capabilities = xdg_toplevel_caps,
+	.wm_capabilities = xdg_toplevel_wm_caps,
 };
 
 static void xdg_wm_base_ping(void *data, struct xdg_wm_base *wm, uint32_t serial)
@@ -201,10 +197,10 @@ static void pointer_frame(void *data, struct wl_pointer *p)
 	(void)data; (void)p;
 }
 
-static void pointer_axis_source(void *data, struct wl_pointer *p, uint32_t time,
-				uint32_t axis, uint32_t source)
+static void pointer_axis_source(void *data, struct wl_pointer *p,
+				uint32_t axis_source)
 {
-	(void)data; (void)p; (void)time; (void)axis; (void)source;
+	(void)data; (void)p; (void)axis_source;
 }
 
 static void pointer_axis_stop(void *data, struct wl_pointer *p, uint32_t time,
@@ -248,9 +244,14 @@ static void seat_capabilities(void *data, struct wl_seat *seat, uint32_t caps)
 	}
 }
 
+static void seat_name(void *data, struct wl_seat *seat, const char *name)
+{
+	(void)data; (void)seat; (void)name;
+}
+
 static const struct wl_seat_listener seat_listener = {
 	.capabilities = seat_capabilities,
-	.name = noop,
+	.name = seat_name,
 };
 
 static void registry_global(void *data, struct wl_registry *reg, uint32_t id,
@@ -278,9 +279,15 @@ static void registry_global(void *data, struct wl_registry *reg, uint32_t id,
 	 * zwp_input_method_manager_v2: this client has no input method. */
 }
 
+static void registry_global_remove(void *data, struct wl_registry *reg,
+				   uint32_t id)
+{
+	(void)data; (void)reg; (void)id;
+}
+
 static const struct wl_registry_listener registry_listener = {
 	.global = registry_global,
-	.global_remove = noop,
+	.global_remove = registry_global_remove,
 };
 
 static void draw(void)
@@ -314,16 +321,18 @@ static void draw(void)
 		px[i] = 0xff304050; /* opaque slate */
 	munmap(px, (size_t)stride * height);
 	struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd,
-							(int32_t)((off_t)stride * height));
+						(int32_t)((off_t)stride * height));
 	struct wl_buffer *buf =
 		wl_shm_pool_create_buffer(pool, 0, width, height, stride,
 					  WL_SHM_FORMAT_ARGB8888);
 	wl_surface_attach(g_surface, buf, 0, 0);
 	wl_surface_damage(g_surface, 0, 0, width, height);
 	wl_surface_commit(g_surface);
-	wl_buffer_destroy(buf);
-	wl_shm_pool_destroy(pool);
-	close(fd);
+	/* buf/pool/fd stay alive: the compositor still references the buffer
+	 * and there is no release listener in this minimal client. One frame
+	 * is drawn for the whole session, so nothing grows. */
+	(void)buf;
+	(void)pool;
 }
 
 int main(int argc, char **argv)
@@ -359,6 +368,23 @@ int main(int argc, char **argv)
 	g_toplevel = xdg_surface_get_toplevel(g_xdg_surface);
 	xdg_toplevel_add_listener(g_toplevel, &xdg_toplevel_listener, NULL);
 	xdg_toplevel_set_title(g_toplevel, "pf-input-harness no-im");
+	/* xdg-shell: committing a buffer before the first configure is the
+	 * not_constructed protocol error, so wait for configure first. */
+	struct timespec cfg_start, cfg_now;
+	clock_gettime(CLOCK_MONOTONIC, &cfg_start);
+	while (!g_configured) {
+		if (wl_display_dispatch(g_display) < 0)
+			break;
+		clock_gettime(CLOCK_MONOTONIC, &cfg_now);
+		if (cfg_now.tv_sec - cfg_start.tv_sec > 15)
+			break;
+	}
+	if (!g_configured) {
+		pf_tx_emitf("error",
+			    ",\"message\":\"first xdg_surface configure never arrived\"");
+		pf_tx_stop(1);
+		return 1;
+	}
 	draw();
 	wl_display_roundtrip(g_display);
 

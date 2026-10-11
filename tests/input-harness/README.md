@@ -48,15 +48,15 @@ instead of a runtime crate — it is test tooling, not product code.
 
 | Client | Row covered | Backend | Notes |
 | --- | --- | --- | --- |
-| `gtk4-text` | Wayland apps that ask to show | wayland | GtkEntry, purpose from `PF_TX_PURPOSE` (email), commits via insert-text, pointer + cursor transcript |
+| `gtk4-text` | Wayland apps that ask to show | wayland | GtkEntry, purpose from `PF_TX_PURPOSE` (email), commits via insert-text, pointer + cursor transcript; wire-protocol `im_state` comes from the preload interposer, never from a hardcoded claim |
 | `qt6-text` | Wayland apps that ask to show | wayland | QLineEdit, `ImhDigitsOnly`; digits hint rejects the phrase → raw-keys mode is the expected pass path today |
 | `sdl3-text` | patched SDL3 native Wayland | wayland | `SDL_StartTextInput`, TEXTINPUT commits, screen-keyboard events |
 | `sdl2-game` | SDL2 game through sdl2-compat | wayland | Debian's `libsdl2` **is** sdl2-compat; no org fork exists (see gaps) |
-| `x11-gtk` | X11 apps with GTK/Qt | x11 | GTK3 via Xwayland, `im-context-simple` commits, purpose url |
+| `x11-gtk` | X11 apps with GTK/Qt | x11 | GTK3 via Xwayland with `GTK_IM_MODULE=simple` (deterministic im-context-simple commits), purpose url, records `im_state none/unavailable` |
 | `xim-only` | X11 XIM-only apps | x11 | pure Xlib; records XIM availability (unavailable: no XIM server) and raw keys; never commits |
-| `no-im` | app with no input method | wayland | raw libwayland client; never binds any text-input protocol; keys only |
+| `no-im` | app with no input method | wayland | raw libwayland client; never binds any text-input protocol; keys only; waits for the first xdg_surface configure before attaching a buffer (not_constructed protocol rule) |
 | `wpe-view` | WPE minimal view | wayland | **not available** in the harness image → report emits `SKIP:` (bead: "if available") |
-| `broken-client` | negative control | headless | deliberately invalid transcript (seq gap, unknown event, bad type, no stop) — the run only passes when the validator catches it |
+| `broken-client` | negative control | headless | deliberately invalid transcript (seq gap, unknown event, bad type, no stop) — the run only passes when the validator catches it; the verdict line shows the caught `FAIL` with `reason=` |
 
 Until the gamescope text-input-v3/input-method-v2 relay lands (tsp-501qb,
 blocked on this harness), Wayland clients cannot receive protocol commits.

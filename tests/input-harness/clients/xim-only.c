@@ -83,15 +83,23 @@ int main(int argc, char **argv)
 			if (xic && XFilterEvent(&ev, None))
 				continue;
 			switch (ev.type) {
-			case MapNotify:
+			case MapNotify: {
+				/* XMapEvent carries no geometry; ask X. */
+				XWindowAttributes wa;
+				int w = 640, h = 480;
+				if (XGetWindowAttributes(dpy, ev.xmap.window,
+							 &wa)) {
+					w = wa.width;
+					h = wa.height;
+				}
 				pf_tx_emitf("mapped",
 					    ",\"width\":%d,\"height\":%d",
-					    ev.xmap.width, ev.xmap.height);
+					    w, h);
 				break;
+			}
 			case ConfigureNotify:
-				if (!ev.xconfigure.send_event &&
-				    ev.xconfigure.width > 0)
-					; /* mapped event already covers this */
+				/* geometry changes are not transcribed; the
+				 * MapNotify size is what the harness asserts */
 				break;
 			case FocusIn:
 				pf_tx_emitf("enter", ",\"serial\":%lu",

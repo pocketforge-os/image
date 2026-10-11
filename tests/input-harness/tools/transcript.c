@@ -74,19 +74,31 @@ void pf_tx_jstr(char *out, size_t outsz, const char *s)
 	out[o < outsz ? o : outsz - 1] = '\0';
 }
 
+/* Caller must hold g_lock. Queue "event<fields>\n" verbatim for replay by
+ * flush_pending_locked() once the transcript file is open. */
+static void queue_pending_locked(const char *event, const char *fields)
+{
+	if (g_pending_n >= MAX_PENDING)
+		return;
+	size_t evlen = strlen(event);
+	size_t fldlen = fields ? strlen(fields) : 0;
+	char *copy = malloc(evlen + fldlen + 2);
+	if (!copy)
+		return;
+	memcpy(copy, event, evlen);
+	if (fldlen)
+		memcpy(copy + evlen, fields, fldlen);
+	copy[evlen + fldlen] = '\n';
+	copy[evlen + fldlen + 1] = '\0';
+	g_pending[g_pending_n++] = copy;
+}
+
 /* Caller must hold g_lock. Builds and writes one envelope line. */
 static void emit_locked(const char *event, const char *fields)
 {
 	char line[MAX_LINE];
 	if (!g_fp) {
-		if (g_pending_n < MAX_PENDING) {
-			char *copy = malloc(MAX_LINE);
-			if (copy) {
-				snprintf(copy, MAX_LINE, "%s%s%s", event,
-					 fields ? fields : "", "\n");
-				g_pending[g_pending_n++] = copy;
-			}
-		}
+		queue_pending_locked(event, fields);
 		return;
 	}
 	snprintf(line, sizeof line,
@@ -133,13 +145,7 @@ void pf_tx_emitf(const char *event, const char *fmt, ...)
 	pthread_mutex_lock(&g_lock);
 	if (!g_fp) {
 		/* queue as "event<fields>\n" so flush can replay verbatim */
-		if (g_pending_n < MAX_PENDING) {
-			char *copy = malloc(MAX_LINE);
-			if (copy) {
-				snprintf(copy, MAX_LINE, "%s%s\n", event, fields);
-				g_pending[g_pending_n++] = copy;
-			}
-		}
+		queue_pending_locked(event, fields);
 		pthread_mutex_unlock(&g_lock);
 		return;
 	}

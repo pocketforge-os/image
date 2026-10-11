@@ -48,7 +48,8 @@ CLIENTS = [
     ("qt6-text", "wayland", "digits", True, True, {"QT_QPA_PLATFORM": "wayland"}),
     ("sdl3-text", "wayland", "normal", True, True, {"SDL_VIDEODRIVER": "wayland"}),
     ("sdl2-game", "wayland", None, True, True, {"SDL_VIDEODRIVER": "wayland"}),
-    ("x11-gtk", "x11", "url", True, False, {"GDK_BACKEND": "x11"}),
+    ("x11-gtk", "x11", "url", True, False,
+     {"GDK_BACKEND": "x11", "GTK_IM_MODULE": "simple"}),
     ("xim-only", "x11", None, False, False, {}),
     ("no-im", "wayland", None, False, True, {}),
     ("broken-client", "headless", None, False, False, {}),
@@ -106,9 +107,6 @@ def wait_event_in(tx_path: str, event: str, timeout: float,
                   proc: subprocess.Popen | None = None) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if proc is not None and proc.poll() is not None:
-            # client exited; scan one last time then give up
-            pass
         if os.path.exists(tx_path):
             with open(tx_path, "r", encoding="utf-8", errors="replace") as f:
                 for line in f:
@@ -122,6 +120,7 @@ def wait_event_in(tx_path: str, event: str, timeout: float,
                     if rec.get("event") == event:
                         return True
         if proc is not None and proc.poll() is not None:
+            # client exited; the final scan above was its last chance
             return False
         time.sleep(0.2)
     return False
@@ -168,9 +167,26 @@ class FakeInput:
 
 def screenshot(sw: SessionWriter, name: str, shot_type: int = 4) -> bool:
     path = os.path.join(SHOT_DIR, f"{name}.png")
+    # Manifest and event paths are relative to the run dir so the same
+    # manifest validates both in-container (/out) and on the host ($OUT).
+    rel_path = os.path.join("screenshots", f"{name}.png")
     if os.path.exists(path):
         os.unlink(path)
-    with open(MANGO_FIFO, "w", encoding="utf-8") as fifo:
+    # Opening the FIFO for write blocks until the mangoapp relay reads it;
+    # use O_NONBLOCK + retry so a dead relay fails the shot instead of
+    # hanging the driver (the reaper respawns the relay between shots).
+    fd = -1
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        try:
+            fd = os.open(MANGO_FIFO, os.O_WRONLY | os.O_NONBLOCK)
+            break
+        except OSError:
+            time.sleep(0.2)
+    if fd < 0:
+        log(f"screenshot {name}: no mangoapp reader on {MANGO_FIFO} within 60s")
+        return False
+    with os.fdopen(fd, "w") as fifo:
         fifo.write(f"screenshot {path} {shot_type}\n")
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -183,14 +199,14 @@ def screenshot(sw: SessionWriter, name: str, shot_type: int = 4) -> bool:
                 continue
             if head[:8] == b"\x89PNG\r\n\x1a\n" and head[12:16] == b"IHDR":
                 width, height = struct.unpack(">II", head[16:24])
-                sw.emit("screenshot", path=path, type=shot_type,
+                sw.emit("screenshot", path=rel_path, type=shot_type,
                         width=width, height=height)
                 manifest_path = os.path.join(SHOT_DIR, "manifest.json")
                 manifest = []
                 if os.path.exists(manifest_path):
                     with open(manifest_path, "r", encoding="utf-8") as f:
                         manifest = json.load(f)
-                manifest.append({"path": path, "type": shot_type,
+                manifest.append({"path": rel_path, "type": shot_type,
                                  "width": width, "height": height})
                 with open(manifest_path, "w", encoding="utf-8") as f:
                     json.dump(manifest, f, indent=1)

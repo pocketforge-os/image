@@ -29,8 +29,8 @@ static void on_focus_enter(GtkEventControllerFocus *c, gpointer data)
 	pf_tx_emitf("content",
 		    ",\"source\":\"set\",\"hints\":[\"none\"],\"purpose\":\"%s\"",
 		    g_purpose);
-	pf_tx_emitf("im_state",
-		    ",\"protocol\":\"text-input-v3\",\"state\":\"enabled\"");
+	/* text-input-v3 availability is recorded truthfully by the preload
+	 * interposer (im_state); the client must not claim wire state. */
 }
 
 static void on_focus_leave(GtkEventControllerFocus *c, gpointer data)
@@ -150,8 +150,10 @@ int main(int argc, char **argv)
 			argc, argv) != 0)
 		return 1;
 	pf_tx_arm_sigterm();
+	/* The harness container has no session D-Bus; NON_UNIQUE keeps
+	 * GtkApplication from trying to register a bus name. */
 	GtkApplication *app = gtk_application_new("org.pocketforge.harness.gtk4text",
-						  G_APPLICATION_DEFAULT_FLAGS);
+						  G_APPLICATION_NON_UNIQUE);
 	g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
 	int rc = g_application_run(G_APPLICATION(app), argc, argv);
 	pf_tx_stop(0);
