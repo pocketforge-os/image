@@ -27,6 +27,7 @@ PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
 ReadWritePaths=/var/lib/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
+InaccessiblePaths=-/dev/uinput
 InaccessiblePaths=/run/pocketforge/prefsd.sock
 KillMode=control-group
 KillSignal=SIGTERM

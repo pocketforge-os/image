@@ -90,6 +90,7 @@ assert f"PF_DESCRIPTOR={DESCRIPTOR}" in environment, environment
 assert f"PF_BROKER_SOCK={BROKER_SOCK}" in environment, environment
 assert values(app, "Service", "InaccessiblePaths") == [
     f"-{AUTHORITY_SOCK}",
+    "-/dev/uinput",
     PREFSD_SOCK,
 ]
 assert PREF_WRITER_GROUP not in values(app, "Service", "SupplementaryGroups")

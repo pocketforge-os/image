@@ -67,6 +67,15 @@ def connect(path: str) -> str:
         return errno.errorcode.get(error.errno or 0, type(error).__name__)
 
 
+def open_write(path: str) -> str:
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CLOEXEC)
+        os.close(fd)
+        return "ok"
+    except OSError as error:
+        return errno.errorcode.get(error.errno or 0, type(error).__name__)
+
+
 def main() -> int:
     state = Path(os.environ["XDG_STATE_HOME"])
     mode = Path("/run/pocketforge/fixture-exit-code").read_text().strip()
@@ -100,6 +109,7 @@ def main() -> int:
         "prefsd_connect": connect(prefsd),
         "authority_connect": connect(authority),
         "authority_mode": authority_mode,
+        "uinput_open": open_write("/dev/uinput"),
         "uid": os.getuid(),
     }
     if mode == "abort":
