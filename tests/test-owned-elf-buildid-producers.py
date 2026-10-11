@@ -15,7 +15,8 @@ def verify(dockerfile: str, rootfs: str, finalizer: str) -> None:
         ),
         "SDL CMake stage": (
             dockerfile,
-            'LDFLAGS="-Wl,--build-id=sha1" \\\n+OUT=/work/out bash /work/src/build/build-libsdl3.sh',
+            'LDFLAGS="-Wl,--build-id=sha1" \\' + "\n"
+            'OUT=/work/out bash /work/src/build/build-libsdl3.sh',
         ),
         "wpa Make stage": (
             dockerfile,
@@ -23,7 +24,7 @@ def verify(dockerfile: str, rootfs: str, finalizer: str) -> None:
         ),
         "hwprobe Make stage": (
             dockerfile,
-            'LDFLAGS="-Wl,--build-id=sha1" \\\n+  OUT_DIR=/out/bin',
+            'LDFLAGS="-Wl,--build-id=sha1" \\' + "\n" + '  OUT_DIR=/out/bin',
         ),
         "runtime GNU Rust links": (
             dockerfile,
@@ -35,7 +36,8 @@ def verify(dockerfile: str, rootfs: str, finalizer: str) -> None:
         ),
         "recovery musl Rust link": (
             dockerfile,
-            'RUSTFLAGS="-C link-arg=--build-id=sha1" \\\n+cargo build --offline --locked --release --target aarch64-unknown-linux-musl',
+            'RUSTFLAGS="-C link-arg=--build-id=sha1" \\' + "\n"
+            'cargo build --offline --locked --release --target aarch64-unknown-linux-musl',
         ),
         "launcher musl Rust link": (
             dockerfile,
@@ -68,7 +70,8 @@ verify(dockerfile, rootfs, finalizer)
 # Negative control in the same invocation: removing one producer's explicit
 # policy must make the verifier fail.
 broken = dockerfile.replace(
-    'LDFLAGS="-Wl,--build-id=sha1" \\\n+OUT=/work/out bash /work/src/build/build-libsdl3.sh',
+    'LDFLAGS="-Wl,--build-id=sha1" \\' + "\n"
+    'OUT=/work/out bash /work/src/build/build-libsdl3.sh',
     'OUT=/work/out bash /work/src/build/build-libsdl3.sh',
     1,
 )

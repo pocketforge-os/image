@@ -1824,6 +1824,7 @@ ANIMATOR_SRC_DIR="${SRC_DIR}/apps/pocketforge-boot-animator"
 PF_ANIMATOR_BIN="${WORK}/pocketforge-boot-animator"
 CROSS_CC="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-gcc"
 CROSS_STRIP="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-strip"
+BUILD_ID_LDFLAG="-Wl,--build-id=sha1"
 
 # Build the minimal XR829 vendor attach helper from committed GPL source. It
 # links only libc and is installed only in the a133-open-7x rootfs.
@@ -1831,6 +1832,7 @@ if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then
     PF_BT_ATTACH_BIN="${WORK}/xr829-hciattach"
     "${CROSS_CC}" -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
         -std=gnu11 -static-libgcc \
+        "${BUILD_ID_LDFLAG}" \
         -I"${SRC_DIR}/third_party/xradio-hciattach" \
         -o "${PF_BT_ATTACH_BIN}" \
         "${SRC_DIR}/third_party/xradio-hciattach/main.c" \
@@ -1848,6 +1850,7 @@ echo "  Cross-compiling pocketforge-boot-animator (aarch64)..."
 "${CROSS_CC}" \
     -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -static-libgcc \
+    "${BUILD_ID_LDFLAG}" \
     -I"${ANIMATOR_SRC_DIR}/src" \
     -o "${PF_ANIMATOR_BIN}" \
     "${ANIMATOR_SRC_DIR}/src/main.c" \
@@ -1885,6 +1888,7 @@ echo "  Cross-compiling pocketforge-placeholder (aarch64)..."
 "${CROSS_CC}" \
     -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -static-libgcc \
+    "${BUILD_ID_LDFLAG}" \
     -I"${PLACEHOLDER_SRC_DIR}/src" \
     -o "${PF_PLACEHOLDER_BIN}" \
     "${PLACEHOLDER_SRC_DIR}/src/main.c"
@@ -1906,6 +1910,7 @@ echo "  Cross-compiling pocketforge-menu (aarch64)..."
 "${CROSS_CC}" \
     -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -static-libgcc \
+    "${BUILD_ID_LDFLAG}" \
     -I"${MENU_SRC_DIR}/src" \
     -o "${PF_MENU_BIN}" \
     "${MENU_SRC_DIR}/src/main.c"

@@ -1017,6 +1017,7 @@ export SOURCE_DATE_EPOCH="${PF_LIBSDL3_SOURCE_DATE_EPOCH:?}"
 # cmake change was needed to point it at Mesa instead of the DDK).
 PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
 SUNXIFB_MESA_ROOT=/work/gpu-um-mesa/usr/local \
+LDFLAGS="-Wl,--build-id=sha1" \
 OUT=/work/out bash /work/src/build/build-libsdl3.sh
 # Emit the shared-object set (real lib + soname/dev symlinks) for the a133 rootfs/assemble stage.
 cp -a /work/out/libSDL3-pocketforge.so* /out/lib/
@@ -1113,7 +1114,7 @@ make -j"$(nproc)" wpa_supplicant \
   CC=aarch64-none-linux-gnu-gcc \
   LIBNL_INC=/usr/include/libnl3 \
   EXTRA_CFLAGS="-idirafter /usr/include -idirafter /usr/include/aarch64-linux-gnu -Wno-deprecated-declarations" \
-  LDFLAGS="-B/usr/lib/aarch64-linux-gnu -L/usr/lib/aarch64-linux-gnu"
+  LDFLAGS="-Wl,--build-id=sha1 -B/usr/lib/aarch64-linux-gnu -L/usr/lib/aarch64-linux-gnu"
 # ^ -Wno-deprecated-declarations: wpa_supplicant 2.10 predates the OpenSSL 3.0
 #   API migration, so its crypto_openssl.c emits ~134 deprecation warnings
 #   (ENGINE_*/EC_KEY_* — upstream builds identically); left on, they would
@@ -1288,7 +1289,7 @@ cd /work/runtime
 # Build the SDK for every device: hwprobe is a separate build-graph input even
 # where runtime daemons are not shipped in that device's rootfs.
 CARGO_NET_OFFLINE=true CARGO_NET_LOCKED=1 \
-RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=-Wl,--build-id=sha1" \
 cargo build --offline --locked --release --target aarch64-unknown-linux-gnu -p libpocketforge
 install -D -m 0644 include/pocketforge.h /out/sdk/include/pocketforge.h
 install -D -m 0644 target/aarch64-unknown-linux-gnu/release/libpocketforge.a /out/sdk/lib/libpocketforge.a
@@ -1326,7 +1327,7 @@ fi
 # a133 variant (closed + open). The F13/F07 userspace stack (pf-session-authorityd + pf-prefsd)
 # is OPEN-ONLY (tsp-mc9m.41.924.4 / top-coord RULING B-extended) — see the gated block below.
 CARGO_NET_LOCKED=1 \
-RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
 cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-decode
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-decode"
 [ -f "${BIN}" ] || { echo "FATAL: pf-input-decode not built at ${BIN}"; exit 1; }
@@ -1350,13 +1351,13 @@ install -D -m 0644 crates/pf-input-decode/systemd/pf-input-decode.service /out/s
 # both open-gated, closed a133/a523 land on neither and the pairing block simply never fires.
 if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   CARGO_NET_LOCKED=1 \
-  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-session-authority --bin pf-session-authorityd
   CARGO_NET_LOCKED=1 \
-  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-prefsd --bin pf-prefsd
   CARGO_NET_LOCKED=1 \
-  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-app-launch --bin pf-app-launch
   AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
   PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
@@ -1402,7 +1403,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   # (2) pf-input-broker, static musl like every other runtime daemon. Its runtime
   #     unit ships verbatim; the image's drop-in scopes it to app sessions.
   CARGO_NET_LOCKED=1 \
-  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-broker --bin pf-input-broker
   BROKER_BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-broker"
   [ -f "${BROKER_BIN}" ] || { echo "FATAL: pf-input-broker not built at ${BROKER_BIN}"; exit 1; }
@@ -1615,6 +1616,7 @@ make -C /work/hwprobe \
   SDL3_STATIC=/work/sdl-static/lib/libSDL3.a \
   PF_INCLUDE=/work/runtime-sdk/include \
   PF_STATIC=/work/runtime-sdk/lib/libpocketforge.a \
+  LDFLAGS="-Wl,--build-id=sha1" \
   OUT_DIR=/out/bin
 test "$(od -An -tx1 -j18 -N2 /out/bin/pf-hwprobe | tr -d ' ')" = b700
 ! aarch64-none-linux-gnu-readelf -l /out/bin/pf-hwprobe | grep -q 'Requesting program interpreter'
@@ -1733,7 +1735,7 @@ set -eux
   exit 1
 }
 export SOURCE_DATE_EPOCH="${PF_POOLSUITE_SOURCE_DATE_EPOCH:?}"
-./ci/device-build.sh --offline
+RUSTFLAGS="-C link-arg=-Wl,--build-id=sha1" ./ci/device-build.sh --offline
 APP=target/aarch64-unknown-linux-gnu/release/ps-app
 test -f "${APP}"
 E_MACHINE="$(od -An -tx1 -j18 -N2 "${APP}" | tr -d ' ')"
@@ -1890,6 +1892,7 @@ directory = "/work/image/recovery/vendor"
 offline = true
 CARGOCFG
 cd /work/image/apps/pocketforge-recovery-entry
+RUSTFLAGS="-C link-arg=--build-id=sha1" \
 cargo build --offline --locked --release --target aarch64-unknown-linux-musl
 install -D -m0755 target/aarch64-unknown-linux-musl/release/pocketforge-recovery-entry \
   /out/bin/pocketforge-recovery-entry
@@ -1966,7 +1969,7 @@ export SOURCE_DATE_EPOCH="${PF_LAUNCHER_SOURCE_DATE_EPOCH:?}"
 # the toolchain (no cross-gcc install).
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
 cd /work/launcher
-RUSTFLAGS="--remap-path-prefix=/work/launcher=." \
+RUSTFLAGS="--remap-path-prefix=/work/launcher=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" \
     --no-default-features -p pf-shell
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-shell"
