@@ -1616,7 +1616,9 @@ make -C /work/hwprobe \
   SDL3_STATIC=/work/sdl-static/lib/libSDL3.a \
   PF_INCLUDE=/work/runtime-sdk/include \
   PF_STATIC=/work/runtime-sdk/lib/libpocketforge.a \
-  LDFLAGS="-Wl,--build-id=sha1" \
+  # Command-line make variables replace `?=` defaults, so retain the
+  # pf-hwprobe Makefile's required static-link flag while adding the build ID.
+  LDFLAGS="-static -Wl,--build-id=sha1" \
   OUT_DIR=/out/bin
 test "$(od -An -tx1 -j18 -N2 /out/bin/pf-hwprobe | tr -d ' ')" = b700
 ! aarch64-none-linux-gnu-readelf -l /out/bin/pf-hwprobe | grep -q 'Requesting program interpreter'
@@ -1624,6 +1626,7 @@ if aarch64-none-linux-gnu-readelf -d /out/bin/pf-hwprobe | grep -q NEEDED; then
   echo 'FATAL: pf-hwprobe has a DT_NEEDED entry' >&2
   exit 1
 fi
+aarch64-none-linux-gnu-readelf -n /out/bin/pf-hwprobe | grep -q 'Build ID:'
 {
   printf 'pf-hwprobe@%s\n' "${PF_HWPROBE_SHA}"
   printf 'runtime@%s\n' "${PF_RUNTIME_SHA}"

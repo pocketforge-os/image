@@ -24,7 +24,11 @@ def verify(dockerfile: str, rootfs: str, finalizer: str) -> None:
         ),
         "hwprobe Make stage": (
             dockerfile,
-            'LDFLAGS="-Wl,--build-id=sha1" \\' + "\n" + '  OUT_DIR=/out/bin',
+            'LDFLAGS="-static -Wl,--build-id=sha1" \\' + "\n" + '  OUT_DIR=/out/bin',
+        ),
+        "hwprobe artifact build-id assertion": (
+            dockerfile,
+            "aarch64-none-linux-gnu-readelf -n /out/bin/pf-hwprobe | grep -q 'Build ID:'",
         ),
         "runtime GNU Rust links": (
             dockerfile,
@@ -81,5 +85,20 @@ except AssertionError as exc:
     assert "SDL CMake stage" in str(exc)
 else:
     raise AssertionError("negative control: missing SDL build-id policy was accepted")
+
+# Command-line make variables replace Makefile `?=` defaults. The hwprobe
+# producer must therefore preserve its static-link invariant while adding the
+# build-id flag; a build-id-only override is an unsafe negative control.
+unsafe_hwprobe = dockerfile.replace(
+    'LDFLAGS="-static -Wl,--build-id=sha1"',
+    'LDFLAGS="-Wl,--build-id=sha1"',
+    1,
+)
+try:
+    verify(unsafe_hwprobe, rootfs, finalizer)
+except AssertionError as exc:
+    assert "hwprobe Make stage" in str(exc)
+else:
+    raise AssertionError("negative control: hwprobe static-link flags were replaced")
 
 print("test-owned-elf-buildid-producers=ALL PASS")
