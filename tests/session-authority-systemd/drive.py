@@ -27,6 +27,7 @@ TARGET_UNIT = "pocketforge-foreground.target"
 BROKER_UNIT = "pf-input-broker.service"
 SOCKET = Path("/run/pocketforge/session-authority.sock")
 BROKER_SOCKET = Path("/run/pocketforge/input-broker.sock")
+SYSTEM_MENU_SOCKET = Path("/run/pocketforge/system-menu.sock")
 MODE = Path("/run/pocketforge/fixture-exit-code")
 APP_STATE = Path(f"/var/lib/pocketforge/apps/{APP_ID}/state")
 INVOCATIONS = APP_STATE / "invocations"
@@ -410,7 +411,7 @@ def assert_crash_exit() -> str:
     return scope.session_id
 
 
-# --- B4 (tsp-f3fm.202.1.4): app-session input broker, grab order, SafeReturn, R4 ----
+# --- B4 + tsp-op5a.440.10: broker, grab order, SystemMenu fallback, R4 ----------
 
 
 def evidence(line: str) -> None:
@@ -511,9 +512,12 @@ def broker_control(request: bytes) -> bytes:
         return stream.recv(16)
 
 
-def press_guide() -> float:
+def press_system_menu_without_provider() -> float:
     reply = broker_control(b"guide")
-    require(reply.strip() == b"sent", f"fake broker did not accept the guide press: {reply!r}")
+    require(
+        reply.strip() == b"fallback",
+        f"fake broker did not take the providerless fallback: {reply!r}",
+    )
     return time.monotonic()
 
 
@@ -575,21 +579,36 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
         f"broker started before the shell stopped or the target started: {start}",
     )
     require(grab_lock_is_held(), "negative control: the broker does not hold the pad grab model")
+    menu_socket = os.stat(SYSTEM_MENU_SOCKET)
+    require(
+        stat.S_ISSOCK(menu_socket.st_mode)
+        and stat.S_IMODE(menu_socket.st_mode) == 0o600
+        and menu_socket.st_uid == 0
+        and menu_socket.st_gid == gamer_gid,
+        f"system-menu provider socket is not root:gamer 0600: "
+        f"mode={oct(menu_socket.st_mode)} uid={menu_socket.st_uid} gid={menu_socket.st_gid}",
+    )
     return probe
 
 
-def assert_safe_return_graceful(order: GrabOrder) -> str:
+def assert_system_menu_fallback_graceful(order: GrabOrder) -> str:
     scope = launch_held("hold")
     probe = assert_app_session_wiring(scope)
-    pressed = press_guide()
+    pressed = press_system_menu_without_provider()
     wait_for(
         lambda: property_value(APP_UNIT, "ActiveState") == "inactive",
-        f"SafeReturn to stop {APP_UNIT} for {scope.session_id}",
+        f"providerless SystemMenu fallback to stop {APP_UNIT} for {scope.session_id}",
         timeout=5,
     )
     stop_seconds = time.monotonic() - pressed
-    require(property_value(APP_UNIT, "Result") == "success", "graceful SafeReturn stop was not clean")
-    require(stop_seconds < 2.0, f"graceful SafeReturn took {stop_seconds:.2f}s (TimeoutStopSec=2s)")
+    require(
+        property_value(APP_UNIT, "Result") == "success",
+        "graceful SystemMenu fallback stop was not clean",
+    )
+    require(
+        stop_seconds < 2.0,
+        f"graceful SystemMenu fallback took {stop_seconds:.2f}s (TimeoutStopSec=2s)",
+    )
     wait_for_app_exit(scope, "inactive")
     wait_for(lambda: not unit_is_active(BROKER_UNIT), f"{BROKER_UNIT} to stop after {scope.session_id}")
     assert_no_terminal_before_presentation(scope)
@@ -597,13 +616,19 @@ def assert_safe_return_graceful(order: GrabOrder) -> str:
     require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
     final_events = events()
     returned = session_events(final_events, scope, "returned")
-    require(len(returned) == 1, f"SafeReturn Returned count for {scope.session_id}: {returned}")
+    require(
+        len(returned) == 1,
+        f"SystemMenu fallback Returned count for {scope.session_id}: {returned}",
+    )
     for other in ("crash", "forced_close", "recovery_required"):
-        require(not session_events(final_events, scope, other), f"graceful SafeReturn published {other}")
+        require(
+            not session_events(final_events, scope, other),
+            f"graceful SystemMenu fallback published {other}",
+        )
     require(history_entry(scope.session_id)["receipt"] == "Returned", "graceful receipt not durable")
     order.checkpoint(scope.session_id)
     evidence(
-        f"safe_return_graceful session={scope.session_id} receipt=Returned app_result=success "
+        f"system_menu_fallback_graceful session={scope.session_id} receipt=Returned app_result=success "
         f"guide_to_inactive_s={stop_seconds:.2f} broker_sock=root:gamer:0770 "
         f"app_broker_connect={probe['broker_connect']} app_authority_connect={probe['authority_connect']} "
         "authority_outside_sandbox=ok grab_lock_negative_control=held-by-broker"
@@ -654,11 +679,11 @@ def probe_systemctl_stop_after_sigkill(order: GrabOrder) -> dict[str, Any]:
     }
 
 
-def assert_safe_return_after_sigkill(order: GrabOrder, r4: dict[str, Any]) -> str:
-    """R4 GATE (gpu-14): SafeReturn to an app that ignores SIGTERM must end Returned."""
+def assert_system_menu_fallback_after_sigkill(order: GrabOrder, r4: dict[str, Any]) -> str:
+    """R4 GATE: providerless SystemMenu fallback through SafeReturn must end Returned."""
     scope = launch_held("ignore-term")
     before_timeouts = app_timeout_log_count()
-    pressed = press_guide()
+    pressed = press_system_menu_without_provider()
     wait_for(
         lambda: property_value(APP_UNIT, "ActiveState") == "failed",
         f"SIGKILL at TimeoutStopSec for {scope.session_id}",
@@ -680,7 +705,7 @@ def assert_safe_return_after_sigkill(order: GrabOrder, r4: dict[str, Any]) -> st
     payload = phase.get(phase_name, {}) if isinstance(phase, dict) else {}
     pending = payload.get("receipt")
     pending_name = pending if isinstance(pending, str) else json.dumps(pending, separators=(",", ":"))
-    safe_return_log = (GRAB / "safe-return.log").read_text().splitlines()[-1:]
+    system_menu_log = (GRAB / "system-menu.log").read_text().splitlines()[-1:]
     evidence(
         f"r4_sigkill session={scope.session_id} app_result={result} "
         f"guide_to_failed_s={stop_seconds:.2f} authority_phase={phase_name} "
@@ -688,11 +713,11 @@ def assert_safe_return_after_sigkill(order: GrabOrder, r4: dict[str, Any]) -> st
         f"reason={str(payload.get('reason', 'none')).replace(' ', '_')} events_rpc={rpc_state} "
         f"systemctl_stop_exit_after_sigkill={r4['stop_exit']} probe_stop_s={r4['stop_seconds']:.2f} "
         f"systemctl_kill_exit_on_failed_unit={r4['kill_exit']} kill_stderr={r4['kill_stderr']} "
-        f"broker_safe_return={safe_return_log}"
+        f"broker_system_menu={system_menu_log}"
     )
     require(
         result == "timeout" and stop_seconds >= 1.9 and app_timeout_log_count() == before_timeouts + 1,
-        f"R4: SafeReturn did not reach the SIGKILL path: result={result} stop_s={stop_seconds:.2f}",
+        f"R4: SystemMenu fallback did not reach the SIGKILL path: result={result} stop_s={stop_seconds:.2f}",
     )
     require(
         phase_name == "Restoring"
@@ -1544,9 +1569,9 @@ def main() -> None:
         f"broker_at_boot=inactive,{broker_boot} grab_lock_negative_control=held-by-shell",
         flush=True,
     )
-    graceful_session = assert_safe_return_graceful(order)
+    graceful_session = assert_system_menu_fallback_graceful(order)
     r4 = probe_systemctl_stop_after_sigkill(order)
-    sigkill_session = assert_safe_return_after_sigkill(order, r4)
+    sigkill_session = assert_system_menu_fallback_after_sigkill(order, r4)
     broker_failure_session = assert_broker_failure_never_traps()
     exit_before_ready_session = assert_broker_exit_before_ready_never_traps()
     exit_mid_session = assert_broker_exit_mid_session_never_traps(order)
