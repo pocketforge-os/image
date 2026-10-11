@@ -1277,7 +1277,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "5738f3d5e108b52186b129a5db1c62a878278b19" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "de890215bd97eb0b5b63287a51e8b9a2e18d1125" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # file exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml with the pinned digest (prints its path).
@@ -1417,6 +1417,21 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   OBJDUMP=aarch64-none-linux-gnu-objdump READELF=aarch64-none-linux-gnu-readelf \
     check-libpocketforge "${CDYLIB}" abi/libpocketforge.v1.abi
   install -D -m 0644 "${CDYLIB}" /out/lib/libpocketforge.so.1
+  # (4) On-disk production fonts for the pf-shell text stack (tsp-ihne1.12).
+  #     pf-shell links pf-render, which memory-maps its fonts from
+  #     /usr/share/fonts/pocketforge — no shipped binary embeds font bytes.
+  #     v1 stages exactly the two Latin faces the runtime goldens pin plus their
+  #     OFL licenses, from the pinned runtime checkout (single source of truth:
+  #     the same bytes the runtime test suite measures with). CJK collections
+  #     install only with their languages later (design/input-layer #l10n), so
+  #     they are deliberately NOT staged; install-shell-fonts.sh in the rootfs
+  #     builder fails closed on any deviation from this exact set.
+  for font in "Manrope[wght].ttf" "Manrope-OFL.txt" \
+      "Fraunces[SOFT,WONK,opsz,wght].ttf" "Fraunces-OFL.txt"; do
+    [ -f "crates/pf-text-raster/fonts/${font}" ] || {
+      echo "FATAL: shell font missing from runtime checkout: crates/pf-text-raster/fonts/${font}"; exit 1; }
+    install -D -m 0644 "crates/pf-text-raster/fonts/${font}" "/out/share/fonts/pocketforge/${font}"
+  done
   {
     printf '  pf-session-authorityd sha256=%s\n' "$(sha256sum /out/bin/pf-session-authorityd | cut -d' ' -f1)"
     printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
@@ -1424,6 +1439,11 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     printf '  pf-input-broker sha256=%s\n' "$(sha256sum /out/bin/pf-input-broker | cut -d' ' -f1)"
     printf '  libpocketforge.so.1 sha256=%s\n' "$(sha256sum /out/lib/libpocketforge.so.1 | cut -d' ' -f1)"
     printf '  devices/%s/capabilities.toml sha256=%s\n' "${PF_DEVICE_DESCRIPTOR_ID}" "${DESCRIPTOR_SHA256}"
+    for font in "Manrope[wght].ttf" "Manrope-OFL.txt" \
+        "Fraunces[SOFT,WONK,opsz,wght].ttf" "Fraunces-OFL.txt"; do
+      printf '  fonts/pocketforge/%s sha256=%s\n' "${font}" \
+        "$(sha256sum "/out/share/fonts/pocketforge/${font}" | cut -d' ' -f1)"
+    done
   } >> /out/.pf-runtime-provenance
 fi
 cat /out/.pf-runtime-provenance
@@ -1919,7 +1939,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "95302865bc584ce5e1c96e09df387aa5f58455f6" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fourteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.

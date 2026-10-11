@@ -15,15 +15,13 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# Runtime#106 source-owns the Wayland contract that launcher#153 vendors. The
-# preceding guarded pair (runtime#104 candidate 1dd87ecc, launcher#150 candidate
-# 1ef9671a) fails the production comparator at pf-session-authority. The new
-# guard therefore admits only the exact compatible source candidates and rejects
+# Runtime#108 source-owns the SystemMenu input contract that launcher#154 vendors.
+# The guard therefore admits only the exact compatible merged pair and rejects
 # both the preceding pair and either crossed generation.
-expected_runtime=5738f3d5e108b52186b129a5db1c62a878278b19
-expected_launcher=73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5
-prior_runtime=1dd87ecc2952584a7ef1473c5dcb872662b7c0cb
-prior_launcher=1ef9671afdd687d53f61a91e92c51da9fb614293
+expected_runtime=de890215bd97eb0b5b63287a51e8b9a2e18d1125
+expected_launcher=95302865bc584ce5e1c96e09df387aa5f58455f6
+prior_runtime=5738f3d5e108b52186b129a5db1c62a878278b19
+prior_launcher=73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5
 old_launcher=ab9fb7fde36e633add69b94c36bf1213f7cff5d9
 pre149_launcher=ca22de0ed3cec46c73f2de44aa6e570e109695d8
 pre148_launcher=d26dfa1162e601100c3a18956b5ce4a2ddc7427f
