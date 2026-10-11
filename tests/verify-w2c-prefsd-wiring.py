@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
-RUNTIME_SHA = "4b71a503909090219c3a01c1718e9e772e0d488b"
+RUNTIME_SHA = "b289235d8cbdc8d542e551b8139d22b6abf31ec1"
 LAUNCHER_SHA = "d46dbb48e610e10cc4d01562fedcdf7cdfae0f7d"
 
 
@@ -51,7 +51,7 @@ runtime_guard = re.findall(
     flags=re.MULTILINE,
 )
 assert runtime_guard == [RUNTIME_SHA], (
-    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 4b71a503, "
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime b289235d, "
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
@@ -63,6 +63,7 @@ assert "7536aa1f5af76f0220b582ee68e29e254251fd76" not in dockerfile
 assert "1dd87ecc2952584a7ef1473c5dcb872662b7c0cb" not in dockerfile
 assert "5738f3d5e108b52186b129a5db1c62a878278b19" not in dockerfile
 assert "de890215bd97eb0b5b63287a51e8b9a2e18d1125" not in dockerfile
+assert "4b71a503909090219c3a01c1718e9e772e0d488b" not in dockerfile
 launcher_guard = re.findall(
     r'^\[ "\$\{PF_LAUNCHER_SHA\}" = "([0-9a-f]{40})" \] '
     r'\|\| \{ echo "FATAL: F13 launcher pin drift: \$\{PF_LAUNCHER_SHA\}"; exit 1; \}$',
