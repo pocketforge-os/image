@@ -37,6 +37,7 @@ InaccessiblePaths=-/run/pocketforge/session-authority.sock
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/pf-no-session-bus
 InaccessiblePaths=-/run/pf-ime
 TemporaryFileSystem=/run/pf-ime-door:ro
+ProtectProc=invisible
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s

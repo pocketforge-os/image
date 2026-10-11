@@ -31,7 +31,7 @@ ExecStart=/usr/bin/xdg-dbus-proxy unix:path=/run/pf-ime/bus /run/pf-ime-door/%i/
     --call=org.freedesktop.portal.Fcitx=org.fcitx.Fcitx.InputContext1.*@/org/freedesktop/portal/inputcontext/*
 RuntimeDirectory=pf-ime-door/%i
 RuntimeDirectoryMode=0755
-ExecStartPost=/usr/bin/timeout 2 /bin/sh -c 'until [ -S /run/pf-ime-door/%i/bus ]; do sleep 0.05; done'
+ExecStartPost=/usr/bin/timeout 2 /bin/sh -c 'until [ -S "/run/pf-ime-door/$1/bus" ]; do sleep 0.05; done' sh %i
 # The app (User=gamer) must connect, which needs write on the socket inode.
 UMask=0000
 Restart=no

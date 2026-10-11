@@ -1298,6 +1298,22 @@ fi
     "${LAUNCHER_DIR}" \
     /work/src/rootfs-overlay/etc/systemd/system/pf-app@.service
 
+# Private input-method bus and per-app X11 door (bd tsp-ihne1.5). These files
+# stay dormant until the session/manifest work starts pf-fcitx5, pf-osk or an
+# explicitly opted-in X11 app; no unit is enabled at boot here.
+for ime_file in \
+    usr/lib/sysusers.d/pf-ime.conf \
+    usr/lib/tmpfiles.d/pf-ime.conf \
+    usr/share/pocketforge/ime/bus.conf \
+    usr/share/pocketforge/ime/pf-app-door.conf \
+    etc/systemd/system/pf-ime-bus.service \
+    etc/systemd/system/pf-ime-door@.service \
+    etc/systemd/system/pf-fcitx5.service.d/10-pf-ime-sandbox.conf \
+    etc/systemd/system/pf-osk.service.d/10-pf-ime-sandbox.conf; do
+    install -D -m 0644 "/work/src/rootfs-overlay/${ime_file}" "${ROOTFS}/${ime_file}"
+done
+echo "[customize] dormant private IME bus, X11 door and pf-ime identity installed"
+
 # --- F13 shell owner + independent F07 session authority (tsp-op5a.78) -------
 SHELL_BIN="${LAUNCHER_DIR}/bin/pf-shell"
 AUTHORITY_BIN="${RUNTIME_DIR}/bin/pf-session-authorityd"
