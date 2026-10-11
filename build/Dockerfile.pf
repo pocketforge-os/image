@@ -1425,14 +1425,19 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   # (4) On-disk production fonts for the pf-shell text stack (tsp-ihne1.12).
   #     pf-shell links pf-render, which memory-maps its fonts from
   #     /usr/share/fonts/pocketforge — no shipped binary embeds font bytes.
-  #     v1 stages exactly the two Latin faces the runtime goldens pin plus their
-  #     OFL licenses, from the pinned runtime checkout (single source of truth:
-  #     the same bytes the runtime test suite measures with). CJK collections
-  #     install only with their languages later (design/input-layer #l10n), so
-  #     they are deliberately NOT staged; install-shell-fonts.sh in the rootfs
+  #     v1 stages exactly the runtime's canonical display set — the two Latin
+  #     faces the goldens pin plus the Noto Sans CJK display fallback that
+  #     guarantees CJK user data (app titles, SSIDs, Bluetooth names) renders in
+  #     every UI language — with their OFL licenses, from the pinned runtime
+  #     checkout (single source of truth: the same bytes the runtime test suite
+  #     measures with). The runtime resolver requires all three faces and panics
+  #     on a partial directory, so the CJK collection is REQUIRED here;
+  #     input-method language packs install their own fonts later
+  #     (design/input-layer #l10n L2). install-shell-fonts.sh in the rootfs
   #     builder fails closed on any deviation from this exact set.
   for font in "Manrope[wght].ttf" "Manrope-OFL.txt" \
-      "Fraunces[SOFT,WONK,opsz,wght].ttf" "Fraunces-OFL.txt"; do
+      "Fraunces[SOFT,WONK,opsz,wght].ttf" "Fraunces-OFL.txt" \
+      "NotoSansCJK-Regular.ttc" "NotoSansCJK-OFL.txt"; do
     [ -f "crates/pf-text-raster/fonts/${font}" ] || {
       echo "FATAL: shell font missing from runtime checkout: crates/pf-text-raster/fonts/${font}"; exit 1; }
     install -D -m 0644 "crates/pf-text-raster/fonts/${font}" "/out/share/fonts/pocketforge/${font}"
@@ -1445,7 +1450,8 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     printf '  libpocketforge.so.1 sha256=%s\n' "$(sha256sum /out/lib/libpocketforge.so.1 | cut -d' ' -f1)"
     printf '  devices/%s/capabilities.toml sha256=%s\n' "${PF_DEVICE_DESCRIPTOR_ID}" "${DESCRIPTOR_SHA256}"
     for font in "Manrope[wght].ttf" "Manrope-OFL.txt" \
-        "Fraunces[SOFT,WONK,opsz,wght].ttf" "Fraunces-OFL.txt"; do
+        "Fraunces[SOFT,WONK,opsz,wght].ttf" "Fraunces-OFL.txt" \
+        "NotoSansCJK-Regular.ttc" "NotoSansCJK-OFL.txt"; do
       printf '  fonts/pocketforge/%s sha256=%s\n' "${font}" \
         "$(sha256sum "/out/share/fonts/pocketforge/${font}" | cut -d' ' -f1)"
     done

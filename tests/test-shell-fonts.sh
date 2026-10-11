@@ -13,24 +13,30 @@ dockerfile="${root}/build/Dockerfile.pf"
 tmp="$(mktemp -d)"
 trap 'find "${tmp}" -mindepth 1 -delete; rmdir "${tmp}"' EXIT
 
-# --- fixture runtime stage carrying the exact v1 Latin-only set ---------------
+# --- fixture runtime stage carrying the exact canonical display set ------------
+# Two Latin faces + the Noto Sans CJK display fallback (guaranteed for CJK user
+# data — app titles, SSIDs, Bluetooth names — in every UI language; tsp-ihne1.12
+# reopen) + the three OFL licenses.
 runtime="${tmp}/runtime"
 mkdir -p "${runtime}/share/fonts/pocketforge"
 printf 'manrope bytes\n' > "${runtime}/share/fonts/pocketforge/Manrope[wght].ttf"
 printf 'manrope license\n' > "${runtime}/share/fonts/pocketforge/Manrope-OFL.txt"
 printf 'fraunces bytes\n' > "${runtime}/share/fonts/pocketforge/Fraunces[SOFT,WONK,opsz,wght].ttf"
 printf 'fraunces license\n' > "${runtime}/share/fonts/pocketforge/Fraunces-OFL.txt"
+printf 'cjk bytes\n' > "${runtime}/share/fonts/pocketforge/NotoSansCJK-Regular.ttc"
+printf 'cjk license\n' > "${runtime}/share/fonts/pocketforge/NotoSansCJK-OFL.txt"
 
 rootfs="${tmp}/rootfs"
 mkdir -p "${rootfs}"
 "${installer}" "${runtime}" "${rootfs}"
 for face in "Manrope[wght].ttf" "Manrope-OFL.txt" \
-    "Fraunces[SOFT,WONK,opsz,wght].ttf" "Fraunces-OFL.txt"; do
+    "Fraunces[SOFT,WONK,opsz,wght].ttf" "Fraunces-OFL.txt" \
+    "NotoSansCJK-Regular.ttc" "NotoSansCJK-OFL.txt"; do
     cmp "${runtime}/share/fonts/pocketforge/${face}" \
         "${rootfs}/usr/share/fonts/pocketforge/${face}"
     test "$(stat -c %a "${rootfs}/usr/share/fonts/pocketforge/${face}")" = 644
 done
-test "$(find "${rootfs}/usr/share/fonts/pocketforge" -mindepth 1 ! -type d | wc -l)" = 4
+test "$(find "${rootfs}/usr/share/fonts/pocketforge" -mindepth 1 ! -type d | wc -l)" = 6
 
 # --- negative controls: every deviation fails closed --------------------------
 expect_fatal() {
@@ -49,14 +55,21 @@ expect_fatal() {
 # A missing face is refused: pf-shell would start and panic at its first text.
 mv "${runtime}/share/fonts/pocketforge/Manrope[wght].ttf" "${tmp}/held"
 expect_fatal "a missing Manrope face" \
-    "FATAL: staged shell fonts differ from the v1 Latin-only set"
+    "FATAL: staged shell fonts differ from the canonical display set"
 mv "${tmp}/held" "${runtime}/share/fonts/pocketforge/Manrope[wght].ttf"
 
-# A staged CJK collection is refused: v1 ships Latin-only (design #l10n; CJK
-# installs only with those languages, later).
-printf 'cjk bytes\n' > "${runtime}/share/fonts/pocketforge/NotoSansCJK-Regular.ttc"
-expect_fatal "a staged CJK collection" "NotoSansCJK-Regular.ttc"
-find "${runtime}/share/fonts/pocketforge/NotoSansCJK-Regular.ttc" -delete
+# A missing CJK fallback is refused (tsp-ihne1.12 reopen regression): the
+# runtime resolver requires NotoSansCJK-Regular.ttc, so a Latin-only directory
+# would panic pf-shell at startup; the installer must fail closed at build time.
+mv "${runtime}/share/fonts/pocketforge/NotoSansCJK-Regular.ttc" "${tmp}/held"
+expect_fatal "a missing CJK fallback face" \
+    "FATAL: staged shell fonts differ from the canonical display set"
+mv "${tmp}/held" "${runtime}/share/fonts/pocketforge/NotoSansCJK-Regular.ttc"
+
+# An unexpected extra face is refused: the set is exact, fail-closed both ways.
+printf 'dejavu bytes\n' > "${runtime}/share/fonts/pocketforge/DejaVuSans.ttf"
+expect_fatal "an unexpected extra face" "DejaVuSans.ttf"
+find "${runtime}/share/fonts/pocketforge/DejaVuSans.ttf" -delete
 
 # A missing staged font directory is refused.
 mv "${runtime}/share/fonts" "${tmp}/held-fonts"
@@ -87,15 +100,20 @@ test -n "${open_line}" && test -n "${stage_line}" && test -n "${end_line}"
 test "${open_line}" -lt "${stage_line}"
 test "${stage_line}" -lt "${end_line}"
 
-# The exact v1 Latin faces are what the Dockerfile stages; a CJK collection is
-# never staged (v1 Latin-only, design #l10n). Explicit if/then so a violated
-# negative fails closed rather than being swallowed by `!` under errexit.
+# The canonical display set is what the Dockerfile stages: the two Latin faces
+# AND the Noto Sans CJK fallback (required by the runtime resolver; guaranteed
+# CJK rendering of user data in every UI language). Explicit if/then so a
+# violated check fails closed rather than being swallowed by `!` under errexit.
 if ! grep -Fq '"Manrope[wght].ttf"' "${dockerfile}"; then
     echo "FAIL: Dockerfile does not stage the Manrope face" >&2
     exit 1
 fi
-if grep -Fq 'NotoSansCJK' "${dockerfile}"; then
-    echo "FAIL: Dockerfile stages a CJK collection (v1 is Latin-only)" >&2
+if ! grep -Fq '"NotoSansCJK-Regular.ttc"' "${dockerfile}"; then
+    echo "FAIL: Dockerfile does not stage the required CJK fallback face" >&2
+    exit 1
+fi
+if ! grep -Fq '"NotoSansCJK-OFL.txt"' "${dockerfile}"; then
+    echo "FAIL: Dockerfile does not stage the CJK OFL license" >&2
     exit 1
 fi
 
@@ -106,4 +124,4 @@ if grep -Fq 'fonts/pocketforge' "${root}/scripts/build-rootfs-a523.sh"; then
     exit 1
 fi
 
-echo 'shell-fonts contract: PASS (exact v1 Latin-only set installed 0644; missing face, staged CJK and missing directory each fail closed; staging open-gated and paired with pf-shell)'
+echo 'shell-fonts contract: PASS (exact canonical display set — Latin + CJK fallback — installed 0644; missing face, missing CJK, extra face and missing directory each fail closed; staging open-gated and paired with pf-shell)'
