@@ -35,6 +35,7 @@ type `screen_buffer` for golden comparison) and `screenshots/manifest.json`.
 | `session/udev-shim.sh` | synthetic udev seat tags for the fake devices |
 | `tools/fake-input.c` | uinput daemon: fake pad/keyboard/mouse |
 | `tools/eis-bridge.c` | evdev → libeis sender bridge into gamescope |
+| `tools/pf-shot.c` | trusted `gamescope_control` screenshot (type 4, waits for `screenshot_taken`) |
 | `tools/transcript.{h,c}` | `libpf-transcript.so` used by every client |
 | `tools/transcript-preload.c` | LD_PRELOAD interposer (cursor names, text-input-v3 availability) |
 | `clients/*.c(pp)` | the test clients, one per design table row |
@@ -76,13 +77,23 @@ python3 -B tests/input-harness/validate/validate_transcript.py <run>/transcripts
 
 ## Screenshots
 
-`gamescopectl screenshot <path> 4` (type 4 = `screen_buffer`, the buffer
-displayed 1:1) executed through the trusted-client relay: gamescope's
-`--mangoapp` path spawns `session/mangoapp` under `gamescopereaper` with a
-trusted `WAYLAND_SOCKET`; the stand-in blocks on a FIFO and `exec`s one
-`gamescopectl` per command, so each screenshot consumes exactly one trusted
-connection. Captures are 1280x720 PNGs checked against
-`screenshots/manifest.json`.
+`pf-shot <path> 4` (`tools/pf-shot.c`, screenshot type 4 =
+`screen_buffer`, the buffer displayed 1:1) executed through the
+trusted-client relay: gamescope's `--mangoapp` path spawns
+`session/mangoapp` under `gamescopereaper --respawn` with a trusted
+`WAYLAND_SOCKET`; the stand-in blocks on a FIFO and `exec`s one
+`pf-shot` per command, so each screenshot consumes exactly one trusted
+connection. `pf-shot` binds the privileged `gamescope_control` global,
+requests the capture and waits for the `screenshot_taken` event (sent
+after the PNG is on disk). Captures are 1280x720 PNGs checked against
+`screenshots/manifest.json` (run-dir-relative paths, so the report
+works both in-container and on the host).
+
+`gamescopectl screenshot` is deliberately NOT used: its `Execute()`
+forwards only two strings over `gamescope_private`, so the type
+argument is dropped and the compositor's console command falls back to
+`base_plane_only` (no overlays) without waiting for the write — see
+known gap 7.
 
 ## CI
 
@@ -140,3 +151,12 @@ workflow has no docker daemon); it is not wired into CI yet.
    no client or fixture uses emoji.
 6. Headless lavapipe timing says nothing about GE8300/A53 compositing cost
    (D2-R1); this harness is for behaviour contracts, not performance.
+7. **gamescopectl cannot select a screenshot type**: its `Execute()`
+   forwards only `name` + one argument over `gamescope_private`, so
+   `gamescopectl screenshot <path> 4` silently captures
+   `base_plane_only` (type 1 — no overlays) and returns before the
+   write completes. The harness uses `tools/pf-shot.c` (binds
+   `gamescope_control`, type 4 `screen_buffer`, waits for
+   `screenshot_taken`). Fed back to the plan: any downstream bead that
+   wants overlay-inclusive goldens (OSK, system menu) must use
+   `gamescope_control` directly or fix `gamescopectl`.

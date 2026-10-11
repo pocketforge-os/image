@@ -1,10 +1,10 @@
 #!/bin/bash
 # Trusted-client screenshot relay. gamescope --mangoapp launches the
-# binary named "mangoapp" through gamescopereaper, which hands it a
-# trusted Wayland connection (WAYLAND_SOCKET fd). We block on a FIFO;
-# each command is executed via `exec gamescopectl`, consuming the
-# trusted fd. gamescopectl exits, the reaper respawns us with a fresh
-# trusted fd, and we block on the FIFO again.
+# binary named "mangoapp" through gamescopereaper (--respawn), which
+# hands each spawn a fresh trusted Wayland connection (WAYLAND_SOCKET
+# fd). We block on a FIFO; each command is executed via `exec pf-shot`,
+# consuming the trusted fd. pf-shot exits, the reaper respawns us with
+# a fresh trusted fd, and we block on the FIFO again.
 set -u
 
 fifo="${PF_MANGO_FIFO:-/run/pf-mango.fifo}"
@@ -21,7 +21,10 @@ case "$verb" in
 	screenshot)
 		path="${2:?screenshot needs a path}"
 		type="${3:-4}"
-		exec gamescopectl screenshot "$path" "$type"
+		# pf-shot binds gamescope_control on this trusted connection
+		# and waits for screenshot_taken (gamescopectl would drop
+		# the type argument and return before the write).
+		exec pf-shot "$path" "$type"
 		;;
 	*)
 		echo "mangoapp: unknown command: $cmd" >&2

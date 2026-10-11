@@ -229,6 +229,9 @@ def check_session(out_dir, launched):
         return "FAIL", f"reason=session_transcript_invalid hint={problems[0]}"
     events = read_events(path)
     names = [e["event"] for e in events]
+    errors = [e for e in events if e["event"] == "error"]
+    if errors:
+        return "FAIL", f"reason=session_error hint={errors[0]['message']}"
     if "compositor_ready" not in names:
         return "FAIL", "reason=compositor_never_ready hint=no compositor_ready event"
     kinds = {e["kind"] for e in events if e["event"] == "device_created"}

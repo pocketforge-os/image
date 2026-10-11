@@ -23,10 +23,11 @@ RUN apt-get update -qq \
       libxkbcommon-dev libdrm-dev libinput-dev libudev-dev libcap-dev \
       libpixman-1-dev libseat-dev libdecor-0-dev liblcms2-dev luajit \
       libx11-dev libxmu-dev libxcomposite-dev libxrender-dev libxres-dev \
-      libxtst-dev libxdamage-dev libxcursor-dev libxext-dev libxfixes-dev \
-      libxxf86vm-dev libxi-dev libxrandr-dev libeis-dev libsdl2-dev \
-      libavif-dev libpipewire-0.3-dev libbenchmark-dev catch2 hwdata \
-      libegl-dev libgles-dev xwayland x11-xkb-utils \
+       libxtst-dev libxdamage-dev libxcursor-dev libxext-dev libxfixes-dev \
+       libxxf86vm-dev libxi-dev libxrandr-dev libeis-dev libsdl2-dev \
+       libxcb-composite0-dev libxcb-xfixes0-dev libxcb-render0-dev \
+       libavif-dev libpipewire-0.3-dev libbenchmark-dev catch2 hwdata \
+       libegl-dev libgles-dev xwayland x11-xkb-utils \
  && find /var/lib/apt/lists -mindepth 1 -delete
 
 RUN git clone "${GAMESCOPE_URL}" /src/gamescope \
@@ -60,12 +61,19 @@ RUN apt-get update -qq \
 
 COPY tests/input-harness/tools /src/tools
 COPY tests/input-harness/clients /src/clients
+# gamescope_control protocol from the SAME pinned fork the compositor is
+# built from, so pf-shot cannot drift from the server's wire contract.
+COPY --from=gamescope-builder /src/gamescope/protocol/gamescope-control.xml /src/build/gamescope-control.xml
 
 RUN set -eux; \
     mkdir -p /src/build /opt/harness/bin /opt/harness/lib; \
     XDG_XML=/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml; \
     wayland-scanner client-header "$XDG_XML" /src/build/xdg-shell-client-protocol.h; \
     wayland-scanner private-code "$XDG_XML" /src/build/xdg-shell-protocol.c; \
+    wayland-scanner client-header /src/build/gamescope-control.xml \
+        /src/build/gamescope-control-client-protocol.h; \
+    wayland-scanner private-code /src/build/gamescope-control.xml \
+        /src/build/gamescope-control-protocol.c; \
     gcc -O1 -Wall -fPIC -shared -o /opt/harness/lib/libpf-transcript.so \
         /src/tools/transcript.c -lpthread; \
     gcc -O1 -Wall -fPIC -shared -o /opt/harness/lib/libpf-transcript-preload.so \
@@ -76,6 +84,9 @@ RUN set -eux; \
     gcc -O1 -Wall -o /opt/harness/bin/fake-input /src/tools/fake-input.c; \
     gcc -O1 -Wall -o /opt/harness/bin/eis-bridge /src/tools/eis-bridge.c \
         $(pkg-config --cflags --libs libei-1.0); \
+    gcc -O1 -Wall -I/src/build -o /opt/harness/bin/pf-shot \
+        /src/tools/pf-shot.c /src/build/gamescope-control-protocol.c \
+        $(pkg-config --cflags --libs wayland-client); \
     gcc -O1 -I/opt/harness/lib -o /opt/harness/bin/gtk4-text \
         /src/clients/gtk4-text.c $(pkg-config --cflags --libs gtk4) $TX; \
     g++ -O1 -fPIC -I/opt/harness/lib -o /opt/harness/bin/qt6-text \

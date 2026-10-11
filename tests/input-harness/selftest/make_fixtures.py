@@ -279,6 +279,34 @@ def build_negatives(good_dir):
         handle.write("\n".join(fixed) + "\n")
     negatives["neg-session-missing-device"] = (d, "fake_device_missing")
 
+    # A session error event (e.g. a screenshot that never landed) must
+    # fail the whole run even when every client transcript looks good.
+    d = clone(good_dir, "neg-session-error")
+    session_path = os.path.join(d, "session.jsonl")
+    records = [
+        json.loads(ln)
+        for ln in open(session_path, encoding="utf-8").read().splitlines()
+        if ln.strip()
+    ]
+    stop_rec = records.pop()
+    records.append(
+        {
+            "schema": SCHEMA,
+            "client": "session",
+            "seq": 0,
+            "t_mono_us": stop_rec["t_mono_us"] - 1,
+            "event": "error",
+            "message": "screenshot_timeout: idle not written within 30s",
+        }
+    )
+    records.append(stop_rec)
+    for i, rec in enumerate(records, start=1):
+        rec["seq"] = i
+    with open(session_path, "w", encoding="utf-8") as handle:
+        for rec in records:
+            handle.write(json.dumps(rec) + "\n")
+    negatives["neg-session-error"] = (d, "session_error")
+
     return negatives
 
 

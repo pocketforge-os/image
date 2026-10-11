@@ -184,7 +184,9 @@ def screenshot(sw: SessionWriter, name: str, shot_type: int = 4) -> bool:
         except OSError:
             time.sleep(0.2)
     if fd < 0:
-        log(f"screenshot {name}: no mangoapp reader on {MANGO_FIFO} within 60s")
+        msg = f"screenshot_relay_missing: no mangoapp reader on {MANGO_FIFO} within 60s ({name})"
+        log(msg)
+        sw.emit("error", message=msg)
         return False
     with os.fdopen(fd, "w") as fifo:
         fifo.write(f"screenshot {path} {shot_type}\n")
@@ -213,7 +215,9 @@ def screenshot(sw: SessionWriter, name: str, shot_type: int = 4) -> bool:
                 log(f"screenshot {path} {width}x{height}")
                 return True
         time.sleep(0.2)
-    log(f"screenshot {name} timed out")
+    msg = f"screenshot_timeout: {name} not written within 30s"
+    log(msg)
+    sw.emit("error", message=msg)
     return False
 
 

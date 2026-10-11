@@ -167,6 +167,7 @@ def section_asset_audit(work):
         "session/mangoapp",
         "session/udev-shim.sh",
         "tools/fake-input.c",
+        "tools/pf-shot.c",
         "tools/transcript.c",
         "tools/transcript.h",
         "clients/gtk4-text.c",
