@@ -9,7 +9,7 @@ SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
 RUNTIME_SHA = "b289235d8cbdc8d542e551b8139d22b6abf31ec1"
-LAUNCHER_SHA = "d46dbb48e610e10cc4d01562fedcdf7cdfae0f7d"
+LAUNCHER_SHA = "8209c392ea19abfe6377d7254cb063eed43c491b"
 
 
 def text(path: Path) -> str:
@@ -71,7 +71,7 @@ launcher_guard = re.findall(
     flags=re.MULTILINE,
 )
 assert launcher_guard == [LAUNCHER_SHA], (
-    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher d46dbb48, "
+    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher 8209c392, "
     f"found: {launcher_guard}"
 )
 assert "ab9fb7fde36e633add69b94c36bf1213f7cff5d9" not in dockerfile
