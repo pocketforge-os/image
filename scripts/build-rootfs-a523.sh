@@ -107,6 +107,15 @@ while read -r ug home; do
     fi
 done
 
+# --- ELF build-ids, debuginfo split, image build-id manifest (bd tsp-ihne1.33) ---
+# Gate: every ELF in the assembled rootfs outside the closed vendor dirs must
+# carry a GNU build-id, or the build fails. DWARF-carrying owned binaries are
+# split into the debuginfod-compatible symbol store under OUT_DIR/pf-debuginfo
+# (private to cr-server; hosting is wired by tsp-ihne1.34) and the shipped
+# copies are stripped here, right before ext4 assembly.
+echo "[cr-symbols] ELF build-id gate + debuginfo split + image build-id manifest"
+"${SRC_DIR}/scripts/finalize-elf-debuginfo.sh" "${EXT}" "${OUT_DIR}"
+
 ROOTFS_DU="$(du -sm "${EXT}" | cut -f1)"
 EXT4_SIZE_MB=1024
 [ "${ROOTFS_DU}" -gt 768 ] && EXT4_SIZE_MB=$(( ROOTFS_DU * 130 / 100 ))
