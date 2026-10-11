@@ -26,3 +26,9 @@ fails while EGL and the PowerVR-backed Zink context are available. Recovery
 retains every bounded sanity attempt, resumes at the next case after a later
 healthy draw, and stops with a verified partial result only after retry
 exhaustion or the per-boot reset-case cap.
+
+Result identity is the pair `(list label, case name)`. Candidate arms may
+legitimately repeat baseline controls; `test-label-case-identity.sh` proves that
+cross-label reuse is committed while a second result for the same pair remains
+an error. Its reset fixture also verifies that the resulting crash evidence can
+be archived and read by the host verifier.
