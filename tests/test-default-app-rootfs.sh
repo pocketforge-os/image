@@ -30,17 +30,20 @@ SupplementaryGroups=audio input video
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
+Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
+CacheDirectory=pocketforge/apps/%i
+CacheDirectoryMode=0700
 ProtectSystem=strict
 ProtectHome=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
-ReadWritePaths=/var/lib/pocketforge/apps/%i
+ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
 KillMode=control-group
 KillSignal=SIGTERM

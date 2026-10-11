@@ -1630,6 +1630,29 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/watchdog.con
     "${ROOTFS}/etc/systemd/system.conf.d/watchdog.conf"
 echo "[customize] Watchdog: systemd drop-in installed"
 
+# --- Browser platform defaults (bd: tsp-be9lx) --------------------------------
+# WebKit reads CHASSIS from /etc/machine-info to pick its user agent; handset
+# makes UA-sniffing sites serve mobile pages on this handheld (also reported
+# by hostnamectl). Accurate for the device on every profile.
+install -m 0644 "/work/src/rootfs-overlay/etc/machine-info" \
+    "${ROOTFS}/etc/machine-info"
+echo "[customize] /etc/machine-info: CHASSIS=handset installed"
+
+# systemd-coredump caps: a crashing web process must not fill the SD card.
+# systemd's defaults are multi-gigabyte, so cap both sizes at 64 MiB.
+install -d "${ROOTFS}/etc/systemd/coredump.conf.d"
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/coredump.conf.d/pocketforge.conf" \
+    "${ROOTFS}/etc/systemd/coredump.conf.d/pocketforge.conf"
+echo "[customize] coredump: ProcessSizeMax/ExternalSizeMax capped at 64M"
+
+# System default browser registration (URL-open design item 6,
+# tsp-mc9m.41.996.5): names the browser .desktop shipped by the browser
+# package (tsp-8ue6s). Inert until that package is installed.
+install -d "${ROOTFS}/usr/share/applications"
+install -m 0644 "/work/src/rootfs-overlay/usr/share/applications/pocketforge-mimeapps.list" \
+    "${ROOTFS}/usr/share/applications/pocketforge-mimeapps.list"
+echo "[customize] default browser: pocketforge-mimeapps.list installed"
+
 # --- Build-id marker (resolved-input provenance; bd tsp-mc9m.41.513.1) --------
 # Hash a canonical list of platform.lock-resolved inputs. No clock, host, random
 # value, or build counter participates, so identical inputs remain byte-identical.
@@ -1982,6 +2005,17 @@ python3 "${SRC_DIR}/scripts/verify-rootfs-usbnet-bench.py" \
 # Fail the build before ext4 assembly if DHCP DNS cannot reach libc. This is a
 # structural image check; lease population itself is verified on tsp-f956's boot.
 "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${ROOTFS_EXTRACTED}"
+
+# Browser platform defaults (bd tsp-be9lx): chassis, DNS-over-TLS, coredump
+# size cap, default browser files, and — on the open-GPU profile that ships
+# the default-app mechanism (install-default-app-support.sh installs pf-app@
+# for PF_GPU_MODEL=open only) — the pf-app@ per-app cache dir.
+if [ "${PF_GPU_MODEL}" = open ]; then
+    "${SRC_DIR}/scripts/verify-rootfs-browser-defaults.sh" \
+        "${ROOTFS_EXTRACTED}" --expect-pf-app
+else
+    "${SRC_DIR}/scripts/verify-rootfs-browser-defaults.sh" "${ROOTFS_EXTRACTED}"
+fi
 
 # Assert the signed Wi-Fi regulatory database is in the assembled filesystem,
 # and enforce the owner-approved XR829 image-embedding policy.
