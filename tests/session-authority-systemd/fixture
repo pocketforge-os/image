@@ -18,7 +18,8 @@ Modes (from /run/pocketforge/fixture-exit-code, written by drive.py):
                and /proc/$$/status readings to core-bound.txt, then runs
                `kill -ABRT $$`: the unit's MainPID is what dumps.
 Each start records what the sandbox actually gives the app: the launch environment,
-whether the broker acquire socket is reachable, and whether the authority socket is.
+whether the broker acquire socket is reachable, and whether the authority and prefsd
+sockets are reachable.
 """
 
 from __future__ import annotations
@@ -94,6 +95,7 @@ def main() -> int:
     descriptor = os.environ.get("PF_DESCRIPTOR", "")
     broker = os.environ.get("PF_BROKER_SOCK", "")
     authority = "/run/pocketforge/session-authority.sock"
+    prefsd = "/run/pocketforge/prefsd.sock"
     try:
         authority_mode = oct(stat.S_IMODE(os.stat(authority).st_mode))
     except OSError as error:
@@ -104,6 +106,7 @@ def main() -> int:
         "descriptor_readable": bool(descriptor) and os.access(descriptor, os.R_OK),
         "PF_BROKER_SOCK": broker,
         "broker_connect": connect(broker) if broker else "unset",
+        "prefsd_connect": connect(prefsd),
         "authority_connect": connect(authority),
         "authority_mode": authority_mode,
         "uinput_open": open_write("/dev/uinput"),

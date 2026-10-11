@@ -345,8 +345,8 @@ The image-owned template is:
 [Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-foreground.target
-BindsTo=pf-input-broker.service
-After=local-fs.target pocketforge-foreground.target pf-input-broker.service
+BindsTo=pf-input-broker.service pf-prefsd.service
+After=local-fs.target pocketforge-foreground.target pf-input-broker.service pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
 ConditionPathExists=/dev/fb0
@@ -372,6 +372,7 @@ ReadOnlyPaths=/opt/pocketforge/apps/%i
 ReadWritePaths=/var/lib/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
 InaccessiblePaths=-/dev/uinput
+InaccessiblePaths=/run/pocketforge/prefsd.sock
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
@@ -380,8 +381,14 @@ MemoryMax=256M
 Nice=-5
 ```
 
-The `pf-input-broker.service` dependency, the two `PF_*` variables, and
-`InaccessiblePaths=` are the `tsp-f3fm.202.1` amendment. The dependency is `BindsTo=`, not
+The app template deliberately omits the dedicated `pf-pref-writer` supplementary group. Only
+`pf-shell-selected.service` and `pf-foreground@.service` receive that group, while generated
+runtime-root drop-ins reset `SupplementaryGroups=` entirely. The `pf-input-broker.service`
+dependency, the two `PF_*` variables, and the session-authority
+`InaccessiblePaths=` entry are the `tsp-f3fm.202.1` amendment. The fail-closed prefsd entry keeps
+preference state behind the broker's read-only API; `BindsTo=pf-prefsd.service` also tears down the
+app namespace if the daemon exits, so socket recreation cannot reveal a replacement inode. The
+broker dependency is `BindsTo=`, not
 `Requires=` (`tsp-f3fm.202.1.6`): `Requires=` does not propagate a broker that exits by itself
 mid-session, so the app would keep the panel with no Menu intake. See
 [Input delivery](#input-delivery) and

@@ -14,6 +14,7 @@ remount_helper="${root}/tests/session-authority-systemd/remount-cgroup-systemd"
 workflow="${root}/.github/workflows/session-authority-systemd.yml"
 precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditions.py"
 shell_fixture_verifier="${root}/tests/verify-session-authority-shell-fixture.py"
+app_fixture_verifier="${root}/tests/verify-session-authority-app-fixture.py"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
 fake_root="${tmp}/host"
 fake_bin="${fake_root}/.test-bin"
@@ -872,11 +873,14 @@ grep -Fqx 'COPY runtime/crates/pf-input-broker/systemd/pf-input-broker.service /
 grep -Fqx 'COPY 10-app-session.conf /etc/systemd/system/pf-input-broker.service.d/10-app-session.conf' "${recipe}" || exit 1
 grep -Fqx 'COPY 10-input-broker.conf /etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf' "${recipe}" || exit 1
 grep -Fqx 'COPY fake-input-broker /usr/bin/pf-input-broker' "${recipe}" || exit 1
+grep -Fqx 'COPY pf-prefsd.service /etc/systemd/system/pf-prefsd.service' "${recipe}" || exit 1
+grep -Fqx 'COPY fake-prefsd /usr/local/libexec/fake-prefsd' "${recipe}" || exit 1
 grep -Fq 'pf-input-broker.service | grep -q .' "${recipe}" || exit 1
 for b4_check in 'R4 GATE FAILED' 'def assert_grab_timeline' 'def assert_broker_failure_never_traps' \
     'grab_lock_is_held()' 'systemctl_stop_exit_after_sigkill=' '"--reuid=gamer"' \
     'def assert_broker_exit_before_ready_never_traps' 'def assert_broker_exit_mid_session_never_traps' \
-    'def control_restart_on_failure_reproduces_trap' 'watch_units(30.0)'; do
+    'def control_restart_on_failure_reproduces_trap' 'watch_units(30.0)' \
+    'probe["prefsd_connect"] != "ok"' 'prefsd_outside_sandbox=ok'; do
     grep -Fq -- "${b4_check}" "${driver}" || {
         echo "session-authority systemd-safety: FAIL: driver lost B4 check ${b4_check}" >&2
         exit 1
@@ -934,14 +938,15 @@ if python3 "${tmp}/no-rlimit-as-drive.py" --self-test >"${stdout_log}" 2>"${stde
     exit 1
 fi
 grep -Fq 'self-test: a report with RLIMIT_AS absent passed the core bound' "${stderr_log}" || exit 1
-for b4_input in fake-input-broker fake-shell capabilities.toml 10-app-session.conf 10-input-broker.conf; do
+for b4_input in fake-input-broker fake-prefsd pf-prefsd.service fake-shell capabilities.toml \
+    10-app-session.conf 10-input-broker.conf; do
     grep -Fq "${b4_input}" "${harness}" || exit 1
 done
 # The harness runs a FIXTURE shell; the real unit's edges toward harness units
 # must match it (bd tsp-3rd3.12). Positive run, then a negative control that
 # gives the real unit an unmodelled ordering edge on the broker.
 shell_fixture_output="$(python3 "${shell_fixture_verifier}")"
-grep -Eq '^session-authority shell-fixture parity: PASS harness_units=[0-9]+ edges_to_harness_units=0 ' \
+grep -Eq '^session-authority shell-fixture parity: PASS harness_units=[0-9]+ edges_to_harness_units=2 ' \
     <<<"${shell_fixture_output}" || exit 1
 sed 's/^After=/After=pf-input-broker.service /' \
     "${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service" >"${tmp}/drifted-shell.service"
@@ -950,12 +955,30 @@ if python3 "${shell_fixture_verifier}" --real "${tmp}/drifted-shell.service" \
     echo 'session-authority systemd-safety: FAIL: unmodelled shell edge passed the fixture parity check' >&2
     exit 1
 fi
-grep -Fq "After= toward harness units differs: real ['pf-input-broker.service'] fixture []" \
+grep -Fq "After= toward harness units differs: real ['pf-input-broker.service', 'pf-prefsd.service'] fixture ['pf-prefsd.service']" \
     "${stderr_log}" || exit 1
 grep -Fq 'tests/verify-session-authority-shell-fixture.py' "${harness}" || exit 1
 grep -Fq 'SHELL_FIXTURE_DRIFT' "${harness}" || exit 1
+grep -Fq 'tests/verify-session-authority-app-fixture.py' "${harness}" || exit 1
+grep -Fq 'APP_FIXTURE_DRIFT' "${harness}" || exit 1
 grep -Fq -- '- rootfs-overlay/etc/systemd/system/pf-shell-selected.service' "${workflow}" || exit 1
 grep -Fq -- '- tests/verify-session-authority-shell-fixture.py' "${workflow}" || exit 1
+grep -Fq -- '- tests/verify-session-authority-app-fixture.py' "${workflow}" || exit 1
+# Every Requires=/BindsTo= edge on the real app template must resolve inside
+# the real-systemd fixture. Positive run, then remove prefsd from a copied
+# recipe to prove that the checker detects the exact regression from #220.
+app_fixture_output="$(python3 "${app_fixture_verifier}")"
+grep -Eq '^session-authority app-fixture closure: PASS hard_dependencies=[0-9]+ provided=[0-9]+$' \
+    <<<"${app_fixture_output}" || exit 1
+sed '/^COPY pf-prefsd\.service \/etc\/systemd\/system\/pf-prefsd\.service$/d' \
+    "${recipe}" >"${tmp}/missing-prefsd.Containerfile"
+if python3 "${app_fixture_verifier}" --containerfile "${tmp}/missing-prefsd.Containerfile" \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: missing prefsd dependency passed fixture closure' >&2
+    exit 1
+fi
+grep -Fq "hard dependencies absent from ${tmp}/missing-prefsd.Containerfile: ['pf-prefsd.service']" \
+    "${stderr_log}" || exit 1
 # The broker's effective Restart=no (bd tsp-f3fm.202.1.6) is a static contract that
 # the image repo's CI would otherwise never run.
 grep -Fq -- '- tests/verify-input-broker-wiring.py' "${workflow}" || exit 1

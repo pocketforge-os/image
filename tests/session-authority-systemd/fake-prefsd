@@ -1,0 +1,52 @@
+#!/usr/bin/python3
+"""Socket-ready prefsd stand-in for the isolated real-systemd harness."""
+
+from __future__ import annotations
+
+import os
+import signal
+import socket
+
+
+PATH = "/run/pocketforge/prefsd.sock"
+stopping = False
+
+
+def stop(*_args: object) -> None:
+    global stopping
+    stopping = True
+
+
+def notify_ready() -> None:
+    address = os.environ.get("NOTIFY_SOCKET", "")
+    if not address:
+        raise SystemExit("fake prefsd: NOTIFY_SOCKET unset")
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+        notify.sendto(b"READY=1", address)
+
+
+def main() -> None:
+    try:
+        os.unlink(PATH)
+    except FileNotFoundError:
+        pass
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(PATH)
+        os.chmod(PATH, 0o660)
+        server.listen(8)
+        server.settimeout(0.1)
+        notify_ready()
+        while not stopping:
+            try:
+                client, _ = server.accept()
+            except TimeoutError:
+                continue
+            client.close()
+
+
+if __name__ == "__main__":
+    main()
