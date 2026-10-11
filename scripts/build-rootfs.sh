@@ -757,6 +757,12 @@ chroot "$ROOTFS" groupadd -g 27 plugdev 2>/dev/null || chroot "$ROOTFS" groupmod
 chroot "$ROOTFS" groupadd -g 105 input  2>/dev/null || true
 chroot "$ROOTFS" groupadd -g 106 render 2>/dev/null || true
 chroot "$ROOTFS" groupadd -g 1000 gamer 2>/dev/null || true
+# Socket-bound preference-write authority is assigned by the trusted service
+# units below, never through gamer's global supplementary groups. Creation must
+# fail closed because the runtime daemon resolves this name before accepting.
+if ! chroot "$ROOTFS" getent group pf-pref-writer >/dev/null; then
+    chroot "$ROOTFS" groupadd --system pf-pref-writer
+fi
 chroot "$ROOTFS" useradd -u 1000 -g 1000 -m -d /home/gamer -s /bin/bash gamer
 chroot "$ROOTFS" usermod -aG audio,input,video,render,plugdev gamer
 chroot "$ROOTFS" passwd -l gamer

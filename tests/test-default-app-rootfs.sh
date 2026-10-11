@@ -53,6 +53,7 @@ Nice=-5
 actual = Path(sys.argv[1]).read_text()
 assert actual == expected
 assert "[Install]" not in actual
+assert "pf-pref-writer" not in actual
 PY
 
 rootfs="${tmp}/open-rootfs"

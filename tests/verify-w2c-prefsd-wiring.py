@@ -7,6 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
+WRITER_GROUP = "pf-pref-writer"
+RUNTIME_SHA = "5738f3d5e108b52186b129a5db1c62a878278b19"
 
 
 def text(path: Path) -> str:
@@ -25,6 +27,19 @@ for relative in (
     assert f"Environment=PF_PREFSD_SOCK={SOCKET}" in unit, relative
     assert "Requires=pf-prefsd.service" not in unit, relative
 
+for relative in ("pf-shell-selected.service", "pf-foreground@.service"):
+    unit = text(SYSTEMD / relative)
+    assert WRITER_GROUP in unit, f"{relative} lacks {WRITER_GROUP}"
+
+app = text(SYSTEMD / "pf-app@.service")
+assert WRITER_GROUP not in app, "the app template inherited preference-write authority"
+
+rootfs_builder = text(ROOT / "scripts/build-rootfs.sh")
+assert 'chroot "$ROOTFS" getent group pf-pref-writer' in rootfs_builder
+assert 'chroot "$ROOTFS" groupadd --system pf-pref-writer' in rootfs_builder
+assert not re.search(r"usermod[^\n]*pf-pref-writer[^\n]*gamer", rootfs_builder)
+assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
+
 assert text(ROOT / "rootfs-overlay/etc/environment").strip() == f"PF_PREFSD_SOCK={SOCKET}"
 
 dockerfile = text(ROOT / "build/Dockerfile.pf")
@@ -34,7 +49,7 @@ runtime_guard = re.findall(
     dockerfile,
     flags=re.MULTILINE,
 )
-assert runtime_guard == ["5738f3d5e108b52186b129a5db1c62a878278b19"], (
+assert runtime_guard == [RUNTIME_SHA], (
     "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 5738f3d5, "
     f"found: {runtime_guard}"
 )

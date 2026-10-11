@@ -14,6 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 APP_UNIT = SYSTEMD / "pf-app@.service"
+SELECTED_UNIT = SYSTEMD / "pf-shell-selected.service"
+FOREGROUND_UNIT = SYSTEMD / "pf-foreground@.service"
 BROKER_DROPIN = SYSTEMD / "pf-input-broker.service.d/10-app-session.conf"
 SHELL_DROPIN = SYSTEMD / "pf-shell-selected.service.d/10-input-broker.conf"
 DOC = ROOT / "docs/DEFAULT-APPS.md"
@@ -23,6 +25,7 @@ DESCRIPTOR = "/usr/share/pocketforge/devices/a133/capabilities.toml"
 BROKER_SOCK = "/run/pocketforge/input-broker.sock"
 AUTHORITY_SOCK = "/run/pocketforge/session-authority.sock"
 PREFSD_SOCK = "/run/pocketforge/prefsd.sock"
+PREF_WRITER_GROUP = "pf-pref-writer"
 
 
 def directives(text: str) -> list[tuple[str, str, str]]:
@@ -63,6 +66,8 @@ def directive_text(entries: list[tuple[str, str, str]]) -> str:
 
 
 app = directives(APP_UNIT.read_text())
+selected = directives(SELECTED_UNIT.read_text())
+foreground = directives(FOREGROUND_UNIT.read_text())
 broker = directives(BROKER_DROPIN.read_text())
 shell = directives(SHELL_DROPIN.read_text())
 
@@ -85,7 +90,18 @@ assert values(app, "Service", "InaccessiblePaths") == [
     f"-{AUTHORITY_SOCK}",
     PREFSD_SOCK,
 ]
+assert PREF_WRITER_GROUP not in values(app, "Service", "SupplementaryGroups")
+for name, trusted in (("selected shell", selected), ("foreground shell", foreground)):
+    assert PREF_WRITER_GROUP in values(trusted, "Service", "SupplementaryGroups"), (
+        f"{name} must receive the dedicated preference-writer group"
+    )
 assert not any(section == "Install" for section, _, _ in app), "pf-app@ must stay dormant"
+
+rootfs_builder = (ROOT / "scripts/build-rootfs.sh").read_text()
+assert 'chroot "$ROOTFS" getent group pf-pref-writer' in rootfs_builder
+assert 'chroot "$ROOTFS" groupadd --system pf-pref-writer' in rootfs_builder
+assert not re.search(r"usermod[^\n]*pf-pref-writer[^\n]*gamer", rootfs_builder)
+assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
 
 # Broker drop-in: exactly the ruling's directives plus the Condition->Assert fix.
 assert broker == [

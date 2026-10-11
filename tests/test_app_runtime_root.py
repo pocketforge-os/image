@@ -281,6 +281,7 @@ class RendererTest(unittest.TestCase):
         self.assertIn(
             "InaccessiblePaths=/run/pocketforge/prefsd.sock", unit
         )
+        self.assertNotIn("pf-pref-writer", unit)
         self.assertIn(
             "ReadWritePaths=/var/lib/pocketforge/apps/org.pocketforge.steamlink", unit
         )

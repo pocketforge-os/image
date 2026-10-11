@@ -380,7 +380,10 @@ MemoryMax=256M
 Nice=-5
 ```
 
-The `pf-input-broker.service` dependency, the two `PF_*` variables, and the session-authority
+The app template deliberately omits the dedicated `pf-pref-writer` supplementary group. Only
+`pf-shell-selected.service` and `pf-foreground@.service` receive that group, while generated
+runtime-root drop-ins reset `SupplementaryGroups=` entirely. The `pf-input-broker.service`
+dependency, the two `PF_*` variables, and the session-authority
 `InaccessiblePaths=` entry are the `tsp-f3fm.202.1` amendment. The fail-closed prefsd entry keeps
 preference state behind the broker's read-only API; `BindsTo=pf-prefsd.service` also tears down the
 app namespace if the daemon exits, so socket recreation cannot reveal a replacement inode. The
