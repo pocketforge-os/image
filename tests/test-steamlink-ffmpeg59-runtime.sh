@@ -275,7 +275,7 @@ if run_contract_builder "${previous_uapi_sha}" \
     exit 1
 fi
 if ! grep -Fxq \
-        "steamlink-ffmpeg59: PF_FFMPEG_UAPI_SHA drift: got '${previous_uapi_sha}', want 'c22dbc0226242cd1e582073eac5d82d36953c0d8'" \
+        "steamlink-ffmpeg59: PF_FFMPEG_UAPI_SHA drift: got '${previous_uapi_sha}', want 'de8ca3df549158834e1459dc0cd555bb97536be4'" \
         "${scratch}/stale-uapi.log"; then
     echo 'FAIL: stale kernel UAPI pin did not report the current image witness' >&2
     exit 1
@@ -285,7 +285,7 @@ if grep -Fq 'kernel UAPI source receipt missing' "${scratch}/stale-uapi.log"; th
     exit 1
 fi
 
-if run_contract_builder c22dbc0226242cd1e582073eac5d82d36953c0d8 \
+if run_contract_builder de8ca3df549158834e1459dc0cd555bb97536be4 \
         >"${scratch}/contract.log" 2>&1; then
     echo 'FAIL: lock admission reached a missing kernel receipt without failing' >&2
     exit 1

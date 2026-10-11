@@ -18,11 +18,11 @@ import gamescope_package as gp  # noqa: E402
 
 
 BASE = "bb2ddfc8b1091d6c4d0133b1ea9dcd2494b69ab9"
-HEAD = "4232739e75c95113871e260967e8b4ff995ea897"
+HEAD = "c30e8ceec43b137c206a445f49853b9fcdc58e71"
 PRESENT = "b1d220453331e28554d938f060156abfeb504757"
 STAGING = "a5b1f4697a13e671f9e8bfd108c3003987ca1fa4"
 ROTATION = "eb3ae2c705326b0c6535ea99ee233c17a170ace4"
-PATCHES = "cf0736049af178c1e94fd40bea54a28d309010c65d07fb3a981e130395a9508c"
+PATCHES = "bb6cfe0bad0d62ad774a0d1e5e4d6faff3efc379728c435ad6ce8cc0fc302ec4"
 
 
 class GamescopePackagePathTest(unittest.TestCase):
