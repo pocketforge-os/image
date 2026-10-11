@@ -139,6 +139,7 @@ jobs:
             tests/test-sdl-kmsdrm-sysroot.sh
             tests/test-session-authority-systemd-safety.sh
             tests/test-session-compositor-contract.sh
+            tests/test-shell-fonts.sh
             tests/test-steamlink-ffmpeg59-runtime.sh
             tests/test-userdata-partition.sh
             tests/test-uboot-logo.sh
