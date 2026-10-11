@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+# =============================================================================
+# kbd-layout-env: render the one keyboardLayout preference into XKB env
+# =============================================================================
+# One keyboard layout setting drives the whole system (design/input-layer
+# every-menu-spec.md §5.1, registry §16): gamescope/Xwayland read
+# XKB_DEFAULT_* from the session environment, and fcitx5 (tsp-ihne1.18) plus
+# the on-screen keyboard consume the same token. This generator resolves the
+# effective `keyboardLayout` value with the pf-prefs precedence —
+#
+#   explicit store (/var/lib/pocketforge/shell/prefs.json, user set wins)
+#     > first-boot seed (/etc/pocketforge/prefs.seed.json, cloud-init-tsp)
+#       > schema default ("us")
+#
+# — and atomically writes an EnvironmentFile for the session units:
+#
+#   XKB_DEFAULT_RULES="evdev"
+#   XKB_DEFAULT_MODEL="pc105"
+#   XKB_DEFAULT_LAYOUT="<layout>"
+#   XKB_DEFAULT_VARIANT="<variant or empty>"
+#   XKB_DEFAULT_OPTIONS=""
+#   PF_KEYBOARD_LAYOUT="<layout(variant) token>"
+#   PF_KEYBOARD_LAYOUT_SOURCE="stored|seed|default"
+#
+# Fail closed: a corrupt store/seed document or a token outside the
+# `layout(variant)` grammar is a nonzero exit with a reason on stderr; the
+# previous env file (if any) is left untouched. The image's gamescope session
+# unit and pf-fcitx5 unit order After=pf-kbd-layout-env.service and load
+# EnvironmentFile=/run/pocketforge/kbd-layout.env.
+#
+# Test seams (tests/test-kbd-layout-env.sh); the unit sets none of these:
+#   PF_KBD_PREFS_FILE, PF_KBD_SEED_FILE, PF_KBD_ENV_FILE, PF_KBD_RULES_XML.
+#
+# bd: tsp-ihne1.6
+# =============================================================================
+"""Resolve keyboardLayout into /run/pocketforge/kbd-layout.env."""
+
+import json
+import os
+import re
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from typing import NoReturn
+
+STORE_FILE = os.environ.get(
+    "PF_KBD_PREFS_FILE", "/var/lib/pocketforge/shell/prefs.json"
+)
+SEED_FILE = os.environ.get(
+    "PF_KBD_SEED_FILE", "/etc/pocketforge/prefs.seed.json"
+)
+ENV_FILE = os.environ.get("PF_KBD_ENV_FILE", "/run/pocketforge/kbd-layout.env")
+# The xkb-data rules file the image ships — the same source the pf-prefs
+# keyboardLayout enum is generated from (runtime tools/gen-keyboard-layouts.py).
+RULES_XML = os.environ.get(
+    "PF_KBD_RULES_XML", "/usr/share/X11/xkb/rules/evdev.xml"
+)
+
+KEY = "keyboardLayout"
+DEFAULT_TOKEN = "us"
+# The pf-prefs keyboardLayout enum grammar (crates/pf-prefs/build.rs):
+# lowercase-alnum layout, optional parenthesised variant.
+TOKEN_RE = re.compile(r"^([a-z0-9]+)(?:\(([a-zA-Z0-9_.+\-]+)\))?$")
+
+
+def fail(reason: str) -> NoReturn:
+    print(f"kbd-layout-env: FAIL: {reason}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def shipped_layouts(path: str):
+    """Return {layout: {variants}} from the xkb rules XML, failing closed.
+
+    Layout names in the XKB data may be comma-separated alternatives; the
+    first (canonical) name is the selectable one, matching the enum
+    generation in the runtime repo.
+    """
+    try:
+        tree = ET.parse(path)
+    except OSError as error:
+        fail(f"cannot read xkb rules {path}: {error}")
+    except ET.ParseError as error:
+        fail(f"xkb rules {path} is malformed: {error}")
+    layouts = {}
+    for layout in tree.iter("layout"):
+        name_el = layout.find("configItem/name")
+        if name_el is None or not (name_el.text or "").strip():
+            continue
+        names = [n.strip() for n in name_el.text.split(",") if n.strip()]
+        if not names:
+            continue
+        variants = layouts.setdefault(names[0], set())
+        for variant in layout.iter("variant"):
+            vname_el = variant.find("configItem/name")
+            if vname_el is not None and (vname_el.text or "").strip():
+                variants.add(vname_el.text.strip())
+    if not layouts:
+        fail(f"xkb rules {path} list no layouts")
+    return layouts
+
+
+def validate_token(token: str, source: str, layouts) -> tuple:
+    """Split and membership-check a token against the shipped xkb data."""
+    match = TOKEN_RE.match(token)
+    if match is None:
+        fail(f"{source} {KEY} token {token!r} is not layout(variant)")
+    layout, variant = match.group(1), match.group(2) or ""
+    known = layouts.get(layout)
+    if known is None:
+        fail(f"{source} layout {layout!r} is not shipped by {RULES_XML}")
+    if variant and variant not in known:
+        fail(
+            f"{source} variant {variant!r} is not shipped for layout "
+            f"{layout!r} by {RULES_XML}"
+        )
+    return layout, variant
+
+
+def read_token(path: str, origin: str):
+    """Return the keyboardLayout token from a JSON document, or None.
+
+    A missing file is 'no value here'. Anything malformed fails closed: this
+    is provisioning/state data, and silently falling back to `us` would make
+    a German keyboard type English.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        fail(f"cannot read {origin} {path}: {error}")
+    if not text.strip():
+        fail(f"{origin} {path} is empty")
+    try:
+        doc = json.loads(text)
+    except ValueError as error:
+        fail(f"{origin} {path} is not valid JSON: {error}")
+    if not isinstance(doc, dict):
+        fail(f"{origin} {path} is not a JSON object")
+    token = doc.get(KEY)
+    if token is None:
+        return None
+    if not isinstance(token, str):
+        fail(f"{origin} {path}: {KEY} is not a string")
+    return token
+
+
+def main() -> int:
+    token = read_token(STORE_FILE, "store")
+    source = "stored"
+    if token is None:
+        token = read_token(SEED_FILE, "seed")
+        source = "seed"
+    if token is None:
+        token = DEFAULT_TOKEN
+        source = "default"
+
+    layout, variant = validate_token(token, source, shipped_layouts(RULES_XML))
+
+    lines = [
+        "XKB_DEFAULT_RULES=\"evdev\"",
+        "XKB_DEFAULT_MODEL=\"pc105\"",
+        f"XKB_DEFAULT_LAYOUT=\"{layout}\"",
+        f"XKB_DEFAULT_VARIANT=\"{variant}\"",
+        "XKB_DEFAULT_OPTIONS=\"\"",
+        f"PF_KEYBOARD_LAYOUT=\"{token}\"",
+        f"PF_KEYBOARD_LAYOUT_SOURCE=\"{source}\"",
+        "",
+    ]
+    contents = "\n".join(lines)
+
+    parent = os.path.dirname(ENV_FILE) or "."
+    os.makedirs(parent, exist_ok=True)
+    # Atomic publish: never leave a half-written EnvironmentFile for a
+    # session unit to source.
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".kbd-layout-env.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(contents)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, ENV_FILE)
+    except OSError as error:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        fail(f"cannot write {ENV_FILE}: {error}")
+    print(f"kbd-layout-env: {KEY}={token} ({source}) -> {ENV_FILE}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

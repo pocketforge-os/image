@@ -1352,6 +1352,21 @@ if [ -f "${PREFSD_BIN}" ]; then
     echo "[customize] pf-prefsd installed and enabled as the preference state authority"
 fi
 
+# --- keyboardLayout session env generator (tsp-ihne1.6) ----------------------
+# One keyboard layout preference drives gamescope/Xwayland (XKB_DEFAULT_*),
+# fcitx5 and the OSK. The generator resolves explicit store > cloud-init seed
+# (/etc/pocketforge/prefs.seed.json) > "us" into /run/pocketforge/kbd-layout.env;
+# session units load it as an EnvironmentFile. Image-owned (not gated on the
+# runtime binary): without pf-prefsd it still renders the seed/default.
+install -D -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/kbd-layout-env" \
+    "${ROOTFS}/usr/lib/pocketforge/kbd-layout-env"
+install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-kbd-layout-env.service" \
+    "${ROOTFS}/etc/systemd/system/pf-kbd-layout-env.service"
+install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+ln -sf /etc/systemd/system/pf-kbd-layout-env.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-kbd-layout-env.service"
+echo "[customize] pf-kbd-layout-env installed and enabled (keyboardLayout -> XKB_DEFAULT_*)"
+
 if [ "${PF_HAS_DISPLAY}" = 1 ]; then
 # pocketforge-boot-animator (bd tsp-3rd3.4: kernel-handoff fb0 boot animator).
 # Supersedes pocketforge-fb-clear — the animator owns fb0 from kernel-fb0
