@@ -19,7 +19,7 @@ run_label_key=org.pocketforge.session-authority-run
 
 runtime_sha=1dd87ecc2952584a7ef1473c5dcb872662b7c0cb
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=e7659be67b15fd02f6fd8ee4b9087cae0866ce30fc0ed802a0788240ec3d1fac
+app_unit_sha256=a1fe0ad9f359e8c349b6d22dcf69b0e516c0590b6dada1313d9c5c8ae5c7118b
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
 # is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
 # crates/pf-input-broker/systemd/pf-input-broker.service is byte-identical at

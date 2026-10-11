@@ -1,0 +1,7 @@
+# System default browser registration (bd tsp-be9lx; URL-open design item 6,
+# tsp-mc9m.41.996.5). The browser's .desktop file itself ships in the browser
+# package (tsp-8ue6s); this file only names it as the system default handler
+# for http/https URLs, for tools that read the freedesktop mimeapps spec.
+[Default Applications]
+x-scheme-handler/http=pocketforge-browser.desktop
+x-scheme-handler/https=pocketforge-browser.desktop

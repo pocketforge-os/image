@@ -97,6 +97,7 @@ jobs:
             tests/test-alsa-config.sh
             tests/test-app-runtime-root.sh
             tests/test-boot-animator.sh
+            tests/test-browser-platform-defaults.sh
             tests/test-build-id.sh
             tests/test-build-rootfs-direct.sh
             tests/test-cedar-spike.sh
