@@ -19,7 +19,7 @@ run_label_key=org.pocketforge.session-authority-run
 
 runtime_sha=1dd87ecc2952584a7ef1473c5dcb872662b7c0cb
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=d5bdd3fba3bcc2b9fdbc1eb8675574bb15492381c01987cf1bc9ab04f68daace
+app_unit_sha256=5607b0b899f3ab0e41afd84492f05ce1f38d9603aba4780173eb7e4e8dff0121
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
 # is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
 # crates/pf-input-broker/systemd/pf-input-broker.service is byte-identical at
@@ -606,6 +606,9 @@ done
 shell_fixture_parity="$(python3 "${root}/tests/verify-session-authority-shell-fixture.py" 2>&1)" \
     || fail "SHELL_FIXTURE_DRIFT: ${shell_fixture_parity}"
 echo "${shell_fixture_parity}"
+app_fixture_closure="$(python3 "${root}/tests/verify-session-authority-app-fixture.py" 2>&1)" \
+    || fail "APP_FIXTURE_DRIFT: ${app_fixture_closure}"
+echo "${app_fixture_closure}"
 
 git clone --quiet --filter=blob:none --no-checkout "${runtime_repository}" "${runtime}"
 git -C "${runtime}" fetch --quiet origin "${runtime_sha}"
@@ -645,9 +648,11 @@ install -m 0644 "${fixtures}/pocketforge-foreground.target" \
 install -m 0644 "${owner_dropin}" "${context}/10-owner-shell.conf"
 install -m 0644 "${fixtures}/pf-shell-selected.service" \
     "${context}/pf-shell-selected.service"
+install -m 0644 "${fixtures}/pf-prefsd.service" "${context}/pf-prefsd.service"
 install -m 0644 "${broker_dropin}" "${context}/10-app-session.conf"
 install -m 0644 "${shell_dropin}" "${context}/10-input-broker.conf"
 install -m 0755 "${fixtures}/fake-input-broker" "${context}/fake-input-broker"
+install -m 0755 "${fixtures}/fake-prefsd" "${context}/fake-prefsd"
 install -m 0755 "${fixtures}/fake-shell" "${context}/fake-shell"
 install -m 0644 "${fixtures}/capabilities.toml" "${context}/capabilities.toml"
 install -m 0644 "${fixtures}/session-authority-test.target" \

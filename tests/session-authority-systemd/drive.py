@@ -27,6 +27,7 @@ TARGET_UNIT = "pocketforge-foreground.target"
 BROKER_UNIT = "pf-input-broker.service"
 SOCKET = Path("/run/pocketforge/session-authority.sock")
 BROKER_SOCKET = Path("/run/pocketforge/input-broker.sock")
+PREFSD_SOCKET = Path("/run/pocketforge/prefsd.sock")
 SYSTEM_MENU_SOCKET = Path("/run/pocketforge/system-menu.sock")
 MODE = Path("/run/pocketforge/fixture-exit-code")
 APP_STATE = Path(f"/var/lib/pocketforge/apps/{APP_ID}/state")
@@ -547,6 +548,10 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     require(probe["PF_BROKER_SOCK"] == str(BROKER_SOCKET), f"PF_BROKER_SOCK: {probe}")
     require(probe["broker_connect"] == "ok", f"app cannot reach the broker acquire socket: {probe}")
     require(
+        probe["prefsd_connect"] != "ok",
+        f"app can reach prefsd (InaccessiblePaths ineffective): {probe}",
+    )
+    require(
         probe["authority_connect"] != "ok" and probe["authority_mode"] == "0o0",
         f"app can reach the session authority (InaccessiblePaths ineffective): {probe}",
     )
@@ -560,6 +565,17 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     )
     require(outside.stdout.strip() == "ok", f"positive control failed: gamer outside pf-app@ "
             f"cannot reach the authority: rc={outside.returncode} {outside.stderr.strip()}")
+    outside_prefsd = command(
+        "setpriv", "--reuid=gamer", "--regid=gamer", "--init-groups", "python3", "-c",
+        "import socket; s = socket.socket(socket.AF_UNIX); "
+        f"s.connect({str(PREFSD_SOCKET)!r}); print('ok')",
+        check=False,
+    )
+    require(
+        outside_prefsd.stdout.strip() == "ok",
+        "positive control failed: gamer outside pf-app@ cannot reach prefsd: "
+        f"rc={outside_prefsd.returncode} {outside_prefsd.stderr.strip()}",
+    )
     broker_socket = os.stat(BROKER_SOCKET)
     gamer_gid = grp.getgrnam("gamer").gr_gid
     require(
@@ -631,7 +647,9 @@ def assert_system_menu_fallback_graceful(order: GrabOrder) -> str:
         f"system_menu_fallback_graceful session={scope.session_id} receipt=Returned app_result=success "
         f"guide_to_inactive_s={stop_seconds:.2f} broker_sock=root:gamer:0770 "
         f"app_broker_connect={probe['broker_connect']} app_authority_connect={probe['authority_connect']} "
-        "authority_outside_sandbox=ok grab_lock_negative_control=held-by-broker"
+        f"app_prefsd_connect={probe['prefsd_connect']} "
+        "authority_outside_sandbox=ok prefsd_outside_sandbox=ok "
+        "grab_lock_negative_control=held-by-broker"
     )
     return scope.session_id
 

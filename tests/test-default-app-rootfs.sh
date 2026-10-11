@@ -16,8 +16,8 @@ from pathlib import Path
 expected = """[Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-foreground.target
-BindsTo=pf-input-broker.service
-After=local-fs.target pocketforge-foreground.target pf-input-broker.service
+BindsTo=pf-input-broker.service pf-prefsd.service
+After=local-fs.target pocketforge-foreground.target pf-input-broker.service pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
 ConditionPathExists=/dev/fb0
@@ -42,6 +42,7 @@ PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
 ReadWritePaths=/var/lib/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
+InaccessiblePaths=/run/pocketforge/prefsd.sock
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
@@ -52,6 +53,7 @@ Nice=-5
 actual = Path(sys.argv[1]).read_text()
 assert actual == expected
 assert "[Install]" not in actual
+assert "pf-pref-writer" not in actual
 PY
 
 rootfs="${tmp}/open-rootfs"
