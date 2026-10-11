@@ -371,6 +371,7 @@ PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
 ReadWritePaths=/var/lib/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
+InaccessiblePaths=-/dev/uinput
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
@@ -831,6 +832,11 @@ The authority, launcher and vendored crates are unchanged.
 authority, even though its `gamer` group could otherwise open the `root:gamer 0770` socket.
 The harness checks this in the same run: the app sandbox is refused, while `gamer` outside the
 unit connects.
+
+Apps also get `InaccessiblePaths=-/dev/uinput`: even if device-node permissions or group
+membership would otherwise allow it, an app cannot create a controller that resembles the
+built-in pad. The real-systemd harness makes its fake node mode 0666 and proves both sides in one
+run: `gamer` outside the unit can open it, while the same uid inside `pf-app@` cannot.
 
 **R3/R4.** R3 treats a SIGKILL at the 2 s timeout as `Returned`, not `ForcedClose`. The concern
 behind R4 was `pf-session-authority` `lib.rs:995-1004`: a non-zero `systemctl stop` would be
