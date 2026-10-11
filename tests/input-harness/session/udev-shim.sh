@@ -18,13 +18,20 @@ maj=$((16#${hex% *}))
 min=$((16#${hex#* }))
 dev="$maj:$min"
 
-# locate /sys/class/input/inputN whose dev matches maj:min
+# Locate the input device by matching maj:min against the event node's dev
+# file: /sys/class/input/inputN has no dev file, only eventN does. The
+# parent inputN name is derived from the resolved event symlink. Retry
+# briefly because the uinput kernel registration and the sysfs view can
+# lag the device-node creation.
 input_name=""
-for d in /sys/class/input/input*; do
-	if [ -r "$d/dev" ] && [ "$(cat "$d/dev")" = "$dev" ]; then
-		input_name="$(basename "$d")"
-		break
-	fi
+for _attempt in $(seq 10); do
+	for d in /sys/class/input/event*; do
+		if [ -r "$d/dev" ] && [ "$(cat "$d/dev")" = "$dev" ]; then
+			input_name="$(basename "$(dirname "$(readlink -f "$d")")")"
+			break 2
+		fi
+	done
+	sleep 0.5
 done
 if [ -z "$input_name" ]; then
 	echo "udev-shim: no input sysfs entry for $dev" >&2
