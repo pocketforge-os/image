@@ -193,7 +193,7 @@ def screenshot(sw: SessionWriter, name: str, shot_type: int = 4) -> bool:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if os.path.exists(path) and os.path.getsize(path) > 0:
-            time.sleep(0.3)  # let gamescopectl finish writing
+            time.sleep(0.3)  # let pf-shot's write settle
             try:
                 with open(path, "rb") as f:
                     head = f.read(33)
