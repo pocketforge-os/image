@@ -32,8 +32,13 @@ RUN apt-get update -qq \
        libegl-dev libgles-dev xwayland x11-xkb-utils \
  && find /var/lib/apt/lists -mindepth 1 -delete
 
+# Harness-local patches against the pinned fork commit (kept here so the
+# fork stays pristine; see patches/*.patch for rationale).
+COPY tests/input-harness/patches /src/patches
+
 RUN git clone "${GAMESCOPE_URL}" /src/gamescope \
  && git -C /src/gamescope checkout "${GAMESCOPE_COMMIT}" \
+ && git -C /src/gamescope apply /src/patches/gamescope-optional-semaphore-fd.patch \
  && git -C /src/gamescope submodule update --init --recursive
 
 # Headless harness scope: no WSI layer (that is for gamescope nested under
@@ -152,7 +157,7 @@ RUN set -eux; \
     done; \
     echo "runtime linkage smoke test ok"
 
-ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
     GALLIUM_DRIVER=llvmpipe \
     XKB_DEFAULT_RULES=evdev
 

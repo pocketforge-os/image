@@ -14,7 +14,7 @@ if [ ! -p "$PF_MANGO_FIFO" ]; then
 fi
 export PATH="/harness/bin:$PATH"
 
-export VK_ICD_FILENAMES="${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/lvp_icd.x86_64.json}"
+export VK_ICD_FILENAMES="${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/lvp_icd.json}"
 export GALLIUM_DRIVER="${GALLIUM_DRIVER:-llvmpipe}"
 export XKB_DEFAULT_RULES="${XKB_DEFAULT_RULES:-evdev}"
 export LIBINPUT_DEFAULT_SEAT="${LIBINPUT_DEFAULT_SEAT:-seat0}"

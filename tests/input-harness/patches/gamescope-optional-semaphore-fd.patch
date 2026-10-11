@@ -1,0 +1,28 @@
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index 11bfb70..a5a1c07 100644
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -602,7 +602,22 @@ bool CVulkanDevice::createDevice()
+ 	enabledExtensions.push_back( VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME );
+ 	enabledExtensions.push_back( VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME );
+ 
+-	enabledExtensions.push_back( VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME );
++	// llvmpipe (software Vulkan used by the headless test harness) does not
++	// implement VK_KHR_external_semaphore_fd.  Only the OpenVR/Wayland
++	// backends export semaphore fds; enable the extension when the device
++	// actually offers it instead of failing device creation.
++	{
++		uint32_t semFdExtCount = 0;
++		vk.EnumerateDeviceExtensionProperties( physDev(), nullptr, &semFdExtCount, nullptr );
++		std::vector<VkExtensionProperties> semFdExts( semFdExtCount );
++		vk.EnumerateDeviceExtensionProperties( physDev(), nullptr, &semFdExtCount, semFdExts.data() );
++		for ( auto& ext : semFdExts ) {
++			if ( strcmp( ext.extensionName, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME ) == 0 ) {
++				enabledExtensions.push_back( VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME );
++				break;
++			}
++		}
++	}
+ 
+ 	enabledExtensions.push_back( VK_EXT_ROBUSTNESS_2_EXTENSION_NAME );
+ #if 0
