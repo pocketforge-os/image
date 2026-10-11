@@ -144,6 +144,70 @@ printf '[Coredump]\nProcessSizeMax=infinity\n' \
     > "${laterdropin}/etc/systemd/coredump.conf.d/zz-later.conf"
 expect_reject "${laterdropin}" 'ProcessSizeMax' --expect-pf-app
 
+# A vendor drop-in outside /etc is equally reachable by systemd-coredump:
+# files merge across all drop-in dirs by NAME order, so zz-vendor.conf in
+# /usr/lib beats pocketforge.conf in /etc.
+vendor="${tmp}/neg-coredump-vendor-usrlib"
+seed_rootfs "${vendor}"
+mkdir -p "${vendor}/usr/lib/systemd/coredump.conf.d"
+printf '[Coredump]\nProcessSizeMax=2G\nExternalSizeMax=2G\n' \
+    > "${vendor}/usr/lib/systemd/coredump.conf.d/zz-vendor.conf"
+expect_reject "${vendor}" 'ProcessSizeMax' --expect-pf-app
+
+# Same for /run drop-ins (transient runtime config).
+rundrop="${tmp}/neg-coredump-run-raise"
+seed_rootfs "${rundrop}"
+mkdir -p "${rundrop}/run/systemd/coredump.conf.d"
+printf '[Coredump]\nExternalSizeMax=infinity\n' \
+    > "${rundrop}/run/systemd/coredump.conf.d/zz-run.conf"
+expect_reject "${rundrop}" 'ExternalSizeMax' --expect-pf-app
+
+# Main-file search path: with no /etc drop-in, a /usr/lib/systemd/coredump.conf
+# raising the cap is the effective config and must be rejected.
+mainv="${tmp}/neg-coredump-main-usrlib"
+seed_rootfs "${mainv}"
+find "${mainv}/etc/systemd/coredump.conf.d" -mindepth 1 -delete
+mkdir -p "${mainv}/usr/lib/systemd"
+printf '[Coredump]\nProcessSizeMax=2G\n' > "${mainv}/usr/lib/systemd/coredump.conf"
+expect_reject "${mainv}" 'ProcessSizeMax' --expect-pf-app
+
+# Only the [Coredump] section counts: the same keys under another section
+# leave the cap unset and must be rejected.
+section="${tmp}/neg-coredump-wrong-section"
+seed_rootfs "${section}"
+printf '[SomethingElse]\nProcessSizeMax=64M\nExternalSizeMax=64M\n' \
+    > "${section}/etc/systemd/coredump.conf.d/pocketforge.conf"
+expect_reject "${section}" 'ProcessSizeMax' --expect-pf-app
+
+# Same-name masking (positive control): /etc wins over /usr/lib for an
+# identical file NAME even though the /usr/lib copy raises the cap, because
+# the masked vendor file never applies.
+masked="${tmp}/pos-coredump-etc-masks-usrlib"
+seed_rootfs "${masked}"
+mkdir -p "${masked}/usr/lib/systemd/coredump.conf.d"
+printf '[Coredump]\nProcessSizeMax=2G\nExternalSizeMax=2G\n' \
+    > "${masked}/usr/lib/systemd/coredump.conf.d/zz-vendor.conf"
+printf '[Coredump]\nProcessSizeMax=64M\nExternalSizeMax=64M\n' \
+    > "${masked}/etc/systemd/coredump.conf.d/zz-vendor.conf"
+"${verifier}" "${masked}" --expect-pf-app
+
+# Section scoping (positive control): a compliant [Coredump] section after a
+# non-Coredump section still caps.
+sectok="${tmp}/pos-coredump-section-scope"
+seed_rootfs "${sectok}"
+printf '[Nope]\nProcessSizeMax=1\n[Coredump]\nProcessSizeMax=32M\nExternalSizeMax=32M\n' \
+    > "${sectok}/etc/systemd/coredump.conf.d/pocketforge.conf"
+"${verifier}" "${sectok}" --expect-pf-app
+
+# An empty assignment resets the key to systemd's default (multi-gigabyte),
+# so a drop-in blanking the cap must be rejected even though pocketforge.conf
+# set it earlier in name order.
+blanked="${tmp}/neg-coredump-blank-reset"
+seed_rootfs "${blanked}"
+printf '[Coredump]\nProcessSizeMax=\n' \
+    > "${blanked}/etc/systemd/coredump.conf.d/zz-blank.conf"
+expect_reject "${blanked}" 'ProcessSizeMax is unset' --expect-pf-app
+
 # An exactly-64MiB cap expressed differently must still pass (positive control
 # for the size parser, same run).
 kibi="${tmp}/pos-coredump-kib"

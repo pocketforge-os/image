@@ -5,8 +5,12 @@
 #     phone layouts on this handheld.
 #   - the systemd-resolved drop-in resolves DNSOverTLS=opportunistic.
 #   - systemd-coredump ProcessSizeMax/ExternalSizeMax cap a core at 64 MiB, so
-#     a crashing web process cannot fill the card. Unset keys count as
-#     systemd's multi-gigabyte defaults and fail the cap.
+#     a crashing web process cannot fill the card. The effective value is
+#     merged across every config path systemd-coredump reads (/etc, /run,
+#     /usr/local/lib, /usr/lib main files and drop-in dirs, with same-name
+#     masking and name-order merge), so no vendor or runtime drop-in can
+#     silently raise the cap. Unset (or blanked) keys count as systemd's
+#     multi-gigabyte defaults and fail the cap.
 #   - /usr/share/applications/pocketforge-mimeapps.list registers the browser
 #     as the default http/https handler (URL-open design item 6).
 #   - pf-app@.service gives each app its own cache dir (XDG_CACHE_HOME +
@@ -65,32 +69,86 @@ size_to_bytes() {
     return 1
 }
 
-# Effective value of a [Coredump] key across /etc/systemd/coredump.conf and its
-# drop-in dir, in systemd's merge order (lexicographic; the last assignment of
-# a key wins). Comments and blank lines are skipped.
+# Last assignment of `key` inside the [Coredump] section of one file, printed
+# as "<found>\t<value>". found=1 when the key is assigned at all — including
+# `Key=` (an empty assignment), which systemd treats as a reset to its
+# compiled-in default. Lines in other sections, comments and blanks are
+# ignored.
+coredump_file_value() {
+    local file="$1" key="$2" line section="" out="" found=0
+    while IFS= read -r line || [ -n "${line}" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        case "${line}" in
+            '#'*|';'*|'') continue ;;
+            '['*']')
+                section="${line%%[[:space:]]*}"
+                continue
+                ;;
+        esac
+        [ "${section}" = '[Coredump]' ] || continue
+        case "${line}" in
+            "${key}="*)
+                found=1
+                out="${line#"${key}="}"
+                out="${out%%[[:space:]]*}"
+                ;;
+        esac
+    done < "${file}"
+    printf '%s\t%s' "${found}" "${out}"
+}
+
+# Effective value of a [Coredump] key, merged the way systemd-coredump merges
+# its configuration:
+#   - the main file is the first that exists of /etc, /run, /usr/local/lib,
+#     /usr/lib systemd/coredump.conf (a higher-priority dir masks the others);
+#   - every *.conf in the four coredump.conf.d drop-in dirs is then applied in
+#     lexicographic order of its file NAME across all dirs (so a later vendor
+#     file in /usr/lib beats an earlier one in /etc), with a same-name file in
+#     a higher-priority dir masking lower-priority copies;
+#   - the last assignment of the key wins.
 coredump_effective() {
-    local key="$1" val="" files=() f line
-    [ -f "${ROOTFS}/etc/systemd/coredump.conf" ] \
-        && files+=( "${ROOTFS}/etc/systemd/coredump.conf" )
-    if [ -d "${ROOTFS}/etc/systemd/coredump.conf.d" ]; then
-        while IFS= read -r f; do
-            files+=( "$f" )
-        done < <(find "${ROOTFS}/etc/systemd/coredump.conf.d" -maxdepth 1 -type f -name '*.conf' \
-                 | LC_ALL=C sort)
-    fi
-    for f in ${files[@]+"${files[@]}"}; do
-        while IFS= read -r line || [ -n "${line}" ]; do
-            line="${line#"${line%%[![:space:]]*}"}"
-            case "${line}" in
-                '#'*|';'*|'') continue ;;
-                "${key}="*)
-                    val="${line#"${key}="}"
-                    val="${val%%[[:space:]]*}"
-                    ;;
-            esac
-        done < "$f"
+    local key="$1" f name entry
+    local -a files=()
+    for f in \
+        "${ROOTFS}/etc/systemd/coredump.conf" \
+        "${ROOTFS}/run/systemd/coredump.conf" \
+        "${ROOTFS}/usr/local/lib/systemd/coredump.conf" \
+        "${ROOTFS}/usr/lib/systemd/coredump.conf"; do
+        if [ -f "${f}" ]; then
+            files+=( "${f}" )
+            break
+        fi
     done
-    printf '%s' "${val}"
+    local -A seen=()
+    local -a entries=()
+    local d
+    for d in \
+        "${ROOTFS}/etc/systemd/coredump.conf.d" \
+        "${ROOTFS}/run/systemd/coredump.conf.d" \
+        "${ROOTFS}/usr/local/lib/systemd/coredump.conf.d" \
+        "${ROOTFS}/usr/lib/systemd/coredump.conf.d"; do
+        [ -d "${d}" ] || continue
+        while IFS= read -r f; do
+            name="${f##*/}"
+            [ -n "${seen["${name}"]:-}" ] && continue
+            seen["${name}"]=1
+            entries+=( "${name}"$'\t'"${f}" )
+        done < <(find "${d}" -maxdepth 1 -type f -name '*.conf')
+    done
+    if [ "${#entries[@]}" -gt 0 ]; then
+        while IFS= read -r entry; do
+            files+=( "${entry#*$'\t'}" )
+        done < <(printf '%s\n' "${entries[@]}" | LC_ALL=C sort)
+    fi
+    local found last="" rec
+    for f in ${files[@]+"${files[@]}"}; do
+        rec="$(coredump_file_value "${f}" "${key}")"
+        found="${rec%%$'\t'*}"
+        if [ "${found}" = 1 ]; then
+            last="${rec#*$'\t'}"
+        fi
+    done
+    printf '%s' "${last}"
 }
 
 require_cap() {
