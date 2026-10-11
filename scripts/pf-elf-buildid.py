@@ -28,9 +28,15 @@
 #     .zdebug_info both count.
 #   - Deterministic: manifest rows sorted by (build-id, path); store paths are
 #     a pure function of the build-id.
+#   - Walkers lstat every entry (never os.path.isfile): a symlink of any class
+#     is skipped, so an in-image symlink can never resolve against, be recorded
+#     for, or mutate anything outside ROOTFS (objcopy/strip only ever see
+#     regular files physically inside the tree). Closed prefixes must likewise
+#     be real directories; a symlinked prefix is not walked.
 import argparse
 import os
 import shutil
+import stat
 import struct
 import sys
 from subprocess import run
@@ -184,6 +190,14 @@ def has_debug_info(path):
         return False
 
 
+def _is_regular_file(path):
+    """True only for a regular file per lstat: symlinks are never followed."""
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
 def iter_elves(root, closed_prefixes):
     """Yield (abs_path, in_image_path) for every regular ELF file under root
     that lies outside the closed prefixes (symlinks and non-ELFs skipped)."""
@@ -193,7 +207,7 @@ def iter_elves(root, closed_prefixes):
         dirnames.sort()
         for name in sorted(filenames):
             path = os.path.join(dirpath, name)
-            if not os.path.isfile(path):
+            if not _is_regular_file(path):
                 continue
             try:
                 with open(path, "rb") as fd:
@@ -210,11 +224,16 @@ def count_closed_elves(closed_prefixes):
     count = 0
     for prefix in closed_prefixes:
         prefix_abs = os.path.normpath(os.path.abspath(prefix))
-        if not os.path.isdir(prefix_abs):
+        try:
+            if not stat.S_ISDIR(os.lstat(prefix_abs).st_mode):
+                continue
+        except OSError:
             continue
         for dirpath, _dirnames, filenames in os.walk(prefix_abs):
             for name in filenames:
                 p = os.path.join(dirpath, name)
+                if not _is_regular_file(p):
+                    continue
                 try:
                     with open(p, "rb") as fd:
                         if fd.read(4) != ELF_MAGIC:
