@@ -1,0 +1,20 @@
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index a5a1c07..ade8238 100644
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -2176,6 +2176,15 @@ static gamescope::output_staging::OutputPlan makeOutputPlan(
+ 	bool allowCombined = true )
+ {
+ 	using namespace gamescope::output_staging;
++	// Backends that never consume KMS planes (headless, SDL) advertise no
++	// output modifiers, and software devices such as lavapipe lack
++	// VK_EXT_image_drm_format_modifier entirely.  Neither can negotiate a
++	// modifier-based plan, but both can composite straight into an
++	// optimal-tiled image with DRM_FORMAT_MOD_INVALID; keep that path
++	// working instead of rejecting every output format.
++	if ( !GetBackend()->UsesModifiers() )
++		return { OutputMode::Combined, InvalidModifier, Rejection::Accepted };
++
+ 	if ( !g_device.supportsModifiers() )
+ 		return { OutputMode::Unsupported, InvalidModifier, Rejection::NoKmsFormat };
+ 

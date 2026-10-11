@@ -39,6 +39,7 @@ COPY tests/input-harness/patches /src/patches
 RUN git clone "${GAMESCOPE_URL}" /src/gamescope \
  && git -C /src/gamescope checkout "${GAMESCOPE_COMMIT}" \
  && git -C /src/gamescope apply /src/patches/gamescope-optional-semaphore-fd.patch \
+ && git -C /src/gamescope apply /src/patches/gamescope-headless-combined-output.patch \
  && git -C /src/gamescope submodule update --init --recursive
 
 # Headless harness scope: no WSI layer (that is for gamescope nested under
