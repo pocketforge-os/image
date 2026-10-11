@@ -184,8 +184,12 @@ require(input_contract.get("menu_fallback") == "safe_return-shared-intake"
 require(input_contract.get("menu_protocol_unknown_optional_fields") == "ignore"
         and input_contract.get("menu_protocol_breaking_change") == "new-major-version",
         "provider protocol lost its additive-versioning rule")
-require(input_contract.get("declared_future_items") == ["open-keyboard"],
-        "image declared unapproved system-menu items")
+require("declared_future_items" not in input_contract,
+        "image must not embed a system-menu row list")
+require(input_contract.get("menu_rows_source") == "in-ipc-versioned-data"
+        and input_contract.get("menu_overflow_fold_source") ==
+        "in-ipc-versioned-data",
+        "system-menu rows and overflow folding must be data-driven")
 require(not input_contract["menu_forwarded_to_client"]
         and not input_contract["gamescope_opens_physical_gamepad"]
         and not input_contract["gamescope_opens_broker_gamepad"]

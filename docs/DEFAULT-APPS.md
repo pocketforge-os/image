@@ -833,8 +833,10 @@ instruments:
 Protocol versioning is additive within major version 1: receivers ignore unknown optional
 fields. Changing an existing field's meaning or making a new field mandatory requires a new
 major version. This permits a future owner-approved snapshot payload to be added without
-breaking v1 peers; no snapshot shape or policy is implemented here. The only declared future
-menu item is open keyboard.
+breaking v1 peers. The versioned `in-ipc` contract supplies the menu-row data and overflow
+fold policy; the image embeds neither. That data owns the all-size-class rule that replaces
+Wi-Fi, Bluetooth, and Airplane with one `Connections ›` row whenever the list would
+otherwise overflow.
 
 The authority honours the shared SafeReturn intake in `Starting`/`Running`:
 
