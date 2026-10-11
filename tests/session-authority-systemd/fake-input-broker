@@ -4,9 +4,11 @@
 Runs under runtime's verbatim pf-input-broker.service plus the image's app-session
 drop-in, so it receives the production ExecStart argv, Group=, UMask= and
 Environment=. It models the pad grab with a kernel-released flock (released only
-when this process dies, like EVIOCGRAB), sends the real pf-wire SafeReturn frame
-to the socket named by --safe-return-sock when the driver presses "guide", and
-holds the lock for 0.5 s after SIGTERM to widen any ordering race.
+when this process dies, like EVIOCGRAB), creates the configured root-only System
+Menu provider socket, and models the current providerless image: a "guide" press
+takes the broker's bounded fallback and sends the real pf-wire SafeReturn frame
+to --safe-return-sock. It holds the lock for 0.5 s after SIGTERM to widen any
+ordering race.
 
 Runtime failure modes (bd: tsp-f3fm.202.1.6), chosen by the driver:
   /run/pf-grab/broker-mode = exit-before-ready: exit 1 after the argv checks, before
@@ -41,6 +43,7 @@ EXPECTED = {
     "--acquire-sock": "/run/pocketforge/input-broker.sock",
     "--source": "/dev/input/pf-gamepad",
     "--safe-return-sock": "/run/pocketforge/session-authority.sock",
+    "--system-menu-sock": "/run/pocketforge/system-menu.sock",
 }
 stop = threading.Event()
 
@@ -75,7 +78,7 @@ def notify_ready() -> None:
         notify.sendto(b"READY=1", address)
 
 
-def safe_return(authority: str) -> None:
+def return_fallback(authority: str) -> None:
     body = json.dumps({"method": "safe_return"}, separators=(",", ":")).encode()
     started = time.monotonic()
     try:
@@ -89,7 +92,7 @@ def safe_return(authority: str) -> None:
             reply = stream.recv(length).decode(errors="replace") if length else "<closed>"
     except OSError as error:
         reply = f"<{type(error).__name__}: {error}>"
-    append("safe-return.log", f"reply={reply} elapsed_ms={int((time.monotonic() - started) * 1000)}")
+    append("system-menu.log", f"fallback_reply={reply} elapsed_ms={int((time.monotonic() - started) * 1000)}")
 
 
 def main() -> int:
@@ -139,6 +142,15 @@ def main() -> int:
     acquire.bind(acquire_path)
     acquire.listen(8)
     acquire.settimeout(0.05)
+    system_menu_path = arguments["--system-menu-sock"]
+    try:
+        os.unlink(system_menu_path)
+    except FileNotFoundError:
+        pass
+    system_menu = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    system_menu.bind(system_menu_path)
+    os.chmod(system_menu_path, 0o600)
+    system_menu.listen(8)
     try:
         os.unlink(CONTROL)
     except FileNotFoundError:
@@ -162,11 +174,13 @@ def main() -> int:
             with driver:
                 request = driver.recv(16).strip()
                 if request == b"guide":
-                    append("safe-return.log", f"guide {time.monotonic_ns()}")
+                    append("system-menu.log", f"guide provider=none {time.monotonic_ns()}")
                     threading.Thread(
-                        target=safe_return, args=(arguments["--safe-return-sock"],), daemon=True
+                        target=return_fallback,
+                        args=(arguments["--safe-return-sock"],),
+                        daemon=True,
                     ).start()
-                    driver.sendall(b"sent\n")
+                    driver.sendall(b"fallback\n")
                 elif request == b"crash":
                     driver.sendall(b"crashing\n")
                     crash = True
@@ -181,7 +195,7 @@ def main() -> int:
         return 1
     append("timeline", f"term broker {time.monotonic_ns()} {os.getpid()}")
     time.sleep(0.5)  # still holding the grab: a premature shell start would conflict
-    for path in (acquire_path, str(CONTROL)):
+    for path in (acquire_path, system_menu_path, str(CONTROL)):
         try:
             os.unlink(path)
         except FileNotFoundError:

@@ -313,19 +313,27 @@ The existing app-session topology remains authoritative:
 - `pf-input-broker` alone takes its `EVIOCGRAB`, canonicalizes events, creates
   `PocketForge Input (<id>)`, and passes a read fd by
   `Acquire("input")` + `SCM_RIGHTS`;
-- the broker consumes guide/`BTN_MODE` press and release and sends exactly one
-  `safe_return` request to `pf-session-authority`; the app never sees Menu; and
+- the broker consumes guide/`BTN_MODE` press and release and routes the protected
+  `SystemMenu` action to one same-UID provider over the versioned v1 socket;
+- the provider must acknowledge within 250 ms; absent, invalid, disconnected or timed-out
+  providers fall back to the existing `safe_return` request to `pf-session-authority`, and
+  the app never sees Menu; and
 - broker lifetime stays bound to the single app unit and never becomes a
   boot-enabled service.
 
 This is implemented in the admitted runtime at
 `crates/pf-input-broker/src/evdev.rs:38-68`,
-`src/broker.rs:417-486,677-723`, and `src/safe_return.rs:1-41`, and documented
+`src/broker.rs` and `src/safe_return.rs`, and documented
 in this repository at `docs/DEFAULT-APPS.md:734-825`. Gamescope/libinput must be
 filtered from both the physical source and broker-created gamepad; the app gets
-the broker fd directly. In overlay mode the same broker exclusively routes
-sanitized navigation/confirm/cancel to the trusted overlay and suppresses them
-from the app. No second open, second grab, or dual delivery is allowed. Power
+the broker fd directly. An acknowledged provider may report `shown` when its frame is
+committed; v1 logs it but does not enforce a deadline or health watch. The provider's
+`return` message and every fallback use one SafeReturn intake. Unknown optional v1 fields
+are additive; changed meanings or new mandatory fields require a new major version. A
+versioned `in-ipc` contract (`tsp-ihne1.36`) owns the data for system-menu rows and
+overflow folding; this image embeds neither a row list nor a parallel fold policy. In
+overlay mode later G2 work may route sanitized navigation to the trusted overlay. No
+second open, second grab, or dual delivery is allowed. Power
 and other device-class system keys use a distinct protected device/path and
 never enter the app stream. G1 has no input integration; this work begins in G2.
 
@@ -430,7 +438,8 @@ the system session. On compositor heartbeat loss or a guilty lockup: stop the
 client first; stop Gamescope with a bounded deadline; release/reacquire DRM in
 the supervisor; display a CPU dumb-buffer or plane-safe recovery screen; bump
 the session generation exactly once; and restart the compositor at most once.
-SafeReturn remains available through the broker. No restart loop or new GPU
+System Menu return remains available through the broker, with direct SafeReturn fallback
+when no healthy provider acknowledges. No restart loop or new GPU
 submission is allowed until the incident is acknowledged.
 
 The recovery screen deadline is 3 s. `pf-session-authority` and

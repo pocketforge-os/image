@@ -27,7 +27,7 @@ app_unit_sha256=5607b0b899f3ab0e41afd84492f05ce1f38d9603aba4780173eb7e4e8dff0121
 # runtime#102 changed broker source and tests but no unit; runtime#103 touched only
 # crates/pf-session-authority; runtime#104 did too), so the broker unit digest is unchanged.
 broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=552f608d11f54b858d00b743e2af53f96fbf0f070fb12ce15c63f9f84589ffba
+broker_dropin_sha256=e1e8c331ac2ccd72601c4c1ac3e6a07a67e6d6a4b0247487f06e720373d238f4
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))

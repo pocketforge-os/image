@@ -2,8 +2,9 @@
 """Static contract for default-app input delivery (bd: tsp-f3fm.202.1.4, B4).
 
 Checks the unit wiring the ruling fixed, the cross-file path agreements (descriptor,
-acquire socket, SafeReturn socket), the A133-open-only Dockerfile structure, and that
-docs/DEFAULT-APPS.md shows the exact directives that ship.
+acquire socket, System Menu provider socket, SafeReturn fallback socket), the
+A133-open-only Dockerfile structure, and that docs/DEFAULT-APPS.md shows the exact
+directives that ship.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ BROKER_SOCK = "/run/pocketforge/input-broker.sock"
 AUTHORITY_SOCK = "/run/pocketforge/session-authority.sock"
 PREFSD_SOCK = "/run/pocketforge/prefsd.sock"
 PREF_WRITER_GROUP = "pf-pref-writer"
+SYSTEM_MENU_SOCK = "/run/pocketforge/system-menu.sock"
 
 
 def directives(text: str) -> list[tuple[str, str, str]]:
@@ -118,13 +120,16 @@ assert broker == [
     ("Service", "ExecStart", ""),
     ("Service", "ExecStart", "/usr/bin/pf-input-broker --descriptor " + DESCRIPTOR
      + " --acquire-sock " + BROKER_SOCK + " --source /dev/input/pf-gamepad"
-     + " --safe-return-sock " + AUTHORITY_SOCK),
+     + " --safe-return-sock " + AUTHORITY_SOCK
+     + " --system-menu-sock " + SYSTEM_MENU_SOCK),
 ], broker
 exec_start = values(broker, "Service", "ExecStart")
 flags = dict(zip(exec_start[1::2], exec_start[2::2]))
 assert flags["--descriptor"] == DESCRIPTOR == environment[environment.index(f"PF_DESCRIPTOR={DESCRIPTOR}")].split("=", 1)[1]
 assert flags["--acquire-sock"] == BROKER_SOCK
 assert flags["--safe-return-sock"] == values(app, "Service", "InaccessiblePaths")[0].lstrip("-")
+assert flags["--system-menu-sock"] == SYSTEM_MENU_SOCK
+assert flags["--system-menu-sock"] not in (flags["--acquire-sock"], flags["--safe-return-sock"])
 assert shell == [("Unit", "After", "pf-input-broker.service")], shell
 
 
@@ -163,7 +168,7 @@ doc = DOC.read_text()
 for heading in (
     "### R1: the one staged device descriptor",
     "### Input delivery",
-    "### Protected Safe Return during app sessions",
+    "### Protected System Menu and return fallback during app sessions",
     "### Updated units",
     "### Failure modes (amendment)",
     "### Sequence (B1-B6)",
