@@ -55,16 +55,20 @@ assert "pf-input-decode.service" in foreground["Unit"].get("After", "").split()
 
 rule = RULE.read_text()
 expected_rule = (
-    'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="TRIMUI Player1", '
+    'SUBSYSTEM=="input", KERNEL=="event*", DEVPATH=="/devices/virtual/input/*", '
+    'ATTRS{name}=="TRIMUI Player1", '
     'ATTRS{id/vendor}=="045e", ATTRS{id/product}=="028e", '
     'SYMLINK+="input/pf-gamepad"'
 )
 assert rule.splitlines().count(expected_rule) == 1, "udev gamepad identity rule drifted"
+assert 'DEVPATH=="/devices/virtual/input/*"' in expected_rule, (
+    "a USB/Bluetooth lookalike must not acquire the built-in gamepad symlink"
+)
 
 builder = (ROOT / "scripts/build-rootfs.sh").read_text()
 assert builder.count("72-pocketforge-input.rules") == 2, "udev rule is not installed exactly once"
 
 print("gamepad-input-wiring=PASS")
-print("gamepad-node=/dev/input/pf-gamepad identity=TRIMUI_Player1,045e:028e")
+print("gamepad-node=/dev/input/pf-gamepad identity=virtual,TRIMUI_Player1,045e:028e")
 print("shell-units=pf-shell-selected.service,pf-foreground@.service")
 print("device-unit-dependency=absent bounded-wait=4s,non-fatal")

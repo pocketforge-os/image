@@ -6,3 +6,6 @@ wifis:
     access-points:
       Bench Network:
         password-b64: Y29ycmVjdCBob3JzZSBiYXR0ZXJ5IHN0YXBsZQ==
+      Cellar Network:
+        hidden: true
+        password: cellar horse battery staple

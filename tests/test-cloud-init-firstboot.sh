@@ -116,7 +116,11 @@ cat >"${scratch}/bin/systemd-creds" <<'EOF'
 set -euo pipefail
 destination="${@: -1}"
 payload="$(cat)"
-[[ ${payload} == net00=* ]] || exit 64
+first="${payload%%$'\n'*}"
+[[ ${first} == net00=* ]] || exit 64
+[[ ${payload} == *$'\n'pw00=* ]] || exit 65
+[[ ${payload} == *$'\n'net01=* ]] || exit 66
+[[ ${payload} == *$'\n'pw01=* ]] || exit 67
 printf 'test-encrypted-credential\n' >"${destination}"
 EOF
 chmod 0755 "${scratch}/bin/systemd-creds"
@@ -162,7 +166,44 @@ assert stat.S_IMODE(wpa.stat().st_mode) == 0o600
 assert stat.S_IMODE(credential.stat().st_mode) == 0o600
 assert "psk=ext:net00" in wpa.read_text(encoding="utf-8")
 assert "correct horse" not in wpa.read_text(encoding="utf-8")
-assert redacted["wifis"]["wlan0"]["access-points"]["Bench Network"]["password"] == "ext:net00"
+rendered = wpa.read_text(encoding="utf-8")
+access_points = redacted["wifis"]["wlan0"]["access-points"]
+assert access_points["Bench Network"] == {"password": "ext:net00"}
+assert access_points["Cellar Network"] == {"hidden": True, "password": "ext:net01"}
+assert "psk=ext:net01" in rendered
+assert rendered.count("key_mgmt=WPA-PSK WPA-PSK-SHA256\n") == 2
+assert rendered.count("ieee80211w=1") == 2
+assert rendered.count("scan_ssid=1") == 1
+assert "SAE" not in rendered and "sae_password" not in rendered
+blocks = {chunk.split("\n")[1]: chunk for chunk in rendered.split("network={")[1:]}
+bench = blocks[[key for key in blocks if key.endswith("42656e6368204e6574776f726b")][0]]
+cellar = blocks[[key for key in blocks if key.endswith("43656c6c6172204e6574776f726b")][0]]
+assert "scan_ssid=1" not in bench
+assert "scan_ssid=1" in cellar
+for path in sorted(target.rglob("*")):
+    if path.is_file():
+        blob = path.read_bytes()
+        assert b"correct horse battery staple" not in blob, path
+        assert b"cellar horse battery staple" not in blob, path
+        assert b"Y29ycmVjdCBob3JzZSBiYXR0ZXJ5IHN0YXBsZQ==" not in blob, path
+
+finalized = seed_dir("finalize")
+pocketforge.finalize_persistent_seed(finalized, cache_paths=[])
+consumed_text = (finalized / "network-config").read_text(encoding="utf-8")
+for path in sorted(finalized.rglob("*")):
+    if path.is_file():
+        blob = path.read_bytes()
+        assert b"correct horse battery staple" not in blob, path
+        assert b"cellar horse battery staple" not in blob, path
+        assert b"Y29ycmVjdCBob3JzZSBiYXR0ZXJ5IHN0YXBsZQ==" not in blob, path
+assert "pocketforge_seed_consumed: true" in consumed_text
+assert "hidden: true" in consumed_text
+reloaded = pocketforge.load_seed(finalized)
+assert reloaded.network_config_consumed is True
+rerendered = pocketforge.render_wpa_config(reloaded.network_config)
+assert rerendered.content.count("scan_ssid=1") == 1
+assert rerendered.content.count("key_mgmt=WPA-PSK WPA-PSK-SHA256\n") == 2
+assert pocketforge.install_wifi(reloaded, scratch / "consumed-target") == reloaded.network_config
 
 for label, user_data, network, expected in (
     ("ssh-pwauth", "refused-ssh-pwauth-user-data", "network-config", "ssh_pwauth"),
@@ -184,7 +225,7 @@ for label, user_data, network, expected in (
     after = {path.relative_to(refused_target): path.read_bytes() for path in refused_target.rglob("*") if path.is_file()}
     assert after == before, f"{label}: target changed before full validation"
 
-print("cloud-init-firstboot-behavior=PASS valid=wifi+ssh-key negative=ssh_pwauth+unknown-network writes-before-refusal=0")
+print("cloud-init-firstboot-behavior=PASS valid=wifi+ssh-key hidden-only-probe=yes boot-akm=WPA-PSK+WPA-PSK-SHA256+pmf sealed=net00+pw00+net01+pw01 plaintext-in-target=0 consumed-seed-renders=yes negative=ssh_pwauth+unknown-network writes-before-refusal=0")
 PY
 
 echo 'cloud-init-firstboot-test=PASS mode=package-stage behavioral=executed'

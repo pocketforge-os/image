@@ -19,7 +19,7 @@ run_label_key=org.pocketforge.session-authority-run
 
 runtime_sha=1dd87ecc2952584a7ef1473c5dcb872662b7c0cb
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=d5bdd3fba3bcc2b9fdbc1eb8675574bb15492381c01987cf1bc9ab04f68daace
+app_unit_sha256=a1fe0ad9f359e8c349b6d22dcf69b0e516c0590b6dada1313d9c5c8ae5c7118b
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
 # is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
 # crates/pf-input-broker/systemd/pf-input-broker.service is byte-identical at
@@ -27,7 +27,7 @@ app_unit_sha256=d5bdd3fba3bcc2b9fdbc1eb8675574bb15492381c01987cf1bc9ab04f68daace
 # runtime#102 changed broker source and tests but no unit; runtime#103 touched only
 # crates/pf-session-authority; runtime#104 did too), so the broker unit digest is unchanged.
 broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=552f608d11f54b858d00b743e2af53f96fbf0f070fb12ce15c63f9f84589ffba
+broker_dropin_sha256=e1e8c331ac2ccd72601c4c1ac3e6a07a67e6d6a4b0247487f06e720373d238f4
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
@@ -606,6 +606,9 @@ done
 shell_fixture_parity="$(python3 "${root}/tests/verify-session-authority-shell-fixture.py" 2>&1)" \
     || fail "SHELL_FIXTURE_DRIFT: ${shell_fixture_parity}"
 echo "${shell_fixture_parity}"
+app_fixture_closure="$(python3 "${root}/tests/verify-session-authority-app-fixture.py" 2>&1)" \
+    || fail "APP_FIXTURE_DRIFT: ${app_fixture_closure}"
+echo "${app_fixture_closure}"
 
 git clone --quiet --filter=blob:none --no-checkout "${runtime_repository}" "${runtime}"
 git -C "${runtime}" fetch --quiet origin "${runtime_sha}"
@@ -645,9 +648,11 @@ install -m 0644 "${fixtures}/pocketforge-foreground.target" \
 install -m 0644 "${owner_dropin}" "${context}/10-owner-shell.conf"
 install -m 0644 "${fixtures}/pf-shell-selected.service" \
     "${context}/pf-shell-selected.service"
+install -m 0644 "${fixtures}/pf-prefsd.service" "${context}/pf-prefsd.service"
 install -m 0644 "${broker_dropin}" "${context}/10-app-session.conf"
 install -m 0644 "${shell_dropin}" "${context}/10-input-broker.conf"
 install -m 0755 "${fixtures}/fake-input-broker" "${context}/fake-input-broker"
+install -m 0755 "${fixtures}/fake-prefsd" "${context}/fake-prefsd"
 install -m 0755 "${fixtures}/fake-shell" "${context}/fake-shell"
 install -m 0644 "${fixtures}/capabilities.toml" "${context}/capabilities.toml"
 install -m 0644 "${fixtures}/session-authority-test.target" \

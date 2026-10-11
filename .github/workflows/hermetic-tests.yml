@@ -91,12 +91,14 @@ jobs:
           set -uo pipefail
           tests=(
             tests/test-a133-cma-bootargs.sh
+            tests/test-a-cts-label-case-identity.sh
             tests/test-a-cts-worker-evidence-first.sh
             tests/test-a-cts-worker-recovery.sh
             tests/test-a-cts-worker-terminal.sh
             tests/test-alsa-config.sh
             tests/test-app-runtime-root.sh
             tests/test-boot-animator.sh
+            tests/test-browser-platform-defaults.sh
             tests/test-build-id.sh
             tests/test-build-rootfs-direct.sh
             tests/test-cedar-spike.sh
@@ -111,6 +113,7 @@ jobs:
             tests/test-default-app-rootfs.sh
             tests/test-dma-heap-udev-policy.sh
             tests/test-dockerfile-pf-transforms.sh
+            tests/test-elf-buildid.sh
             tests/test-gamescope-package-path.sh
             tests/test-gamescope-pvr-cache.sh
             tests/test-hwprobe-variant-stage.sh
@@ -140,6 +143,7 @@ jobs:
             tests/test-sdl-kmsdrm-sysroot.sh
             tests/test-session-authority-systemd-safety.sh
             tests/test-session-compositor-contract.sh
+            tests/test-shell-fonts.sh
             tests/test-steamlink-ffmpeg59-runtime.sh
             tests/test-userdata-partition.sh
             tests/test-uboot-logo.sh

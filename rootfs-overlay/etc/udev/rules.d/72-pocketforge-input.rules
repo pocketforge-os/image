@@ -1,2 +1,3 @@
-# Stable name for the gamepad created by pf-input-decode through uinput.
-SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="TRIMUI Player1", ATTRS{id/vendor}=="045e", ATTRS{id/product}=="028e", SYMLINK+="input/pf-gamepad"
+# Stable name for the virtual gamepad created by pf-input-decode. A physical USB/Bluetooth
+# lookalike may copy the name and ids, but it never lives below /devices/virtual/input.
+SUBSYSTEM=="input", KERNEL=="event*", DEVPATH=="/devices/virtual/input/*", ATTRS{name}=="TRIMUI Player1", ATTRS{id/vendor}=="045e", ATTRS{id/product}=="028e", SYMLINK+="input/pf-gamepad"

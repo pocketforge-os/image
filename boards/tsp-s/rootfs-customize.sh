@@ -66,6 +66,12 @@ echo "[customize-a523] applying overlay tree..."
 cp -a "${OVERLAY}/." "${ROOTFS}/"
 chmod 0755 "${ROOTFS}/usr/lib/pocketforge/container-memtest.sh"
 
+# --- machine-info (bd tsp-be9lx) ----------------------------------------------
+# CHASSIS=handset, shared with the A133 image from the one overlay source:
+# WebKit reads it to send a mobile user agent, hostnamectl reports it.
+install -m 0644 "${SRC}/rootfs-overlay/etc/machine-info" "${ROOTFS}/etc/machine-info"
+echo "[customize-a523] /etc/machine-info installed (CHASSIS=handset)"
+
 # --- container demo rootfs (static busybox; shared by hello + memtest) -------
 echo "[customize-a523] building OCI demo container rootfs (static busybox)..."
 CROOT="${ROOTFS}/usr/lib/pocketforge/containers/_rootfs"
