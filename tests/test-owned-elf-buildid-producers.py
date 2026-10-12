@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def verify(dockerfile: str, rootfs: str, finalizer: str) -> None:
+def verify(dockerfile: str, rootfs: str, finalizer: str, steamlink_builder: str) -> None:
     required = {
         "PowerVR firmware closed-vendor directory": (
             finalizer,
@@ -53,6 +53,11 @@ def verify(dockerfile: str, rootfs: str, finalizer: str) -> None:
             dockerfile,
             'RUSTFLAGS="-C link-arg=-Wl,--build-id=sha1" ./ci/device-build.sh --offline',
         ),
+        "Steam Link FFmpeg 5.9 shared-library links": (
+            steamlink_builder,
+            "--extra-ldflags='-Wl,--build-id=sha1 -B/usr/lib/aarch64-linux-gnu "
+            "-L/usr/lib/aarch64-linux-gnu'",
+        ),
     }
     missing = [name for name, (text, needle) in required.items() if needle not in text]
     if rootfs.count('"${BUILD_ID_LDFLAG}"') != 4:
@@ -70,8 +75,11 @@ def verify(dockerfile: str, rootfs: str, finalizer: str) -> None:
 dockerfile = (ROOT / "build/Dockerfile.pf").read_text()
 rootfs = (ROOT / "scripts/build-rootfs.sh").read_text()
 finalizer = (ROOT / "scripts/finalize-elf-debuginfo.sh").read_text()
+steamlink_builder = (
+    ROOT / "build/platform-runtimes/steamlink-ffmpeg59/v1/build.sh"
+).read_text()
 
-verify(dockerfile, rootfs, finalizer)
+verify(dockerfile, rootfs, finalizer, steamlink_builder)
 
 # Negative control in the same invocation: removing one producer's explicit
 # policy must make the verifier fail.
@@ -82,7 +90,7 @@ broken = dockerfile.replace(
     1,
 )
 try:
-    verify(broken, rootfs, finalizer)
+    verify(broken, rootfs, finalizer, steamlink_builder)
 except AssertionError as exc:
     assert "SDL CMake stage" in str(exc)
 else:
@@ -97,10 +105,22 @@ unsafe_hwprobe = dockerfile.replace(
     1,
 )
 try:
-    verify(unsafe_hwprobe, rootfs, finalizer)
+    verify(unsafe_hwprobe, rootfs, finalizer, steamlink_builder)
 except AssertionError as exc:
     assert "hwprobe Make stage" in str(exc)
 else:
     raise AssertionError("negative control: hwprobe static-link flags were replaced")
+
+steamlink_without_build_id = steamlink_builder.replace(
+    "-Wl,--build-id=sha1 ",
+    "",
+    1,
+)
+try:
+    verify(dockerfile, rootfs, finalizer, steamlink_without_build_id)
+except AssertionError as exc:
+    assert "Steam Link FFmpeg 5.9 shared-library links" in str(exc)
+else:
+    raise AssertionError("negative control: Steam Link FFmpeg build-id policy was accepted")
 
 print("test-owned-elf-buildid-producers=ALL PASS")
