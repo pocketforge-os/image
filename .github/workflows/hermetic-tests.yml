@@ -148,6 +148,7 @@ jobs:
             tests/test-uboot-logo.sh
             tests/test-usbnet-bench-role.sh
             tests/test-usbnet-bench-rootfs.sh
+            tests/test-wifi-watchdog.sh
           )
           failed=0
           for t in "${tests[@]}"; do
