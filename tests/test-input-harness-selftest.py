@@ -273,6 +273,28 @@ def section_asset_audit(work):
             == "298881e3dff1ade108d57a257e8bf59bf8c6436f",
             f"pins.env lost the producer-verified gamescope pin: {pins.get('GAMESCOPE_COMMIT')!r}",
         )
+        require(
+            pins.get("WAYLAND_PROTOCOLS_URL")
+            == "https://github.com/pocketforge-os/wayland-protocols.git",
+            "pins.env lost the source-closure wayland-protocols fork",
+        )
+        require(
+            pins.get("WAYLAND_PROTOCOLS_COMMIT")
+            == "aa62366fb800a0689f4e9de83811ff33f6a91f44",
+            "pins.env lost gamescope's wlroots-wayland-protocols closure pin",
+        )
+
+        with open(os.path.join(HARNESS, "Containerfile"), "r", encoding="utf-8") as handle:
+            containerfile = handle.read()
+        require(
+            'ARG WAYLAND_PROTOCOLS_COMMIT=aa62366fb800a0689f4e9de83811ff33f6a91f44'
+            in containerfile,
+            "Containerfile does not default to the admitted wayland-protocols closure pin",
+        )
+        require(
+            'checkout "${WAYLAND_PROTOCOLS_COMMIT}"' in containerfile,
+            "Containerfile does not materialize the exact wayland-protocols commit",
+        )
 
     # The trixie builder's wayland-protocols 1.44 must not win over the
     # gamescope source closure's 1.49. Exercise the provisioning helper and

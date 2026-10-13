@@ -169,8 +169,10 @@ workflow has no docker daemon); it is not wired into CI yet.
    `gamescope_control` directly or fix `gamescopectl`.
 8. **Gamescope's wlroots pin requires wayland-protocols >=1.48**, while
    Debian trixie provides 1.44. The harness mirrors gamescope's aarch64 CI:
-   it copies the closure-pinned 1.49 tree outside `subprojects/` and places a
-   generated `wayland-protocols.pc` first on `PKG_CONFIG_PATH` before Meson
-   resolves the dependency. Production `pf build` resolves this differently,
+   it materializes the manifest's `wlroots-wayland-protocols` edge at
+   `aa62366fb800a0689f4e9de83811ff33f6a91f44`, copies that 1.49 tree outside
+   `subprojects/`, and places a generated `wayland-protocols.pc` first on
+   `PKG_CONFIG_PATH` before Meson resolves the dependency. Production
+   `pf build` resolves this differently,
    from the snapshot-pinned Bookworm backports package in its owned build
    environment; neither path patches gamescope source.

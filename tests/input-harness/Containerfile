@@ -15,6 +15,8 @@ ARG BASE_IMAGE=debian@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d76
 FROM ${BASE_IMAGE} AS gamescope-builder
 ARG GAMESCOPE_URL=https://github.com/pocketforge-os/gamescope.git
 ARG GAMESCOPE_COMMIT=298881e3dff1ade108d57a257e8bf59bf8c6436f
+ARG WAYLAND_PROTOCOLS_URL=https://github.com/pocketforge-os/wayland-protocols.git
+ARG WAYLAND_PROTOCOLS_COMMIT=aa62366fb800a0689f4e9de83811ff33f6a91f44
 
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
@@ -36,12 +38,18 @@ COPY tests/input-harness/tools/provision-wayland-protocols.sh /usr/local/bin/
 
 RUN git clone "${GAMESCOPE_URL}" /src/gamescope \
  && git -C /src/gamescope checkout "${GAMESCOPE_COMMIT}" \
- && git -C /src/gamescope submodule update --init --recursive
+ && git -C /src/gamescope submodule update --init --recursive \
+ && git clone "${WAYLAND_PROTOCOLS_URL}" \
+      /src/gamescope/subprojects/wlroots/subprojects/wayland-protocols \
+ && git -C /src/gamescope/subprojects/wlroots/subprojects/wayland-protocols \
+      checkout "${WAYLAND_PROTOCOLS_COMMIT}"
 
-# Match gamescope CI's trixie build environment.  The host package is 1.44,
-# while this gamescope/wlroots closure pins 1.49 and requires >=1.48.  Expose
-# the pinned copy outside subprojects/ (Meson sandbox boundary) and make its
-# pkg-config record win before either the parent or wlroots resolves it.
+# Match gamescope CI's trixie build environment.  Recursive Git submodules do
+# not populate wrap dependencies, so materialize the manifest's
+# wlroots-wayland-protocols edge above.  The host package is 1.44, while that
+# closure pin provides 1.49 and wlroots requires >=1.48.  Expose the pinned
+# copy outside subprojects/ (Meson sandbox boundary) and make its pkg-config
+# record win before either the parent or wlroots resolves it.
 RUN provision-wayland-protocols.sh \
       /src/gamescope/subprojects/wlroots/subprojects/wayland-protocols \
       /opt/pf-wayland-protocols \

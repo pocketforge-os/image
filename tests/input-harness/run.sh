@@ -47,6 +47,8 @@ if [ "$BUILD" = 1 ]; then
 		-f tests/input-harness/Containerfile \
 		--build-arg GAMESCOPE_URL="$GAMESCOPE_URL" \
 		--build-arg GAMESCOPE_COMMIT="$GAMESCOPE_COMMIT" \
+		--build-arg WAYLAND_PROTOCOLS_URL="$WAYLAND_PROTOCOLS_URL" \
+		--build-arg WAYLAND_PROTOCOLS_COMMIT="$WAYLAND_PROTOCOLS_COMMIT" \
 		--build-arg BASE_IMAGE="$BASE_IMAGE" \
 		--label pf.bead=tsp-ihne1.2 \
 		-t "$IMAGE_TAG" .
