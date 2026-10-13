@@ -1287,7 +1287,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "a66fb43c2ebb24b2e8e60d33365722d7e8e08162" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "0ca225044ef4b3cb0a2a4466479b18c43bb1bb2e" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # file exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml with the pinned digest (prints its path).
@@ -1743,7 +1743,9 @@ ENV CARGO_HOME=/opt/poolsuite-cargo-home \
 COPY --from=poolsuite-src . /work/poolsuite
 COPY --from=poolsuite-fetch /poolsuite-fetched-source.sha256 /poolsuite-fetched-source.sha256
 COPY --from=runtime /out/build-tools/pf-app-validate /usr/local/bin/pf-app-validate
+COPY --from=runtime /out/build-tools/pf-app-policy-render /usr/local/bin/pf-app-policy-render
 COPY --from=runtime /out/share/platform-capabilities.toml /work/platform-capabilities.toml
+COPY --from=image-src build/app-policy-a133-open-v1.json /work/app-policy-a133-open-v1.json
 WORKDIR /work/poolsuite
 RUN --network=none \
     --mount=type=bind,from=poolsuite-fetch,source=/opt/poolsuite-cargo-home,target=/opt/poolsuite-cargo-home,rw \
@@ -1801,6 +1803,34 @@ install -d /tmp/default-app-root
 mv /out/app /tmp/default-app-root/org.pocketforge.poolsuite
 pf-app-validate /tmp/default-app-root /work/platform-capabilities.toml org.pocketforge.poolsuite
 mv /tmp/default-app-root/org.pocketforge.poolsuite /out/app
+# Compile the exact staged manifest through runtime's one capability-policy
+# surface. The inventory is image-owned and installed beside the generated
+# drop-in so launch-time compilation consumes the same signed decision inputs.
+install -D -m 0644 /work/app-policy-a133-open-v1.json \
+  /out/app-policy/org.pocketforge.poolsuite.resources.json
+pf-app-policy-render \
+  --manifest /out/app/app.toml \
+  --platform-contract /work/platform-capabilities.toml \
+  --resource-inventory /out/app-policy/org.pocketforge.poolsuite.resources.json \
+  --app-dir /opt/pocketforge/apps/org.pocketforge.poolsuite \
+  --platform-runtime /usr \
+  --xdg-config /var/lib/pocketforge/apps/org.pocketforge.poolsuite/config \
+  --xdg-state /var/lib/pocketforge/apps/org.pocketforge.poolsuite/state \
+  --xdg-cache /var/cache/pocketforge/apps/org.pocketforge.poolsuite \
+  --format systemd-dropin \
+  > /tmp/50-policy.conf
+install -D -m 0644 /tmp/50-policy.conf \
+  /out/systemd/pf-app@org.pocketforge.poolsuite.service.d/50-policy.conf
+grep -Fx 'SupplementaryGroups=audio input video' /tmp/50-policy.conf
+grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' /tmp/50-policy.conf
+grep -Fx 'PrivateNetwork=no' /tmp/50-policy.conf
+grep -Fx '# egress tcp * 80' /tmp/50-policy.conf
+grep -Fx '# egress tcp * 443' /tmp/50-policy.conf
+grep -Fx '# derived dns tcp udp 53' /tmp/50-policy.conf
+if grep -F '# egress udp ' /tmp/50-policy.conf; then
+  echo 'FATAL: Poolsuite manifest unexpectedly grants UDP application egress' >&2
+  exit 1
+fi
 {
   printf 'poolsuite@%s\n' "${PF_POOLSUITE_SHA}"
   printf 'cargo_lock_sha256=%s\n' "${LOCK_SHA256}"
@@ -1973,7 +2003,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "6b50ce7b12976a6d1fc611dc0b281ce3b18e77ed" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "8e5e2cee8d5510e3e28bde5d390e684ba07e2699" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fourteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.

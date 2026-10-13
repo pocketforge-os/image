@@ -66,6 +66,14 @@ grep -F './ci/device-build.sh --offline' <<<"${dev_body}" >/dev/null
 grep -F 'NEEDED.*libSDL3' <<<"${dev_body}" >/dev/null
 grep -F 'GLIBC_2.36' <<<"${dev_body}" >/dev/null
 grep -F 'pf-app-validate /tmp/default-app-root /work/platform-capabilities.toml org.pocketforge.poolsuite' <<<"${dev_body}" >/dev/null
+grep -F 'COPY --from=runtime /out/build-tools/pf-app-policy-render /usr/local/bin/pf-app-policy-render' "${dockerfile}" >/dev/null
+grep -F 'COPY --from=image-src build/app-policy-a133-open-v1.json /work/app-policy-a133-open-v1.json' "${dockerfile}" >/dev/null
+grep -F -- '--resource-inventory /out/app-policy/org.pocketforge.poolsuite.resources.json' <<<"${dev_body}" >/dev/null
+grep -F -- '--platform-runtime /usr' <<<"${dev_body}" >/dev/null
+grep -F -- '--format systemd-dropin' <<<"${dev_body}" >/dev/null
+grep -F '# derived dns tcp udp 53' <<<"${dev_body}" >/dev/null
+grep -F '# egress tcp * 80' <<<"${dev_body}" >/dev/null
+grep -F '# egress tcp * 443' <<<"${dev_body}" >/dev/null
 grep -F 'COPY --from=runtime /out/build-tools/pf-app-validate' <<<"${dev_body}" >/dev/null
 for key in poolsuite@ cargo_lock_sha256 fetched_source_sha256 ps_app_sha256; do
     grep -F "${key}" <<<"${dev_body}" >/dev/null

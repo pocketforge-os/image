@@ -94,11 +94,13 @@ def manifest(
     distribution: str | None = None,
     platform_version: str = PLATFORM_VERSION,
     capabilities: tuple[str, ...] = (),
+    needs_network: bool | None = None,
 ) -> str:
-    effective_capabilities = list(capabilities)
-    if not any(value.strip().lower().startswith("egress:") for value in capabilities):
-        effective_capabilities.append("egress:tcp/443@*")
-    caps = ", ".join(json.dumps(value) for value in effective_capabilities)
+    caps = ", ".join(json.dumps(value) for value in capabilities)
+    if needs_network is None:
+        needs_network = any(
+            value.strip().lower().startswith("egress:") for value in capabilities
+        )
     root_table = ""
     if root:
         distribution_line = (
@@ -134,7 +136,7 @@ def manifest(
 
         [launch]
         exec = "bin/shell"
-        needs_network = true
+        needs_network = {str(needs_network).lower()}
         takes_display = true
         audio = true
         """
@@ -288,10 +290,18 @@ class RendererTest(unittest.TestCase):
         self.assertFalse(self.policy_output.exists())
 
     def test_default_root_render_is_deterministic_and_fail_closed(self) -> None:
-        self.render(manifest(capabilities=("audio", "input", "vibration")))
+        self.render(
+            manifest(
+                capabilities=("audio", "input", "vibration", "egress:tcp/443@*")
+            )
+        )
         first = self.output.read_bytes()
         self.output.unlink()
-        self.render(manifest(capabilities=("audio", "input", "vibration")))
+        self.render(
+            manifest(
+                capabilities=("audio", "input", "vibration", "egress:tcp/443@*")
+            )
+        )
         self.assertEqual(first, self.output.read_bytes())
 
         unit = first.decode()
@@ -320,7 +330,13 @@ class RendererTest(unittest.TestCase):
         self.assertNotIn("/dev/video", unit)
         self.assertNotIn("/dev/media", unit)
         policy = json.loads(self.policy_output.read_text(encoding="utf-8"))
-        self.assertEqual(policy, {"resources": inventory()["resources"]})
+        self.assertEqual(
+            policy,
+            {
+                "platform_runtime": "/run/pocketforge/platform-runtime",
+                "resources": inventory()["resources"],
+            },
+        )
         self.assertIn("SupplementaryGroups=audio input video", unit)
         self.assertIn("# egress tcp * 443", unit)
 

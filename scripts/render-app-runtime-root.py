@@ -440,62 +440,76 @@ def compile_policy(
     renderer: Path,
     manifest: Path,
     platform_contract: Path,
-    inventory: Path,
+    inventory: dict[str, object],
     app_id: str,
 ) -> tuple[dict[str, object], list[str]]:
-    base = [
-        str(renderer),
-        "--manifest",
-        str(manifest),
-        "--platform-contract",
-        str(platform_contract),
-        "--resource-inventory",
-        str(inventory),
-        "--app-dir",
-        f"/opt/pocketforge/apps/{app_id}",
-        "--platform-runtime",
-        "/run/pocketforge/platform-runtime",
-        "--xdg-config",
-        f"/var/lib/pocketforge/apps/{app_id}/config",
-        "--xdg-state",
-        f"/var/lib/pocketforge/apps/{app_id}/state",
-        "--xdg-cache",
-        f"/var/cache/pocketforge/apps/{app_id}",
-    ]
+    with tempfile.TemporaryDirectory(prefix="pf-app-policy-") as temp:
+        policy_inventory = Path(temp) / "resources.json"
+        policy_inventory.write_text(
+            json.dumps(
+                {
+                    "platform_runtime": "/run/pocketforge/platform-runtime",
+                    "resources": inventory["resources"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        base = [
+            str(renderer),
+            "--manifest",
+            str(manifest),
+            "--platform-contract",
+            str(platform_contract),
+            "--resource-inventory",
+            str(policy_inventory),
+            "--app-dir",
+            f"/opt/pocketforge/apps/{app_id}",
+            "--platform-runtime",
+            "/run/pocketforge/platform-runtime",
+            "--xdg-config",
+            f"/var/lib/pocketforge/apps/{app_id}/config",
+            "--xdg-state",
+            f"/var/lib/pocketforge/apps/{app_id}/state",
+            "--xdg-cache",
+            f"/var/cache/pocketforge/apps/{app_id}",
+        ]
 
-    def run(output_format: str) -> str:
+        def run(output_format: str) -> str:
+            try:
+                result = subprocess.run(
+                    [*base, "--format", output_format],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+            except OSError as error:
+                refuse("policy_render_failed", str(error))
+            if result.returncode != 0:
+                detail = result.stderr.strip() or f"renderer exited {result.returncode}"
+                reason = (
+                    "required_resource_missing"
+                    if "required resource " in detail and " is missing" in detail
+                    else "descriptor_invalid"
+                    if "invalid or duplicate capability" in detail
+                    else "policy_render_failed"
+                )
+                refuse(reason, detail)
+            return result.stdout
+
         try:
-            result = subprocess.run(
-                [*base, "--format", output_format],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
-        except OSError as error:
-            refuse("policy_render_failed", str(error))
-        if result.returncode != 0:
-            detail = result.stderr.strip() or f"renderer exited {result.returncode}"
-            reason = (
-                "required_resource_missing"
-                if "required resource " in detail and " is missing" in detail
-                else "descriptor_invalid"
-                if "invalid or duplicate capability" in detail
-                else "policy_render_failed"
-            )
-            refuse(reason, detail)
-        return result.stdout
-
-    try:
-        decision = json.loads(run("json"))
-    except json.JSONDecodeError as error:
-        refuse("policy_render_failed", f"policy JSON is invalid: {error}")
-    if not isinstance(decision, dict) or decision.get("app_id") != app_id:
-        refuse("policy_render_failed", "policy JSON app identity differs")
-    dropin = run("systemd-dropin").splitlines()
-    if not dropin or dropin[0] != "[Service]":
-        refuse("policy_render_failed", "policy drop-in lacks [Service]")
-    return decision, dropin[1:]
+            decision = json.loads(run("json"))
+        except json.JSONDecodeError as error:
+            refuse("policy_render_failed", f"policy JSON is invalid: {error}")
+        if not isinstance(decision, dict) or decision.get("app_id") != app_id:
+            refuse("policy_render_failed", "policy JSON app identity differs")
+        dropin = run("systemd-dropin").splitlines()
+        if not dropin or dropin[0] != "[Service]":
+            refuse("policy_render_failed", "policy drop-in lacks [Service]")
+        return decision, dropin[1:]
 
 
 def render(
@@ -505,7 +519,6 @@ def render(
     platform_runtime_store: Path,
     *,
     manifest_path: Path,
-    inventory_path: Path,
     platform_contract: Path,
     policy_renderer: Path,
 ) -> str | None:
@@ -574,7 +587,7 @@ def render(
         renderer=policy_renderer,
         manifest=manifest_path,
         platform_contract=platform_contract,
-        inventory=inventory_path,
+        inventory=inventory,
         app_id=app_id,
     )
 
@@ -694,14 +707,16 @@ def main() -> int:
             args.app_root_store,
             args.platform_runtime_store,
             manifest_path=args.manifest,
-            inventory_path=args.inventory,
             platform_contract=args.platform_contract,
             policy_renderer=args.policy_renderer,
         )
         assert value is not None
         try:
             resources = json.dumps(
-                {"resources": inventory["resources"]},
+                {
+                    "platform_runtime": "/run/pocketforge/platform-runtime",
+                    "resources": inventory["resources"],
+                },
                 sort_keys=True,
                 separators=(",", ":"),
             ) + "\n"

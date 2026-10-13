@@ -27,7 +27,11 @@ case "${variant}" in
 esac
 
 if [ "${gpu_model}" != open ]; then
-    for forbidden in "${stage}/app" "${stage}/.pf-poolsuite-provenance"; do
+    for forbidden in \
+        "${stage}/app" \
+        "${stage}/app-policy" \
+        "${stage}/systemd" \
+        "${stage}/.pf-poolsuite-provenance"; do
         [ ! -e "${forbidden}" ] || {
             echo "FATAL: Poolsuite payload reached non-open dev profile: ${forbidden}" >&2
             exit 1
@@ -58,6 +62,14 @@ done
     echo "FATAL: Poolsuite dev stage lacks toolchain package inventory" >&2
     exit 1
 }
+[ -f "${stage}/app-policy/org.pocketforge.poolsuite.resources.json" ] || {
+    echo "FATAL: Poolsuite dev stage lacks its policy resource inventory" >&2
+    exit 1
+}
+[ -f "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service.d/50-policy.conf" ] || {
+    echo "FATAL: Poolsuite dev stage lacks its generated app policy drop-in" >&2
+    exit 1
+}
 install -d "${app_root}/themes" "${app_root}/oci"
 install -m 0755 "${app_stage}/ps-app" "${app_root}/ps-app"
 install -m 0644 "${app_stage}/app.toml" "${app_root}/app.toml"
@@ -68,5 +80,11 @@ install -D -m 0644 "${stage}/.pf-poolsuite-provenance" \
     "${rootfs}/usr/share/pocketforge/poolsuite-provenance"
 install -D -m 0644 "${stage}/toolchain-packages.txt" \
     "${rootfs}/usr/share/pocketforge/poolsuite-toolchain-packages.txt"
+install -D -m 0644 \
+    "${stage}/app-policy/org.pocketforge.poolsuite.resources.json" \
+    "${rootfs}/usr/share/pocketforge/app-policy/org.pocketforge.poolsuite.resources.json"
+install -D -m 0644 \
+    "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service.d/50-policy.conf" \
+    "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.poolsuite.service.d/50-policy.conf"
 
 echo "[customize] Poolsuite installed for A133-open dev"
