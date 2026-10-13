@@ -11,7 +11,7 @@ on:
       - .github/workflows/ime-bus-security.yml
       - tests/test-ime-bus-security.sh
       - tests/ime-bus-security-inner.sh
-      - tests/ime-bus-contract-stub.py
+      - tests/ime-bus-contract.py
       - tests/verify-ime-bus-wiring.py
       - tests/ime-bus-security/**
       - rootfs-packages*.txt

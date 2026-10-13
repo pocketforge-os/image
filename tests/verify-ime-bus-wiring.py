@@ -149,7 +149,7 @@ def main() -> None:
         ".github/workflows/ime-bus-security.yml",
         "tests/test-ime-bus-security.sh",
         "tests/ime-bus-security-inner.sh",
-        "tests/ime-bus-contract-stub.py",
+        "tests/ime-bus-contract.py",
         "tests/verify-ime-bus-wiring.py",
         "tests/ime-bus-security/**",
         "rootfs-packages*.txt",
@@ -165,6 +165,10 @@ def main() -> None:
         "snapshot-date.txt",
     ):
         require(workflow, f"      - {path_filter}\n", "IME workflow path filter")
+        if not any(character in path_filter for character in "*?["):
+            assert (ROOT / path_filter).exists(), (
+                f"IME workflow path filter names missing input: {path_filter}"
+            )
 
     containerfile = read("tests/ime-bus-security/Containerfile")
     require(
