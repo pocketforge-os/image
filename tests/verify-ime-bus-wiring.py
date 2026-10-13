@@ -133,6 +133,60 @@ def main() -> None:
 
     workflow = read(".github/workflows/hermetic-tests.yml")
     require(workflow, "tests/test-ime-bus-security.sh", "hermetic workflow")
+
+    containerfile = read("tests/ime-bus-security/Containerfile")
+    require(
+        containerfile,
+        "FROM debian:bookworm-20260623-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df",
+        "IME harness Containerfile",
+    )
+    require(containerfile, "ARG APT_SNAPSHOT_DATE=20260601T000000Z", "IME harness Containerfile")
+    require(containerfile, "snapshot.debian.org/archive/debian/${APT_SNAPSHOT_DATE}/", "IME harness Containerfile")
+    for package in (
+        "bubblewrap",
+        "dbus-bin",
+        "dbus-daemon",
+        "python3",
+        "python3-dbus",
+        "python3-gi",
+        "xdg-dbus-proxy",
+    ):
+        require(containerfile, package, "IME harness Containerfile")
+
+    harness = read("tests/test-ime-bus-security.sh")
+    for needle in (
+        "command -v docker",
+        "--label pf.bead=tsp-ihne1.5",
+        '--user "$(id -u):$(id -g)"',
+        "HOME=/tmp",
+        "RUNNER_TEMP=/tmp",
+        "readonly",
+        "--network none",
+        "--security-opt apparmor=unconfined",
+        '--security-opt "seccomp=${container_dir}/bwrap-seccomp.json"',
+        "--rm",
+    ):
+        require(harness, needle, "IME harness wrapper")
+    for forbidden in ("--privileged", "--cap-add", "docker.sock", "/sbin/init"):
+        assert forbidden not in harness, f"IME harness wrapper uses forbidden Docker option: {forbidden}"
+    for failure in (
+        'fail "docker is required for the real IME bus security harness"',
+        'fail "IME harness image build failed"',
+        'fail "containerized IME bus security harness failed"',
+    ):
+        require(harness, failure, "IME harness fail-closed contract")
+    assert "exit 75" not in harness, "IME harness prerequisites must fail, not skip"
+
+    seccomp = read("tests/ime-bus-security/bwrap-seccomp.json")
+    require(seccomp, '"defaultAction": "SCMP_ACT_ERRNO"', "IME bwrap seccomp profile")
+    for syscall in ('"clone"', '"mount"', '"umount2"', '"unshare"', '"pivot_root"'):
+        require(seccomp, syscall, "IME bwrap seccomp profile")
+    assert "seccomp=unconfined" not in harness, "IME harness must use the committed bwrap profile"
+    provenance = read("tests/ime-bus-security/README.md")
+    require(provenance, "a775db1206ab90d93aee2313040c1d23d5b2d12a12691021fe060fbe33323ed7", "seccomp provenance")
+
+    container_runner = read("tests/ime-bus-security/run.sh")
+    require(container_runner, '"${script_dir}/../ime-bus-security-inner.sh"', "IME container runner")
     print("PASS ime bus static wiring and fail-closed package policy")
 
 
