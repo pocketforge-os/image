@@ -124,7 +124,11 @@ protocol do not.
 
 The existing per-device source is
 `platform/devices/<id>/capabilities.toml`, staged verbatim at
-`/usr/share/pocketforge/devices/<id>/capabilities.toml`. Extend each
+`/usr/share/pocketforge/devices/<id>/capabilities.toml`. Since platform#341
+(`tsp-mc9m.41.1026.4`) the building device's bytes are also installed
+device-neutrally at `/usr/share/pocketforge/device/capabilities.toml`, and that
+neutral path is what runtime consumers (`PF_DESCRIPTOR`, the broker's
+`--descriptor`) load. Extend each
 `[[screens]]` row and its schema with these exact fields:
 
 ```toml
