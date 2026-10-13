@@ -97,6 +97,8 @@ class CursorPackage(unittest.TestCase):
         unit = (ROOT / "rootfs-overlay/etc/systemd/system/pf-app@.service").read_text()
         self.assertIn("Environment=XCURSOR_THEME=pocketforge-light", unit)
         self.assertIn("Environment=XCURSOR_SIZE=48", unit)
+        for builder in ("scripts/build-rootfs.sh", "scripts/build-rootfs-a523.sh"):
+            self.assertIn("install-cursor-theme.sh", (ROOT / builder).read_text())
 
     def test_install_and_failure_controls(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pf-cursor-test.") as td:
