@@ -131,8 +131,40 @@ def main() -> None:
     ):
         require(builder, relative, "build-rootfs.sh installer")
 
-    workflow = read(".github/workflows/hermetic-tests.yml")
-    require(workflow, "tests/test-ime-bus-security.sh", "hermetic workflow")
+    hermetic_workflow = read(".github/workflows/hermetic-tests.yml")
+    assert "            tests/test-ime-bus-security.sh\n" not in hermetic_workflow, (
+        "real-Docker IME harness must stay out of the daemonless hermetic workflow"
+    )
+    workflow = read(".github/workflows/ime-bus-security.yml")
+    for needle in (
+        "runs-on: [self-hosted, pf-builder-vm]",
+        "timeout-minutes: 30",
+        "github.event.pull_request.head.repo.full_name == github.repository",
+        "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+        "set -o pipefail",
+        "tests/test-ime-bus-security.sh",
+    ):
+        require(workflow, needle, "IME bus security workflow")
+    for path_filter in (
+        ".github/workflows/ime-bus-security.yml",
+        "tests/test-ime-bus-security.sh",
+        "tests/ime-bus-security-inner.sh",
+        "tests/ime-bus-contract-stub.py",
+        "tests/verify-ime-bus-wiring.py",
+        "tests/ime-bus-security/**",
+        "rootfs-packages*.txt",
+        "rootfs-overlay/etc/systemd/system/pf-app@.service",
+        "rootfs-overlay/etc/systemd/system/pf-ime-bus.service",
+        "rootfs-overlay/etc/systemd/system/pf-ime-door@.service",
+        "rootfs-overlay/etc/systemd/system/pf-fcitx5.service.d/**",
+        "rootfs-overlay/etc/systemd/system/pf-osk.service.d/**",
+        "rootfs-overlay/usr/lib/sysusers.d/pf-ime.conf",
+        "rootfs-overlay/usr/lib/tmpfiles.d/pf-ime.conf",
+        "rootfs-overlay/usr/share/pocketforge/ime/**",
+        "scripts/build-rootfs.sh",
+        "snapshot-date.txt",
+    ):
+        require(workflow, f"      - {path_filter}\n", "IME workflow path filter")
 
     containerfile = read("tests/ime-bus-security/Containerfile")
     require(
