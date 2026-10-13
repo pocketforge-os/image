@@ -281,6 +281,10 @@ def main() -> None:
         "app_memory_budget_mib": app_memory_budget_mib,
         "inputs": inputs,
         "display": {"width": width, "height": height},
+        "production": True,
+        "landlock_mode": "required",
+        "landlock_full_min_abi": 10,
+        "landlock_browser_min_abi": 6,
     }
     expected.update(graphics)
 
@@ -294,6 +298,10 @@ def main() -> None:
         + "]",
         f"physical_memory_mib = {physical_memory_mib}",
         f"app_memory_budget_mib = {app_memory_budget_mib}",
+        "production = true",
+        'landlock_mode = "required"',
+        "landlock_full_min_abi = 10",
+        "landlock_browser_min_abi = 6",
     ]
     for key in ("gles_max", "vulkan_max"):
         if key in graphics:

@@ -129,6 +129,10 @@ assert parsed == {
     "gles_max": "3.0",
     "inputs": ["buttons", "dpad", "stick", "two_sticks"],
     "display": {"width": 1280, "height": 720},
+    "production": True,
+    "landlock_mode": "required",
+    "landlock_full_min_abi": 10,
+    "landlock_browser_min_abi": 6,
 }, parsed
 PY
 
@@ -179,6 +183,10 @@ assert parsed == {
     "app_memory_budget_mib": 600,
     "inputs": ["buttons", "dpad", "stick", "two_sticks"],
     "display": {"width": 1280, "height": 720},
+    "production": True,
+    "landlock_mode": "required",
+    "landlock_full_min_abi": 10,
+    "landlock_browser_min_abi": 6,
 }, parsed
 PY
 

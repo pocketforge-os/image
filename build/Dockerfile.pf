@@ -1287,7 +1287,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "b289235d8cbdc8d542e551b8139d22b6abf31ec1" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "a66fb43c2ebb24b2e8e60d33365722d7e8e08162" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # file exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml with the pinned digest (prints its path).
@@ -1397,6 +1397,13 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   cargo build --offline --locked --release -p pf-app-manifest --example pf-app-validate
   install -D -m 0755 target/release/examples/pf-app-validate \
     /out/build-tools/pf-app-validate
+  # Image app drop-ins delegate manifest capability policy to the same runtime compiler used
+  # at launch. This host-native helper is build-only and never enters the target rootfs.
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --offline --locked --release -p pf-app-launch --bin pf-app-policy-render
+  install -D -m 0755 target/release/pf-app-policy-render \
+    /out/build-tools/pf-app-policy-render
   # --- Default-app input delivery (bd: tsp-f3fm.202.1 ruling (i), B4) --------------
   # (1) The one staged device descriptor, already contract-checked above
   #     (check-device-descriptor). Parse it with the SAME runtime loaders its
@@ -1966,7 +1973,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "8209c392ea19abfe6377d7254cb063eed43c491b" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "6b50ce7b12976a6d1fc611dc0b281ce3b18e77ed" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fourteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
