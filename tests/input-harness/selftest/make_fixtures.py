@@ -31,6 +31,7 @@ LAUNCHED = (
     "x11-gtk",
     "xim-only",
     "no-im",
+    "broken-client",
 )
 
 
@@ -64,12 +65,27 @@ def commits(builder, source="toolkit"):
         builder.event("commit", text=ch, source=source)
 
 
-def keys(builder, count=len(PHRASE), start_code=35):
-    # KEY_H is 35; consecutive evdev codes approximate the phrase closely
-    # enough for the raw_keys fallback path (the report only counts).
-    for i in range(count):
-        builder.event("key", keycode=start_code + (i % 20), keysym="", state="pressed", mods=0)
-        builder.event("key", keycode=start_code + (i % 20), keysym="", state="released", mods=0)
+KEYCODES = {
+    "h": 43,
+    "e": 26,
+    "l": 46,
+    "o": 32,
+    " ": 65,
+    "a": 38,
+    "r": 27,
+    "n": 57,
+    "s": 39,
+    "z": 52,
+}
+
+
+def keys(builder, text=PHRASE):
+    """Emit the resolved key sequence seen by the real toolkit clients."""
+    for ch in text:
+        keysym = "space" if ch == " " else ch
+        keycode = KEYCODES[ch]
+        builder.event("key", keycode=keycode, keysym=keysym, state="pressed", mods=0)
+        builder.event("key", keycode=keycode, keysym=keysym, state="released", mods=0)
 
 
 def make_png(path, width=WIDTH, height=HEIGHT, rgb=(40, 44, 52)):
@@ -110,7 +126,7 @@ def build_good(out_dir):
     b.event("pointer_button", button=272, state="pressed", x=320.0, y=240.0)
     b.event("pointer_button", button=272, state="released", x=320.0, y=240.0)
     b.event("cursor", name="text")
-    commits(b)
+    keys(b)
     b.event("leave", serial=2)
     b.event("stop", rc=0)
     b.write(os.path.join(tdir, "gtk4-text.jsonl"))
@@ -217,6 +233,19 @@ def build_negatives(good_dir):
     """Return {name: (dir, expected_reason)} for report-level negatives."""
     negatives = {}
 
+    def write_gtk_raw(directory, text):
+        b = Builder("gtk4-text")
+        b.event("start", pid=101, argv=["gtk4-text", "--purpose", "email"], backend="wayland", display="gamescope-0")
+        b.event("mapped", width=640, height=480)
+        b.event("enter", serial=1)
+        b.event("content", source="set", hints=["auto-completion"], purpose="email")
+        b.event("im_state", protocol="input-method-v2", state="unavailable")
+        b.event("pointer_button", button=272, state="pressed", x=320.0, y=240.0)
+        b.event("cursor", name="text")
+        keys(b, text)
+        b.event("stop", rc=0)
+        b.write(os.path.join(directory, "transcripts", "gtk4-text.jsonl"))
+
     d = clone(good_dir, "neg-broken-valid")
     b = Builder("broken-client")
     b.event("start", pid=108, argv=["broken-client"], backend="wayland", display="gamescope-0")
@@ -236,6 +265,37 @@ def build_negatives(good_dir):
     b.event("stop", rc=0)
     b.write(os.path.join(d, "transcripts", "gtk4-text.jsonl"))
     negatives["neg-no-commits"] = (d, "phrase_not_committed")
+
+    for name, text in (
+        ("neg-raw-wrong", "hello harnesz"),
+        ("neg-raw-duplicate", "hello  harness"),
+        ("neg-raw-missing", "hello harnes"),
+        ("neg-raw-reordered", "ehllo harness"),
+    ):
+        d = clone(good_dir, name)
+        write_gtk_raw(d, text)
+        negatives[name] = (d, "raw_key_sequence")
+
+    d = clone(good_dir, "neg-client-identity")
+    path = os.path.join(d, "transcripts", "qt6-text.jsonl")
+    records = [json.loads(line) for line in open(path, encoding="utf-8") if line.strip()]
+    for record in records:
+        record["client"] = "gtk4-text"
+    with open(path, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record) + "\n")
+    negatives["neg-client-identity"] = (d, "client_mismatch")
+
+    d = clone(good_dir, "neg-client-exit")
+    path = os.path.join(d, "session.jsonl")
+    records = [json.loads(line) for line in open(path, encoding="utf-8") if line.strip()]
+    for record in records:
+        if record["event"] == "client_exit" and record["target"] == "qt6-text":
+            record["rc"] = 7
+    with open(path, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record) + "\n")
+    negatives["neg-client-exit"] = (d, "client_exit_rc")
 
     d = clone(good_dir, "neg-corrupt-session")
     with open(os.path.join(d, "session.jsonl"), "a", encoding="utf-8") as handle:

@@ -94,6 +94,21 @@ def fail(sw: SessionWriter, reason: str, hint: str) -> int:
     return 1
 
 
+def prepare_output() -> None:
+    """Create output directories only when no earlier run can be reused."""
+    if os.path.lexists(SESSION_TX):
+        raise RuntimeError(f"stale session transcript exists: {SESSION_TX}")
+    for path in (TX_DIR, SHOT_DIR):
+        if os.path.exists(path) and not os.path.isdir(path):
+            raise RuntimeError(f"output path is not a directory: {path}")
+        if os.path.isdir(path):
+            with os.scandir(path) as entries:
+                if any(entries):
+                    raise RuntimeError(f"output directory is not empty: {path}")
+    os.makedirs(TX_DIR, exist_ok=True)
+    os.makedirs(SHOT_DIR, exist_ok=True)
+
+
 def wait_for_socket(name: str, timeout: float) -> str:
     path = os.path.join(XDG, name)
     deadline = time.monotonic() + timeout
@@ -257,6 +272,9 @@ def type_phrase(kbd: FakeInput) -> None:
 def run_client(sw: SessionWriter, name: str, backend: str, purpose,
                gui: bool, preload: bool, extra_env: dict,
                kbd: FakeInput, mouse: FakeInput) -> None:
+    tx_path = os.path.join(TX_DIR, f"{name}.jsonl")
+    if os.path.lexists(tx_path):
+        raise RuntimeError(f"stale transcript exists before {name} launch: {tx_path}")
     sw.emit("client_launch", target=name)
     env = dict(os.environ)
     env["PF_TRANSCRIPT_DIR"] = TX_DIR
@@ -266,7 +284,6 @@ def run_client(sw: SessionWriter, name: str, backend: str, purpose,
         env["LD_PRELOAD"] = PRELOAD
     env.update(extra_env)
     proc = subprocess.Popen([os.path.join(BIN, name)], env=env)
-    tx_path = os.path.join(TX_DIR, f"{name}.jsonl")
     try:
         if not wait_event_in(tx_path, "mapped", 30, proc):
             log(f"WARN: {name} did not report mapped within 30s")
@@ -307,8 +324,11 @@ def run_client(sw: SessionWriter, name: str, backend: str, purpose,
 
 
 def main() -> int:
-    os.makedirs(TX_DIR, exist_ok=True)
-    os.makedirs(SHOT_DIR, exist_ok=True)
+    try:
+        prepare_output()
+    except (OSError, RuntimeError) as exc:
+        print(f"FAIL: input-harness reason=output_not_empty hint={exc}", flush=True)
+        return 1
     sw = SessionWriter(SESSION_TX)
     sw.emit("start", pid=os.getpid(), argv=sys.argv, backend="headless",
             display=os.environ.get("WAYLAND_DISPLAY", ""))

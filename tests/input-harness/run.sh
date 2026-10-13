@@ -36,6 +36,8 @@ if [ -z "$OUT" ]; then
 	OUT="$HOME/.cache/pf-input-harness/run-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
 
+"$HERE/tools/require-empty-output.sh" "$OUT"
+
 if [ ! -e /dev/uinput ]; then
 	echo "FAIL: input-harness reason=no_uinput hint=/dev/uinput missing or not permitted on this host"
 	exit 1
@@ -54,7 +56,6 @@ if [ "$BUILD" = 1 ]; then
 		-t "$IMAGE_TAG" .
 fi
 
-mkdir -p "$OUT/transcripts" "$OUT/screenshots"
 OUT="$(cd "$OUT" && pwd)"
 
 echo "==> running headless session, output in $OUT"

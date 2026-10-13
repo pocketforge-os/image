@@ -169,6 +169,7 @@ def section_asset_audit(work):
         "tools/fake-input.c",
         "tools/pf-shot.c",
         "tools/provision-wayland-protocols.sh",
+        "tools/require-empty-output.sh",
         "tools/transcript.c",
         "tools/transcript.h",
         "clients/gtk4-text.c",
@@ -221,6 +222,30 @@ def section_asset_audit(work):
             "run.sh does not label built images with pf.bead",
         )
         require("--rm" in text, "run.sh does not run containers with --rm")
+        require(
+            'tools/require-empty-output.sh" "$OUT"' in text,
+            "run.sh does not call the non-empty output guard",
+        )
+
+        # Exercise the same freshness helper used by run.sh. An empty output
+        # is the positive control; a prior artifact must fail closed without
+        # deleting or overwriting it.
+        output_check = os.path.join(HARNESS, "tools", "require-empty-output.sh")
+        fresh = os.path.join(work, "fresh-output")
+        proc = subprocess.run([output_check, fresh], capture_output=True, text=True)
+        require(proc.returncode == 0, f"empty output directory was rejected:\n{proc.stdout}{proc.stderr}")
+        stale = os.path.join(work, "stale-output")
+        os.makedirs(stale)
+        sentinel = os.path.join(stale, "prior.jsonl")
+        with open(sentinel, "w", encoding="utf-8") as handle:
+            handle.write("prior evidence\n")
+        proc = subprocess.run([output_check, stale], capture_output=True, text=True)
+        require(
+            proc.returncode != 0
+            and "reason=output_not_empty" in proc.stdout
+            and os.path.exists(sentinel),
+            f"non-empty output did not fail closed:\n{proc.stdout}{proc.stderr}",
+        )
         for entry in ("session/entry.sh", "session/driver.py", "session/mangoapp", "session/udev-shim.sh"):
             path = os.path.join(HARNESS, entry)
             if not os.path.exists(path):
@@ -266,6 +291,30 @@ def section_asset_audit(work):
         and explicit_env["WAYLAND_DISPLAY"] == "gamescope-test",
         "driver overwrites an explicit Wayland display",
     )
+
+    # Direct driver invocation must also fail closed on stale evidence, even
+    # when a caller bypasses run.sh's output-directory guard.
+    driver_out = os.path.join(work, "driver-output")
+    driver_mod.TX_DIR = os.path.join(driver_out, "transcripts")
+    driver_mod.SHOT_DIR = os.path.join(driver_out, "screenshots")
+    driver_mod.SESSION_TX = os.path.join(driver_out, "session.jsonl")
+    driver_mod.prepare_output()
+    require(
+        os.path.isdir(driver_mod.TX_DIR) and os.path.isdir(driver_mod.SHOT_DIR),
+        "driver rejected a fresh output directory",
+    )
+    stale_tx = os.path.join(driver_mod.TX_DIR, "gtk4-text.jsonl")
+    with open(stale_tx, "w", encoding="utf-8") as handle:
+        handle.write("prior evidence\n")
+    try:
+        driver_mod.prepare_output()
+    except RuntimeError as exc:
+        require(
+            "not empty" in str(exc) and os.path.exists(stale_tx),
+            f"driver stale-output rejection was not fail-closed: {exc}",
+        )
+    else:
+        require(False, "driver accepted a stale transcript directory")
 
     # libei event-owned objects are transient. The bridge keeps the emulated
     # device after EI_EVENT_DEVICE_ADDED, so it must own a reference until the

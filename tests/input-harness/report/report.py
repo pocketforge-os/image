@@ -149,7 +149,7 @@ def check_client(client, transcript_dir):
             return "SKIP", "reason=transcript_absent hint=client not available in this image"
         return "FAIL", "reason=transcript_missing hint=client never wrote a transcript"
 
-    problems = validate_file(path)
+    problems = validate_file(path, expected_client=client)
     if problems:
         first = str(problems[0])
         if spec.expect_invalid:
@@ -194,10 +194,23 @@ def check_client(client, transcript_dir):
     if spec.phrase is not None:
         if spec.phrase in commits:
             mode = "commits"
-        elif spec.allow_raw_keys and len([k for k in keys if k["state"] == "pressed"]) >= len(spec.phrase):
-            # No commit path available yet (e.g. text-input relay missing):
-            # the client must at least have observed the raw key stream and
-            # recorded which input-method protocol state it saw.
+        elif spec.allow_raw_keys and any(k["state"] == "pressed" for k in keys):
+            # No commit path available yet (e.g. text-input relay missing).
+            # Resolve the exact ordered press stream; a count alone lets a
+            # wrong, duplicated, missing, or reordered phrase pass.
+            raw_symbols = []
+            for key in keys:
+                if key["state"] != "pressed":
+                    continue
+                symbol = key["keysym"].casefold()
+                if symbol == "space":
+                    symbol = " "
+                raw_symbols.append(symbol)
+            raw_phrase = "".join(raw_symbols)
+            if raw_phrase != spec.phrase:
+                return "FAIL", (
+                    f"reason=raw_key_sequence hint=keys={raw_phrase!r} expected={spec.phrase!r}"
+                )
             if not by_name.get("im_state"):
                 return "FAIL", "reason=raw_keys_without_im_state hint=no im_state recorded"
             mode = "raw_keys"
@@ -238,11 +251,21 @@ def check_session(out_dir, launched):
     missing = [k for k in SESSION_REQUIRED_DEVICES if k not in kinds]
     if missing:
         return "FAIL", f"reason=fake_device_missing hint=missing kinds {missing}"
+    expected = set(launched)
+    lifecycle_targets = {
+        e["target"] for e in events
+        if e["event"] in ("client_launch", "client_exit")
+    }
+    unexpected = sorted(lifecycle_targets - expected)
+    if unexpected:
+        return "FAIL", f"reason=client_lifecycle_unexpected hint=targets={unexpected}"
     for client in launched:
         launches = [e for e in events if e["event"] == "client_launch" and e["target"] == client]
         exits = [e for e in events if e["event"] == "client_exit" and e["target"] == client]
-        if not launches or not exits:
+        if len(launches) != 1 or len(exits) != 1:
             return "FAIL", f"reason=client_lifecycle_missing hint={client} launch={len(launches)} exit={len(exits)}"
+        if exits[0]["rc"] != 0:
+            return "FAIL", f"reason=client_exit_rc hint={client} rc={exits[0]['rc']}"
     if "screenshot" not in names:
         return "FAIL", "reason=no_screenshot_event hint=driver never captured a screenshot"
     return "PASS", f"events={len(events)} devices={sorted(kinds)}"
@@ -298,7 +321,7 @@ def report(out_dir):
             failures += 1
         if verdict == "SKIP":
             skipped += 1
-        elif client != "broken-client":
+        else:
             launched.append(client)
     # A transcript we do not know about is drift, not a pass.
     for name in present:
