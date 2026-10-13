@@ -106,6 +106,7 @@ jobs:
             tests/test-build-rootfs-direct.sh
             tests/test-cedar-spike.sh
             tests/test-clock-seed.sh
+            tests/test-cursor-theme-package.sh
             tests/test-cloud-init-firstboot.sh
             tests/test-customize-hook-fail-closed.sh
             tests/test-mmdebstrap-local-packages.sh

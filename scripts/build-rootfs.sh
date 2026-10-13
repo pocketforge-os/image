@@ -119,6 +119,7 @@ LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 POOLSUITE_DIR="${POOLSUITE_DIR:-/work/poolsuite}"
 PLATFORM_RUNTIME_DIR="${PLATFORM_RUNTIME_DIR:-/work/platform-runtime}"
+CURSOR_THEME_DIR="${CURSOR_THEME_DIR:-/work/cursor-theme}"
 PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE:-not-shipped}"
 GAMESCOPE_DIR="${GAMESCOPE_DIR:-/work/gamescope-package}"
 PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE:-not-shipped}"
@@ -2006,6 +2007,9 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
 "${SRC_DIR}/scripts/install-platform-runtime.sh" \
     "${PLATFORM_RUNTIME_DIR}" "${ROOTFS_EXTRACTED}" \
     "${PF_STEAMLINK_FFMPEG59_MODE}"
+
+"${SRC_DIR}/scripts/install-cursor-theme.sh" \
+    "${CURSOR_THEME_DIR}" "${ROOTFS_EXTRACTED}"
 
 "${SRC_DIR}/scripts/install-cts-bundle.sh" \
     "${CTS_BUNDLE_DIR}" "${ROOTFS_EXTRACTED}" \

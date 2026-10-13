@@ -18,6 +18,8 @@ Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
+Environment=XCURSOR_THEME=pocketforge-light
+Environment=XCURSOR_SIZE=48
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
