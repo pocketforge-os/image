@@ -61,22 +61,23 @@ static void on_insert_text(GtkEditable *ed, const gchar *text, gint pos,
 	pf_tx_emitf("commit", ",\"text\":%s,\"source\":\"toolkit\"", j);
 }
 
-static void on_button_pressed(GtkGestureClick *gc, gint n, double x, double y,
-			      gpointer data)
+static gboolean on_pointer_event(GtkEventControllerLegacy *controller,
+				 GdkEvent *event, gpointer data)
 {
-	(void)gc; (void)n; (void)data;
+	(void)controller; (void)data;
+	GdkEventType type = gdk_event_get_event_type(event);
+	if (type != GDK_BUTTON_PRESS && type != GDK_BUTTON_RELEASE)
+		return FALSE;
+	double x = 0.0, y = 0.0;
+	gdk_event_get_position(event, &x, &y);
+	unsigned int button = gdk_button_event_get_button(event);
+	if (type == GDK_BUTTON_PRESS)
+		gtk_widget_grab_focus(g_entry);
 	pf_tx_emitf("pointer_button",
-		    ",\"button\":272,\"state\":\"pressed\",\"x\":%.1f,\"y\":%.1f",
-		    x, y);
-}
-
-static void on_button_released(GtkGestureClick *gc, gint n, double x, double y,
-			       gpointer data)
-{
-	(void)gc; (void)n; (void)data;
-	pf_tx_emitf("pointer_button",
-		    ",\"button\":272,\"state\":\"released\",\"x\":%.1f,\"y\":%.1f",
-		    x, y);
+		    ",\"button\":%u,\"state\":\"%s\",\"x\":%.1f,\"y\":%.1f",
+		    button == GDK_BUTTON_PRIMARY ? 272 : button,
+		    type == GDK_BUTTON_PRESS ? "pressed" : "released", x, y);
+	return FALSE;
 }
 
 static void on_motion(GtkEventControllerMotion *c, double x, double y,
@@ -86,12 +87,22 @@ static void on_motion(GtkEventControllerMotion *c, double x, double y,
 	pf_tx_emitf("pointer_motion", ",\"x\":%.1f,\"y\":%.1f", x, y);
 }
 
+static void on_after_paint(GdkFrameClock *clock, gpointer data)
+{
+	GtkWidget *w = GTK_WIDGET(data);
+	int width = gtk_widget_get_width(w);
+	int height = gtk_widget_get_height(w);
+	if (width <= 0 || height <= 0)
+		return;
+	g_signal_handlers_disconnect_by_func(clock, on_after_paint, data);
+	pf_tx_emitf("mapped", ",\"width\":%d,\"height\":%d", width, height);
+}
+
 static void on_map(GtkWidget *w, gpointer data)
 {
 	(void)data;
-	int width = gtk_widget_get_width(w);
-	int height = gtk_widget_get_height(w);
-	pf_tx_emitf("mapped", ",\"width\":%d,\"height\":%d", width, height);
+	GdkFrameClock *clock = gtk_widget_get_frame_clock(w);
+	g_signal_connect(clock, "after-paint", G_CALLBACK(on_after_paint), w);
 }
 
 static gboolean watchdog(gpointer data)
@@ -122,14 +133,17 @@ static void activate(GtkApplication *app, gpointer data)
 	gtk_widget_add_controller(g_entry, fc);
 
 	GtkEventController *kc = gtk_event_controller_key_new();
+	gtk_event_controller_set_propagation_phase(kc, GTK_PHASE_CAPTURE);
 	g_signal_connect(kc, "key-pressed", G_CALLBACK(on_key_pressed), NULL);
-	gtk_widget_add_controller(g_entry, kc);
+	gtk_widget_add_controller(win, kc);
 	g_signal_connect(g_entry, "insert-text", G_CALLBACK(on_insert_text), NULL);
 
-	GtkGesture *click = GTK_GESTURE(gtk_gesture_click_new());
-	g_signal_connect(click, "pressed", G_CALLBACK(on_button_pressed), NULL);
-	g_signal_connect(click, "released", G_CALLBACK(on_button_released), NULL);
-	gtk_widget_add_controller(win, GTK_EVENT_CONTROLLER(click));
+	GtkEventController *pointer = gtk_event_controller_legacy_new();
+	gtk_event_controller_set_propagation_phase(pointer, GTK_PHASE_CAPTURE);
+	g_signal_connect(pointer, "event", G_CALLBACK(on_pointer_event), NULL);
+	gtk_widget_add_controller(win, pointer);
+	gtk_widget_set_cursor_from_name(g_entry, "text");
+	pf_tx_emitf("cursor", ",\"name\":\"text\"");
 
 	GtkEventController *mc = gtk_event_controller_motion_new();
 	g_signal_connect(mc, "motion", G_CALLBACK(on_motion), NULL);

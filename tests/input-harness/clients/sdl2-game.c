@@ -32,6 +32,19 @@ int main(int argc, char **argv)
 		pf_tx_stop(1);
 		return 1;
 	}
+	SDL_Renderer *renderer =
+		SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
+	if (!renderer) {
+		pf_tx_emitf("error", ",\"message\":\"SDL_CreateRenderer: %s\"",
+			    SDL_GetError());
+		SDL_DestroyWindow(win);
+		SDL_Quit();
+		pf_tx_stop(1);
+		return 1;
+	}
+	SDL_SetRenderDrawColor(renderer, 48, 64, 80, 255);
+	SDL_RenderClear(renderer);
+	SDL_RenderPresent(renderer);
 	SDL_StartTextInput();
 	pf_tx_emitf("im_state",
 		    ",\"protocol\":\"sdl-textinput\",\"state\":\"enabled\"");
@@ -127,6 +140,7 @@ int main(int argc, char **argv)
 	}
 done:
 	SDL_StopTextInput();
+	SDL_DestroyRenderer(renderer);
 	SDL_DestroyWindow(win);
 	SDL_Quit();
 	pf_tx_stop(0);

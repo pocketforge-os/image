@@ -368,8 +368,9 @@ int main(int argc, char **argv)
 	g_toplevel = xdg_surface_get_toplevel(g_xdg_surface);
 	xdg_toplevel_add_listener(g_toplevel, &xdg_toplevel_listener, NULL);
 	xdg_toplevel_set_title(g_toplevel, "pf-input-harness no-im");
-	/* xdg-shell: committing a buffer before the first configure is the
-	 * not_constructed protocol error, so wait for configure first. */
+	/* An empty initial commit asks xdg-shell for its first configure. A
+	 * buffer must still not be attached until that configure is acked. */
+	wl_surface_commit(g_surface);
 	struct timespec cfg_start, cfg_now;
 	clock_gettime(CLOCK_MONOTONIC, &cfg_start);
 	while (!g_configured) {

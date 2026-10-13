@@ -17,6 +17,7 @@ Exit code is report.py's exit code.
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import signal
@@ -101,6 +102,22 @@ def wait_for_socket(name: str, timeout: float) -> str:
             return path
         time.sleep(0.2)
     raise TimeoutError(f"socket {path} did not appear within {timeout}s")
+
+
+def wait_for_x_display(display: str, timeout: float) -> None:
+    """Wait for a completed Xwayland handshake, not merely its socket."""
+    x11 = ctypes.CDLL("libX11.so.6")
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        handle = x11.XOpenDisplay(display.encode())
+        if handle:
+            x11.XCloseDisplay(handle)
+            return
+        time.sleep(0.1)
+    raise TimeoutError(f"XOpenDisplay did not succeed: {display}")
 
 
 def configure_wayland_display(env: dict[str, str]) -> str:
@@ -254,11 +271,22 @@ def run_client(sw: SessionWriter, name: str, backend: str, purpose,
         if not wait_event_in(tx_path, "mapped", 30, proc):
             log(f"WARN: {name} did not report mapped within 30s")
         if gui:
-            mouse.cmd("abs 640 360")
+            # gamescope headless delivers EIS absolute coordinates in the
+            # client's logical space even when the 640x480 surface is scaled
+            # into the 1280x720 output. Target the shared logical center.
+            mouse.cmd("abs 320 240")
+            time.sleep(0.3)
+            # A newly mapped gamescope window may consume the first click to
+            # activate it.  Keep activation separate from the second click,
+            # whose delivery is part of the client acceptance evidence.
+            mouse.cmd("btn 272 1")
+            time.sleep(0.05)
+            mouse.cmd("btn 272 0")
             time.sleep(0.3)
             mouse.cmd("btn 272 1")
             time.sleep(0.05)
             mouse.cmd("btn 272 0")
+            time.sleep(0.3)
             if not wait_event_in(tx_path, "enter", 10, proc):
                 log(f"WARN: {name} did not report enter within 10s")
             # move slightly so cursor-theme lookups happen again
@@ -292,9 +320,13 @@ def main() -> int:
         wl_name = configure_wayland_display(os.environ)
         wait_for_socket(wl_name, 60)
         eis_path = wait_for_socket(f"{wl_name}-ei", 60)
+        x_display = os.environ.get("DISPLAY", "")
+        if not x_display:
+            raise RuntimeError("gamescope did not export DISPLAY")
+        wait_for_x_display(x_display, 60)
         sw.emit("compositor_ready", pid=os.getppid(),
                 wayland_display=wl_name,
-                x_display=os.environ.get("DISPLAY", ""),
+                x_display=x_display,
                 backend="headless")
         log(f"compositor ready: wayland={wl_name} x={os.environ.get('DISPLAY')}")
 
@@ -323,7 +355,14 @@ def main() -> int:
             return fail(sw, "eis_bridge_not_ready",
                         "libeis sender never reached emulating state")
 
-        screenshot(sw, "idle")
+        # Xwayland creates its emulated keyboard keymap lazily on the first
+        # libei key frame. Prime it with a non-text modifier before any client
+        # provides acceptance evidence, so that initialization cannot consume
+        # the first client's phrase.
+        kbd.cmd("key 42 1")
+        time.sleep(0.05)
+        kbd.cmd("key 42 0")
+        time.sleep(1.0)
 
         for (name, backend, purpose, gui, preload,
              extra_env) in CLIENTS:

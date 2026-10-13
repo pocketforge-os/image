@@ -292,6 +292,80 @@ def section_asset_audit(work):
         "headless gamescope launch does not enable managed Wayland clients",
     )
 
+    with open(os.path.join(HARNESS, "session", "driver.py"), "r", encoding="utf-8") as handle:
+        driver_source = handle.read()
+    require(
+        'screenshot(sw, "idle")' not in driver_source,
+        "driver requests a screenshot before any surface can trigger a repaint",
+    )
+    require(
+        'mouse.cmd("abs 320 240")' in driver_source
+        and 'mouse.cmd("abs 640 360")' not in driver_source,
+        "driver does not target the logical center shared by its 640x480 clients",
+    )
+    x_ready = driver_source.find("wait_for_x_display(")
+    client_loop = driver_source.find("for (name, backend, purpose, gui, preload,")
+    require(
+        x_ready >= 0 and client_loop > x_ready and "XOpenDisplay" in driver_source,
+        "driver launches clients before Xwayland accepts display connections",
+    )
+    require(
+        'kbd.cmd("key 42 1")' in driver_source
+        and 'kbd.cmd("key 42 0")' in driver_source,
+        "driver does not initialize the emulated keyboard before acceptance input",
+    )
+    first_click = driver_source.find('mouse.cmd("btn 272 1")')
+    second_click = driver_source.find('mouse.cmd("btn 272 1")', first_click + 1)
+    require(
+        first_click >= 0 and second_click > first_click
+        and "A newly mapped gamescope window may consume the first click"
+        in driver_source[first_click - 250:first_click],
+        "driver does not separate compositor activation from the observable client click",
+    )
+
+    with open(os.path.join(HARNESS, "clients", "no-im.c"), "r", encoding="utf-8") as handle:
+        no_im_source = handle.read()
+    initial_commit = no_im_source.find("wl_surface_commit(g_surface);", no_im_source.find("xdg_toplevel_set_title"))
+    configure_wait = no_im_source.find("while (!g_configured)")
+    require(
+        initial_commit >= 0 and initial_commit < configure_wait,
+        "no-im waits for the first xdg configure without an initial empty surface commit",
+    )
+
+    for rel in ("clients/sdl3-text.c", "clients/sdl2-game.c"):
+        with open(os.path.join(HARNESS, rel), "r", encoding="utf-8") as handle:
+            sdl_source = handle.read()
+        require(
+            "SDL_CreateRenderer" in sdl_source and "SDL_RenderPresent" in sdl_source,
+            f"{rel} never attaches a rendered buffer to its Wayland surface",
+        )
+
+    with open(os.path.join(HARNESS, "clients", "gtk4-text.c"), "r", encoding="utf-8") as handle:
+        gtk_source = handle.read()
+    require(
+        "gtk_event_controller_legacy_new()" in gtk_source
+        and "GTK_PHASE_CAPTURE" in gtk_source
+        and "gdk_button_event_get_button" in gtk_source,
+        "GTK client does not record real GDK button events in capture phase",
+    )
+    require(
+        "gtk_event_controller_key_new()" in gtk_source
+        and "gtk_widget_add_controller(win, kc);" in gtk_source
+        and "gtk_event_controller_set_propagation_phase(kc, GTK_PHASE_CAPTURE);"
+        in gtk_source,
+        "GTK key transcript runs after the input-method filter",
+    )
+    require(
+        'g_signal_connect(clock, "after-paint"' in gtk_source
+        and 'pf_tx_emitf("mapped"' in gtk_source,
+        "GTK client declares itself mapped before its first painted frame",
+    )
+    require(
+        'gtk_widget_set_cursor_from_name(g_entry, "text");' in gtk_source
+        and 'pf_tx_emitf("cursor", ",\\"name\\":\\"text\\"");' in gtk_source,
+        "GTK client does not record its explicit text cursor request",
+    )
+
     # pins.env must pin the fork by full commit sha.
     pins_path = os.path.join(HARNESS, "pins.env")
     if os.path.exists(pins_path):

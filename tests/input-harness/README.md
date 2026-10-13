@@ -50,7 +50,7 @@ instead of a runtime crate — it is test tooling, not product code.
 
 | Client | Row covered | Backend | Notes |
 | --- | --- | --- | --- |
-| `gtk4-text` | Wayland apps that ask to show | wayland | GtkEntry, purpose from `PF_TX_PURPOSE` (email), commits via insert-text, pointer + cursor transcript; wire-protocol `im_state` comes from the preload interposer, never from a hardcoded claim |
+| `gtk4-text` | Wayland apps that ask to show | wayland | GtkEntry, purpose from `PF_TX_PURPOSE` (email), commits via insert-text when available and capture-phase raw-key fallback otherwise; pointer + cursor transcript; readiness is emitted after the first painted frame; wire-protocol `im_state` comes from the preload interposer, never from a hardcoded claim |
 | `qt6-text` | Wayland apps that ask to show | wayland | QLineEdit, `ImhDigitsOnly`; digits hint rejects the phrase → raw-keys mode is the expected pass path today |
 | `sdl3-text` | patched SDL3 native Wayland | wayland | `SDL_StartTextInput`, TEXTINPUT commits, screen-keyboard events |
 | `sdl2-game` | SDL2 game through sdl2-compat | wayland | Debian's `libsdl2` **is** sdl2-compat; no org fork exists (see gaps) |
