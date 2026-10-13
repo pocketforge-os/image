@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
-RUNTIME_SHA = "0ca225044ef4b3cb0a2a4466479b18c43bb1bb2e"
-LAUNCHER_SHA = "8e5e2cee8d5510e3e28bde5d390e684ba07e2699"
+RUNTIME_SHA = "0770248e34ac133bf6b42ca7242dc744c81e6f24"
+LAUNCHER_SHA = "069387e3efbbc346a7e4a6c2f6e119aeb6c773ed"
 
 
 def text(path: Path) -> str:

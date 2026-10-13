@@ -45,8 +45,8 @@ jobs:
           path: launcher-pair
       - name: Prove exact runtime, launcher, and image candidates together
         run: |
-          test "$(git -C runtime-pair rev-parse HEAD)" = 0ca225044ef4b3cb0a2a4466479b18c43bb1bb2e
-          test "$(git -C launcher-pair rev-parse HEAD)" = 8e5e2cee8d5510e3e28bde5d390e684ba07e2699
+          test "$(git -C runtime-pair rev-parse HEAD)" = 0770248e34ac133bf6b42ca7242dc744c81e6f24
+          test "$(git -C launcher-pair rev-parse HEAD)" = 069387e3efbbc346a7e4a6c2f6e119aeb6c773ed
           scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
             pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
             pf-framehost-wayland pf-theme pf-input-map pf-prefs pf-prefs-port \
