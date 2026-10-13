@@ -248,8 +248,8 @@ awk_length='length($0) == 6'
 grep -F "${awk_length}" "${builder}" >/dev/null
 
 # Exercise the producer's fail-closed lock admission before any source fetch.
-# A matching platform/image lock advances to the deliberately absent receipt,
-# while the previous platform pin fails first with PF_FFMPEG_UAPI_SHA drift.
+# A matching platform/image/kernel receipt advances to the first producer action,
+# while either the previous platform pin or previous image witness fails first.
 mkdir -p "${scratch}/contract-kernel"
 run_contract_builder() {
     local platform_uapi_sha=$1
@@ -268,14 +268,15 @@ run_contract_builder() {
     )
 }
 
-previous_uapi_sha=8143e381126993e83af322cbb29e17229df0afdd
+previous_uapi_sha=de8ca3df549158834e1459dc0cd555bb97536be4
+build9_uapi_sha=45b87a7d0e68a5aaafdc94523db791483e8a27cd
 if run_contract_builder "${previous_uapi_sha}" \
         >"${scratch}/stale-uapi.log" 2>&1; then
     echo 'FAIL: previous platform UAPI pin was accepted' >&2
     exit 1
 fi
 if ! grep -Fxq \
-        "steamlink-ffmpeg59: PF_FFMPEG_UAPI_SHA drift: got '${previous_uapi_sha}', want 'de8ca3df549158834e1459dc0cd555bb97536be4'" \
+        "steamlink-ffmpeg59: PF_FFMPEG_UAPI_SHA drift: got '${previous_uapi_sha}', want '${build9_uapi_sha}'" \
         "${scratch}/stale-uapi.log"; then
     echo 'FAIL: stale kernel UAPI pin did not report the current image witness' >&2
     exit 1
@@ -285,15 +286,53 @@ if grep -Fq 'kernel UAPI source receipt missing' "${scratch}/stale-uapi.log"; th
     exit 1
 fi
 
-if run_contract_builder de8ca3df549158834e1459dc0cd555bb97536be4 \
-        >"${scratch}/contract.log" 2>&1; then
-    echo 'FAIL: lock admission reached a missing kernel receipt without failing' >&2
+# Preserve the real Build 9 failure as a negative control: the previous image
+# witness admits the previous platform value, then rejects the boot-kernel tree.
+legacy_definition="${scratch}/legacy-definition"
+mkdir -p "${legacy_definition}"
+cp "${builder}" "${legacy_definition}/build.sh"
+cp "${root}/build/platform-runtimes/steamlink-ffmpeg59/v1/source.lock" \
+    "${legacy_definition}/source.lock"
+sed -i "s/${build9_uapi_sha}/${previous_uapi_sha}/" \
+    "${legacy_definition}/source.lock"
+printf '%s\n' "${build9_uapi_sha}" \
+    > "${scratch}/contract-kernel/.pf-source-revision"
+if builder="${legacy_definition}/build.sh" \
+        run_contract_builder "${previous_uapi_sha}" \
+        >"${scratch}/legacy-receipt.log" 2>&1; then
+    echo 'FAIL: previous image witness accepted the Build 9 kernel receipt' >&2
     exit 1
 fi
-if ! grep -Fxq 'steamlink-ffmpeg59: kernel UAPI source receipt missing' \
+if ! grep -Fxq \
+        "steamlink-ffmpeg59: kernel-uapi-receipt drift: got '${build9_uapi_sha}', want '${previous_uapi_sha}'" \
+        "${scratch}/legacy-receipt.log"; then
+    echo 'FAIL: previous image witness did not reproduce the Build 9 refusal' >&2
+    exit 1
+fi
+
+# Do not fetch in this hermetic test. Reaching mkdir for the fixed build path
+# proves all three candidate identities matched and admission completed.
+mkdir -p "${scratch}/contract-bin"
+cat > "${scratch}/contract-bin/mkdir" <<'EOF'
+#!/bin/sh
+if [ "$#" -eq 1 ] && [ "$1" = /work/pf-steamlink-ffmpeg59-v1 ]; then
+    echo 'TEST: matched platform/image/kernel UAPI identities reached producer action' >&2
+    exit 93
+fi
+exec /bin/mkdir "$@"
+EOF
+chmod +x "${scratch}/contract-bin/mkdir"
+if PATH="${scratch}/contract-bin:${PATH}" \
+        run_contract_builder "${build9_uapi_sha}" \
+        >"${scratch}/contract.log" 2>&1; then
+    echo 'FAIL: hermetic producer stop was not reached' >&2
+    exit 1
+fi
+if ! grep -Fxq \
+        'TEST: matched platform/image/kernel UAPI identities reached producer action' \
         "${scratch}/contract.log"; then
     cat "${scratch}/contract.log" >&2
-    echo 'FAIL: platform runtime UAPI lock did not reach the receipt gate' >&2
+    echo 'FAIL: candidate UAPI identities did not pass producer admission' >&2
     exit 1
 fi
 
