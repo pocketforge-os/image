@@ -20,16 +20,22 @@ shell_instruction=$(grep -m1 '^SHELL .*PF_\*' "$root/build/Dockerfile.pf" || :)
     printf '%s\n' 'COPY --from=probe /out /'
 } >"$tmp/Dockerfile"
 
-TRACEPARENT=00-0123456789abcdef0123456789abcdef-0123456789abcdef-01 \
-TRACESTATE=pf-red=1 OTEL_SERVICE_NAME=pf-red \
-    docker buildx build --no-cache --progress=plain \
-    --file "$tmp/Dockerfile" --output "type=local,dest=$tmp/out" "$tmp"
+for run in a b; do
+    case "$run" in
+        a) trace=00-0123456789abcdef0123456789abcdef-0123456789abcdef-01 ;;
+        b) trace=00-fedcba9876543210fedcba9876543210-fedcba9876543210-01 ;;
+    esac
+    TRACEPARENT=$trace TRACESTATE="pf-$run=1" OTEL_SERVICE_NAME="pf-$run" \
+        docker buildx build --no-cache --progress=plain \
+        --file "$tmp/Dockerfile" --output "type=local,dest=$tmp/out-$run" "$tmp"
 
-grep -qxF 'PF_TEST_ADMITTED=admitted' "$tmp/out/environment"
-if grep -Eq '^(TRACEPARENT|TRACESTATE|OTEL_)' "$tmp/out/environment"; then
-    echo 'FAIL: BuildKit tracing environment reached a RUN stage' >&2
-    cat "$tmp/out/environment" >&2
-    exit 1
-fi
+    grep -qxF 'PF_TEST_ADMITTED=admitted' "$tmp/out-$run/environment"
+    if grep -Eq '^(TRACEPARENT|TRACESTATE|OTEL_)' "$tmp/out-$run/environment"; then
+        echo 'FAIL: BuildKit tracing environment reached a RUN stage' >&2
+        cat "$tmp/out-$run/environment" >&2
+        exit 1
+    fi
+done
+cmp "$tmp/out-a/environment" "$tmp/out-b/environment"
 
 echo 'build-stage-environment-test=PASS'

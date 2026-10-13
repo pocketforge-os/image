@@ -2026,6 +2026,13 @@ python3 "${SRC_DIR}/scripts/verify-rootfs-usbnet-bench.py" \
 # structural image check; lease population itself is verified on tsp-f956's boot.
 "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${ROOTFS_EXTRACTED}"
 
+# fontconfig writes this cache diagnostic while packages are configured. It is
+# build-host/run evidence, not device runtime state. Remove the known producer,
+# then fail closed if any other non-empty build log remains.
+find "${ROOTFS_EXTRACTED}/var/log" -maxdepth 1 -type f \
+    -name fontconfig.log -delete
+"${SRC_DIR}/build/check-rootfs-build-logs.sh" "${ROOTFS_EXTRACTED}"
+
 # Browser platform defaults (bd tsp-be9lx): chassis, DNS-over-TLS, coredump
 # size cap, default browser files, and — on the open-GPU profile that ships
 # the default-app mechanism (install-default-app-support.sh installs pf-app@
