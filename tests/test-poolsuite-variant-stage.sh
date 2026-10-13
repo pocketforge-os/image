@@ -14,7 +14,7 @@ grep -Fx 'ARG PF_SOC=not-shipped' "${dockerfile}" >/dev/null
 grep -Fx 'FROM poolsuite-toolchain AS poolsuite-fetch' "${dockerfile}" >/dev/null
 grep -Fx 'FROM poolsuite-toolchain AS poolsuite-dev' "${dockerfile}" >/dev/null
 # shellcheck disable=SC2016 # Match literal Dockerfile ARG interpolation.
-grep -Fx 'FROM ${PF_CONTAINER} AS poolsuite-not-shipped' "${dockerfile}" >/dev/null
+grep -Fx 'FROM pf-build-base AS poolsuite-not-shipped' "${dockerfile}" >/dev/null
 # Only A133 + open + dev reaches the real producer. Every other normative
 # profile resolves immediately to the source-free NOT-SHIPPED stage.
 grep -Fx 'FROM poolsuite-dev AS poolsuite-sun50iw10p1-open-dev' "${dockerfile}" >/dev/null
@@ -55,7 +55,7 @@ if grep -Eq 'tar .*-cf - \.' <<<"${fetch_body}"; then
 fi
 
 # shellcheck disable=SC2016 # sed matches literal Dockerfile ARG interpolation.
-dev_body="$(sed -n '/^FROM poolsuite-toolchain AS poolsuite-dev$/,/^FROM ${PF_CONTAINER} AS poolsuite-not-shipped$/p' "${dockerfile}")"
+dev_body="$(sed -n '/^FROM poolsuite-toolchain AS poolsuite-dev$/,/^FROM pf-build-base AS poolsuite-not-shipped$/p' "${dockerfile}")"
 grep -F -- '--mount=type=bind,from=poolsuite-fetch,source=/opt/poolsuite-cargo-home,target=/opt/poolsuite-cargo-home,rw' <<<"${dev_body}" >/dev/null
 if grep -F 'COPY --from=poolsuite-fetch /opt/poolsuite-cargo-home' <<<"${dev_body}"; then
     echo 'poolsuite dev stage unexpectedly copies the fetched Cargo closure' >&2
@@ -72,7 +72,7 @@ for key in poolsuite@ cargo_lock_sha256 fetched_source_sha256 ps_app_sha256; do
 done
 
 # shellcheck disable=SC2016 # sed matches literal Dockerfile ARG interpolation.
-not_shipped_body="$(sed -n '/^FROM ${PF_CONTAINER} AS poolsuite-not-shipped$/,/^FROM poolsuite-dev AS poolsuite-sun50iw10p1-open-dev$/p' "${dockerfile}")"
+not_shipped_body="$(sed -n '/^FROM pf-build-base AS poolsuite-not-shipped$/,/^FROM poolsuite-dev AS poolsuite-sun50iw10p1-open-dev$/p' "${dockerfile}")"
 if grep -Eq 'poolsuite-src|poolsuite-fetch|PF_POOLSUITE_SHA|device-(fetch|build)' <<<"${not_shipped_body}"; then
     echo 'NOT-SHIPPED stage unexpectedly references the Poolsuite build graph' >&2
     exit 1

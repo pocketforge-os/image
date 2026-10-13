@@ -127,7 +127,7 @@ for wsi_runtime_package in libxcb-dri3-0 libxcb-present0 libxshmfence1; do
     }
 done
 # shellcheck disable=SC2016 # Dockerfile variable is intentionally literal.
-grep -F 'FROM ${PF_CONTAINER} AS gpu-um-build' "$dockerfile" >/dev/null
+grep -F 'FROM pf-build-base AS gpu-um-build' "$dockerfile" >/dev/null
 grep -F 'gpu_um_toolchain_probe=ok distro=debian-bookworm' "$dockerfile" >/dev/null
 grep -F 'FATAL gpu_um_toolchain_probe=compile-link' "$dockerfile" >/dev/null
 grep -F 'gpu_um_native_runtime=ok distro=noble isolation=bundled' "$dockerfile" >/dev/null
