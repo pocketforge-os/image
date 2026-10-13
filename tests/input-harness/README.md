@@ -177,10 +177,11 @@ workflow has no docker daemon); it is not wired into CI yet.
    from the snapshot-pinned Bookworm backports package in its owned build
    environment; neither path patches gamescope source.
 9. **The laptop harness and device image intentionally use different gamescope
-   pins.** The harness uses `3a9122019a95d96721b3ed18f6088de8c7242c4f`
-   from gamescope#15 so current lavapipe can start headless without
-   `VK_KHR_external_semaphore_fd`. The device image remains at
-   `298881e3dff1ade108d57a257e8bf59bf8c6436f`: gamescope#15 changes only the
-   headless extension policy, while DRM scanout and explicit-sync paths still
-   require the extension and fail closed. The device path is therefore
-   unchanged and the harness does not carry a private gamescope patch.
+   pins.** The harness uses `8b0f0fd1a6ca1142bde86e3ecfcaca6de295bbf1`
+   from gamescope#15 and #16: current lavapipe can start headless without
+   `VK_KHR_external_semaphore_fd`, and a headless client commit with no fence is
+   ready immediately instead of registering an invalid descriptor. The device
+   image remains at `298881e3dff1ade108d57a257e8bf59bf8c6436f` because both
+   changes are confined to the headless path. DRM scanout and explicit-sync
+   paths still require the extension and wait on a real fence, so the device
+   path is unchanged and the harness carries no private gamescope patch.
