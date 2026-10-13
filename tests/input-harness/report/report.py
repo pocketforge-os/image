@@ -139,7 +139,19 @@ TEXT_REGIONS = {
     "xim-only": (200, 300, 1050, 410),
     "no-im": (200, 290, 1050, 410),
 }
-MIN_CHANGED_PIXELS = 128
+MIN_FRAME_CHANGE = {
+    # Toolkit fields use their native fonts, so a modest floor is sufficient.
+    "gtk4-text": (128, 32),
+    "qt6-text": (128, 48),
+    "x11-gtk": (128, 32),
+    # These clients render the source-owned glyph atlas at a known scale. A
+    # single stale first glyph is roughly 46 px wide; the complete phrase is
+    # hundreds of pixels wide, so require evidence across the whole line.
+    "sdl3-text": (2048, 300),
+    "sdl2-game": (2048, 300),
+    "xim-only": (2048, 300),
+    "no-im": (2048, 300),
+}
 
 
 def read_events(path):
@@ -232,7 +244,7 @@ def png_rgb(path):
     return width, height, rows
 
 
-def changed_pixels(before_path, after_path, region):
+def frame_change(before_path, after_path, region):
     before = png_rgb(before_path)
     after = png_rgb(after_path)
     if before is None or after is None or before[:2] != after[:2]:
@@ -242,13 +254,18 @@ def changed_pixels(before_path, after_path, region):
     if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):
         return None
     changed = 0
+    min_x = x1
+    max_x = x0 - 1
     for y in range(y0, y1):
         brow, arow = before[2][y], after[2][y]
         for x in range(x0, x1):
             i = x * 3
             if sum(abs(brow[i + c] - arow[i + c]) for c in range(3)) >= 48:
                 changed += 1
-    return changed
+                min_x = min(min_x, x)
+                max_x = max(max_x, x)
+    span_x = 0 if changed == 0 else max_x - min_x + 1
+    return changed, span_x
 
 
 def check_client(client, transcript_dir):
@@ -439,13 +456,16 @@ def check_screenshots(out_dir):
         after = by_target_phase.get((client, "after"))
         if before is None or after is None:
             return "FAIL", f"reason=frame_pair_missing hint={client}", paths
-        changed = changed_pixels(before, after, region)
-        if changed is None:
+        change = frame_change(before, after, region)
+        if change is None:
             return "FAIL", f"reason=frame_region_invalid hint={client} region={region}", paths
-        if changed < MIN_CHANGED_PIXELS:
+        changed, span_x = change
+        min_pixels, min_span_x = MIN_FRAME_CHANGE[client]
+        if changed < min_pixels or span_x < min_span_x:
             return (
                 "FAIL",
-                f"reason=stale_frame hint={client} changed_pixels={changed} minimum={MIN_CHANGED_PIXELS} region={region}",
+                f"reason=stale_frame hint={client} changed_pixels={changed} minimum_pixels={min_pixels} "
+                f"changed_span_x={span_x} minimum_span_x={min_span_x} region={region}",
                 paths,
             )
     return "PASS", f"count={len(manifest)} size={manifest[0]['width']}x{manifest[0]['height']}", paths

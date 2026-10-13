@@ -88,8 +88,9 @@ connection. `pf-shot` binds the privileged `gamescope_control` global,
 requests the capture and waits for the `screenshot_taken` event (sent
 after the PNG is on disk). Each text client is captured before typing and
 again after its exact `widget_text` readback. `report.py` decodes both
-1280x720 PNGs and requires at least 128 materially changed pixels in that
-client's declared text region; a stale compositor frame fails with
+1280x720 PNGs and requires a client-calibrated material pixel count and
+horizontal span in that client's declared text region; a stale or partial
+one-glyph compositor frame fails with
 `reason=stale_frame`. The paths and phases live in
 `screenshots/manifest.json` (run-dir-relative, so the report works both
 in-container and on the host).

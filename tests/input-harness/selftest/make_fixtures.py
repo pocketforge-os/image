@@ -92,8 +92,8 @@ def keys(builder, text=PHRASE):
 def make_png(path, width=WIDTH, height=HEIGHT, rgb=(40, 44, 52), mark=False):
     raw = bytearray()
     row = bytes(rgb) * width
-    marked_row = (bytes(rgb) * 300 + bytes((240, 240, 240)) * 40
-                  + bytes(rgb) * (width - 340))
+    marked_row = (bytes(rgb) * 300 + bytes((240, 240, 240)) * 320
+                  + bytes(rgb) * (width - 620))
     for y in range(height):
         raw.append(0)
         raw.extend(marked_row if mark and 340 <= y < 370 else row)
