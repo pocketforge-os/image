@@ -88,6 +88,8 @@ static void on_text_edited(const QString &text)
 	char j[512];
 	pf_tx_jstr(j, sizeof j, ins.c_str());
 	pf_tx_emitf("commit", ",\"text\":%s,\"source\":\"toolkit\"", j);
+	pf_tx_jstr(j, sizeof j, cur.c_str());
+	pf_tx_emitf("widget_text", ",\"text\":%s", j);
 }
 
 static void on_sigterm(int)
@@ -110,7 +112,7 @@ int main(int argc, char **argv)
 	auto *layout = new QVBoxLayout(&win);
 	g_edit = new MappedEdit(&win);
 	g_edit->setInputMethodHints(Qt::ImhDigitsOnly);
-	g_edit->setPlaceholderText("type digits");
+	g_edit->setPlaceholderText("");
 	layout->addStretch(1);
 	layout->addWidget(g_edit);
 	layout->addStretch(1);
@@ -129,4 +131,3 @@ int main(int argc, char **argv)
 	pf_tx_stop(0);
 	return rc;
 }
-

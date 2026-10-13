@@ -20,6 +20,7 @@ import zlib
 
 SCHEMA = "pf-input-harness.transcript/v1"
 PHRASE = "hello harness"
+QT_PHRASE = "1234567890"
 WIDTH = 1280
 HEIGHT = 720
 
@@ -60,8 +61,8 @@ class Builder:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def commits(builder, source="toolkit"):
-    for ch in PHRASE:
+def commits(builder, text=PHRASE, source="toolkit"):
+    for ch in text:
         builder.event("commit", text=ch, source=source)
 
 
@@ -127,6 +128,7 @@ def build_good(out_dir):
     b.event("pointer_button", button=272, state="released", x=320.0, y=240.0)
     b.event("cursor", name="text")
     keys(b)
+    b.event("widget_text", text=PHRASE)
     b.event("leave", serial=2)
     b.event("stop", rc=0)
     b.write(os.path.join(tdir, "gtk4-text.jsonl"))
@@ -137,7 +139,8 @@ def build_good(out_dir):
     b.event("enter", serial=1)
     b.event("content", source="set", hints=["latin-only"], purpose="digits")
     b.event("im_state", protocol="text-input-v3", state="unavailable")
-    commits(b)
+    commits(b, QT_PHRASE)
+    b.event("widget_text", text=QT_PHRASE)
     b.event("stop", rc=0)
     b.write(os.path.join(tdir, "qt6-text.jsonl"))
 
@@ -149,6 +152,7 @@ def build_good(out_dir):
     b.event("im_state", protocol="sdl-textinput", state="enabled")
     b.event("screen_keyboard", shown=False)
     commits(b, source="toolkit")
+    b.event("widget_text", text=PHRASE)
     b.event("stop", rc=0)
     b.write(os.path.join(tdir, "sdl3-text.jsonl"))
 
@@ -158,6 +162,7 @@ def build_good(out_dir):
     b.event("enter", serial=1)
     b.event("im_state", protocol="sdl-textinput", state="enabled")
     commits(b, source="toolkit")
+    b.event("widget_text", text=PHRASE)
     b.event("stop", rc=0)
     b.write(os.path.join(tdir, "sdl2-game.jsonl"))
 
@@ -167,6 +172,7 @@ def build_good(out_dir):
     b.event("enter", serial=1)
     b.event("content", source="set", hints=["none"], purpose="url")
     commits(b)
+    b.event("widget_text", text=PHRASE)
     b.event("stop", rc=0)
     b.write(os.path.join(tdir, "x11-gtk.jsonl"))
 
@@ -176,6 +182,7 @@ def build_good(out_dir):
     b.event("enter", serial=1)
     b.event("im_state", protocol="xim", state="unavailable")
     keys(b)
+    b.event("widget_text", text=PHRASE)
     b.event("stop", rc=0)
     b.write(os.path.join(tdir, "xim-only.jsonl"))
 
@@ -184,6 +191,7 @@ def build_good(out_dir):
     b.event("mapped", width=640, height=480)
     b.event("enter", serial=1)
     keys(b)
+    b.event("widget_text", text=PHRASE)
     b.event("stop", rc=0)
     b.write(os.path.join(tdir, "no-im.jsonl"))
 
@@ -203,19 +211,19 @@ def build_good(out_dir):
     b.event("compositor_ready", pid=50, wayland_display="gamescope-0", x_display=":0", backend="headless")
     for i, client in enumerate(LAUNCHED):
         b.event("client_launch", target=client)
+        b.event("screenshot", target=client, path=f"screenshots/{client}.png", type=4, width=WIDTH, height=HEIGHT)
+        b.event("client_stop", target=client)
         b.event("client_exit", target=client, rc=0)
-    b.event("screenshot", path="screenshots/idle.png", type=4, width=WIDTH, height=HEIGHT)
-    b.event("screenshot", path="screenshots/gtk4-text-focused.png", type=4, width=WIDTH, height=HEIGHT)
     b.event("stop", rc=0)
     b.write(os.path.join(out_dir, "session.jsonl"))
 
-    make_png(os.path.join(sdir, "idle.png"))
-    make_png(os.path.join(sdir, "gtk4-text-focused.png"))
+    for client in LAUNCHED:
+        make_png(os.path.join(sdir, f"{client}.png"))
     with open(os.path.join(sdir, "manifest.json"), "w", encoding="utf-8") as handle:
         json.dump(
             [
-                {"path": "screenshots/idle.png", "type": 4, "width": WIDTH, "height": HEIGHT},
-                {"path": "screenshots/gtk4-text-focused.png", "type": 4, "width": WIDTH, "height": HEIGHT},
+                {"path": f"screenshots/{client}.png", "type": 4, "width": WIDTH, "height": HEIGHT}
+                for client in LAUNCHED
             ],
             handle,
             indent=1,
@@ -232,6 +240,26 @@ def clone(good_dir, name):
 def build_negatives(good_dir):
     """Return {name: (dir, expected_reason)} for report-level negatives."""
     negatives = {}
+
+    d = clone(good_dir, "neg-widget-text")
+    path = os.path.join(d, "transcripts", "qt6-text.jsonl")
+    records = [json.loads(line) for line in open(path, encoding="utf-8") if line.strip()]
+    stop = records.pop()
+    records.append({
+        "schema": SCHEMA,
+        "client": "qt6-text",
+        "seq": 0,
+        "t_mono_us": stop["t_mono_us"] - 1,
+        "event": "widget_text",
+        "text": "",
+    })
+    records.append(stop)
+    for i, record in enumerate(records, start=1):
+        record["seq"] = i
+    with open(path, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record) + "\n")
+    negatives["neg-widget-text"] = (d, "widget_text_mismatch")
 
     def write_gtk_raw(directory, text):
         b = Builder("gtk4-text")
@@ -303,11 +331,11 @@ def build_negatives(good_dir):
     negatives["neg-corrupt-session"] = (d, "session_transcript_invalid")
 
     d = clone(good_dir, "neg-shot-size")
-    make_png(os.path.join(d, "screenshots", "idle.png"), width=640, height=480)
+    make_png(os.path.join(d, "screenshots", "gtk4-text.png"), width=640, height=480)
     negatives["neg-shot-size"] = (d, "screenshot_size")
 
     d = clone(good_dir, "neg-shot-not-png")
-    with open(os.path.join(d, "screenshots", "idle.png"), "wb") as handle:
+    with open(os.path.join(d, "screenshots", "gtk4-text.png"), "wb") as handle:
         handle.write(b"not a png at all")
     negatives["neg-shot-not-png"] = (d, "screenshot_not_png")
 

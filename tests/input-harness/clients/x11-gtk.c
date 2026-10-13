@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+
 static GtkInputPurpose parse_purpose(const char *s)
 {
 	if (!strcmp(s, "alpha")) return GTK_INPUT_PURPOSE_ALPHA;
@@ -56,6 +57,15 @@ static void on_insert_text(GtkEditable *ed, const gchar *text, gint pos,
 	char j[256];
 	pf_tx_jstr(j, sizeof j, text);
 	pf_tx_emitf("commit", ",\"text\":%s,\"source\":\"toolkit\"", j);
+}
+
+static void on_changed(GtkEditable *ed, gpointer data)
+{
+	(void)data;
+	const char *text = gtk_entry_get_text(GTK_ENTRY(ed));
+	char j[512];
+	pf_tx_jstr(j, sizeof j, text);
+	pf_tx_emitf("widget_text", ",\"text\":%s", j);
 }
 
 static void on_map(GtkWidget *w, gpointer data)
@@ -108,6 +118,7 @@ int main(int argc, char **argv)
 			 NULL);
 	g_signal_connect(entry, "insert-text", G_CALLBACK(on_insert_text),
 			 NULL);
+	g_signal_connect(entry, "changed", G_CALLBACK(on_changed), NULL);
 	g_signal_connect(win, "map", G_CALLBACK(on_map), NULL);
 	g_signal_connect(win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 

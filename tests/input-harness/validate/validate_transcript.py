@@ -95,6 +95,7 @@ EVENTS = {
     },
     "commit": {"text": _STR, "source": _enum(COMMIT_SOURCES)},
     "preedit": {"text": _STR},
+    "widget_text": {"text": _STR},
     "im_state": {"protocol": _enum(IM_PROTOCOLS), "state": _enum(IM_STATES)},
     "screen_keyboard": {"shown": _BOOL},
     "pointer_motion": {"x": _NUM, "y": _NUM},
@@ -119,8 +120,15 @@ EVENTS = {
         "backend": _STR,
     },
     "client_launch": {"target": _STR},
+    "client_stop": {"target": _STR},
     "client_exit": {"target": _STR, "rc": _INT},
-    "screenshot": {"path": _STR, "type": _INT, "width": _INT, "height": _INT},
+    "screenshot": {
+        "target": _STR,
+        "path": _STR,
+        "type": _INT,
+        "width": _INT,
+        "height": _INT,
+    },
 }
 
 _ENVELOPE = {

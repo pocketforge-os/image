@@ -5,6 +5,7 @@
  */
 #define _GNU_SOURCE
 #include "../tools/transcript.h"
+#include "../tools/text-glyphs.h"
 
 #include <poll.h>
 #include <signal.h>
@@ -30,6 +31,25 @@ static struct xdg_surface *g_xdg_surface;
 static struct xdg_toplevel *g_toplevel;
 static volatile sig_atomic_t g_stop;
 static int g_configured;
+static char g_widget_text[64];
+
+static void draw(void);
+
+static char key_to_char(uint32_t key)
+{
+	switch (key) {
+	case 35: return 'h';
+	case 18: return 'e';
+	case 38: return 'l';
+	case 24: return 'o';
+	case 57: return ' ';
+	case 30: return 'a';
+	case 19: return 'r';
+	case 49: return 'n';
+	case 31: return 's';
+	default: return '\0';
+	}
+}
 
 static void on_sigterm(int sig)
 {
@@ -124,6 +144,18 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial,
 		    key + 8,
 		    state == WL_KEYBOARD_KEY_STATE_PRESSED ? "pressed"
 							   : "released");
+	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+		char ch = key_to_char(key);
+		size_t used = strlen(g_widget_text);
+		if (ch && used + 1 < sizeof g_widget_text) {
+			g_widget_text[used] = ch;
+			g_widget_text[used + 1] = '\0';
+			draw();
+			char j[256];
+			pf_tx_jstr(j, sizeof j, g_widget_text);
+			pf_tx_emitf("widget_text", ",\"text\":%s", j);
+		}
+	}
 }
 
 static void keyboard_modifiers(void *data, struct wl_keyboard *kb,
@@ -319,6 +351,21 @@ static void draw(void)
 	}
 	for (int i = 0; i < width * height; i++)
 		px[i] = 0xff304050; /* opaque slate */
+	const int scale = 6;
+	int x0 = 48;
+	const int y0 = 210;
+	for (size_t i = 0; g_widget_text[i]; i++) {
+		uint8_t rows[7];
+		pf_glyph_rows(g_widget_text[i], rows);
+		for (int y = 0; y < 7; y++)
+			for (int x = 0; x < 5; x++)
+				if (rows[y] & (1u << (4 - x)))
+					for (int sy = 0; sy < scale; sy++)
+						for (int sx = 0; sx < scale; sx++)
+							px[(y0 + y * scale + sy) * width +
+							   x0 + x * scale + sx] = 0xfff5f5f5;
+		x0 += 6 * scale;
+	}
 	munmap(px, (size_t)stride * height);
 	struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd,
 						(int32_t)((off_t)stride * height));
@@ -329,8 +376,8 @@ static void draw(void)
 	wl_surface_damage(g_surface, 0, 0, width, height);
 	wl_surface_commit(g_surface);
 	/* buf/pool/fd stay alive: the compositor still references the buffer
-	 * and there is no release listener in this minimal client. One frame
-	 * is drawn for the whole session, so nothing grows. */
+	 * and there is no release listener in this minimal client. The harness
+	 * draws one bounded frame per injected character. */
 	(void)buf;
 	(void)pool;
 }

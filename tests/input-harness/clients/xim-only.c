@@ -17,6 +17,33 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t g_stop;
+static Display *g_dpy;
+static Window g_win;
+static GC g_gc;
+static char g_widget_text[64];
+
+static void draw_widget_text(void)
+{
+	XClearWindow(g_dpy, g_win);
+	XDrawString(g_dpy, g_win, g_gc, 48, 240, g_widget_text,
+		    (int)strlen(g_widget_text));
+	XFlush(g_dpy);
+}
+
+static void append_widget_text(const char *text, int length)
+{
+	size_t used = strlen(g_widget_text);
+	if (length < 0)
+		return;
+	if ((size_t)length > sizeof g_widget_text - used - 1)
+		length = (int)(sizeof g_widget_text - used - 1);
+	memcpy(g_widget_text + used, text, (size_t)length);
+	g_widget_text[used + (size_t)length] = '\0';
+	draw_widget_text();
+	char j[256];
+	pf_tx_jstr(j, sizeof j, g_widget_text);
+	pf_tx_emitf("widget_text", ",\"text\":%s", j);
+}
 
 static void on_sigterm(int sig)
 {
@@ -47,6 +74,7 @@ int main(int argc, char **argv)
 		pf_tx_stop(1);
 		return 1;
 	}
+	g_dpy = dpy;
 
 	XIM xim = XOpenIM(dpy, NULL, NULL, NULL);
 	if (xim)
@@ -60,6 +88,9 @@ int main(int argc, char **argv)
 	Window win = XCreateSimpleWindow(
 		dpy, RootWindow(dpy, screen), 0, 0, 640, 480, 0,
 		BlackPixel(dpy, screen), WhitePixel(dpy, screen));
+	g_win = win;
+	g_gc = XCreateGC(dpy, win, 0, NULL);
+	XSetForeground(dpy, g_gc, BlackPixel(dpy, screen));
 	XStoreName(dpy, win, "pf-input-harness xim-only");
 	XSelectInput(dpy, win,
 		     ExposureMask | KeyPressMask | KeyReleaseMask |
@@ -101,6 +132,9 @@ int main(int argc, char **argv)
 				/* geometry changes are not transcribed; the
 				 * MapNotify size is what the harness asserts */
 				break;
+			case Expose:
+				draw_widget_text();
+				break;
 			case FocusIn:
 				pf_tx_emitf("enter", ",\"serial\":%lu",
 					    (unsigned long)ev.xfocus.serial);
@@ -121,6 +155,14 @@ int main(int argc, char **argv)
 					    ev.type == KeyPress ? "pressed"
 								: "released",
 					    (unsigned)ev.xkey.state);
+				if (ev.type == KeyPress) {
+					char text[32];
+					KeySym looked_up = NoSymbol;
+					int length = XLookupString(&ev.xkey, text,
+							   sizeof text, &looked_up, NULL);
+					if (length > 0)
+						append_widget_text(text, length);
+				}
 				break;
 			}
 			default:
@@ -137,6 +179,7 @@ int main(int argc, char **argv)
 		XDestroyIC(xic);
 	if (xim)
 		XCloseIM(xim);
+	XFreeGC(dpy, g_gc);
 	XDestroyWindow(dpy, win);
 	XCloseDisplay(dpy);
 	pf_tx_stop(0);

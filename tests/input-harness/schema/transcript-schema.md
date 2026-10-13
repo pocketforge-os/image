@@ -54,6 +54,9 @@ by the validator, not by a human reading logs.
   synthesized locally by the toolkit (e.g. GTK IMContextSimple), `key` —
   synthesized by the client from raw keys).
 - `preedit` — composing/pre-edit text changed. Fields: `text` (string).
+- `widget_text` — text read back from the client's real displayed widget or
+  application text buffer after input handling. Fields: `text` (string). The
+  final value must exactly equal that client's expected phrase.
 - `im_state` — input-method availability/state observed by the client.
   Fields: `protocol` (`text-input-v3`, `input-method-v2`,
   `gamescope-input-method`, `xim`, `sdl-textinput`, `none`), `state`
@@ -85,9 +88,10 @@ same envelope with `client` = `session` (including `start` first and
   `name` (string), `event_node` (string, e.g. `/dev/input/event7`).
 - `compositor_ready` — Fields: `pid` (int), `wayland_display` (string),
   `x_display` (string), `backend` (string, e.g. `headless`).
-- `client_launch` / `client_exit` — Fields: `client` is `session`;
-  `target` (string, client id), `rc` (int, on exit).
-- `screenshot` — Fields: `path` (string), `type` (int, gamescope
+- `client_launch` / `client_stop` / `client_exit` — Fields: `client` is
+  `session`; `target` (string, client id), `rc` (int, on exit). The driver
+  records `client_stop` immediately before asking the client to terminate.
+- `screenshot` — Fields: `target` (string, client id), `path` (string), `type` (int, gamescope
   screenshot_type), `width`, `height` (int, expected size).
 
 ## Validation

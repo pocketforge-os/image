@@ -27,6 +27,7 @@ import sys
 import time
 
 PHRASE = "hello harness"
+QT_PHRASE = "1234567890"
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/out"
 TX_DIR = os.path.join(OUT, "transcripts")
 SHOT_DIR = os.path.join(OUT, "screenshots")
@@ -41,19 +42,21 @@ XDG = os.environ.get("XDG_RUNTIME_DIR", "/run/xdg")
 KEYMAP = {
     "h": 35, "e": 18, "l": 38, "o": 24, " ": 57,
     "a": 30, "r": 19, "n": 49, "s": 31,
+    "1": 2, "2": 3, "3": 4, "4": 5, "5": 6,
+    "6": 7, "7": 8, "8": 9, "9": 10, "0": 11,
 }
 
 CLIENTS = [
-    # (name, backend, purpose, gui, preload, env extra)
-    ("gtk4-text", "wayland", "email", True, True, {"GDK_BACKEND": "wayland"}),
-    ("qt6-text", "wayland", "digits", True, True, {"QT_QPA_PLATFORM": "wayland"}),
-    ("sdl3-text", "wayland", "normal", True, True, {"SDL_VIDEODRIVER": "wayland"}),
-    ("sdl2-game", "wayland", None, True, True, {"SDL_VIDEODRIVER": "wayland"}),
-    ("x11-gtk", "x11", "url", True, False,
+    # (name, backend, purpose, phrase, gui, preload, env extra)
+    ("gtk4-text", "wayland", "email", PHRASE, True, True, {"GDK_BACKEND": "wayland"}),
+    ("qt6-text", "wayland", "digits", QT_PHRASE, True, True, {"QT_QPA_PLATFORM": "wayland"}),
+    ("sdl3-text", "wayland", "normal", PHRASE, True, True, {"SDL_VIDEODRIVER": "wayland"}),
+    ("sdl2-game", "wayland", None, PHRASE, True, True, {"SDL_VIDEODRIVER": "wayland"}),
+    ("x11-gtk", "x11", "url", PHRASE, True, False,
      {"GDK_BACKEND": "x11", "GTK_IM_MODULE": "simple"}),
-    ("xim-only", "x11", None, False, False, {}),
-    ("no-im", "wayland", None, False, True, {}),
-    ("broken-client", "headless", None, False, False, {}),
+    ("xim-only", "x11", None, PHRASE, False, False, {}),
+    ("no-im", "wayland", None, PHRASE, False, True, {}),
+    ("broken-client", "headless", None, None, False, False, {}),
 ]
 
 
@@ -240,8 +243,8 @@ def screenshot(sw: SessionWriter, name: str, shot_type: int = 4) -> bool:
                 continue
             if head[:8] == b"\x89PNG\r\n\x1a\n" and head[12:16] == b"IHDR":
                 width, height = struct.unpack(">II", head[16:24])
-                sw.emit("screenshot", path=rel_path, type=shot_type,
-                        width=width, height=height)
+                sw.emit("screenshot", target=name, path=rel_path,
+                        type=shot_type, width=width, height=height)
                 manifest_path = os.path.join(SHOT_DIR, "manifest.json")
                 manifest = []
                 if os.path.exists(manifest_path):
@@ -260,8 +263,8 @@ def screenshot(sw: SessionWriter, name: str, shot_type: int = 4) -> bool:
     return False
 
 
-def type_phrase(kbd: FakeInput) -> None:
-    for ch in PHRASE:
+def type_phrase(kbd: FakeInput, phrase: str) -> None:
+    for ch in phrase:
         code = KEYMAP[ch]
         kbd.cmd(f"key {code} 1")
         time.sleep(0.02)
@@ -269,7 +272,32 @@ def type_phrase(kbd: FakeInput) -> None:
         time.sleep(0.03)
 
 
-def run_client(sw: SessionWriter, name: str, backend: str, purpose,
+def wait_for_widget_text(tx_path: str, phrase: str, timeout: float,
+                         proc: subprocess.Popen) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if os.path.exists(tx_path):
+            for record in read_jsonl(tx_path):
+                if record.get("event") == "widget_text" and record.get("text") == phrase:
+                    return True
+        if proc.poll() is not None:
+            return False
+        time.sleep(0.1)
+    return False
+
+
+def read_jsonl(path: str):
+    records = []
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return records
+
+
+def run_client(sw: SessionWriter, name: str, backend: str, purpose, phrase,
                gui: bool, preload: bool, extra_env: dict,
                kbd: FakeInput, mouse: FakeInput) -> None:
     tx_path = os.path.join(TX_DIR, f"{name}.jsonl")
@@ -308,10 +336,15 @@ def run_client(sw: SessionWriter, name: str, backend: str, purpose,
                 log(f"WARN: {name} did not report enter within 10s")
             # move slightly so cursor-theme lookups happen again
             mouse.cmd("abs 641 361")
-        type_phrase(kbd)
+        if phrase is not None:
+            type_phrase(kbd, phrase)
+            if not wait_for_widget_text(tx_path, phrase, 10, proc):
+                raise RuntimeError(
+                    f"{name} did not read back expected widget text {phrase!r}")
         time.sleep(0.5)
         screenshot(sw, name)
     finally:
+        sw.emit("client_stop", target=name)
         if proc.poll() is None:
             proc.send_signal(signal.SIGTERM)
             try:
@@ -384,9 +417,9 @@ def main() -> int:
         kbd.cmd("key 42 0")
         time.sleep(1.0)
 
-        for (name, backend, purpose, gui, preload,
+        for (name, backend, purpose, phrase, gui, preload,
              extra_env) in CLIENTS:
-            run_client(sw, name, backend, purpose, gui, preload, extra_env,
+            run_client(sw, name, backend, purpose, phrase, gui, preload, extra_env,
                        kbd, mouse)
 
         # exercise the pad once so downstream beads have a known-good path

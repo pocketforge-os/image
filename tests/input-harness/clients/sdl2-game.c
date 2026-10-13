@@ -4,10 +4,46 @@
  */
 #define _GNU_SOURCE
 #include "../tools/transcript.h"
+#include "../tools/text-glyphs.h"
 
 #include <SDL.h>
 #include <stdlib.h>
 #include <string.h>
+
+static char g_text[64];
+
+static void render_text(SDL_Renderer *renderer)
+{
+	SDL_SetRenderDrawColor(renderer, 48, 64, 80, 255);
+	SDL_RenderClear(renderer);
+	SDL_SetRenderDrawColor(renderer, 245, 245, 245, 255);
+	const int scale = 6;
+	int x0 = 64;
+	const int y0 = 210;
+	for (size_t i = 0; g_text[i]; i++) {
+		uint8_t rows[7];
+		pf_glyph_rows(g_text[i], rows);
+		for (int y = 0; y < 7; y++)
+			for (int x = 0; x < 5; x++)
+				if (rows[y] & (1u << (4 - x))) {
+					SDL_Rect rect = {x0 + x * scale,
+						y0 + y * scale, scale, scale};
+					SDL_RenderFillRect(renderer, &rect);
+				}
+		x0 += 6 * scale;
+	}
+	SDL_RenderPresent(renderer);
+}
+
+static void append_widget_text(SDL_Renderer *renderer, const char *text)
+{
+	size_t used = strlen(g_text);
+	strncat(g_text, text, sizeof g_text - used - 1);
+	render_text(renderer);
+	char j[256];
+	pf_tx_jstr(j, sizeof j, g_text);
+	pf_tx_emitf("widget_text", ",\"text\":%s", j);
+}
 
 int main(int argc, char **argv)
 {
@@ -42,9 +78,7 @@ int main(int argc, char **argv)
 		pf_tx_stop(1);
 		return 1;
 	}
-	SDL_SetRenderDrawColor(renderer, 48, 64, 80, 255);
-	SDL_RenderClear(renderer);
-	SDL_RenderPresent(renderer);
+	render_text(renderer);
 	SDL_StartTextInput();
 	pf_tx_emitf("im_state",
 		    ",\"protocol\":\"sdl-textinput\",\"state\":\"enabled\"");
@@ -94,6 +128,7 @@ int main(int argc, char **argv)
 				pf_tx_emitf("commit",
 					    ",\"text\":%s,\"source\":\"toolkit\"",
 					    j);
+				append_widget_text(renderer, ev.text.text);
 				break;
 			}
 			case SDL_MOUSEMOTION:

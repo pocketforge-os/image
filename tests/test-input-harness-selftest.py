@@ -170,6 +170,7 @@ def section_asset_audit(work):
         "tools/pf-shot.c",
         "tools/provision-wayland-protocols.sh",
         "tools/require-empty-output.sh",
+        "tools/text-glyphs.h",
         "tools/transcript.c",
         "tools/transcript.h",
         "clients/gtk4-text.c",
@@ -344,6 +345,10 @@ def section_asset_audit(work):
     with open(os.path.join(HARNESS, "session", "driver.py"), "r", encoding="utf-8") as handle:
         driver_source = handle.read()
     require(
+        'sw.emit("client_stop", target=name)' in driver_source,
+        "driver does not record screenshot-before-stop ordering",
+    )
+    require(
         'screenshot(sw, "idle")' not in driver_source,
         "driver requests a screenshot before any surface can trigger a repaint",
     )
@@ -353,7 +358,7 @@ def section_asset_audit(work):
         "driver does not target the logical center shared by its 640x480 clients",
     )
     x_ready = driver_source.find("wait_for_x_display(")
-    client_loop = driver_source.find("for (name, backend, purpose, gui, preload,")
+    client_loop = driver_source.find("for (name, backend, purpose, phrase, gui, preload,")
     require(
         x_ready >= 0 and client_loop > x_ready and "XOpenDisplay" in driver_source,
         "driver launches clients before Xwayland accepts display connections",
@@ -388,6 +393,29 @@ def section_asset_audit(work):
             "SDL_CreateRenderer" in sdl_source and "SDL_RenderPresent" in sdl_source,
             f"{rel} never attaches a rendered buffer to its Wayland surface",
         )
+
+    for rel in (
+        "clients/gtk4-text.c",
+        "clients/qt6-text.cpp",
+        "clients/sdl3-text.c",
+        "clients/sdl2-game.c",
+        "clients/x11-gtk.c",
+        "clients/xim-only.c",
+        "clients/no-im.c",
+    ):
+        with open(os.path.join(HARNESS, rel), "r", encoding="utf-8") as handle:
+            client_source = handle.read()
+        require(
+            '"widget_text"' in client_source,
+            f"{rel} does not read back and transcribe its displayed text buffer",
+        )
+
+    with open(os.path.join(HARNESS, "schema", "transcript-schema.md"), "r", encoding="utf-8") as handle:
+        schema_text = handle.read()
+    require(
+        "`widget_text`" in schema_text,
+        "transcript schema does not define widget_text readback evidence",
+    )
 
     with open(os.path.join(HARNESS, "clients", "gtk4-text.c"), "r", encoding="utf-8") as handle:
         gtk_source = handle.read()

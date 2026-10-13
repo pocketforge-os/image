@@ -10,6 +10,25 @@
 static GtkWidget *g_entry;
 static const char *g_purpose;
 
+struct key_fallback {
+	char *before;
+	char utf8[8];
+};
+
+static gboolean insert_raw_key_if_needed(gpointer data)
+{
+	struct key_fallback *fallback = data;
+	const char *current = gtk_editable_get_text(GTK_EDITABLE(g_entry));
+	if (!strcmp(current, fallback->before)) {
+		int pos = -1;
+		gtk_editable_insert_text(GTK_EDITABLE(g_entry), fallback->utf8,
+				       -1, &pos);
+	}
+	g_free(fallback->before);
+	g_free(fallback);
+	return G_SOURCE_REMOVE;
+}
+
 static GtkInputPurpose parse_purpose(const char *s)
 {
 	if (!strcmp(s, "alpha")) return GTK_INPUT_PURPOSE_ALPHA;
@@ -49,6 +68,14 @@ static gboolean on_key_pressed(GtkEventControllerKey *c, guint keyval,
 	pf_tx_emitf("key",
 		    ",\"keycode\":%u,\"keysym\":%s,\"state\":\"pressed\",\"mods\":%u",
 		    keycode, jk, (unsigned)state);
+	gunichar uc = gdk_keyval_to_unicode(keyval);
+	if (uc && !g_unichar_iscntrl(uc)) {
+		struct key_fallback *fallback = g_new0(struct key_fallback, 1);
+		fallback->before = g_strdup(
+			gtk_editable_get_text(GTK_EDITABLE(g_entry)));
+		g_unichar_to_utf8(uc, fallback->utf8);
+		g_idle_add(insert_raw_key_if_needed, fallback);
+	}
 	return FALSE;
 }
 
@@ -59,6 +86,15 @@ static void on_insert_text(GtkEditable *ed, const gchar *text, gint pos,
 	char j[256];
 	pf_tx_jstr(j, sizeof j, text);
 	pf_tx_emitf("commit", ",\"text\":%s,\"source\":\"toolkit\"", j);
+}
+
+static void on_changed(GtkEditable *ed, gpointer data)
+{
+	(void)data;
+	const char *text = gtk_editable_get_text(ed);
+	char j[512];
+	pf_tx_jstr(j, sizeof j, text);
+	pf_tx_emitf("widget_text", ",\"text\":%s", j);
 }
 
 static gboolean on_pointer_event(GtkEventControllerLegacy *controller,
@@ -137,6 +173,7 @@ static void activate(GtkApplication *app, gpointer data)
 	g_signal_connect(kc, "key-pressed", G_CALLBACK(on_key_pressed), NULL);
 	gtk_widget_add_controller(win, kc);
 	g_signal_connect(g_entry, "insert-text", G_CALLBACK(on_insert_text), NULL);
+	g_signal_connect(g_entry, "changed", G_CALLBACK(on_changed), NULL);
 
 	GtkEventController *pointer = gtk_event_controller_legacy_new();
 	gtk_event_controller_set_propagation_phase(pointer, GTK_PHASE_CAPTURE);

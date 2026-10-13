@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from validate_transcript import validate_file  # noqa: E402
 
 PHRASE = "hello harness"
+QT_PHRASE = "1234567890"
 
 CLIENT_ORDER = (
     "gtk4-text",
@@ -55,6 +56,7 @@ class Spec:
         require_events=(),
         expect_invalid=False,
         optional=False,
+        widget_phrase=None,
     ):
         self.backend = backend
         self.purpose = purpose
@@ -64,6 +66,7 @@ class Spec:
         self.require_events = tuple(require_events)
         self.expect_invalid = expect_invalid
         self.optional = optional
+        self.widget_phrase = widget_phrase
 
 
 SPECS = {
@@ -73,13 +76,15 @@ SPECS = {
         phrase=PHRASE,
         allow_raw_keys=True,
         require_events=("enter", "content", "im_state", "pointer_button", "cursor"),
+        widget_phrase=PHRASE,
     ),
     "qt6-text": Spec(
         backend="wayland",
         purpose="digits",
-        phrase=PHRASE,
+        phrase=QT_PHRASE,
         allow_raw_keys=True,
         require_events=("enter", "content", "im_state"),
+        widget_phrase=QT_PHRASE,
     ),
     "sdl3-text": Spec(
         backend="wayland",
@@ -87,12 +92,14 @@ SPECS = {
         phrase=PHRASE,
         allow_raw_keys=True,
         require_events=("enter", "im_state"),
+        widget_phrase=PHRASE,
     ),
     "sdl2-game": Spec(
         backend="wayland",
         phrase=PHRASE,
         allow_raw_keys=True,
         require_events=("enter", "im_state"),
+        widget_phrase=PHRASE,
     ),
     "x11-gtk": Spec(
         backend="x11",
@@ -100,16 +107,19 @@ SPECS = {
         phrase=PHRASE,
         allow_raw_keys=True,
         require_events=("enter", "content"),
+        widget_phrase=PHRASE,
     ),
     "xim-only": Spec(
         backend="x11",
         forbid_commits=True,
         require_events=("enter", "key", "im_state"),
+        widget_phrase=PHRASE,
     ),
     "no-im": Spec(
         backend="wayland",
         forbid_commits=True,
         require_events=("enter", "key"),
+        widget_phrase=PHRASE,
     ),
     "wpe-view": Spec(backend="wayland", optional=True),
     # Negative control: this client is deliberately broken. Its transcript
@@ -222,6 +232,13 @@ def check_client(client, transcript_dir):
         return "FAIL", f"reason=unexpected_commits hint={len(by_name['commit'])} commit events"
     if spec.forbid_commits and by_name.get("content"):
         return "FAIL", f"reason=unexpected_content hint=text-input content on a no-IM client"
+    if spec.widget_phrase is not None:
+        widget_events = by_name.get("widget_text", [])
+        actual = widget_events[-1]["text"] if widget_events else None
+        if actual != spec.widget_phrase:
+            return "FAIL", (
+                f"reason=widget_text_mismatch hint=widget_text={actual!r} expected={spec.widget_phrase!r}"
+            )
 
     detail = f"events={len(events)}"
     if mode:
@@ -254,7 +271,7 @@ def check_session(out_dir, launched):
     expected = set(launched)
     lifecycle_targets = {
         e["target"] for e in events
-        if e["event"] in ("client_launch", "client_exit")
+        if e["event"] in ("client_launch", "client_stop", "client_exit")
     }
     unexpected = sorted(lifecycle_targets - expected)
     if unexpected:
@@ -262,10 +279,17 @@ def check_session(out_dir, launched):
     for client in launched:
         launches = [e for e in events if e["event"] == "client_launch" and e["target"] == client]
         exits = [e for e in events if e["event"] == "client_exit" and e["target"] == client]
-        if len(launches) != 1 or len(exits) != 1:
-            return "FAIL", f"reason=client_lifecycle_missing hint={client} launch={len(launches)} exit={len(exits)}"
+        stops = [e for e in events if e["event"] == "client_stop" and e["target"] == client]
+        shots = [e for e in events if e["event"] == "screenshot" and e["target"] == client]
+        if len(launches) != 1 or len(stops) != 1 or len(exits) != 1:
+            return "FAIL", f"reason=client_lifecycle_missing hint={client} launch={len(launches)} stop={len(stops)} exit={len(exits)}"
         if exits[0]["rc"] != 0:
             return "FAIL", f"reason=client_exit_rc hint={client} rc={exits[0]['rc']}"
+        if len(shots) != 1 or shots[0]["seq"] >= stops[0]["seq"]:
+            return "FAIL", (
+                f"reason=screenshot_after_stop hint={client} screenshot_seq="
+                f"{[e['seq'] for e in shots]} stop_seq={stops[0]['seq']}"
+            )
     if "screenshot" not in names:
         return "FAIL", "reason=no_screenshot_event hint=driver never captured a screenshot"
     return "PASS", f"events={len(events)} devices={sorted(kinds)}"
