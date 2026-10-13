@@ -345,8 +345,8 @@ The image-owned template is:
 [Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-foreground.target
-BindsTo=pf-input-broker.service
-After=local-fs.target pocketforge-foreground.target pf-input-broker.service
+BindsTo=pf-input-broker.service pf-prefsd.service
+After=local-fs.target pocketforge-foreground.target pf-input-broker.service pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
 ConditionPathExists=/dev/fb0
@@ -359,18 +359,34 @@ SupplementaryGroups=audio input video
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
+Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
+CacheDirectory=pocketforge/apps/%i
+CacheDirectoryMode=0700
 ProtectSystem=strict
 ProtectHome=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
-ReadWritePaths=/var/lib/pocketforge/apps/%i
+ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
+InaccessiblePaths=-/dev/uinput
+InaccessiblePaths=/run/pocketforge/prefsd.sock
+# No session bus (bd: tsp-ihne1.5). Wayland apps get text only through
+# gamescope's text-input protocol. The address defeats libdbus/GDBus autolaunch
+# and the $XDG_RUNTIME_DIR/bus lookup. The private input-method bus is
+# invisible, and every X11 input-method door is hidden under an empty tmpfs; an
+# X11 app's door drop-in (/usr/share/pocketforge/ime/pf-app-door.conf) binds
+# back only its own. Input processes run as pf-ime, so an app can neither trace
+# them nor read their memory or environment.
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/pf-no-session-bus
+InaccessiblePaths=-/run/pf-ime
+TemporaryFileSystem=/run/pf-ime-door:ro
+ProtectProc=invisible
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
@@ -379,8 +395,14 @@ MemoryMax=256M
 Nice=-5
 ```
 
-The `pf-input-broker.service` dependency, the two `PF_*` variables, and
-`InaccessiblePaths=` are the `tsp-f3fm.202.1` amendment. The dependency is `BindsTo=`, not
+The app template deliberately omits the dedicated `pf-pref-writer` supplementary group. Only
+`pf-shell-selected.service` and `pf-foreground@.service` receive that group, while generated
+runtime-root drop-ins reset `SupplementaryGroups=` entirely. The `pf-input-broker.service`
+dependency, the two `PF_*` variables, and the session-authority
+`InaccessiblePaths=` entry are the `tsp-f3fm.202.1` amendment. The fail-closed prefsd entry keeps
+preference state behind the broker's read-only API; `BindsTo=pf-prefsd.service` also tears down the
+app namespace if the daemon exits, so socket recreation cannot reveal a replacement inode. The
+broker dependency is `BindsTo=`, not
 `Requires=` (`tsp-f3fm.202.1.6`): `Requires=` does not propagate a broker that exits by itself
 mid-session, so the app would keep the panel with no Menu intake. See
 [Input delivery](#input-delivery) and
@@ -413,15 +435,37 @@ The installed path is fixed:
 /usr/share/pocketforge/platform-capabilities.toml
 ```
 
-Schema v1 is exact and denies unknown fields:
+The renderer emits schema v2, which is exact and denies unknown fields. Beyond the four
+identity facts it carries the device facts the runtime requirement checks need:
 
 ```toml
-schema_version = 1
+schema_version = 2
 runtime_family = "pocketforge/a133-powervr"
 runtime_abi = "1"
 platform_version = "20"
 supported_capabilities = ["audio", "entropy", "input", "settings"]
+physical_memory_mib = 970
+app_memory_budget_mib = 600
+gles_max = "3.0"
+inputs = ["buttons", "dpad", "stick", "two_sticks"]
+display = { width = 1280, height = 720 }
 ```
+
+The device facts are derived from the sha-verified staged platform device descriptor, never
+re-declared. `physical_memory_mib`/`app_memory_budget_mib` come from its `[memory]` table and
+are both required — a descriptor without an app budget cannot produce a schema-2 contract.
+`gles_max`/`vulkan_max` come from `[graphics]` and are emitted only when declared; with no
+`[graphics]` both keys are omitted and the runtime then refuses matching app requirements as
+`requirement_unverifiable` (fail-closed). `inputs` is derived from the `[[inputs]]` rows
+excluding `class = "system"` (ambient system authority is never app-bindable): `buttons` for
+any face button, `dpad` for a hat, `stick` for at least one stick and `two_sticks` for at least
+two, `touch` if any screen carries a touch table — emitted in runtime KNOWN_INPUTS declaration
+order and never including `keyboard`/`pointer` (runtime SYSTEM_INPUTS, always satisfied by the
+system input layer). `display` is the unique primary screen's `render_canvas`. The runtime
+still parses schema-v1 contracts, where every v2 fact is absent. [image
+`scripts/render-platform-capabilities.py`; runtime@`939ee0e67a1b1fb113104dd202f4dc56b5130e0d`
+`crates/pf-app-manifest/src/lib.rs:591-665`; platform@`05444eab3d5300a45febbddb2c232e13a8e4f29f`
+`devices/a133/capabilities.toml:40-64`, `abi/platform-capabilities.schema.json:55-135`]
 
 `supported_capabilities` must be sorted, unique, unmodified base names present in runtime's
 canonical known-capability list. `egress:<host>` and `?` are app requirements, not platform
@@ -575,7 +619,9 @@ The image PR adds or updates these fatal preconditions:
 4. On A133-open, all four `PF_APP_*` values are present, syntactically valid, internally
    compatible, and `PF_APP_CAPABILITIES` is sorted, unique, and a subset of runtime's known set;
    non-open profiles emit none of the four.
-5. On A133-open, the generated platform TOML parses back to the exact build-arg values.
+5. On A133-open, the generated platform TOML parses back to the exact build-arg identity tuple
+   plus the descriptor-derived schema-2 device facts, and every vocabulary it validates against
+   is parsed from the pinned runtime source.
 6. On A133-open, `pf-app-launch` exists, is AArch64, and satisfies the same static-musl check as
    the other runtime helpers.
 7. On A133-open, `pf-shell`, `pf-session-authorityd`, `pf-app-launch`, `pf-app@.service`, and the
@@ -648,7 +694,7 @@ service, provenance, and build cost.
 | Network metadata blocks forever | Launcher: with no production network backend, `needs_network=true` remains launchable and exposes the approved network cue. |
 | Wrong unit rendering | Image: parse `pf-app@.service`; assert exact root, user/groups, XDG paths, target join, hardening, no enable symlink, stop/restart policy, and helper command. |
 | Dedicated Poolsuite bypass survives | Image: assert no `pocketforge-poolsuite.service` in source or installed tree and installer has no unit argument/install. |
-| Capability file/build args drift | Platform + image: every A133-open profile emits the expected deterministic tuple and generated TOML round-trips; non-open profiles emit no tuple or file; unknown/missing open input is fatal. |
+| Capability file/build args drift | Platform + image: every A133-open profile emits the expected deterministic tuple and generated TOML round-trips, with the schema-2 device facts derived from the sha-verified staged descriptor and every vocabulary parsed from the pinned runtime source; non-open profiles emit no tuple, descriptor, or file; unknown/missing open input, an unusable descriptor, or a runtime source without the schema-2 vocabularies is fatal. |
 | Runtime/launcher/image lock split | Image + platform: negative fixtures move each SHA alone and prove the old/new image guard refuses; positive fixture moves image/runtime/launcher together. |
 | A133 vendor/default dev migration regresses | Image + platform: the selector fixture proves A133 + non-open + dev resolves the source-free `NOT-SHIPPED` producer before any Poolsuite fetch/compile; its rootfs fixture contains no Poolsuite tree, dedicated service, or provenance marker. |
 | Non-open default-app scope expands accidentally | Platform + image: every non-open profile emits no launcher or `PF_APP_*` identity, stages no launcher context, and contains none of the three generic default-app files. A133 vendor/default release and all A523 profiles also match their pre-feature byte fixtures. |
@@ -857,6 +903,11 @@ request both enter the broker-owned intake. `pf-app@` gets
 authority, even though its `gamer` group could otherwise open the `root:gamer 0770` socket.
 The harness checks this in the same run: the app sandbox is refused, while `gamer` outside the
 unit connects.
+
+Apps also get `InaccessiblePaths=-/dev/uinput`: even if device-node permissions or group
+membership would otherwise allow it, an app cannot create a controller that resembles the
+built-in pad. The real-systemd harness makes its fake node mode 0666 and proves both sides in one
+run: `gamer` outside the unit can open it, while the same uid inside `pf-app@` cannot.
 
 **R3/R4.** R3 treats a SIGKILL at the 2 s timeout as `Returned`, not `ForcedClose`. The concern
 behind R4 was `pf-session-authority` `lib.rs:995-1004`: a non-zero `systemctl stop` would be

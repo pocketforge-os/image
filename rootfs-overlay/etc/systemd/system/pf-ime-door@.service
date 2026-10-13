@@ -1,0 +1,55 @@
+# Per-app filtered input-method door for X11 GTK/Qt apps (bd: tsp-ihne1.5).
+#
+# Instance = app id. Started only by an X11 app's door drop-in
+# (/usr/share/pocketforge/ime/pf-app-door.conf, Requires=/After=), stopped
+# with it (StopWhenUnneeded=). Each client the app opens gets its own upstream
+# connection to the private bus, so the engine sees one sender per app and
+# keeps every input context owned by that sender (focus group door:<app>).
+#
+# The filter is Flatpak's fcitx input-method portal model and nothing more:
+# create my own input context, and the typing calls on input-context objects.
+# No --talk, --own or --see: the engine's main name (Controller1, the non-portal
+# frontend), pf-osk's names, name ownership and every unlisted method, interface
+# or path are refused by the proxy before they reach the bus. The engine refuses
+# calls on another sender's context (sender check, including InvokeAction).
+#
+# Only pf-app@<app> sees this socket: pf-app@.service hides /run/pf-ime-door
+# under an empty tmpfs and the door drop-in binds back only /run/pf-ime-door/<app>.
+# tests/test-ime-bus-security.sh runs this exact ExecStart.
+[Unit]
+Description=PocketForge input-method door for %i
+Requires=pf-ime-bus.service
+After=pf-ime-bus.service
+StopWhenUnneeded=yes
+
+[Service]
+Type=exec
+User=pf-ime
+Group=pf-ime
+ExecStart=/usr/bin/xdg-dbus-proxy unix:path=/run/pf-ime/bus /run/pf-ime-door/%i/bus --filter \
+    --call=org.freedesktop.portal.Fcitx=org.fcitx.Fcitx.InputMethod1.CreateInputContext@/org/freedesktop/portal/inputmethod \
+    --call=org.freedesktop.portal.Fcitx=org.fcitx.Fcitx.InputContext1.*@/org/freedesktop/portal/inputcontext/*
+RuntimeDirectory=pf-ime-door/%i
+RuntimeDirectoryMode=0755
+ExecStartPost=/usr/bin/timeout 2 /bin/sh -c 'until [ -S "/run/pf-ime-door/$1/bus" ]; do sleep 0.05; done' sh %i
+# The app (User=gamer) must connect, which needs write on the socket inode.
+UMask=0000
+Restart=no
+LimitCORE=0
+NoNewPrivileges=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+CapabilityBoundingSet=
+MemoryMax=8M

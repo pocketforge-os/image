@@ -88,4 +88,5 @@ udev
 # supplies the signed regulatory.db + .p7s pair.
 wireless-regdb
 wpasupplicant
+xdg-dbus-proxy
 zlib1g

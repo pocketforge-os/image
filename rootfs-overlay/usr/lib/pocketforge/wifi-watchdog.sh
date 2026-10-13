@@ -16,7 +16,8 @@
 # Design:
 #   - Authoritative health signal = a global IPv4 lease on wlan0. This is the
 #     directly-observed failure mode (lease disappears), and it never false-
-#     positives.
+#     positives. Initial DHCP acquisition is not lease loss: recovery is armed
+#     only after a global IPv4 lease has been observed once this session.
 #   - Secondary signal = the default gateway answers a ping. This catches the
 #     "lease still present but link is dead/lossy" case. To stay false-positive
 #     safe on APs that filter ICMP to the gateway, ping-failure only counts as
@@ -56,10 +57,17 @@ has_lease() {
 }
 
 gw_pingable=0   # set to 1 once the gateway has answered — rules out ICMP filtering
+lease_seen=0    # set to 1 after initial DHCP acquisition completes
 
 healthy() {
-    # Authoritative: no lease => unhealthy (the observed xr819 failure).
-    has_lease || return 1
+    # A missing lease is authoritative only after initial acquisition. Restarting
+    # an associated supplicant cannot repair DHCP and resets acquisition.
+    if has_lease; then
+        lease_seen=1
+    else
+        [ "${lease_seen}" = "0" ] && return 0
+        return 1
+    fi
     gw="$(gw_of)"
     [ -n "${gw}" ] || return 0   # lease present but route not up yet: don't thrash
     if ping -c 1 -W 2 -I "${IFACE}" "${gw}" >/dev/null 2>&1; then

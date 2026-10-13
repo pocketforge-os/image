@@ -18,6 +18,9 @@ name: hermetic tests
 #
 # EXCLUDED from the list below (each needs a real docker daemon or live device
 # state, so it stays out of a hermetic gate):
+#   - tests/test-ime-bus-security.sh -- builds a digest-pinned container for
+#     dbus-daemon, xdg-dbus-proxy and bubblewrap. Covered by its dedicated
+#     Docker-enabled .github/workflows/ime-bus-security.yml workflow.
 #   - tests/f13-fault-definitions.sh -- a fault-definitions library, not a
 #     standalone test: it asserts against a LIVE device's systemd unit/socket
 #     state (systemctl is-active, /run/.../*.sock, /var/lib/...).
@@ -91,12 +94,14 @@ jobs:
           set -uo pipefail
           tests=(
             tests/test-a133-cma-bootargs.sh
+            tests/test-a-cts-label-case-identity.sh
             tests/test-a-cts-worker-evidence-first.sh
             tests/test-a-cts-worker-recovery.sh
             tests/test-a-cts-worker-terminal.sh
             tests/test-alsa-config.sh
             tests/test-app-runtime-root.sh
             tests/test-boot-animator.sh
+            tests/test-browser-platform-defaults.sh
             tests/test-build-id.sh
             tests/test-build-rootfs-direct.sh
             tests/test-cedar-spike.sh
@@ -111,6 +116,7 @@ jobs:
             tests/test-default-app-rootfs.sh
             tests/test-dma-heap-udev-policy.sh
             tests/test-dockerfile-pf-transforms.sh
+            tests/test-elf-buildid.sh
             tests/test-gamescope-package-path.sh
             tests/test-gamescope-pvr-cache.sh
             tests/test-hwprobe-variant-stage.sh
@@ -132,6 +138,7 @@ jobs:
             tests/test-poolsuite-variant-stage.sh
             tests/test-recovery-entry.sh
             tests/test-rootfs-abi-check.sh
+            tests/test-rootfs-build-logs.sh
             tests/test-rootfs-bluetooth.sh
             tests/test-rootfs-dns.sh
             tests/test-rootfs-fallback-profile.sh
@@ -140,11 +147,13 @@ jobs:
             tests/test-sdl-kmsdrm-sysroot.sh
             tests/test-session-authority-systemd-safety.sh
             tests/test-session-compositor-contract.sh
+            tests/test-shell-fonts.sh
             tests/test-steamlink-ffmpeg59-runtime.sh
             tests/test-userdata-partition.sh
             tests/test-uboot-logo.sh
             tests/test-usbnet-bench-role.sh
             tests/test-usbnet-bench-rootfs.sh
+            tests/test-wifi-watchdog.sh
           )
           failed=0
           for t in "${tests[@]}"; do
@@ -161,3 +170,6 @@ jobs:
 
       - name: Check component cache keys
         run: python3 tests/test-component-cache-keys.py
+
+      - name: Check owned ELF producer build-id policy
+        run: python3 tests/test-owned-elf-buildid-producers.py

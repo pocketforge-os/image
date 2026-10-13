@@ -1,0 +1,11 @@
+[Unit]
+Description=PocketForge preference socket integration fixture
+
+[Service]
+Type=notify
+User=gamer
+Group=gamer
+ExecStart=/usr/local/libexec/fake-prefsd
+Restart=no
+TimeoutStartSec=2s
+TimeoutStopSec=2s
