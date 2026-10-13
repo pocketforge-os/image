@@ -32,7 +32,7 @@ cleanup() {
 trap cleanup EXIT
 
 set +e
-gamescope --backend headless \
+gamescope --backend headless --expose-wayland \
 	-W "${PF_OUTPUT_WIDTH:-1280}" -H "${PF_OUTPUT_HEIGHT:-720}" \
 	--mangoapp -- \
 	python3 /harness/session/driver.py "$OUT"

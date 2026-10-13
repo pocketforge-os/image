@@ -60,9 +60,14 @@ static void handle_ei_events(void)
 				EI_DEVICE_CAP_BUTTON,
 				EI_DEVICE_CAP_SCROLL, NULL);
 		} else if (type == EI_EVENT_DEVICE_ADDED) {
-			g_dev = ei_event_get_device(event);
+			if (g_dev)
+				g_dev = ei_device_unref(g_dev);
+			g_dev = ei_device_ref(ei_event_get_device(event));
 		} else if (type == EI_EVENT_DEVICE_REMOVED) {
-			g_dev = NULL;
+			if (ei_event_get_device(event) == g_dev)
+				g_dev = ei_device_unref(g_dev);
+			g_emulating = 0;
+		} else if (type == EI_EVENT_DEVICE_PAUSED) {
 			g_emulating = 0;
 		} else if (type == EI_EVENT_DEVICE_RESUMED) {
 			if (g_dev && !g_emulating) {

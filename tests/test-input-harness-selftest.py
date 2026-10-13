@@ -267,6 +267,31 @@ def section_asset_audit(work):
         "driver overwrites an explicit Wayland display",
     )
 
+    # libei event-owned objects are transient. The bridge keeps the emulated
+    # device after EI_EVENT_DEVICE_ADDED, so it must own a reference until the
+    # matching removal rather than retaining the event's borrowed pointer.
+    bridge_path = os.path.join(HARNESS, "tools", "eis-bridge.c")
+    with open(bridge_path, "r", encoding="utf-8") as handle:
+        bridge_source = handle.read()
+    require(
+        "g_dev = ei_device_ref(ei_event_get_device(event));" in bridge_source,
+        "eis-bridge retains an event-borrowed device without ei_device_ref",
+    )
+    require(
+        "g_dev = ei_device_unref(g_dev);" in bridge_source,
+        "eis-bridge does not release its retained device",
+    )
+
+    # A socket alone is insufficient: gamescope only manages native
+    # xdg-shell surfaces when its Wayland exposure path is enabled.
+    entry_path = os.path.join(HARNESS, "session", "entry.sh")
+    with open(entry_path, "r", encoding="utf-8") as handle:
+        entry_source = handle.read()
+    require(
+        "gamescope --backend headless --expose-wayland" in entry_source,
+        "headless gamescope launch does not enable managed Wayland clients",
+    )
+
     # pins.env must pin the fork by full commit sha.
     pins_path = os.path.join(HARNESS, "pins.env")
     if os.path.exists(pins_path):
