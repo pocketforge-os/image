@@ -18,6 +18,9 @@ name: hermetic tests
 #
 # EXCLUDED from the list below (each needs a real docker daemon or live device
 # state, so it stays out of a hermetic gate):
+#   - tests/test-ime-bus-security.sh -- builds a digest-pinned container for
+#     dbus-daemon, xdg-dbus-proxy and bubblewrap. Covered by its dedicated
+#     Docker-enabled .github/workflows/ime-bus-security.yml workflow.
 #   - tests/f13-fault-definitions.sh -- a fault-definitions library, not a
 #     standalone test: it asserts against a LIVE device's systemd unit/socket
 #     state (systemctl is-active, /run/.../*.sock, /var/lib/...).

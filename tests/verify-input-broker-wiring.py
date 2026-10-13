@@ -92,6 +92,7 @@ assert values(app, "Service", "InaccessiblePaths") == [
     f"-{AUTHORITY_SOCK}",
     "-/dev/uinput",
     PREFSD_SOCK,
+    "-/run/pf-ime",
 ]
 assert PREF_WRITER_GROUP not in values(app, "Service", "SupplementaryGroups")
 for name, trusted in (("selected shell", selected), ("foreground shell", foreground)):
@@ -186,12 +187,12 @@ assert directive_text(shell) in ini_blocks, "DEFAULT-APPS.md shell drop-in block
 dockerfile = DOCKERFILE.read_text()
 stages = re.split(r"(?m)^(?=FROM )", dockerfile)
 copies = [stage for stage in stages if "COPY --from=platform-inputs-src" in stage]
-assert len(copies) == 1 and copies[0].startswith("FROM ${PF_CONTAINER} AS platform-inputs-open\n"), copies
+assert len(copies) == 1 and copies[0].startswith("FROM pf-build-base AS platform-inputs-open\n"), copies
 assert dockerfile.count("COPY --from=platform-inputs-src") == 1
 for stage in ("platform-inputs-ddk", "platform-inputs-none"):
-    assert f"FROM ${{PF_CONTAINER}} AS {stage}\nRUN mkdir -p /out\n" in dockerfile, stage
+    assert f"FROM pf-build-base AS {stage}\nRUN mkdir -p /out\n" in dockerfile, stage
 assert "FROM platform-inputs-${PF_GPU_MODEL} AS platform-inputs\n" in dockerfile
-runtime = next(stage for stage in stages if stage.startswith("FROM ${PF_CONTAINER} AS runtime\n"))
+runtime = next(stage for stage in stages if stage.startswith("FROM pf-build-base AS runtime\n"))
 for line in (
     "ARG PF_DEVICE_DESCRIPTOR_ID=\n",
     "ARG PF_DEVICE_DESCRIPTOR_SHA256=\n",

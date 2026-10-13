@@ -1,0 +1,42 @@
+# Private input-method bus for pf-osk and pf-fcitx5 (bd: tsp-ihne1.5).
+#
+# Never enabled. pf-ime-door@.service and the pf-fcitx5/pf-osk drop-ins pull it
+# in with Requires=/After=; StopWhenUnneeded= stops it with the last of them.
+# Runs as pf-ime, a uid no app shares: apps (User=gamer) cannot open the 0700
+# socket directory, are refused by bus.conf if a path leaks, and cannot ptrace
+# the daemon. Apps never see this bus; X11 apps reach the engine only through
+# their own filtered door (pf-ime-door@.service).
+[Unit]
+Description=PocketForge private input-method bus
+StopWhenUnneeded=yes
+
+[Service]
+Type=exec
+User=pf-ime
+Group=pf-ime
+ExecStart=/usr/bin/dbus-daemon --config-file=/usr/share/pocketforge/ime/bus.conf --nofork --nopidfile --nosyslog
+# The listen path in bus.conf. Top-level, so no other unit's RuntimeDirectory
+# teardown of /run/pocketforge can remove it.
+RuntimeDirectory=pf-ime
+RuntimeDirectoryMode=0700
+ExecStartPost=/usr/bin/timeout 2 /bin/sh -c 'until [ -S /run/pf-ime/bus ]; do sleep 0.05; done'
+Restart=no
+UMask=0077
+LimitCORE=0
+NoNewPrivileges=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+CapabilityBoundingSet=
+MemoryMax=16M
