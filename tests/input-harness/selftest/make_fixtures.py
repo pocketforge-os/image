@@ -89,12 +89,14 @@ def keys(builder, text=PHRASE):
         builder.event("key", keycode=keycode, keysym=keysym, state="released", mods=0)
 
 
-def make_png(path, width=WIDTH, height=HEIGHT, rgb=(40, 44, 52)):
+def make_png(path, width=WIDTH, height=HEIGHT, rgb=(40, 44, 52), mark=False):
     raw = bytearray()
     row = bytes(rgb) * width
-    for _ in range(height):
+    marked_row = (bytes(rgb) * 300 + bytes((240, 240, 240)) * 40
+                  + bytes(rgb) * (width - 340))
+    for y in range(height):
         raw.append(0)
-        raw.extend(row)
+        raw.extend(marked_row if mark and 340 <= y < 370 else row)
 
     def chunk(tag, payload):
         return (
@@ -211,20 +213,31 @@ def build_good(out_dir):
     b.event("compositor_ready", pid=50, wayland_display="gamescope-0", x_display=":0", backend="headless")
     for i, client in enumerate(LAUNCHED):
         b.event("client_launch", target=client)
-        b.event("screenshot", target=client, path=f"screenshots/{client}.png", type=4, width=WIDTH, height=HEIGHT)
+        if client != "broken-client":
+            b.event("screenshot", target=client, phase="before", path=f"screenshots/{client}-before.png", type=4, width=WIDTH, height=HEIGHT)
+        b.event("screenshot", target=client, phase="after", path=f"screenshots/{client}.png", type=4, width=WIDTH, height=HEIGHT)
         b.event("client_stop", target=client)
         b.event("client_exit", target=client, rc=0)
     b.event("stop", rc=0)
     b.write(os.path.join(out_dir, "session.jsonl"))
 
     for client in LAUNCHED:
-        make_png(os.path.join(sdir, f"{client}.png"))
+        if client != "broken-client":
+            make_png(os.path.join(sdir, f"{client}-before.png"))
+        make_png(os.path.join(sdir, f"{client}.png"), mark=client != "broken-client")
     with open(os.path.join(sdir, "manifest.json"), "w", encoding="utf-8") as handle:
         json.dump(
-            [
-                {"path": f"screenshots/{client}.png", "type": 4, "width": WIDTH, "height": HEIGHT}
-                for client in LAUNCHED
-            ],
+            [entry for client in LAUNCHED for entry in (
+                ([] if client == "broken-client" else [{
+                    "target": client, "phase": "before",
+                    "path": f"screenshots/{client}-before.png",
+                    "type": 4, "width": WIDTH, "height": HEIGHT,
+                }]) + [{
+                    "target": client, "phase": "after",
+                    "path": f"screenshots/{client}.png",
+                    "type": 4, "width": WIDTH, "height": HEIGHT,
+                }]
+            )],
             handle,
             indent=1,
         )
@@ -260,6 +273,13 @@ def build_negatives(good_dir):
         for record in records:
             handle.write(json.dumps(record) + "\n")
     negatives["neg-widget-text"] = (d, "widget_text_mismatch")
+
+    d = clone(good_dir, "neg-stale-frame")
+    shutil.copyfile(
+        os.path.join(d, "screenshots", "gtk4-text-before.png"),
+        os.path.join(d, "screenshots", "gtk4-text.png"),
+    )
+    negatives["neg-stale-frame"] = (d, "stale_frame")
 
     def write_gtk_raw(directory, text):
         b = Builder("gtk4-text")

@@ -25,6 +25,7 @@ import json
 import os
 import struct
 import sys
+import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "validate"))
 from validate_transcript import validate_file  # noqa: E402
@@ -129,6 +130,16 @@ SPECS = {
 }
 
 SESSION_REQUIRED_DEVICES = ("pad", "keyboard", "mouse")
+TEXT_REGIONS = {
+    "gtk4-text": (190, 340, 1090, 420),
+    "qt6-text": (190, 340, 1090, 420),
+    "sdl3-text": (220, 290, 1050, 410),
+    "sdl2-game": (220, 290, 1050, 410),
+    "x11-gtk": (190, 320, 1090, 420),
+    "xim-only": (200, 300, 1050, 410),
+    "no-im": (200, 290, 1050, 410),
+}
+MIN_CHANGED_PIXELS = 128
 
 
 def read_events(path):
@@ -148,6 +159,96 @@ def png_size(path):
         return None
     width, height = struct.unpack(">II", head[16:24])
     return width, height
+
+
+def png_rgb(path):
+    """Decode an 8-bit, non-interlaced RGB/RGBA PNG using stdlib only."""
+    with open(path, "rb") as handle:
+        png = handle.read()
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos = 8
+    width = height = bpp = 0
+    compressed = bytearray()
+    while pos + 12 <= len(png):
+        length = struct.unpack(">I", png[pos:pos + 4])[0]
+        kind = png[pos + 4:pos + 8]
+        data = png[pos + 8:pos + 8 + length]
+        if len(data) != length:
+            return None
+        if kind == b"IHDR":
+            width, height, depth, color, comp, filt, interlace = struct.unpack(
+                ">IIBBBBB", data)
+            if depth != 8 or color not in (2, 6) or (comp, filt, interlace) != (0, 0, 0):
+                return None
+            bpp = 3 if color == 2 else 4
+        elif kind == b"IDAT":
+            compressed.extend(data)
+        elif kind == b"IEND":
+            break
+        pos += length + 12
+    if width <= 0 or height <= 0 or bpp == 0:
+        return None
+    try:
+        raw = zlib.decompress(compressed)
+    except zlib.error:
+        return None
+    stride = width * bpp
+    if len(raw) != height * (stride + 1):
+        return None
+    rows = []
+    previous = bytearray(stride)
+    offset = 0
+    for _ in range(height):
+        filter_type = raw[offset]
+        encoded = raw[offset + 1:offset + 1 + stride]
+        offset += stride + 1
+        if filter_type == 0:
+            decoded = bytearray(encoded)
+        else:
+            decoded = bytearray(stride)
+            for i, value in enumerate(encoded):
+                left = decoded[i - bpp] if i >= bpp else 0
+                up = previous[i]
+                upper_left = previous[i - bpp] if i >= bpp else 0
+                if filter_type == 1:
+                    predictor = left
+                elif filter_type == 2:
+                    predictor = up
+                elif filter_type == 3:
+                    predictor = (left + up) // 2
+                elif filter_type == 4:
+                    p = left + up - upper_left
+                    pa, pb, pc = abs(p - left), abs(p - up), abs(p - upper_left)
+                    predictor = left if pa <= pb and pa <= pc else up if pb <= pc else upper_left
+                else:
+                    return None
+                decoded[i] = (value + predictor) & 0xff
+        if bpp == 3:
+            rows.append(bytes(decoded))
+        else:
+            rows.append(bytes(channel for i, channel in enumerate(decoded) if i % 4 != 3))
+        previous = decoded
+    return width, height, rows
+
+
+def changed_pixels(before_path, after_path, region):
+    before = png_rgb(before_path)
+    after = png_rgb(after_path)
+    if before is None or after is None or before[:2] != after[:2]:
+        return None
+    width, height = before[:2]
+    x0, y0, x1, y1 = region
+    if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):
+        return None
+    changed = 0
+    for y in range(y0, y1):
+        brow, arow = before[2][y], after[2][y]
+        for x in range(x0, x1):
+            i = x * 3
+            if sum(abs(brow[i + c] - arow[i + c]) for c in range(3)) >= 48:
+                changed += 1
+    return changed
 
 
 def check_client(client, transcript_dir):
@@ -285,10 +386,16 @@ def check_session(out_dir, launched):
             return "FAIL", f"reason=client_lifecycle_missing hint={client} launch={len(launches)} stop={len(stops)} exit={len(exits)}"
         if exits[0]["rc"] != 0:
             return "FAIL", f"reason=client_exit_rc hint={client} rc={exits[0]['rc']}"
-        if len(shots) != 1 or shots[0]["seq"] >= stops[0]["seq"]:
+        expected_phases = ("before", "after") if client in TEXT_REGIONS else ("after",)
+        phase_map = {shot["phase"]: shot for shot in shots}
+        ordered = [phase_map.get(phase) for phase in expected_phases]
+        if (len(shots) != len(expected_phases) or any(shot is None for shot in ordered)
+                or any(shot["seq"] >= stops[0]["seq"] for shot in shots)
+                or any(ordered[i]["seq"] >= ordered[i + 1]["seq"]
+                       for i in range(len(ordered) - 1))):
             return "FAIL", (
                 f"reason=screenshot_after_stop hint={client} screenshot_seq="
-                f"{[e['seq'] for e in shots]} stop_seq={stops[0]['seq']}"
+                f"{[(e['phase'], e['seq']) for e in shots]} stop_seq={stops[0]['seq']}"
             )
     if "screenshot" not in names:
         return "FAIL", "reason=no_screenshot_event hint=driver never captured a screenshot"
@@ -308,6 +415,7 @@ def check_screenshots(out_dir):
     if not isinstance(manifest, list) or not manifest:
         return "FAIL", "reason=screenshot_manifest_empty hint=no captures recorded", []
     paths = []
+    by_target_phase = {}
     for entry in manifest:
         path = entry["path"] if os.path.isabs(entry["path"]) else os.path.join(out_dir, entry["path"])
         paths.append(path)
@@ -320,6 +428,24 @@ def check_screenshots(out_dir):
             return (
                 "FAIL",
                 f"reason=screenshot_size hint={path} is {size[0]}x{size[1]} expected {entry['width']}x{entry['height']}",
+                paths,
+            )
+        key = (entry.get("target"), entry.get("phase"))
+        if key in by_target_phase:
+            return "FAIL", f"reason=screenshot_duplicate hint={key}", paths
+        by_target_phase[key] = path
+    for client, region in TEXT_REGIONS.items():
+        before = by_target_phase.get((client, "before"))
+        after = by_target_phase.get((client, "after"))
+        if before is None or after is None:
+            return "FAIL", f"reason=frame_pair_missing hint={client}", paths
+        changed = changed_pixels(before, after, region)
+        if changed is None:
+            return "FAIL", f"reason=frame_region_invalid hint={client} region={region}", paths
+        if changed < MIN_CHANGED_PIXELS:
+            return (
+                "FAIL",
+                f"reason=stale_frame hint={client} changed_pixels={changed} minimum={MIN_CHANGED_PIXELS} region={region}",
                 paths,
             )
     return "PASS", f"count={len(manifest)} size={manifest[0]['width']}x{manifest[0]['height']}", paths

@@ -207,11 +207,13 @@ class FakeInput:
             self.proc.wait(timeout=5)
 
 
-def screenshot(sw: SessionWriter, name: str, shot_type: int = 4) -> bool:
-    path = os.path.join(SHOT_DIR, f"{name}.png")
+def screenshot(sw: SessionWriter, name: str, phase: str,
+               artifact: str | None = None, shot_type: int = 4) -> bool:
+    artifact = artifact or name
+    path = os.path.join(SHOT_DIR, f"{artifact}.png")
     # Manifest and event paths are relative to the run dir so the same
     # manifest validates both in-container (/out) and on the host ($OUT).
-    rel_path = os.path.join("screenshots", f"{name}.png")
+    rel_path = os.path.join("screenshots", f"{artifact}.png")
     if os.path.exists(path):
         os.unlink(path)
     # Opening the FIFO for write blocks until the mangoapp relay reads it;
@@ -243,14 +245,15 @@ def screenshot(sw: SessionWriter, name: str, shot_type: int = 4) -> bool:
                 continue
             if head[:8] == b"\x89PNG\r\n\x1a\n" and head[12:16] == b"IHDR":
                 width, height = struct.unpack(">II", head[16:24])
-                sw.emit("screenshot", target=name, path=rel_path,
+                sw.emit("screenshot", target=name, phase=phase, path=rel_path,
                         type=shot_type, width=width, height=height)
                 manifest_path = os.path.join(SHOT_DIR, "manifest.json")
                 manifest = []
                 if os.path.exists(manifest_path):
                     with open(manifest_path, "r", encoding="utf-8") as f:
                         manifest = json.load(f)
-                manifest.append({"path": rel_path, "type": shot_type,
+                manifest.append({"target": name, "phase": phase,
+                                 "path": rel_path, "type": shot_type,
                                  "width": width, "height": height})
                 with open(manifest_path, "w", encoding="utf-8") as f:
                     json.dump(manifest, f, indent=1)
@@ -337,12 +340,14 @@ def run_client(sw: SessionWriter, name: str, backend: str, purpose, phrase,
             # move slightly so cursor-theme lookups happen again
             mouse.cmd("abs 641 361")
         if phrase is not None:
+            if not screenshot(sw, name, "before", f"{name}-before"):
+                raise RuntimeError(f"{name} pre-typing screenshot failed")
             type_phrase(kbd, phrase)
             if not wait_for_widget_text(tx_path, phrase, 10, proc):
                 raise RuntimeError(
                     f"{name} did not read back expected widget text {phrase!r}")
         time.sleep(0.5)
-        screenshot(sw, name)
+        screenshot(sw, name, "after")
     finally:
         sw.emit("client_stop", target=name)
         if proc.poll() is None:

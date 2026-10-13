@@ -91,8 +91,10 @@ same envelope with `client` = `session` (including `start` first and
 - `client_launch` / `client_stop` / `client_exit` — Fields: `client` is
   `session`; `target` (string, client id), `rc` (int, on exit). The driver
   records `client_stop` immediately before asking the client to terminate.
-- `screenshot` — Fields: `target` (string, client id), `path` (string), `type` (int, gamescope
-  screenshot_type), `width`, `height` (int, expected size).
+- `screenshot` — Fields: `target` (string, client id), `phase` (`before` |
+  `after`), `path` (string), `type` (int, gamescope screenshot_type),
+  `width`, `height` (int, expected size). Text clients have one capture in
+  each phase; the final frame must visibly differ in its declared text region.
 
 ## Validation
 

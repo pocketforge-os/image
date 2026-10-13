@@ -124,6 +124,7 @@ EVENTS = {
     "client_exit": {"target": _STR, "rc": _INT},
     "screenshot": {
         "target": _STR,
+        "phase": _enum(("before", "after")),
         "path": _STR,
         "type": _INT,
         "width": _INT,

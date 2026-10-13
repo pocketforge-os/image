@@ -1,11 +1,11 @@
 # PocketForge input harness (tsp-ihne1.2)
 
 Shared laptop harness for all gamescope/input work: a **headless gamescope
-session** (our fork, branch `pocketforge`, pinned in `pins.env`) with
+session** (our fork, branch `pocketforge-linear`, pinned in `pins.env`) with
 Xwayland, fake uinput controller/keyboard/mouse, and one test client per
 row of the design's *When the keyboard opens* table. Every client writes a
-machine-readable **transcript** so downstream beads assert behaviour, not
-pixels.
+machine-readable **transcript** plus pre/post text-region frames so downstream
+beads assert both widget state and visible compositor output.
 
 One command builds the container, runs the whole session and prints the
 house verdict:
@@ -51,7 +51,7 @@ instead of a runtime crate — it is test tooling, not product code.
 | Client | Row covered | Backend | Notes |
 | --- | --- | --- | --- |
 | `gtk4-text` | Wayland apps that ask to show | wayland | GtkEntry, purpose from `PF_TX_PURPOSE` (email), commits via insert-text when available and capture-phase raw-key fallback otherwise; pointer + cursor transcript; readiness is emitted after the first painted frame; wire-protocol `im_state` comes from the preload interposer, never from a hardcoded claim |
-| `qt6-text` | Wayland apps that ask to show | wayland | QLineEdit, `ImhDigitsOnly`; digits hint rejects the phrase → raw-keys mode is the expected pass path today |
+| `qt6-text` | Wayland apps that ask to show | wayland | QLineEdit, `ImhDigitsOnly`; injects the compatible phrase `1234567890` and requires exact QLineEdit readback |
 | `sdl3-text` | patched SDL3 native Wayland | wayland | `SDL_StartTextInput`, TEXTINPUT commits, screen-keyboard events |
 | `sdl2-game` | SDL2 game through sdl2-compat | wayland | Debian's `libsdl2` **is** sdl2-compat; no org fork exists (see gaps) |
 | `x11-gtk` | X11 apps with GTK/Qt | x11 | GTK3 via Xwayland with `GTK_IM_MODULE=simple` (deterministic im-context-simple commits), purpose url, records `im_state none/unavailable` |
@@ -86,9 +86,13 @@ trusted-client relay: gamescope's `--mangoapp` path spawns
 `pf-shot` per command, so each screenshot consumes exactly one trusted
 connection. `pf-shot` binds the privileged `gamescope_control` global,
 requests the capture and waits for the `screenshot_taken` event (sent
-after the PNG is on disk). Captures are 1280x720 PNGs checked against
-`screenshots/manifest.json` (run-dir-relative paths, so the report
-works both in-container and on the host).
+after the PNG is on disk). Each text client is captured before typing and
+again after its exact `widget_text` readback. `report.py` decodes both
+1280x720 PNGs and requires at least 128 materially changed pixels in that
+client's declared text region; a stale compositor frame fails with
+`reason=stale_frame`. The paths and phases live in
+`screenshots/manifest.json` (run-dir-relative, so the report works both
+in-container and on the host).
 
 `gamescopectl screenshot` is deliberately NOT used: its `Execute()`
 forwards only two strings over `gamescope_private`, so the type
