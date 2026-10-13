@@ -107,6 +107,10 @@ while read -r ug home; do
     fi
 done
 
+# Remove the known package-configuration log and fail closed on any other
+# build-run log content before finalization and ext4 assembly.
+"${SRC_DIR}/build/prepare-rootfs-build-logs.sh" "${EXT}"
+
 # --- ELF build-ids, debuginfo split, image build-id manifest (bd tsp-ihne1.33) ---
 # Gate: every ELF in the assembled rootfs outside the closed vendor dirs must
 # carry a GNU build-id, or the build fails. DWARF-carrying owned binaries are

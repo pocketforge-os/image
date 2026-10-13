@@ -1,0 +1,27 @@
+name: build stage environment
+
+on:
+  pull_request:
+    paths:
+      - 'build/Dockerfile.pf'
+      - 'tests/test-build-stage-environment.sh'
+      - '.github/workflows/build-stage-environment.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-stage-environment-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-stage-environment:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, pf-builder-vm]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Prove BuildKit tracing is absent from RUN
+        run: tests/test-build-stage-environment.sh
