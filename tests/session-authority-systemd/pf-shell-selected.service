@@ -1,5 +1,7 @@
 [Unit]
 Description=PocketForge selected owner integration fixture (models the pf-shell grab)
+Wants=pf-prefsd.service
+After=pf-prefsd.service
 
 [Service]
 Type=simple

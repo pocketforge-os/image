@@ -651,7 +651,8 @@ commit_attempt() {
     while IFS="$TAB" read -r case_name status; do
         [ -n "$case_name" ] || continue
         grep -Fxq "$case_name" "$remaining" || die "reason=qpa_unknown_case case=$case_name"
-        if awk -F '\t' -v c="$case_name" '$2==c { found=1 } END { exit !found }' "$ledger"; then
+        if awk -F '\t' -v l="$label" -v c="$case_name" \
+            '$1==l && $2==c { found=1 } END { exit !found }' "$ledger"; then
             die "reason=duplicate_result case=$case_name"
         fi
         printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$case_name" "$status" "$unit" "$attempt" >>"$current"
@@ -674,7 +675,9 @@ commit_attempt() {
         if [ -z "$terminal" ]; then
             if [ "$commit_gpu_reset" != yes ]; then
                 completed=$(wc -l <"$current")
-                next_case=$(awk -F '\t' 'FILENAME==ARGV[1] { done[$2]=1; next } !($0 in done) { print; exit }' "$current" "$remaining")
+                next_case=$(awk -F '\t' -v l="$label" \
+                    'FILENAME==ARGV[1] { if ($1==l) done[$2]=1; next } !($0 in done) { print; exit }' \
+                    "$current" "$remaining")
                 record_harness_error "$label" "$unit" "$attempt" "$rc" "$deadline" \
                     "$completed" "$next_case" "$qpa" "$stdout" "$stderr"
             fi
@@ -712,7 +715,9 @@ commit_attempt() {
         qpa_sha=$(sha256sum "$qpa_copy" | cut -d' ' -f1)
         printf '%s\t%s\t%s\t%s\n' "$label" "$unit" "$attempt" "$qpa_sha" >>"$ROOT/qpa-manifest.tsv"
     fi
-    awk -F '\t' 'NR==FNR { done[$2]=1; next } !($0 in done)' "$current" "$remaining" >"$remaining.tmp"
+    awk -F '\t' -v l="$label" \
+        'NR==FNR { if ($1==l) done[$2]=1; next } !($0 in done)' \
+        "$current" "$remaining" >"$remaining.tmp"
     mv "$remaining.tmp" "$remaining"
     find "$parsed" "$current" -maxdepth 0 -type f -delete
 }
@@ -1809,6 +1814,103 @@ QPA
     printf 'A_CTS_SELFTEST state=pass crash_suffix=yes crash_evidence=yes timeout_suffix=yes unbegun_not_crash=yes nonpass_qpa=yes aggregate_fail_closed=yes\n'
 }
 
+label_case_selftest_skip() {
+    skip_label=$1
+    skip_case=$2
+    skip_qpa=$ROOT/nonpass-qpa/$skip_label/prerequisite-0.qpa
+    mkdir -p "$ROOT/nonpass-qpa/$skip_label"
+    printf 'A_CTS_NOT_RUN reason=prerequisite_gate_not_met\n' >"$skip_qpa"
+    skip_sha=$(sha256sum "$skip_qpa" | cut -d' ' -f1)
+    printf '%s\tprerequisite\t0\t%s\n' "$skip_label" "$skip_sha" >>"$ROOT/qpa-manifest.tsv"
+    printf '%s\t%s\tNotRun\tprerequisite\t0\n' "$skip_label" "$skip_case" >>"$ROOT/ledger.tsv"
+}
+
+label_case_selftest() {
+    [ "${PF_ACTS_SELFTEST:-}" = 1 ] || die 'reason=selftest_only'
+    control_one=dEQP-GLES3.functional.texture.shadow.control_one
+    control_two=dEQP-GLES3.functional.texture.shadow.control_two
+    target=dEQP-GLES3.functional.texture.shadow.depth24_stencil8
+    mkdir -p "$ROOT/nonpass-qpa/A1" "$ROOT/nonpass-qpa/B1" \
+        "$ROOT/crash-evidence/B1" "$ROOT/gpu-reset-events/B1" \
+        "$ROOT/harness-evidence/B1" "$ROOT/recovery-sanity" "$ROOT/work"
+    : >"$ROOT/ledger.tsv"; : >"$ROOT/qpa-manifest.tsv"
+    : >"$ROOT/crash-evidence.tsv"; : >"$ROOT/harness-errors.tsv"
+    : >"$ROOT/recovery-wait.tsv"; : >"$ROOT/gpu-reset-events.tsv"
+    printf 'A1\t%s\nA1\t%s\nA1\t%s\nB1\t%s\nB1\t%s\nB1\t%s\nB2\tcase.b2\nMATRIX\tcase.matrix\n' \
+        "$control_one" "$control_two" "$target" \
+        "$control_one" "$control_two" "$target" >"$ROOT/expected.tsv"
+    printf 'PF_GLES_SANITY verdict=pass clear=pass texture=pass renderer=zink-powervr\n' \
+        >"$ROOT/recovery-sanity/baseline.stdout"
+    : >"$ROOT/recovery-sanity/baseline.stderr"
+    printf 'A_CTS_RECOVERY_SANITY list=baseline unit=baseline attempt=0 user=selftest uid=0 started=fixture ended=fixture rc=0 verdict=pass probe_sha256=fixture\n' \
+        >"$ROOT/recovery-sanity/baseline.result"
+
+    printf '%s\n%s\n%s\n' "$control_one" "$control_two" "$target" >"$ROOT/work/a1.remaining"
+    cat >"$ROOT/work/a1.qpa" <<EOF
+#beginTestCaseResult $control_one
+<Result StatusCode="Pass">ok</Result>
+#endTestCaseResult
+#beginTestCaseResult $control_two
+<Result StatusCode="Pass">ok</Result>
+#endTestCaseResult
+#beginTestCaseResult $target
+<Result StatusCode="Pass">ok</Result>
+#endTestCaseResult
+EOF
+    commit_attempt A1 0000 1 "$ROOT/work/a1.remaining" "$ROOT/work/a1.qpa" 0 no
+
+    printf '%s\n%s\n%s\n' "$control_one" "$control_two" "$target" >"$ROOT/work/b1.remaining"
+    cat >"$ROOT/work/b1.qpa" <<EOF
+#beginTestCaseResult $control_one
+<Result StatusCode="Pass">ok</Result>
+#endTestCaseResult
+#beginTestCaseResult $control_two
+<Result StatusCode="Pass">ok</Result>
+#endTestCaseResult
+#beginTestCaseResult $target
+<Text>Watchdog terminated the target after a GPU reset</Text>
+<Text>0x0000000000002000 : linux-vdso.so.1(__kernel_rt_sigreturn+0x0) [0x2000]</Text>
+<Text>0x0000000000003000 : /usr/local/lib/aarch64-linux-gnu/libvulkan_powervr_mesa.so(+0xabc) [0x3000]</Text>
+EOF
+    printf 'stdout before target reset\n' >"$ROOT/work/b1.stdout"
+    printf 'stderr before target reset\n' >"$ROOT/work/b1.stderr"
+    cat >"$ROOT/work/b1.dmesg" <<'EOF'
+[ 42.000000] powervr 1800000.gpu: [drm] Reset reason=1 (Guilty lockup)
+[ 42.010000] powervr 1800000.gpu: [drm] Data Master=3 (Fragment)
+EOF
+    commit_attempt B1 0000 1 "$ROOT/work/b1.remaining" "$ROOT/work/b1.qpa" 137 no \
+        "$ROOT/work/b1.stdout" "$ROOT/work/b1.stderr" \
+        2026-10-11T12:00:00Z 2026-10-11T12:00:30Z "$ROOT/work/b1.dmesg" pass yes 1
+
+    cp "$ROOT/work/b1.dmesg" "$ROOT/gpu-reset-events/B1/0000-1.dmesg"
+    reset_bytes=$(wc -c <"$ROOT/gpu-reset-events/B1/0000-1.dmesg")
+    reset_sha=$(sha256sum "$ROOT/gpu-reset-events/B1/0000-1.dmesg" | cut -d' ' -f1)
+    printf 'B1\t0000\t1\t1\t%s\t2026-10-11T12:00:00Z\t2026-10-11T12:00:30Z\t%s\t%s\n' \
+        "$target" "$reset_bytes" "$reset_sha" >>"$ROOT/gpu-reset-events.tsv"
+    printf 'B1\tdecision=reject\treason=candidate_target_reset\n' >"$ROOT/r49-decisions.tsv"
+    label_case_selftest_skip B2 case.b2
+    label_case_selftest_skip MATRIX case.matrix
+    printf 'GL_VERSION fixture OpenGL ES 3.2\nGL_EXTENSIONS fixture GL_EXT_one\n' >"$ROOT/precondition.txt"
+    write_worker_environment
+    write_recovery_policy
+    cp "$ROOT/work/b1.dmesg" "$ROOT/dmesg.full"
+    atomic_line "$ROOT/run-outcome.txt" 'outcome=complete completed=8 total=8'
+    atomic_line "$ROOT/state" 'state=complete completed=8 total=8'
+    make_archive
+    printf 'A_CTS_LABEL_CASE_SELFTEST PASS b1_controls=committed b1_crash=committed reset=target-attributed decision=reject b2=prerequisite-gated matrix=prerequisite-gated archive=ready\n'
+}
+
+same_label_duplicate_selftest() {
+    [ "${PF_ACTS_SELFTEST:-}" = 1 ] || die 'reason=selftest_only'
+    mkdir -p "$ROOT/work"
+    printf 'A1\tcase.same\tPass\t0000\t1\n' >"$ROOT/ledger.tsv"
+    printf 'case.same\n' >"$ROOT/work/remaining"
+    printf '#beginTestCaseResult case.same\n<Result StatusCode="Pass">ok</Result>\n#endTestCaseResult\n' \
+        >"$ROOT/work/same.qpa"
+    commit_attempt A1 0000 2 "$ROOT/work/remaining" "$ROOT/work/same.qpa" 0 no
+    die 'reason=same_label_duplicate_accepted'
+}
+
 recovery_selftest() {
     fixture=${PF_ACTS_RECOVERY_FIXTURE:-}
     case "$fixture" in r42-delayed|recoverable|unrecoverable|process-exit|reset-cap) ;; *) die 'reason=recovery_fixture' ;; esac
@@ -2031,6 +2133,8 @@ host_selftest() {
 
 case "$mode" in
     selftest) selftest ;;
+    label-case-selftest) label_case_selftest ;;
+    same-label-duplicate-selftest) same_label_duplicate_selftest ;;
     selftest-dmesg-delta)
         [ "${PF_ACTS_SELFTEST:-}" = 1 ] || die 'reason=selftest_only'
         [ -r "${PF_ACTS_DMESG_BEFORE:-}" ] || die 'reason=dmesg_before_missing'

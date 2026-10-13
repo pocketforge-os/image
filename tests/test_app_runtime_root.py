@@ -279,6 +279,10 @@ class RendererTest(unittest.TestCase):
         self.assertIn("PrivateDevices=yes", unit)
         self.assertIn("DevicePolicy=closed", unit)
         self.assertIn(
+            "InaccessiblePaths=/run/pocketforge/prefsd.sock", unit
+        )
+        self.assertNotIn("pf-pref-writer", unit)
+        self.assertIn(
             "ReadWritePaths=/var/lib/pocketforge/apps/org.pocketforge.steamlink", unit
         )
         self.assertIn("DeviceAllow=/dev/dri/renderD128 rw", unit)
@@ -399,6 +403,7 @@ class RendererTest(unittest.TestCase):
         self.assertIn(
             "BindReadOnlyPaths=/run/pocketforge/session/environment", unit
         )
+        self.assertNotIn("BindPaths=/run/pocketforge/prefsd.sock", unit)
         for capability in capabilities:
             self.assertIn(f"# capability {capability}:", unit)
 

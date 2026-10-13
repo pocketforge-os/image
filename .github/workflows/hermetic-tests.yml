@@ -91,12 +91,14 @@ jobs:
           set -uo pipefail
           tests=(
             tests/test-a133-cma-bootargs.sh
+            tests/test-a-cts-label-case-identity.sh
             tests/test-a-cts-worker-evidence-first.sh
             tests/test-a-cts-worker-recovery.sh
             tests/test-a-cts-worker-terminal.sh
             tests/test-alsa-config.sh
             tests/test-app-runtime-root.sh
             tests/test-boot-animator.sh
+            tests/test-browser-platform-defaults.sh
             tests/test-build-id.sh
             tests/test-build-rootfs-direct.sh
             tests/test-cedar-spike.sh
@@ -111,6 +113,7 @@ jobs:
             tests/test-default-app-rootfs.sh
             tests/test-dma-heap-udev-policy.sh
             tests/test-dockerfile-pf-transforms.sh
+            tests/test-elf-buildid.sh
             tests/test-gamescope-package-path.sh
             tests/test-gamescope-pvr-cache.sh
             tests/test-hwprobe-variant-stage.sh
@@ -132,6 +135,7 @@ jobs:
             tests/test-poolsuite-variant-stage.sh
             tests/test-recovery-entry.sh
             tests/test-rootfs-abi-check.sh
+            tests/test-rootfs-build-logs.sh
             tests/test-rootfs-bluetooth.sh
             tests/test-rootfs-dns.sh
             tests/test-rootfs-fallback-profile.sh
@@ -146,6 +150,7 @@ jobs:
             tests/test-uboot-logo.sh
             tests/test-usbnet-bench-role.sh
             tests/test-usbnet-bench-rootfs.sh
+            tests/test-wifi-watchdog.sh
           )
           failed=0
           for t in "${tests[@]}"; do
@@ -162,3 +167,6 @@ jobs:
 
       - name: Check component cache keys
         run: python3 tests/test-component-cache-keys.py
+
+      - name: Check owned ELF producer build-id policy
+        run: python3 tests/test-owned-elf-buildid-producers.py

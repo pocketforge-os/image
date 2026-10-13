@@ -6,6 +6,7 @@ installer="${root}/scripts/install-default-app-support.sh"
 unit="${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
 dockerfile="${root}/build/Dockerfile.pf"
 rootfs_builder="${root}/scripts/build-rootfs.sh"
+live_harness="${root}/tests/test-session-authority-systemd.sh"
 tmp="$(mktemp -d)"
 trap 'find "${tmp}" -mindepth 1 -delete; rmdir "${tmp}"' EXIT
 
@@ -16,8 +17,8 @@ from pathlib import Path
 expected = """[Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-foreground.target
-BindsTo=pf-input-broker.service
-After=local-fs.target pocketforge-foreground.target pf-input-broker.service
+BindsTo=pf-input-broker.service pf-prefsd.service
+After=local-fs.target pocketforge-foreground.target pf-input-broker.service pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
 ConditionPathExists=/dev/fb0
@@ -30,18 +31,23 @@ SupplementaryGroups=audio input video
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
+Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
+CacheDirectory=pocketforge/apps/%i
+CacheDirectoryMode=0700
 ProtectSystem=strict
 ProtectHome=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
-ReadWritePaths=/var/lib/pocketforge/apps/%i
+ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
+InaccessiblePaths=-/dev/uinput
+InaccessiblePaths=/run/pocketforge/prefsd.sock
 # No session bus (bd: tsp-ihne1.5). Wayland apps get text only through
 # gamescope's text-input protocol. The address defeats libdbus/GDBus autolaunch
 # and the $XDG_RUNTIME_DIR/bus lookup. The private input-method bus is
@@ -63,7 +69,15 @@ Nice=-5
 actual = Path(sys.argv[1]).read_text()
 assert actual == expected
 assert "[Install]" not in actual
+assert "pf-pref-writer" not in actual
 PY
+
+expected_unit_sha256="$(sed -n 's/^app_unit_sha256=//p' "${live_harness}")"
+actual_unit_sha256="$(sha256sum "${unit}" | awk '{print $1}')"
+if [ "${actual_unit_sha256}" != "${expected_unit_sha256}" ]; then
+    echo "live harness app-unit digest drift: expected ${expected_unit_sha256}, got ${actual_unit_sha256}" >&2
+    exit 1
+fi
 
 rootfs="${tmp}/open-rootfs"
 runtime="${tmp}/open-runtime"
@@ -87,11 +101,16 @@ printf '%s\n' '[Unit]' 'Description=runtime broker unit fixture' '[Install]' \
     'WantedBy=multi-user.target' > "${runtime}/systemd/pf-input-broker.service"
 printf '[identity]\nid = "a133"\n' > "${runtime}/share/devices/a133/capabilities.toml"
 printf '%s\n' \
-    'schema_version = 1' \
+    'schema_version = 2' \
     'runtime_family = "pocketforge/a133-powervr"' \
     'runtime_abi = "1"' \
     'platform_version = "20"' \
     'supported_capabilities = ["audio", "entropy", "input", "settings"]' \
+    'physical_memory_mib = 970' \
+    'app_memory_budget_mib = 600' \
+    'gles_max = "3.0"' \
+    'inputs = ["buttons", "dpad", "stick", "two_sticks"]' \
+    'display = { width = 1280, height = 720 }' \
     > "${runtime}/share/platform-capabilities.toml"
 
 # A pre-existing boot enable link for the broker (what `systemctl enable` of the
