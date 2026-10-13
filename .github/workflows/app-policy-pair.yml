@@ -51,9 +51,10 @@ jobs:
             pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
             pf-framehost-wayland pf-theme pf-input-map pf-prefs pf-prefs-port \
             pf-session-client pf-session-authority pf-wire
-          cargo build --locked \
-            --manifest-path runtime-pair/Cargo.toml \
-            -p pf-app-launch --bin pf-app-policy-render
+          (cd runtime-pair && cargo build --locked \
+            --manifest-path Cargo.toml \
+            -p pf-app-launch --bin pf-app-policy-render \
+            --target-dir target)
           export PF_APP_POLICY_RENDER="$GITHUB_WORKSPACE/runtime-pair/target/debug/pf-app-policy-render"
           printf 'runtime_candidate=%s launcher_candidate=%s image_candidate=%s policy_renderer_sha256=%s\n' \
             "$(git -C runtime-pair rev-parse HEAD)" \
