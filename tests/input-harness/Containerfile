@@ -14,7 +14,7 @@ ARG BASE_IMAGE=debian@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d76
 # ---------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS gamescope-builder
 ARG GAMESCOPE_URL=https://github.com/pocketforge-os/gamescope.git
-ARG GAMESCOPE_COMMIT=eaca59d90a22431238bb084fce4d399036851d92
+ARG GAMESCOPE_COMMIT=298881e3dff1ade108d57a257e8bf59bf8c6436f
 
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
@@ -32,9 +32,23 @@ RUN apt-get update -qq \
        libegl-dev libgles-dev xwayland x11-xkb-utils \
  && find /var/lib/apt/lists -mindepth 1 -delete
 
+COPY tests/input-harness/tools/provision-wayland-protocols.sh /usr/local/bin/
+
 RUN git clone "${GAMESCOPE_URL}" /src/gamescope \
  && git -C /src/gamescope checkout "${GAMESCOPE_COMMIT}" \
  && git -C /src/gamescope submodule update --init --recursive
+
+# Match gamescope CI's trixie build environment.  The host package is 1.44,
+# while this gamescope/wlroots closure pins 1.49 and requires >=1.48.  Expose
+# the pinned copy outside subprojects/ (Meson sandbox boundary) and make its
+# pkg-config record win before either the parent or wlroots resolves it.
+RUN provision-wayland-protocols.sh \
+      /src/gamescope/subprojects/wlroots/subprojects/wayland-protocols \
+      /opt/pf-wayland-protocols \
+      /opt/pf-wayland-protocols-pc \
+ && PKG_CONFIG_PATH=/opt/pf-wayland-protocols-pc \
+      pkg-config --modversion wayland-protocols | grep -Fx 1.49
+ENV PKG_CONFIG_PATH=/opt/pf-wayland-protocols-pc
 
 # Headless harness scope: no WSI layer (that is for gamescope nested under
 # another compositor; it is also what drags in x11-xcb) and no unit tests.

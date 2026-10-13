@@ -36,6 +36,7 @@ type `screen_buffer` for golden comparison) and `screenshots/manifest.json`.
 | `tools/fake-input.c` | uinput daemon: fake pad/keyboard/mouse |
 | `tools/eis-bridge.c` | evdev → libeis sender bridge into gamescope |
 | `tools/pf-shot.c` | trusted `gamescope_control` screenshot (type 4, waits for `screenshot_taken`) |
+| `tools/provision-wayland-protocols.sh` | exposes the closure-pinned 1.49 protocol XMLs to Meson before trixie's 1.44 package |
 | `tools/transcript.{h,c}` | `libpf-transcript.so` used by every client |
 | `tools/transcript-preload.c` | LD_PRELOAD interposer (cursor names, text-input-v3 availability) |
 | `clients/*.c(pp)` | the test clients, one per design table row |
@@ -166,3 +167,10 @@ workflow has no docker daemon); it is not wired into CI yet.
    `screenshot_taken`). Fed back to the plan: any downstream bead that
    wants overlay-inclusive goldens (OSK, system menu) must use
    `gamescope_control` directly or fix `gamescopectl`.
+8. **Gamescope's wlroots pin requires wayland-protocols >=1.48**, while
+   Debian trixie provides 1.44. The harness mirrors gamescope's aarch64 CI:
+   it copies the closure-pinned 1.49 tree outside `subprojects/` and places a
+   generated `wayland-protocols.pc` first on `PKG_CONFIG_PATH` before Meson
+   resolves the dependency. Production `pf build` resolves this differently,
+   from the snapshot-pinned Bookworm backports package in its owned build
+   environment; neither path patches gamescope source.

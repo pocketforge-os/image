@@ -168,6 +168,7 @@ def section_asset_audit(work):
         "session/udev-shim.sh",
         "tools/fake-input.c",
         "tools/pf-shot.c",
+        "tools/provision-wayland-protocols.sh",
         "tools/transcript.c",
         "tools/transcript.h",
         "clients/gtk4-text.c",
@@ -263,6 +264,61 @@ def section_asset_audit(work):
             re.fullmatch(r"[0-9a-f]{40}", pins.get("GAMESCOPE_COMMIT", "")) is not None,
             f"pins.env GAMESCOPE_COMMIT is not a full sha: {pins.get('GAMESCOPE_COMMIT')!r}",
         )
+        require(
+            pins.get("GAMESCOPE_BRANCH") == "pocketforge-linear",
+            f"pins.env does not identify the linear gamescope branch: {pins.get('GAMESCOPE_BRANCH')!r}",
+        )
+        require(
+            pins.get("GAMESCOPE_COMMIT")
+            == "298881e3dff1ade108d57a257e8bf59bf8c6436f",
+            f"pins.env lost the producer-verified gamescope pin: {pins.get('GAMESCOPE_COMMIT')!r}",
+        )
+
+    # The trixie builder's wayland-protocols 1.44 must not win over the
+    # gamescope source closure's 1.49. Exercise the provisioning helper and
+    # prove both the required ordering and its deliberately reversed negative.
+    provision = os.path.join(HARNESS, "tools", "provision-wayland-protocols.sh")
+    protocol_fixture = os.path.join(work, "wayland-protocols-source")
+    cursor_shape = os.path.join(
+        protocol_fixture, "staging", "cursor-shape", "cursor-shape-v1.xml"
+    )
+    os.makedirs(os.path.dirname(cursor_shape))
+    with open(cursor_shape, "w", encoding="utf-8") as handle:
+        handle.write("<protocol name=\"fixture\"/>\n")
+    exposed = os.path.join(work, "wayland-protocols-exposed")
+    pinned_pc = os.path.join(work, "wayland-protocols-pinned-pc")
+    proc = subprocess.run(
+        [provision, protocol_fixture, exposed, pinned_pc],
+        capture_output=True,
+        text=True,
+    )
+    require(proc.returncode == 0, f"wayland-protocol provisioning failed:\n{proc.stderr}")
+    old_pc = os.path.join(work, "wayland-protocols-old-pc")
+    os.makedirs(old_pc)
+    with open(os.path.join(old_pc, "wayland-protocols.pc"), "w", encoding="utf-8") as handle:
+        handle.write(
+            "prefix=/fixture-old\nName: wayland-protocols\n"
+            "Description: deliberately old negative control\nVersion: 1.44\n"
+        )
+
+    def resolved_protocol_version(path):
+        env = os.environ.copy()
+        env["PKG_CONFIG_PATH"] = path
+        result = subprocess.run(
+            ["pkg-config", "--modversion", "wayland-protocols"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode, result.stdout.strip(), result.stderr
+
+    rc, version, error = resolved_protocol_version(os.pathsep.join((pinned_pc, old_pc)))
+    require(rc == 0 and version == "1.49", f"pinned .pc did not win: {version!r} {error}")
+    rc, version, error = resolved_protocol_version(os.pathsep.join((old_pc, pinned_pc)))
+    require(
+        rc == 0 and version == "1.44",
+        f"reversed-order negative control did not expose 1.44: {version!r} {error}",
+    )
 
     # The hermetic CI workflow must run this self-test.
     workflow = os.path.join(REPO, ".github", "workflows", "hermetic-tests.yml")
