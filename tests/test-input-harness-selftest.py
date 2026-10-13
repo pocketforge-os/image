@@ -246,6 +246,27 @@ def section_asset_audit(work):
                 )
             require(proc.returncode == 0, f"{entry} fails syntax check:\n{proc.stderr}")
 
+    # Gamescope may start its primary child before exporting WAYLAND_DISPLAY.
+    # The driver must make its documented gamescope-0 fallback visible to all
+    # client subprocesses, rather than using it only for its own socket wait.
+    driver_mod = load_module(
+        "pf_input_harness_driver",
+        os.path.join(HARNESS, "session", "driver.py"),
+    )
+    fallback_env = {}
+    fallback_display = driver_mod.configure_wayland_display(fallback_env)
+    require(
+        fallback_display == "gamescope-0"
+        and fallback_env.get("WAYLAND_DISPLAY") == "gamescope-0",
+        "driver does not export its fallback Wayland display to clients",
+    )
+    explicit_env = {"WAYLAND_DISPLAY": "gamescope-test"}
+    require(
+        driver_mod.configure_wayland_display(explicit_env) == "gamescope-test"
+        and explicit_env["WAYLAND_DISPLAY"] == "gamescope-test",
+        "driver overwrites an explicit Wayland display",
+    )
+
     # pins.env must pin the fork by full commit sha.
     pins_path = os.path.join(HARNESS, "pins.env")
     if os.path.exists(pins_path):

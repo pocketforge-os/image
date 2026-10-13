@@ -103,6 +103,13 @@ def wait_for_socket(name: str, timeout: float) -> str:
     raise TimeoutError(f"socket {path} did not appear within {timeout}s")
 
 
+def configure_wayland_display(env: dict[str, str]) -> str:
+    """Resolve and export the compositor display for child processes."""
+    name = env.get("WAYLAND_DISPLAY") or "gamescope-0"
+    env["WAYLAND_DISPLAY"] = name
+    return name
+
+
 def wait_event_in(tx_path: str, event: str, timeout: float,
                   proc: subprocess.Popen | None = None) -> bool:
     deadline = time.monotonic() + timeout
@@ -282,7 +289,7 @@ def main() -> int:
     bridge = None
     rc = 1
     try:
-        wl_name = os.environ.get("WAYLAND_DISPLAY", "gamescope-0")
+        wl_name = configure_wayland_display(os.environ)
         wait_for_socket(wl_name, 60)
         eis_path = wait_for_socket(f"{wl_name}-ei", 60)
         sw.emit("compositor_ready", pid=os.getppid(),
