@@ -2029,9 +2029,7 @@ python3 "${SRC_DIR}/scripts/verify-rootfs-usbnet-bench.py" \
 # fontconfig writes this cache diagnostic while packages are configured. It is
 # build-host/run evidence, not device runtime state. Remove the known producer,
 # then fail closed if any other non-empty build log remains.
-find "${ROOTFS_EXTRACTED}/var/log" -maxdepth 1 -type f \
-    -name fontconfig.log -delete
-"${SRC_DIR}/build/check-rootfs-build-logs.sh" "${ROOTFS_EXTRACTED}"
+"${SRC_DIR}/build/prepare-rootfs-build-logs.sh" "${ROOTFS_EXTRACTED}"
 
 # Browser platform defaults (bd tsp-be9lx): chassis, DNS-over-TLS, coredump
 # size cap, default browser files, and — on the open-GPU profile that ships

@@ -21,5 +21,11 @@ grep -Fq 'var/log/fontconfig.log' "$tmp/negative.err"
 find "$tmp/rootfs/var/log" -type f -size +0c -delete
 "$root/build/check-rootfs-build-logs.sh" "$tmp/rootfs"
 
-grep -Fq 'check-rootfs-build-logs.sh' "$root/scripts/build-rootfs.sh"
+printf '%s\n' 'Fontconfig error: Cannot load default config file' \
+    >"$tmp/rootfs/var/log/fontconfig.log"
+"$root/build/prepare-rootfs-build-logs.sh" "$tmp/rootfs"
+[ ! -e "$tmp/rootfs/var/log/fontconfig.log" ]
+
+grep -Fq 'prepare-rootfs-build-logs.sh' "$root/scripts/build-rootfs.sh"
+grep -Fq 'prepare-rootfs-build-logs.sh' "$root/scripts/build-rootfs-a523.sh"
 echo 'rootfs-build-logs-test=PASS'
