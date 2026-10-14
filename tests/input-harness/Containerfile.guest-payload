@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1.6
 ARG PF_BUILD_IMAGE=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
 FROM ${PF_BUILD_IMAGE} AS builder
-RUN apt-get update \
+ARG PF_APT_PROXY
+COPY tests/input-harness/tools/require-apt-proxy.sh /usr/local/libexec/require-apt-proxy.sh
+RUN set -eu; \
+    . /usr/local/libexec/require-apt-proxy.sh; \
+    apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       dpkg-dev fakechroot fakeroot libfakechroot:arm64 libfakeroot:arm64 \
  && find /var/lib/apt/lists -mindepth 1 -delete
@@ -19,13 +23,11 @@ RUN set -eux; \
 
 FROM builder AS sysroots
 ARG SNAPSHOT_DATE=20260601T000000Z
-ARG PF_APT_PROXY=
+ARG PF_APT_PROXY
 RUN set -eux; \
+    . /usr/local/libexec/require-apt-proxy.sh; \
     mirror="http://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE}/"; \
-    set --; \
-    if [ -n "${PF_APT_PROXY}" ]; then \
-      set -- "--aptopt=Acquire::http::Proxy \"${PF_APT_PROXY}\""; \
-    fi; \
+    set -- "--aptopt=Acquire::http::Proxy \"${PF_APT_PROXY}\""; \
     build_packages="build-essential,cmake,meson,ninja-build,pkg-config,python3,python3-attr,python3-jinja2,libxml2-utils,wayland-protocols,libwayland-dev,libgtk-4-dev,libgtk-3-dev,qt6-base-dev,libsdl2-dev,libx11-dev,libxkbcommon-dev"; \
     runtime_packages="python3,libwayland-client0,libwayland-cursor0,libgtk-4-1,libgtk-3-0,libqt6widgets6,qt6-wayland,libsdl2-2.0-0,libx11-6,libxkbcommon0,xwayland,x11-xkb-utils,xkb-data,fontconfig,fonts-dejavu-core"; \
     mmdebstrap "$@" --mode=fakechroot --architectures=arm64 --variant=minbase \
@@ -36,7 +38,10 @@ RUN set -eux; \
       --aptopt='Acquire::Retries "5"' bookworm /work/runtime.tar "$mirror"
 
 FROM builder AS payload-tools
-RUN apt-get update \
+ARG PF_APT_PROXY
+RUN set -eu; \
+    . /usr/local/libexec/require-apt-proxy.sh; \
+    apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends squashfs-tools \
  && find /var/lib/apt/lists -mindepth 1 -delete
 

@@ -190,6 +190,7 @@ def section_asset_audit(work):
         "session/udev-shim.sh",
         "tools/fake-input.c",
         "tools/pf_uinput_domain_guard.h",
+        "tools/require-apt-proxy.sh",
         "tools/private-input.c",
         "tools/pf-shot.c",
         "tools/provision-wayland-protocols.sh",
@@ -210,6 +211,7 @@ def section_asset_audit(work):
         "selftest/test-fake-input-guard.sh",
         "selftest/test-negative-control-wrapper.sh",
         "selftest/test-guest-agent.py",
+        "selftest/test-apt-proxy-guard.sh",
         "guest/agent.py",
         "guest/build-tools.sh",
         "session/entry-guest.sh",
@@ -247,6 +249,8 @@ def section_asset_audit(work):
     require(
         "mmdebstrap" in payload_container
         and "snapshot.debian.org" in payload_container
+        and payload_container.count(". /usr/local/libexec/require-apt-proxy.sh") == 3
+        and '--aptopt=Acquire::http::Proxy' in payload_container
         and "mksquashfs" in payload_builder
         and "-all-time" in payload_builder
         and "contains_product_gamescope" in payload_builder
@@ -265,6 +269,10 @@ def section_asset_audit(work):
         and 'docker pull "$PF_BUILD_IMAGE"' not in payload_workflow
         and '--build-arg PF_BUILD_IMAGE="$PF_BUILD_IMAGE"' in payload_workflow,
         "payload workflow does not use the runner's approved insecure-registry builder",
+    )
+    require(
+        '--build-arg PF_APT_PROXY=http://10.0.32.86:3142' in payload_workflow,
+        "payload workflow does not pass the fleet apt-cacher-ng endpoint",
     )
     with open(os.path.join(HARNESS, "run-guest.sh"), "r", encoding="utf-8") as handle:
         guest_runner = handle.read()
