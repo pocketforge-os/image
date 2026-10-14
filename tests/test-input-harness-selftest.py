@@ -191,6 +191,8 @@ def section_asset_audit(work):
         "tools/fake-input.c",
         "tools/pf_uinput_domain_guard.h",
         "tools/require-apt-proxy.sh",
+        "tools/normalize-guest-payload-root.sh",
+        "tools/inventory-guest-payload.py",
         "tools/private-input.c",
         "tools/pf-shot.c",
         "tools/provision-wayland-protocols.sh",
@@ -212,6 +214,7 @@ def section_asset_audit(work):
         "selftest/test-negative-control-wrapper.sh",
         "selftest/test-guest-agent.py",
         "selftest/test-apt-proxy-guard.sh",
+        "selftest/test-payload-reproducibility.sh",
         "guest/agent.py",
         "guest/build-tools.sh",
         "session/entry-guest.sh",
@@ -315,6 +318,12 @@ def section_asset_audit(work):
         and '--build-context libei-src="$RUNNER_TEMP/payload-contexts/libei"'
         in payload_workflow,
         "payload workflow does not stage pinned source contexts outside BuildKit RUN",
+    )
+    require(
+        payload_workflow.index('cat "$out/$evidence"')
+        < payload_workflow.index("verify-guest-payload.sh")
+        and "apt-sources.txt runtime-packages.tsv payload-files.tsv" in payload_workflow,
+        "payload workflow does not print full provenance before pin verification",
     )
     with open(os.path.join(HARNESS, "run-guest.sh"), "r", encoding="utf-8") as handle:
         guest_runner = handle.read()

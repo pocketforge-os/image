@@ -70,6 +70,11 @@ jobs:
             --label pf.bead=tsp-ihne1.56.4 \
             -f tests/input-harness/Containerfile.guest-payload \
             --output "type=local,dest=$out" . 2>&1 | tee "$RUNNER_TEMP/payload-build.log"
+          for evidence in apt-sources.txt runtime-packages.tsv payload-files.tsv; do
+            echo "--- BEGIN $evidence ---"
+            cat "$out/$evidence"
+            echo "--- END $evidence ---"
+          done
           tests/input-harness/verify-guest-payload.sh \
             --payload "$out/input-harness.squashfs" \
             --manifest "$out/manifest.json"
@@ -85,6 +90,9 @@ jobs:
           path: |
             ${{ runner.temp }}/input-harness-payload/input-harness.squashfs
             ${{ runner.temp }}/input-harness-payload/manifest.json
+            ${{ runner.temp }}/input-harness-payload/apt-sources.txt
+            ${{ runner.temp }}/input-harness-payload/runtime-packages.tsv
+            ${{ runner.temp }}/input-harness-payload/payload-files.tsv
           if-no-files-found: error
           retention-days: 7
       - name: Remove staged source contexts

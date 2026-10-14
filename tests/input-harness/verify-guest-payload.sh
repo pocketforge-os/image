@@ -47,5 +47,7 @@ assert value["contains_product_gamescope"] is False
 assert value["reproducibility_copies"] == 2
 assert value["sha256"] == sys.argv[2]
 assert value["bytes"] == int(sys.argv[3])
+assert value["file_inventory"]["path"] == "payload-files.tsv"
+assert value["apt_sources"]["path"] == "apt-sources.txt"
 PY
 echo "guest-payload-verify=PASS sha256=$actual_sha bytes=$actual_bytes manifest_sha256=$actual_manifest_sha"
