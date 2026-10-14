@@ -242,9 +242,17 @@ cat > "${fixture_src}/scripts/verify-mesa-shader-cache.sh" <<'EOF'
 #!/bin/sh
 echo 'mesa-shader-cache fixture=SKIP scope=usbnet-final-rootfs-ordering'
 EOF
+# Cursor payload installation is independently covered by
+# test-cursor-theme-package.sh. This synthetic tar intentionally contains only
+# the USB-network artifacts needed to exercise final-rootfs guard ordering.
+cat > "${fixture_src}/scripts/install-cursor-theme.sh" <<'EOF'
+#!/bin/sh
+echo 'cursor-theme fixture=SKIP scope=usbnet-final-rootfs-ordering'
+EOF
 chmod 0755 "${fixture_src}/scripts/verify-open-gpu-tools.sh" \
     "${fixture_src}/scripts/verify-open-gpu-provider.sh" \
-    "${fixture_src}/scripts/verify-mesa-shader-cache.sh"
+    "${fixture_src}/scripts/verify-mesa-shader-cache.sh" \
+    "${fixture_src}/scripts/install-cursor-theme.sh"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829_bt.bin"
 for library in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so gbm/dri_gbm.so; do

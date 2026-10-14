@@ -395,6 +395,11 @@ MemoryMax=256M
 Nice=-5
 ```
 
+The image installs `pf-app@.service.d/30-cursor-theme.conf` alongside this security-pinned
+template. Its two `Environment=` directives set `XCURSOR_THEME=pocketforge-light` and
+`XCURSOR_SIZE=48`, so systemd supplies the defaults directly to every app unit without relying on
+PAM interpretation of `/etc/environment`.
+
 The app template deliberately omits the dedicated `pf-pref-writer` supplementary group. Only
 `pf-shell-selected.service` and `pf-foreground@.service` receive that group, while generated
 runtime-root drop-ins reset `SupplementaryGroups=` entirely. The `pf-input-broker.service`

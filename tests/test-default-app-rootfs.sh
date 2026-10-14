@@ -126,6 +126,8 @@ test -x "${rootfs}/usr/bin/pf-app-launch"
 cmp "${runtime}/share/platform-capabilities.toml" \
     "${rootfs}/usr/share/pocketforge/platform-capabilities.toml"
 cmp "${unit}" "${rootfs}/etc/systemd/system/pf-app@.service"
+cmp "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf" \
+    "${rootfs}/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf"
 if find "${rootfs}/etc/systemd/system" -path '*.wants/*' -name 'pf-app@*.service' | grep -q .; then
     echo 'pf-app@.service was unexpectedly enabled' >&2
     exit 1
