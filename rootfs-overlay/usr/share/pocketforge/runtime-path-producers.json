@@ -1,0 +1,16 @@
+{
+  "schema": "pocketforge.runtime-path-producers/v1",
+  "producers": {
+    "/run/pocketforge/session/environment": {
+      "unit": "pocketforge-session-publisher.service",
+      "type": "regular",
+      "mode": "0444"
+    },
+    "/run/pocketforge/session/wayland-0": {
+      "unit": "pocketforge-session-publisher.service",
+      "type": "socket-link",
+      "mode": "0660"
+    }
+  },
+  "optional": []
+}

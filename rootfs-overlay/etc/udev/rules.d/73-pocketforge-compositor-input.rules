@@ -1,0 +1,10 @@
+# The input router owns every gamepad. Gamescope receives only the compositor
+# classes named by design/input-layer/input-layer.html: real keyboard/mouse/
+# touch and the router-created virtual mouse.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="TRIMUI Player1", GOTO="pf_compositor_input_end"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_JOYSTICK}=="1", GOTO="pf_compositor_input_end"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", GROUP="pf-compositor-input", MODE="0660"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", GROUP="pf-compositor-input", MODE="0660"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHSCREEN}=="1", GROUP="pf-compositor-input", MODE="0660"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="PocketForge virtual mouse", GROUP="pf-compositor-input", MODE="0660"
+LABEL="pf_compositor_input_end"

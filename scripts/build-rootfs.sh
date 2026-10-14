@@ -944,6 +944,8 @@ if [ ! -s "${ROOTFS}/lib/modules/${KREL}/modules.dep" ]; then
 fi
 install_open_gpu_module_options
 
+/work/src/scripts/install-gamescope-session.sh "${PF_GAMESCOPE_MODE}" "${ROOTFS}"
+
 # --- Firmware install --------------------------------------------------------
 echo "[customize] Installing firmware..."
 install -d "${ROOTFS}/lib/firmware"
@@ -1304,6 +1306,13 @@ fi
     "${RUNTIME_DIR}" \
     "${LAUNCHER_DIR}" \
     /work/src/rootfs-overlay/etc/systemd/system/pf-app@.service
+
+if [ "${PF_GAMESCOPE_MODE}" = g1 ]; then
+    /work/src/scripts/check-runtime-path-producers.py \
+        --root "${ROOTFS}" \
+        --inventory /work/src/build/app-policy-a133-open-g1-v1.json \
+        --producers "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
+fi
 
 # Private input-method bus and per-app X11 door (bd tsp-ihne1.5). These files
 # stay dormant until the session/manifest work starts pf-fcitx5, pf-osk or an

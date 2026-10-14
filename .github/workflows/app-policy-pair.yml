@@ -8,6 +8,7 @@ on:
       - 'scripts/render-platform-capabilities.py'
       - 'scripts/install-poolsuite.sh'
       - 'build/app-policy-a133-open-v1.json'
+      - 'build/app-policy-a133-open-g1-v1.json'
       - 'build/Dockerfile.pf'
       - 'tests/test-app-runtime-root.sh'
       - 'tests/test_app_runtime_root.py'
