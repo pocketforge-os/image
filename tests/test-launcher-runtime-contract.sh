@@ -18,8 +18,8 @@ grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 # The paired runtime adds the one app capability-policy compiler; the paired
 # launcher vendors that exact generation. The image guard rejects any crossed
 # or preceding source generation.
-expected_runtime=53af03d72165ce2c7b74bcd8864339912d3ab8e8
-expected_launcher=58652733f84f3dd3361103063cc862f07247cbc2
+expected_runtime=a94690d152f421890073511f62e20f70ed68b0d4
+expected_launcher=07736e16ea39787fe6e59bb3595f9c274138a335
 prior_runtime=4b71a503909090219c3a01c1718e9e772e0d488b
 prior_launcher=d46dbb48e610e10cc4d01562fedcdf7cdfae0f7d
 older_runtime=de890215bd97eb0b5b63287a51e8b9a2e18d1125
