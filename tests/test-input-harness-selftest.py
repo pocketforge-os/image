@@ -260,9 +260,11 @@ def section_asset_audit(work):
     ) as handle:
         payload_workflow = handle.read()
     require(
-        'docker pull "$PF_BUILD_IMAGE"' in payload_workflow
+        'docker buildx inspect pf-insecure --bootstrap' in payload_workflow
+        and '--builder pf-insecure' in payload_workflow
+        and 'docker pull "$PF_BUILD_IMAGE"' not in payload_workflow
         and '--build-arg PF_BUILD_IMAGE="$PF_BUILD_IMAGE"' in payload_workflow,
-        "payload workflow does not seed BuildKit through the runner's approved registry path",
+        "payload workflow does not use the runner's approved insecure-registry builder",
     )
     with open(os.path.join(HARNESS, "run-guest.sh"), "r", encoding="utf-8") as handle:
         guest_runner = handle.read()

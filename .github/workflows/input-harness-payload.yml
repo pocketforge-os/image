@@ -28,15 +28,15 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - name: Seed BuildKit from the runner's approved insecure registry
-        run: docker pull "$PF_BUILD_IMAGE"
+      - name: Verify the runner's approved insecure-registry builder
+        run: docker buildx inspect pf-insecure --bootstrap
       - name: Build reproducible arm64 attachment
         timeout-minutes: 40
         run: |
           set -o pipefail
           out="$RUNNER_TEMP/input-harness-payload"
           test ! -e "$out"
-          docker buildx build --builder default --pull=false --progress=plain \
+          docker buildx build --builder pf-insecure --pull=false --progress=plain \
             --build-arg PF_BUILD_IMAGE="$PF_BUILD_IMAGE" \
             --build-arg PF_APT_PROXY=http://10.0.32.86:3142 \
             --label pf.bead=tsp-ihne1.56.4 \
