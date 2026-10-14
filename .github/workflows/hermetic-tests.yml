@@ -134,6 +134,7 @@ jobs:
             tests/test-open-gpu-integration.sh
             tests/test-open-gpu-gate-ordering.sh
             tests/test-open-gpu-gate-virtual.sh
+            tests/test-open-gpu-probe-spirv.sh
             tests/test-open-gpu-provider.sh
             tests/test-open-gpu-tools.sh
             tests/test-open-module-contract.sh
