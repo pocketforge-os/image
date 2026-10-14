@@ -357,7 +357,7 @@ static int probe_venus_readback(void)
 {
     char node[256], icd[256];
     int drm_fd;
-    int capset_mask = 0;
+    uint64_t capset_mask = 0;
     struct drm_virtgpu_getparam getparam;
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice *physical_devices = NULL;
@@ -401,10 +401,10 @@ static int probe_venus_readback(void)
         return virtual_fail("VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs query failed");
     }
     close(drm_fd);
-    if ((capset_mask & (1 << VIRTGPU_DRM_CAPSET_VENUS)) == 0) {
+    if ((capset_mask & (1ULL << VIRTGPU_DRM_CAPSET_VENUS)) == 0) {
         fprintf(stderr,
                 "open-gpu-probe: host does not advertise the Venus capset "
-                "(supported mask=0x%x)\n", capset_mask);
+                "(supported mask=0x%llx)\n", (unsigned long long)capset_mask);
         return 1;
     }
 
