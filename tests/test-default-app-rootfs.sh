@@ -27,7 +27,7 @@ ConditionPathExists=/dev/fb0
 Type=simple
 User=gamer
 Group=gamer
-SupplementaryGroups=audio input video
+SupplementaryGroups=
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
@@ -126,6 +126,8 @@ test -x "${rootfs}/usr/bin/pf-app-launch"
 cmp "${runtime}/share/platform-capabilities.toml" \
     "${rootfs}/usr/share/pocketforge/platform-capabilities.toml"
 cmp "${unit}" "${rootfs}/etc/systemd/system/pf-app@.service"
+cmp "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf" \
+    "${rootfs}/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf"
 if find "${rootfs}/etc/systemd/system" -path '*.wants/*' -name 'pf-app@*.service' | grep -q .; then
     echo 'pf-app@.service was unexpectedly enabled' >&2
     exit 1
@@ -270,4 +272,86 @@ none_body="$(sed -n '/^FROM ${PF_CONTAINER} AS launcher-none$/,/^# launcher-open
 ! grep -F 'launcher-src' <<<"${none_body}"
 test "$(grep -c '^COPY --from=launcher-src ' "${dockerfile}")" -eq 1
 
-echo 'default-app rootfs contract: PASS (verbatim dormant unit, open-only install incl. app-session broker never enabled, libpocketforge.so.1, devices/a133 and byte-identical device-neutral descriptor, no per-SoC PF_DESCRIPTOR hard-code; non-open no-op with every leak refused)'
+# No app bundle may declare a cgroup uinput grant (incident tsp-ihne1.56, PR6).
+# uinput is broker-owned (pf-input-broker AssertPathExists=/dev/uinput) and the
+# generic pf-app@.service already hides it (InaccessiblePaths=-/dev/uinput), so a
+# slice.conf DeviceAllow=/dev/uinput is both over-broad and redundant: an app reads
+# input through the broker, it never creates input devices. hello-pocketforge used
+# to ship one; this guard keeps every apps/*/slice.conf free of it.
+#
+# The scanner follows systemd unit-file assignment syntax: whole-line comments
+# (#/;) grant nothing, whitespace on either side of '=' and leading indentation
+# are accepted spellings, and a backslash continues the assignment onto the next
+# line -- so no spelling systemd would parse as a /dev/uinput grant can slip
+# through. Production scan and planted controls both call this one function, so
+# the controls can never drift from the production pattern. A dangling comment
+# continuation over-detects (fail-closed), which is the intended bias.
+uinput_grant_scan() {
+    find "$1" -mindepth 2 -maxdepth 2 -name slice.conf -print0 \
+    | xargs -0 -r awk '
+        function flush() {
+            if (buf ~ /DeviceAllow[[:space:]]*=[[:space:]]*[^[:space:]]*\/dev\/uinput/)
+                printf "%s:%d:%s\n", bufname, bufstart, buf
+            buf = ""
+        }
+        FNR == 1 { flush() }
+        /^[[:space:]]*[#;]/ { next }
+        {
+            if (buf == "") { bufname = FILENAME; bufstart = FNR }
+            if ($0 ~ /\\[[:space:]]*$/) {
+                line = $0
+                sub(/\\[[:space:]]*$/, "", line)
+                buf = buf line
+                next
+            }
+            buf = buf $0
+            flush()
+        }
+        END { flush() }
+    '
+}
+grants="$(uinput_grant_scan "${root}/apps")"
+if [ -n "${grants}" ]; then
+    printf '%s\n' "${grants}" >&2
+    echo 'an app slice.conf declares a /dev/uinput DeviceAllow grant' >&2
+    exit 1
+fi
+# Planted controls: every accepted spelling of the grant must be caught, and a
+# comment-only mention (hello-pocketforge's slice.conf carries one) must not be.
+planted="${tmp}/planted-apps"
+evil_last=0
+while IFS= read -r variant; do
+    evil_last=$((evil_last + 1))
+    mkdir -p "${planted}/evil${evil_last}"
+    printf 'DevicePolicy=strict\n%s\n' "${variant}" > "${planted}/evil${evil_last}/slice.conf"
+done <<'VARIANTS'
+DeviceAllow=/dev/uinput rw
+DeviceAllow =/dev/uinput rw
+DeviceAllow= /dev/uinput rw
+DeviceAllow = /dev/uinput rw
+DeviceAllow	=	/dev/uinput rw
+	DeviceAllow=/dev/uinput rw
+VARIANTS
+evil_last=$((evil_last + 1))
+mkdir -p "${planted}/evil${evil_last}"
+printf 'DevicePolicy=strict\nDeviceAllow=\\\n/dev/uinput rw\n' > "${planted}/evil${evil_last}/slice.conf"
+mkdir -p "${planted}/commented"
+printf '# DeviceAllow=/dev/uinput rw\n;DeviceAllow = /dev/uinput rw\nDeviceAllow=/dev/fb0 rw\n' \
+    > "${planted}/commented/slice.conf"
+grants="$(uinput_grant_scan "${planted}")"
+n=1
+while [ "${n}" -le "${evil_last}" ]; do
+    if ! printf '%s\n' "${grants}" | grep -q "/evil${n}/slice.conf"; then
+        echo "negative control: uinput grant scan missed planted variant evil${n}" >&2
+        printf '%s\n' "${grants}" >&2
+        exit 1
+    fi
+    n=$((n + 1))
+done
+if printf '%s\n' "${grants}" | grep -q '/commented/slice.conf'; then
+    echo 'false-positive control: uinput grant scan flagged a comment-only mention' >&2
+    printf '%s\n' "${grants}" >&2
+    exit 1
+fi
+
+echo 'default-app rootfs contract: PASS (verbatim dormant unit, open-only install incl. app-session broker never enabled, libpocketforge.so.1, devices/a133 and byte-identical device-neutral descriptor, no per-SoC PF_DESCRIPTOR hard-code, no app slice.conf uinput grant; non-open no-op with every leak refused)'

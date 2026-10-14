@@ -30,6 +30,8 @@ name: hermetic tests
 #     harness; fails closed with MISSING_PREREQUISITE without a real `docker`
 #     binary. Already covered by its own dedicated workflow,
 #     .github/workflows/session-authority-systemd.yml.
+#   - tests/test-app-runtime-root.sh -- its capability-policy half now executes the real
+#     pf-app-policy-render from the paired runtime candidate, so app-policy-pair.yml owns it.
 #   - tests/test-initrd-first-frame.sh -- fully hermetic (no docker, no
 #     network) and reliably green in every interactive dev-worktree run, but
 #     its "crash" case raced on this workflow's first real run on
@@ -99,13 +101,13 @@ jobs:
             tests/test-a-cts-worker-recovery.sh
             tests/test-a-cts-worker-terminal.sh
             tests/test-alsa-config.sh
-            tests/test-app-runtime-root.sh
             tests/test-boot-animator.sh
             tests/test-browser-platform-defaults.sh
             tests/test-build-id.sh
             tests/test-build-rootfs-direct.sh
             tests/test-cedar-spike.sh
             tests/test-clock-seed.sh
+            tests/test-cursor-theme-package.sh
             tests/test-cloud-init-firstboot.sh
             tests/test-customize-hook-fail-closed.sh
             tests/test-mmdebstrap-local-packages.sh

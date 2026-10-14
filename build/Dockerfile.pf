@@ -55,6 +55,8 @@
 # The owned, digest-pinned build container (image/container.pin). Overridable so a dev
 # can point at a locally-built tag; CI/`pf build` pass the pinned digest.
 ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
+ARG PF_CURSOR_TOOLS_IMAGE=10.0.32.86:5555/pocketforge/ci-tools@sha256:2ff536627228c90e5c32b7d6345b21600a38a17481c075b41683db47ead3e862
+ARG PF_CURSOR_TOOLS_RECIPE_SHA=ec5b2621f636261978d3bb4fd9843ae22a59c320
 
 # Declared before the first FROM (global pre-FROM scope) SOLELY so the gpu-um-mesa
 # selector stage below can interpolate it into a `FROM gpu-um-mesa-${PF_GPU_MODEL}`
@@ -549,7 +551,7 @@ GPUUMNONE
 
 # --- 1/5 toolchain: Ubuntu 24.04 (native x86_64) + the arm64 cross toolchain + LLVM 20 ---
 # Keep the load-bearing toolchain settings aligned with gpu-um-tsp's
-# docker/Dockerfile.ge8300-mesa-cross at bd1713af2183cf5d945945c2b127e25d382ee8e9. Do NOT add
+# docker/Dockerfile.ge8300-mesa-cross at 8cda9585d05d72c072c82a436b4d4db92ee93386. Do NOT add
 # --platform=linux/arm64 anywhere in this subgraph: every program this recipe executes is
 # x86_64 (the "native precompilers" stage below is the whole reason a cross build needs a
 # native pass at all — mesa_clc/pco_clc/vtn_bindgen2 run at BUILD time, not on-device).
@@ -1292,7 +1294,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "b289235d8cbdc8d542e551b8139d22b6abf31ec1" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "2736751f2dcd48155da02fb605cdc261da1ae5fc" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # files exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml plus the byte-identical device-neutral
@@ -1404,6 +1406,13 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   cargo build --offline --locked --release -p pf-app-manifest --example pf-app-validate
   install -D -m 0755 target/release/examples/pf-app-validate \
     /out/build-tools/pf-app-validate
+  # Image app service fragments delegate manifest capability policy to the same runtime compiler
+  # used at launch. This host-native helper is build-only and never enters the target rootfs.
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --offline --locked --release -p pf-app-launch --bin pf-app-policy-render
+  install -D -m 0755 target/release/pf-app-policy-render \
+    /out/build-tools/pf-app-policy-render
   # --- Default-app input delivery (bd: tsp-f3fm.202.1 ruling (i), B4) --------------
   # (1) The one staged device descriptor, already contract-checked above
   #     (check-device-descriptor). Parse it with the SAME runtime loaders its
@@ -1751,7 +1760,10 @@ ENV CARGO_HOME=/opt/poolsuite-cargo-home \
 COPY --from=poolsuite-src . /work/poolsuite
 COPY --from=poolsuite-fetch /poolsuite-fetched-source.sha256 /poolsuite-fetched-source.sha256
 COPY --from=runtime /out/build-tools/pf-app-validate /usr/local/bin/pf-app-validate
+COPY --from=runtime /out/build-tools/pf-app-policy-render /usr/local/bin/pf-app-policy-render
 COPY --from=runtime /out/share/platform-capabilities.toml /work/platform-capabilities.toml
+COPY --from=image-src build/app-policy-a133-open-v1.json /work/app-policy-a133-open-v1.json
+COPY --from=image-src rootfs-overlay/etc/systemd/system/pf-app@.service /work/pf-app@.service
 WORKDIR /work/poolsuite
 RUN --network=none \
     --mount=type=bind,from=poolsuite-fetch,source=/opt/poolsuite-cargo-home,target=/opt/poolsuite-cargo-home,rw \
@@ -1809,6 +1821,36 @@ install -d /tmp/default-app-root
 mv /out/app /tmp/default-app-root/org.pocketforge.poolsuite
 pf-app-validate /tmp/default-app-root /work/platform-capabilities.toml org.pocketforge.poolsuite
 mv /tmp/default-app-root/org.pocketforge.poolsuite /out/app
+# Compile the exact staged manifest through runtime's one capability-policy
+# surface. The inventory is image-owned and installed beside the generated
+# exact-instance unit so launch-time compilation consumes the same signed decision inputs.
+install -D -m 0644 /work/app-policy-a133-open-v1.json \
+  /out/app-policy/org.pocketforge.poolsuite.resources.json
+pf-app-policy-render \
+  --manifest /out/app/app.toml \
+  --platform-contract /work/platform-capabilities.toml \
+  --resource-inventory /out/app-policy/org.pocketforge.poolsuite.resources.json \
+  --app-dir /opt/pocketforge/apps/org.pocketforge.poolsuite \
+  --platform-runtime /usr \
+  --xdg-config /var/lib/pocketforge/apps/org.pocketforge.poolsuite/config \
+  --xdg-state /var/lib/pocketforge/apps/org.pocketforge.poolsuite/state \
+  --xdg-cache /var/cache/pocketforge/apps/org.pocketforge.poolsuite \
+  --format systemd-dropin \
+  > /tmp/app-policy.service-fragment
+install -D -m 0644 /work/pf-app@.service \
+  /out/systemd/pf-app@org.pocketforge.poolsuite.service
+cat /tmp/app-policy.service-fragment \
+  >> /out/systemd/pf-app@org.pocketforge.poolsuite.service
+grep -Fx 'SupplementaryGroups=audio input video' /tmp/app-policy.service-fragment
+grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' /tmp/app-policy.service-fragment
+grep -Fx 'PrivateNetwork=no' /tmp/app-policy.service-fragment
+grep -Fx '# egress tcp * 80' /tmp/app-policy.service-fragment
+grep -Fx '# egress tcp * 443' /tmp/app-policy.service-fragment
+grep -Fx '# derived dns tcp udp 53' /tmp/app-policy.service-fragment
+if grep -F '# egress udp ' /tmp/app-policy.service-fragment; then
+  echo 'FATAL: Poolsuite manifest unexpectedly grants UDP application egress' >&2
+  exit 1
+fi
 {
   printf 'poolsuite@%s\n' "${PF_POOLSUITE_SHA}"
   printf 'cargo_lock_sha256=%s\n' "${LOCK_SHA256}"
@@ -1981,7 +2023,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "8209c392ea19abfe6377d7254cb063eed43c491b" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "8a276aecf087d32a143d9db0d7a895d7f8222796" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fourteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
@@ -2083,6 +2125,36 @@ GAMESCOPE
 
 FROM gamescope-${PF_GAMESCOPE_MODE} AS gamescope
 
+# Cursor assets are source-built in the allowlisted, digest-pinned ci-tools
+# producer. The build vertex has no network and consumes only the lock-staged
+# source context. A second build is compared before either output can ship.
+FROM ${PF_CURSOR_TOOLS_IMAGE} AS cursor-theme
+ARG PF_CURSOR_TOOLS_IMAGE
+ARG PF_CURSOR_TOOLS_RECIPE_SHA
+ARG PF_CURSOR_THEME_SHA
+COPY --from=cursor-theme-src . /work/cursor-theme
+COPY --chmod=0444 --from=image-src scripts/verify-cursor-theme.py /work/verify-cursor-theme.py
+COPY --chmod=0444 --from=image-src scripts/verify-cursor-tools-recipe.py /work/verify-cursor-tools-recipe.py
+RUN --network=none <<'CURSOR_THEME'
+set -eux
+python3 -B /work/verify-cursor-tools-recipe.py \
+  "${PF_CURSOR_TOOLS_IMAGE}" "${PF_CURSOR_TOOLS_RECIPE_SHA}"
+test "$(cat /work/cursor-theme/.pf-source-revision)" = "${PF_CURSOR_THEME_SHA}"
+python3 /work/cursor-theme/build_cursors.py --out /tmp/build-a
+python3 /work/cursor-theme/build_cursors.py --out /tmp/build-b
+diff -r /tmp/build-a /tmp/build-b
+mkdir -p /tmp/out/usr/share/icons /tmp/out/usr/share/licenses/pocketforge-cursor-theme /tmp/out/usr/share/pocketforge
+cp -a /tmp/build-a/pocketforge-light /tmp/build-a/pocketforge-dark /tmp/out/usr/share/icons/
+install -m 0444 /work/cursor-theme/LICENSE /tmp/out/usr/share/licenses/pocketforge-cursor-theme/LICENSE
+install -m 0444 /work/cursor-theme/ATTRIBUTION.md /tmp/out/usr/share/licenses/pocketforge-cursor-theme/ATTRIBUTION.md
+printf 'source_sha=%s\ntools_image=%s\ntools_recipe_sha=%s\n' \
+  "${PF_CURSOR_THEME_SHA}" "${PF_CURSOR_TOOLS_IMAGE}" "${PF_CURSOR_TOOLS_RECIPE_SHA}" \
+  > /tmp/out/usr/share/pocketforge/cursor-theme.provenance
+find /tmp/out -type f -exec chmod 0444 {} +
+find /tmp/out -type d -exec chmod 0555 {} +
+python3 -B /work/verify-cursor-theme.py /tmp/out
+CURSOR_THEME
+
 # Byte-repro test boundaries. These source-free scratch aliases are pruned from
 # normal `--target export` builds. Ephemeral CI selects one with `--target
 # component-test-<name> --output type=local` to hash exactly the producer's
@@ -2120,6 +2192,8 @@ FROM scratch AS component-test-launcher
 COPY --from=launcher /out /
 FROM scratch AS component-test-gamescope
 COPY --from=gamescope /out /
+FROM scratch AS component-test-cursor-theme
+COPY --from=cursor-theme /tmp/out /
 
 # =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
@@ -2160,6 +2234,9 @@ ARG PF_GAMESCOPE_MODE=not-shipped
 ARG PF_CTS_BUNDLE_MODE=not-shipped
 ARG PF_CTS_BUNDLE_URL=
 ARG PF_CTS_BUNDLE_SHA256=
+ARG PF_CURSOR_THEME_SHA
+ARG PF_CURSOR_TOOLS_IMAGE
+ARG PF_CURSOR_TOOLS_RECIPE_SHA
 ARG PF_ODYSSEY_CAPTURE=
 ARG APT_SNAPSHOT_DATE
 ARG SOURCE_DATE_EPOCH
@@ -2191,6 +2268,7 @@ COPY --from=launcher /out           /work/launcher
 COPY --from=platform-runtime-steamlink-ffmpeg59 /out /work/platform-runtime
 COPY --from=gamescope /out /work/gamescope-package
 COPY --from=cts-bundle /out /work/cts-bundle
+COPY --from=cursor-theme /tmp/out /work/cursor-theme
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -2213,6 +2291,7 @@ case "${PF_SOC}" in
       PLATFORM_RUNTIME_DIR=/work/platform-runtime \
       GAMESCOPE_DIR=/work/gamescope-package \
       CTS_BUNDLE_DIR=/work/cts-bundle \
+      CURSOR_THEME_DIR=/work/cursor-theme \
       PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE}" \
       PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE}" \
       PF_CTS_BUNDLE_MODE="${PF_CTS_BUNDLE_MODE}" \
@@ -2261,7 +2340,7 @@ case "${PF_SOC}" in
     # Call the OWNED a523 rootfs builder unchanged (mirrors sdl/a133-rootfs: run the recipe
     # living with the source, don't re-inline it). SOURCE_DATE_EPOCH is honoured transparently;
     # PF_APT_PROXY plumbing is a133-only today (tsp-1dl.14 unify carries it to a523).
-    SRC_DIR=/work/src OUT_DIR=/out \
+    SRC_DIR=/work/src OUT_DIR=/out CURSOR_THEME_DIR=/work/cursor-theme \
       PF_GPU_SHA="${PF_GPU_SHA:-}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA:-}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-rootfs-a523.sh --variant "${PF_VARIANT}"

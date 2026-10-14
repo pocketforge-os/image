@@ -355,7 +355,7 @@ ConditionPathExists=/dev/fb0
 Type=simple
 User=gamer
 Group=gamer
-SupplementaryGroups=audio input video
+SupplementaryGroups=
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
@@ -395,9 +395,19 @@ MemoryMax=256M
 Nice=-5
 ```
 
-The app template deliberately omits the dedicated `pf-pref-writer` supplementary group. Only
-`pf-shell-selected.service` and `pf-foreground@.service` receive that group, while generated
-runtime-root drop-ins reset `SupplementaryGroups=` entirely. The `pf-input-broker.service`
+The image installs `pf-app@.service.d/30-cursor-theme.conf` alongside this security-pinned
+template. Its two `Environment=` directives set `XCURSOR_THEME=pocketforge-light` and
+`XCURSOR_SIZE=48`, so systemd supplies the defaults directly to every app unit without relying on
+PAM interpretation of `/etc/environment`.
+
+The app template deliberately carries no supplementary group. Only
+`pf-shell-selected.service` and `pf-foreground@.service` receive the dedicated
+`pf-pref-writer` group. Generated runtime-root service fragments first reset
+`SupplementaryGroups=`, then compiler-generated app policy directives populate the exact
+capability-derived groups for each app. Image-shipped Poolsuite appends those directives to a
+complete `pf-app@org.pocketforge.poolsuite.service` exact-instance unit; it does not put security
+policy in a drop-in. Every installed `pf-app@*.service.d` file is therefore environment-only. The
+`pf-input-broker.service`
 dependency, the two `PF_*` variables, and the session-authority
 `InaccessiblePaths=` entry are the `tsp-f3fm.202.1` amendment. The fail-closed prefsd entry keeps
 preference state behind the broker's read-only API; `BindsTo=pf-prefsd.service` also tears down the
@@ -1046,8 +1056,9 @@ After=pf-input-broker.service
   fixed and non-rebindable; customization of unrelated bindings remains allowed.
 - Peer authentication (`SO_PEERCRED`) on the authority socket. Protection is path-based
   (`InaccessiblePaths=`) and has the authority-restart limitation above.
-- Taking direct input access away from apps. `pf-app@` keeps `SupplementaryGroups=input`. The
-  broker's grab makes the pad exclusive, but the broker is not an input security boundary.
+- Replacing today's manifest-scoped raw input grant with mediated input. The one capability
+  compiler currently maps `input` to the `input` group and selected device paths; the input
+  mediation follow-up changes that mapping in place rather than adding another policy list.
 - Distinguishing `ForcedClose` from `Returned` for a SIGKILLed app (R3); that would change a
   launcher-vendored crate.
 - Any of this on A133 vendor/default or A523. The broker, library and descriptor are

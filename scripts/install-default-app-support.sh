@@ -37,6 +37,7 @@ neutral_descriptors="${runtime_stage}/share/device"
 neutral_descriptor="${neutral_descriptors}/capabilities.toml"
 broker_dropin="${systemd_source}/pf-input-broker.service.d/10-app-session.conf"
 shell_dropin="${systemd_source}/pf-shell-selected.service.d/10-input-broker.conf"
+cursor_dropin="${systemd_source}/pf-app@.service.d/30-cursor-theme.conf"
 
 if [ "${gpu_model}" != open ]; then
     for forbidden in "${helper}" "${authority}" "${platform}" "${shell}" \
@@ -52,7 +53,8 @@ fi
 
 for required in "${helper}" "${authority}" "${platform}" "${shell}" "${unit}" \
     "${broker}" "${broker_unit}" "${library}" "${descriptor}" \
-    "${neutral_descriptor}" "${broker_dropin}" "${shell_dropin}"; do
+    "${neutral_descriptor}" "${broker_dropin}" "${shell_dropin}" \
+    "${cursor_dropin}"; do
     [ -f "${required}" ] || {
         echo "FATAL: A133-open default-app artifact is missing: ${required}" >&2
         exit 1
@@ -93,6 +95,8 @@ install -D -m 0755 "${helper}" "${rootfs}/usr/bin/pf-app-launch"
 install -D -m 0644 "${platform}" \
     "${rootfs}/usr/share/pocketforge/platform-capabilities.toml"
 install -D -m 0644 "${unit}" "${rootfs}/etc/systemd/system/pf-app@.service"
+install -D -m 0644 "${cursor_dropin}" \
+    "${rootfs}/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf"
 
 install -D -m 0755 "${broker}" "${rootfs}/usr/bin/pf-input-broker"
 install -D -m 0644 "${broker_unit}" "${rootfs}/etc/systemd/system/pf-input-broker.service"
