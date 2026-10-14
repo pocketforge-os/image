@@ -18,8 +18,37 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Fixture CTS binaries are shell scripts, so the library names the runtime gate
+# scans for are carried as literal lines: bare `lib*.so[.N]` lines stand in for
+# dlopen literals, and `# NEEDED:` lines stand in for dynamic NEEDED entries
+# (the stub readelf below turns them back into `readelf -d` output).
+write_cts_binary() {
+    local destination=$1 literals=$2
+    {
+        printf '#!/bin/sh\nexit 0\n'
+        case "${literals}" in
+            unversioned)
+                printf '%s\n' libEGL.so libGLESv2.so libGL.so
+                ;;
+            versioned)
+                printf '%s\n' libGLESv2.so.2 libEGL.so.1 libvulkan.so.1
+                printf '%s\n' '# NEEDED: libEGL.so.1' '# NEEDED: libGL.so.1'
+                ;;
+            none)
+                printf '%s\n' 'no library names here'
+                ;;
+            *)
+                echo "FAIL: unknown fixture literal set: ${literals}" >&2
+                exit 1
+                ;;
+        esac
+    } > "${destination}"
+    chmod 0755 "${destination}"
+}
+
 make_bundle() {
     local destination=$1 receipt_commit=$2 corrupt_member=$3
+    local literals=${4:-unversioned}
     local tree="${scratch}/tree" bundle="${scratch}/tree/pf-deqp-gles"
     if [ -d "${tree}" ]; then
         find "${tree}" -mindepth 1 -delete
@@ -29,9 +58,7 @@ make_bundle() {
         "${bundle}/config" "${bundle}/mustpass" "${bundle}/receipts"
 
     for binary in deqp-gles2 deqp-gles3 deqp-gles31 glcts; do
-        printf '#!/bin/sh\nexit 0\nlibEGL.so\nlibGLESv2.so\nlibGL.so\n' \
-            > "${bundle}/bin/${binary}"
-        chmod 0755 "${bundle}/bin/${binary}"
+        write_cts_binary "${bundle}/bin/${binary}" "${literals}"
     done
     printf '#!/bin/sh\nexit 0\n' > "${bundle}/run-chunks.sh"
     chmod 0755 "${bundle}/run-chunks.sh"
@@ -152,17 +179,26 @@ fi
 grep -F 'reason=bundle_checksum_mismatch' "${scratch}/bad-manifest.err" >/dev/null
 test ! -e "${scratch}/bad-manifest"
 
+make_runtime_rootfs() {
+    local destination=$1
+    mkdir -p "${destination}/usr/lib/aarch64-linux-gnu"
+    for library in libEGL.so.1 libGLESv2.so.2 libGL.so.1 libvulkan.so.1; do
+        printf '\177ELF fixture %s\n' "${library}" \
+            > "${destination}/usr/lib/aarch64-linux-gnu/${library}"
+    done
+}
+
 rootfs="${scratch}/rootfs"
-mkdir -p "${rootfs}/usr/lib/aarch64-linux-gnu"
-printf '\177ELF fixture EGL\n' \
-    > "${rootfs}/usr/lib/aarch64-linux-gnu/libEGL.so.1"
-printf '\177ELF fixture GLESv2\n' \
-    > "${rootfs}/usr/lib/aarch64-linux-gnu/libGLESv2.so.2"
-printf '\177ELF fixture GL\n' \
-    > "${rootfs}/usr/lib/aarch64-linux-gnu/libGL.so.1"
+make_runtime_rootfs "${rootfs}"
 fake_readelf="${scratch}/readelf"
-printf '#!/bin/sh\nprintf "  Machine:                           AArch64\\n"\n' \
-    > "${fake_readelf}"
+cat > "${fake_readelf}" <<'STUB'
+#!/bin/sh
+case "$1" in
+    -h) printf '  Machine:                           %s\n' "${PF_TEST_MACHINE:-AArch64}" ;;
+    -d) sed -n 's|^# NEEDED: \(.*\)$|  0x0000000000000001 (NEEDED)             Shared library: [\1]|p' "$2" ;;
+    *) exit 2 ;;
+esac
+STUB
 chmod 0755 "${fake_readelf}"
 "${install_bundle}" "${producer}" "${rootfs}" v1 "${good_sha}"
 cmp "${producer}/usr/share/pocketforge/cts-provenance" \
@@ -188,6 +224,88 @@ if PF_CTS_READELF="${fake_readelf}" "${verify_runtime}" "${negative_rootfs}" \
 fi
 grep -F 'reason=library_missing library=libEGL.so' \
     "${scratch}/negative.err" >/dev/null
+
+# Versioned-soname payload (bd tsp-mc9m.41.924.24.39): the pinned CTS bundle
+# dlopens only versioned names, so the runtime gate must resolve those as well,
+# including a soname that appears only as a dynamic NEEDED entry.
+versioned_archive="${scratch}/versioned.tar.gz"
+make_bundle "${versioned_archive}" 067e8832315e79817ede1c4863804e440f5d1c80 no versioned
+versioned_sha="$(sha256sum "${versioned_archive}" | cut -d' ' -f1)"
+versioned_producer="${scratch}/versioned-producer"
+"${prepare}" "${versioned_archive}" "${versioned_producer}" \
+    "http://artifact.invalid/artifacts/sha256/${versioned_sha}/pf-deqp-gles-aarch64.tar.gz" \
+    "${versioned_sha}"
+versioned_rootfs="${scratch}/versioned-rootfs"
+make_runtime_rootfs "${versioned_rootfs}"
+"${install_bundle}" "${versioned_producer}" "${versioned_rootfs}" v1 "${versioned_sha}"
+versioned_out="${scratch}/versioned.out"
+PF_CTS_READELF="${fake_readelf}" "${verify_runtime}" "${versioned_rootfs}" \
+    > "${versioned_out}"
+grep -F 'cts_runtime_libraries=PASS' "${versioned_out}" >/dev/null
+for library in libEGL.so.1 libGLESv2.so.2 libvulkan.so.1 libGL.so.1; do
+    if ! sed -n 's/^cts_runtime_libraries=PASS libraries=\([^ ]*\).*/\1/p' \
+            "${versioned_out}" | tr ',' '\n' | grep -Fx "${library}" >/dev/null; then
+        echo "FAIL: versioned runtime library not resolved: ${library}" >&2
+        exit 1
+    fi
+done
+cat "${versioned_out}"
+
+# Negative control: a NEEDED-only soname the rootfs does not carry.
+needed_missing_rootfs="${scratch}/versioned-needed-missing"
+cp -a "${versioned_rootfs}" "${needed_missing_rootfs}"
+rm "${needed_missing_rootfs}/usr/lib/aarch64-linux-gnu/libGL.so.1"
+if PF_CTS_READELF="${fake_readelf}" "${verify_runtime}" "${needed_missing_rootfs}" \
+        >"${scratch}/needed-missing.out" 2>"${scratch}/needed-missing.err"; then
+    echo 'FAIL: versioned rootfs without a NEEDED soname passed' >&2
+    exit 1
+fi
+grep -F 'reason=library_missing library=libGL.so.1' \
+    "${scratch}/needed-missing.err" >/dev/null
+
+# Negative control: a versioned soname resolving outside the rootfs.
+outside_dir="${scratch}/outside-lib"
+mkdir -p "${outside_dir}"
+printf '\177ELF fixture outside libvulkan.so.1\n' > "${outside_dir}/libvulkan.so.1"
+outside_rootfs="${scratch}/versioned-outside"
+cp -a "${versioned_rootfs}" "${outside_rootfs}"
+rm "${outside_rootfs}/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
+ln -s "${outside_dir}/libvulkan.so.1" \
+    "${outside_rootfs}/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
+if PF_CTS_READELF="${fake_readelf}" "${verify_runtime}" "${outside_rootfs}" \
+        >"${scratch}/outside.out" 2>"${scratch}/outside.err"; then
+    echo 'FAIL: versioned soname resolving outside the rootfs passed' >&2
+    exit 1
+fi
+grep -F 'reason=library_target_outside_rootfs library=libvulkan.so.1' \
+    "${scratch}/outside.err" >/dev/null
+
+# Negative control: a versioned soname resolving to a non-AArch64 object.
+if PF_TEST_MACHINE=ARM PF_CTS_READELF="${fake_readelf}" \
+        "${verify_runtime}" "${versioned_rootfs}" \
+        >"${scratch}/arch.out" 2>"${scratch}/arch.err"; then
+    echo 'FAIL: non-AArch64 versioned runtime library passed' >&2
+    exit 1
+fi
+grep -F 'reason=library_target_not_aarch64' "${scratch}/arch.err" >/dev/null
+
+# Fail-closed control: a payload without any library name still dies.
+nameless_archive="${scratch}/nameless.tar.gz"
+make_bundle "${nameless_archive}" 067e8832315e79817ede1c4863804e440f5d1c80 no none
+nameless_sha="$(sha256sum "${nameless_archive}" | cut -d' ' -f1)"
+nameless_producer="${scratch}/nameless-producer"
+"${prepare}" "${nameless_archive}" "${nameless_producer}" \
+    "http://artifact.invalid/artifacts/sha256/${nameless_sha}/pf-deqp-gles-aarch64.tar.gz" \
+    "${nameless_sha}"
+nameless_rootfs="${scratch}/nameless-rootfs"
+make_runtime_rootfs "${nameless_rootfs}"
+"${install_bundle}" "${nameless_producer}" "${nameless_rootfs}" v1 "${nameless_sha}"
+if PF_CTS_READELF="${fake_readelf}" "${verify_runtime}" "${nameless_rootfs}" \
+        >"${scratch}/nameless.out" 2>"${scratch}/nameless.err"; then
+    echo 'FAIL: CTS payload without any library name passed' >&2
+    exit 1
+fi
+grep -F 'reason=dlopen_names_missing' "${scratch}/nameless.err" >/dev/null
 if "${install_bundle}" "${producer}" "${rootfs}" v1 "${good_sha}" \
         >"${scratch}/collision.out" 2>"${scratch}/collision.err"; then
     echo 'FAIL: CTS destination collision was accepted' >&2
@@ -225,4 +343,4 @@ grep -F '"${SRC_DIR}/scripts/verify-cts-runtime-libraries.sh" "${ROOTFS_EXTRACTE
 test "$(grep -Fxc '            tests/test-cts-bundle-image.sh' "${workflow}")" -eq 1
 grep -Fx 'test-cts-bundle-image:' "${makefile}" >/dev/null
 
-echo 'PASS: CTS image payload rejects wrong SHA/receipt/checksums and installs only when selected'
+echo 'PASS: CTS image payload rejects wrong SHA/receipt/checksums, resolves versioned runtime sonames, and installs only when selected'
