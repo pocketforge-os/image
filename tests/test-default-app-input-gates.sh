@@ -26,9 +26,13 @@ expect_fatal() {
 }
 
 # --- check-device-descriptor.sh ------------------------------------------------
+# Platform stages the descriptor twice (platform#341, tsp-mc9m.41.1026.4): the
+# per-SoC devices/<id>/capabilities.toml and the byte-identical device-neutral
+# device/capabilities.toml that every runtime consumer installs from.
 inputs="${tmp}/inputs"
-mkdir -p "${inputs}/devices/a133"
+mkdir -p "${inputs}/devices/a133" "${inputs}/device"
 printf '[identity]\nid = "a133"\n' > "${inputs}/devices/a133/capabilities.toml"
+cp "${inputs}/devices/a133/capabilities.toml" "${inputs}/device/capabilities.toml"
 sha="$(sha256sum "${inputs}/devices/a133/capabilities.toml" | cut -d' ' -f1)"
 empty="${tmp}/empty-inputs"
 mkdir -p "${empty}"
@@ -70,6 +74,32 @@ expect_fatal 'platform-inputs holds more than the one descriptor' \
     "${descriptor_gate}" open "${inputs}" a133 "${sha}"
 rm "${inputs}/devices/a133/profile.toml"
 test "$("${descriptor_gate}" open "${inputs}" a133 "${sha}")" = "${inputs}/devices/a133/capabilities.toml"
+
+# Device-neutral copy refusals (tsp-mc9m.41.1026.4): missing, symlinked, or
+# byte-divergent device/capabilities.toml each fail closed with a named error;
+# there is no fallback to the per-SoC path.
+mkdir -p "${tmp}/no-neutral/devices/a133"
+cp "${inputs}/devices/a133/capabilities.toml" "${tmp}/no-neutral/devices/a133/capabilities.toml"
+expect_fatal 'device-neutral descriptor missing or not a regular file' \
+    "${descriptor_gate}" open "${tmp}/no-neutral" a133 "${sha}"
+mkdir -p "${tmp}/linked-neutral/devices/a133" "${tmp}/linked-neutral/device"
+cp "${inputs}/devices/a133/capabilities.toml" "${tmp}/linked-neutral/devices/a133/capabilities.toml"
+ln -s "${tmp}/linked-neutral/devices/a133/capabilities.toml" \
+    "${tmp}/linked-neutral/device/capabilities.toml"
+expect_fatal 'device-neutral descriptor missing or not a regular file' \
+    "${descriptor_gate}" open "${tmp}/linked-neutral" a133 "${sha}"
+mkdir -p "${tmp}/bad-neutral/devices/a133" "${tmp}/bad-neutral/device"
+cp "${inputs}/devices/a133/capabilities.toml" "${tmp}/bad-neutral/devices/a133/capabilities.toml"
+printf '[identity]\nid = "a523"\n' > "${tmp}/bad-neutral/device/capabilities.toml"
+bad_sha="$(sha256sum "${tmp}/bad-neutral/device/capabilities.toml" | cut -d' ' -f1)"
+expect_fatal "device-neutral descriptor sha256 ${bad_sha} != PF_DEVICE_DESCRIPTOR_SHA256 ${sha}" \
+    "${descriptor_gate}" open "${tmp}/bad-neutral" a133 "${sha}"
+mkdir -p "${tmp}/extra-neutral/devices/a133" "${tmp}/extra-neutral/device"
+cp "${inputs}/devices/a133/capabilities.toml" "${tmp}/extra-neutral/devices/a133/capabilities.toml"
+cp "${inputs}/device/capabilities.toml" "${tmp}/extra-neutral/device/capabilities.toml"
+printf 'extra\n' > "${tmp}/extra-neutral/device/README"
+expect_fatal 'platform-inputs holds more than the one descriptor' \
+    "${descriptor_gate}" open "${tmp}/extra-neutral" a133 "${sha}"
 
 # --- check-libpocketforge.sh ---------------------------------------------------
 golden="${tmp}/libpocketforge.v1.abi"
@@ -168,4 +198,4 @@ ln -s "${so}" "${tmp}/linked.so"
 expect_fatal 'not a regular file' gate "${tmp}/linked.so" "${golden}"
 gate "${so}" "${golden}" >/dev/null
 
-echo 'default-app input gates: PASS (descriptor contract open/non-open, 10 refusals; libpocketforge glibc<=2.36 boundary, version sort, exports, DT_NEEDED, ELF identity)'
+echo 'default-app input gates: PASS (descriptor contract open/non-open incl. device-neutral copy, 14 refusals; libpocketforge glibc<=2.36 boundary, version sort, exports, DT_NEEDED, ELF identity)'

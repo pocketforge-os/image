@@ -42,7 +42,7 @@ BROKER_ATTEMPTS = GRAB / "broker-attempts"
 # Negative control only (run last): restores the runtime unit's Restart=on-failure.
 CONTROL_DROPIN = Path("/run/systemd/system/pf-input-broker.service.d/99-control-restart-on-failure.conf")
 UINPUT = Path("/dev/uinput")
-DESCRIPTOR = "/usr/share/pocketforge/devices/a133/capabilities.toml"
+DESCRIPTOR = "/usr/share/pocketforge/device/capabilities.toml"
 # tsp-f3fm.219 (runtime#103): the authority ticks itself once per second and gives the
 # restored shell this long to acknowledge presentation before RecoveryRequired.
 PRESENTATION_DEADLINE_S = 10.0

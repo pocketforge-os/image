@@ -39,7 +39,7 @@ LOCK = GRAB / "pf-gamepad.lock"
 CONTROL = GRAB / "broker-control.sock"
 MODE = GRAB / "broker-mode"
 EXPECTED = {
-    "--descriptor": "/usr/share/pocketforge/devices/a133/capabilities.toml",
+    "--descriptor": "/usr/share/pocketforge/device/capabilities.toml",
     "--acquire-sock": "/run/pocketforge/input-broker.sock",
     "--source": "/dev/input/pf-gamepad",
     "--safe-return-sock": "/run/pocketforge/session-authority.sock",
