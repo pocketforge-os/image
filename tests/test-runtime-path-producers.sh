@@ -68,6 +68,7 @@ cat > "${scratch}/all-producers.json" <<'EOF'
     "/run/generated/inaccessible":{"unit":"fixture-producer.service"},
     "/run/generated/readonly":{"unit":"fixture-producer.service"},
     "/run/generated/readwrite":{"unit":"fixture-producer.service"},
+    "/run/generated/dropin":{"unit":"fixture-producer.service"},
     "/run/pocketforge/session/environment":{"unit":"pocketforge-session-publisher.service"},
     "/run/pocketforge/session/wayland-0":{"unit":"pocketforge-session-publisher.service"}
   },
@@ -89,6 +90,44 @@ EOF
     --root "${fixture}" \
     --unit "${scratch}/pf-app@org.pocketforge.fixture.service" \
     --producers "${scratch}/all-producers.json"
+
+# The production Poolsuite policy is one flattened full instance unit, not a
+# drop-in. Prove rootfs discovery audits that shape and any accompanying
+# instance drop-ins without requiring explicit --unit arguments.
+cp "${scratch}/pf-app@org.pocketforge.fixture.service" \
+    "${fixture}/etc/systemd/system/pf-app@org.pocketforge.fixture.service"
+mkdir -p \
+    "${fixture}/etc/systemd/system/pf-app@org.pocketforge.fixture.service.d"
+cat > "${fixture}/etc/systemd/system/pf-app@org.pocketforge.fixture.service.d/50-policy.conf" <<'EOF'
+[Service]
+BindReadOnlyPaths=/run/generated/dropin:/inside/dropin
+EOF
+"${checker}" \
+    --root "${fixture}" \
+    --producers "${scratch}/all-producers.json" \
+    > "${scratch}/installed-units.out"
+grep -F 'units=2' "${scratch}/installed-units.out" >/dev/null
+
+python3 - "${scratch}/all-producers.json" "${scratch}/missing-dropin.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, output = map(Path, sys.argv[1:])
+data = json.loads(source.read_text(encoding="utf-8"))
+del data["producers"]["/run/generated/dropin"]
+output.write_text(json.dumps(data), encoding="utf-8")
+PY
+if "${checker}" \
+    --root "${fixture}" \
+    --producers "${scratch}/missing-dropin.json" \
+    > "${scratch}/missing-dropin.out" 2>&1; then
+    fail "audit skipped an installed instance drop-in"
+fi
+grep -F 'missing producer: /run/generated/dropin: consumer=' \
+    "${scratch}/missing-dropin.out" >/dev/null
+grep -F 'pf-app@org.pocketforge.fixture.service.d/50-policy.conf:BindReadOnlyPaths' \
+    "${scratch}/missing-dropin.out" >/dev/null
 
 # Every non-optional path directive is enforced and reports its consumer.
 for missing in bind ro inaccessible readonly readwrite; do
