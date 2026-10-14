@@ -14,6 +14,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 VERIFY = ROOT / "scripts/verify-cursor-theme.py"
 INSTALL = ROOT / "scripts/install-cursor-theme.sh"
+BIND_TOOLS_RECIPE = ROOT / "scripts/verify-cursor-tools-recipe.py"
+TOOLS_IMAGE = ("10.0.32.86:5555/pocketforge/ci-tools@sha256:"
+               "2ff536627228c90e5c32b7d6345b21600a38a17481c075b41683db47ead3e862")
+TOOLS_RECIPE = "ec5b2621f636261978d3bb4fd9843ae22a59c320"
 THEMES = ("pocketforge-light", "pocketforge-dark")
 SIZES = (32, 48, 64, 96, 128)
 ALIASES = {
@@ -122,12 +126,14 @@ class CursorPackage(unittest.TestCase):
 
     def test_docker_stage_is_pinned_offline_and_reproducible(self) -> None:
         text = (ROOT / "build/Dockerfile.pf").read_text()
-        digest = "10.0.32.86:5555/pocketforge/ci-tools@sha256:2ff536627228c90e5c32b7d6345b21600a38a17481c075b41683db47ead3e862"
-        self.assertIn(f"ARG PF_CURSOR_TOOLS_IMAGE={digest}", text)
-        self.assertIn("ARG PF_CURSOR_TOOLS_RECIPE_SHA=22b8c9feb04565c9ee84858687ed30455da7ed58", text)
+        self.assertIn(f"ARG PF_CURSOR_TOOLS_IMAGE={TOOLS_IMAGE}", text)
+        self.assertIn(f"ARG PF_CURSOR_TOOLS_RECIPE_SHA={TOOLS_RECIPE}", text)
         start = text.index("FROM ${PF_CURSOR_TOOLS_IMAGE} AS cursor-theme")
         end = text.index("\nFROM ", start + 6)
         stage = text[start:end]
+        binding = "python3 -B /work/verify-cursor-tools-recipe.py "
+        self.assertIn(binding, stage)
+        self.assertLess(stage.index(binding), stage.index(".pf-source-revision"))
         self.assertIn("COPY --from=cursor-theme-src", stage)
         self.assertIn("RUN --network=none", stage)
         self.assertIn("build-a", stage)
@@ -139,6 +145,21 @@ class CursorPackage(unittest.TestCase):
         self.assertIn("30-cursor-theme.conf", installer)
         for builder in ("scripts/build-rootfs.sh", "scripts/build-rootfs-a523.sh"):
             self.assertIn("install-cursor-theme.sh", (ROOT / builder).read_text())
+
+    def test_tools_recipe_binding_accepts_only_proven_pair(self) -> None:
+        matching = subprocess.run(
+            ["python3", str(BIND_TOOLS_RECIPE), TOOLS_IMAGE, TOOLS_RECIPE],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertEqual(matching.returncode, 0, matching.stdout)
+        self.assertIn("cursor_tools_recipe_binding=pass", matching.stdout)
+
+        mismatched = subprocess.run(
+            ["python3", str(BIND_TOOLS_RECIPE), TOOLS_IMAGE, "0" * 40],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertNotEqual(mismatched.returncode, 0, mismatched.stdout)
+        self.assertIn(
+            "cursor_tools_recipe_binding=refused reason=tools_recipe_binding_mismatch",
+            mismatched.stdout)
 
     def test_install_and_failure_controls(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pf-cursor-test.") as td:
