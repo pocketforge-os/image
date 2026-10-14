@@ -137,10 +137,12 @@ def main() -> None:
     )
     workflow = read(".github/workflows/ime-bus-security.yml")
     for needle in (
-        "runs-on: [self-hosted, pf-builder-vm]",
+        "runs-on: [self-hosted, pf-public-ci]",
         "timeout-minutes: 30",
-        "github.event.pull_request.head.repo.full_name == github.repository",
         "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+        "persist-credentials: false",
+        "tests/test-public-ci-workflows.sh",
+        "tests/prove-public-ci-fit.sh",
         "set -o pipefail",
         "tests/test-ime-bus-security.sh",
     ):
@@ -151,6 +153,8 @@ def main() -> None:
         "tests/ime-bus-security-inner.sh",
         "tests/ime-bus-contract.py",
         "tests/verify-ime-bus-wiring.py",
+        "tests/test-public-ci-workflows.sh",
+        "tests/prove-public-ci-fit.sh",
         "tests/ime-bus-security/**",
         "rootfs-packages*.txt",
         "rootfs-overlay/etc/systemd/system/pf-app@.service",
