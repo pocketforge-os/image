@@ -204,7 +204,11 @@ repo-wide uinput occurrence inventory with seeded red controls.
   `<receipt>.evidence/` directory, and writes a typed receipt from its EXIT
   finalizer on success, host-safety abort, timeout, or internal failure. Receipts
   also serialize test mode, every injected/real source path, the named journal
-  patterns, and per-pattern counts.
+  patterns, and per-pattern counts. In real mode the wrapper resolves and
+  accepts only its canonical sibling `run.sh` or `run-guest.sh`; arbitrary
+  executables, symlinks and non-canonical traversal spellings fail with
+  `reason=runner_not_allowlisted`. The receipt records the canonical runner
+  path and its SHA256.
 - `--network none` at run time (build needs network; the run does not).
 - No host input passthrough: QEMU command lines must reject `input-linux`,
   `usb-host`, evdev passthrough, `/dev/uinput`, and `/dev/input/*` routes.

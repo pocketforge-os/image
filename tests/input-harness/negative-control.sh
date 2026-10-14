@@ -4,27 +4,31 @@
 set -Eeuo pipefail
 umask 077
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(realpath -e "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")"
 test_mode="${PF_NEGATIVE_CONTROL_TESTING:-0}"
+runner_allowlist_only="${PF_NEGATIVE_CONTROL_TEST_RUNNER_ALLOWLIST_ONLY:-0}"
+runner="$root/run.sh"
 if [[ "$test_mode" == 1 ]]; then
-	devices_path="${PF_INPUT_DEVICES_PATH:?test mode needs PF_INPUT_DEVICES_PATH}"
-	journalctl_cmd="${PF_NEGATIVE_CONTROL_JOURNALCTL:?test mode needs PF_NEGATIVE_CONTROL_JOURNALCTL}"
-	runner="${PF_NEGATIVE_CONTROL_RUNNER:?test mode needs PF_NEGATIVE_CONTROL_RUNNER}"
-	reporter_path="${PF_NEGATIVE_CONTROL_REPORTER:?test mode needs PF_NEGATIVE_CONTROL_REPORTER}"
-	poll_interval="${PF_NEGATIVE_CONTROL_POLL_INTERVAL:?test mode needs PF_NEGATIVE_CONTROL_POLL_INTERVAL}"
+	if [[ "$runner_allowlist_only" != 1 ]]; then
+		devices_path="${PF_INPUT_DEVICES_PATH:?test mode needs PF_INPUT_DEVICES_PATH}"
+		journalctl_cmd="${PF_NEGATIVE_CONTROL_JOURNALCTL:?test mode needs PF_NEGATIVE_CONTROL_JOURNALCTL}"
+		runner="${PF_NEGATIVE_CONTROL_RUNNER:?test mode needs PF_NEGATIVE_CONTROL_RUNNER}"
+		reporter_path="${PF_NEGATIVE_CONTROL_REPORTER:?test mode needs PF_NEGATIVE_CONTROL_REPORTER}"
+		poll_interval="${PF_NEGATIVE_CONTROL_POLL_INTERVAL:?test mode needs PF_NEGATIVE_CONTROL_POLL_INTERVAL}"
+	fi
 else
 	if [[ -n "${PF_INPUT_DEVICES_PATH+x}" ||
 	      -n "${PF_NEGATIVE_CONTROL_JOURNALCTL+x}" ||
 	      -n "${PF_NEGATIVE_CONTROL_RUNNER+x}" ||
 	      -n "${PF_NEGATIVE_CONTROL_REPORTER+x}" ||
 	      -n "${PF_NEGATIVE_CONTROL_POLL_INTERVAL+x}" ||
-	      -n "${PF_NEGATIVE_CONTROL_TEST_INTERNAL_ERROR_AFTER_POLLS+x}" ]]; then
+	      -n "${PF_NEGATIVE_CONTROL_TEST_INTERNAL_ERROR_AFTER_POLLS+x}" ||
+	      -n "${PF_NEGATIVE_CONTROL_TEST_RUNNER_ALLOWLIST_ONLY+x}" ]]; then
 		echo "FAIL: input-harness-negative-control reason=test_override_requires_opt_in"
 		exit 1
 	fi
 	devices_path=/proc/bus/input/devices
 	journalctl_cmd="$(command -v journalctl)"
-	runner="$root/run.sh"
 	reporter_path="$root/report/report.py"
 	poll_interval=0.1
 fi
@@ -38,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 		--out) out="${2:?--out needs a directory}"; shift 2 ;;
 		--receipt) receipt="${2:?--receipt needs a file}"; shift 2 ;;
 		--runner)
-			[[ "$test_mode" == 0 ]] || {
+			[[ "$test_mode" == 0 || "$runner_allowlist_only" == 1 ]] || {
 				echo "FAIL: input-harness-negative-control reason=runner_option_in_test_mode"
 				exit 2
 			}
@@ -46,15 +50,32 @@ while [[ $# -gt 0 ]]; do
 		*) echo "usage: negative-control.sh [--timeout 50m] [--runner PATH] --out DIR --receipt FILE" >&2; exit 2 ;;
 	esac
 done
+
+runner_real="$(realpath -e -- "$runner" 2>/dev/null || :)"
+if [[ -z "$runner_real" || "$runner" != "$runner_real" || -L "$runner" ||
+      ! -f "$runner_real" || ! -x "$runner_real" ]]; then
+	echo "FAIL: input-harness-negative-control reason=runner_not_allowlisted path=$runner"
+	exit 2
+fi
+if [[ "$test_mode" == 0 || "$runner_allowlist_only" == 1 ]]; then
+	allowed_run="$(realpath -e -- "$root/run.sh")"
+	allowed_guest="$(realpath -e -- "$root/run-guest.sh")"
+	if [[ "$runner_real" != "$allowed_run" && "$runner_real" != "$allowed_guest" ]]; then
+		echo "FAIL: input-harness-negative-control reason=runner_not_allowlisted path=$runner"
+		exit 2
+	fi
+fi
+runner="$runner_real"
+runner_sha256="$(sha256sum -- "$runner" | awk '{print $1}')"
+if [[ "$runner_allowlist_only" == 1 ]]; then
+	echo "runner-allowlist=PASS runner=$runner sha256=$runner_sha256"
+	exit 0
+fi
+
 [[ -n "$out" && -n "$receipt" ]] || {
 	echo "usage: negative-control.sh [--timeout 50m] [--runner PATH] --out DIR --receipt FILE" >&2
 	exit 2
 }
-[[ "$runner" = /* && -f "$runner" && -x "$runner" && ! -L "$runner" ]] || {
-	echo "FAIL: input-harness-negative-control reason=invalid_runner path=$runner"
-	exit 2
-}
-
 tmp="$(mktemp -d "${RUNNER_TEMP:-/tmp}/input-negative-control.XXXXXX")"
 evidence="${receipt}.evidence"
 mkdir -m 0700 "$evidence"
@@ -173,7 +194,8 @@ write_receipt()
 		printf 'test_mode=%s\n' "$test_mode"
 		printf 'devices_path=%s\n' "$devices_path"
 		printf 'journalctl_path=%s\n' "$journalctl_cmd"
-		printf 'runner_path=%s\n' "$runner"
+		printf 'runner=%s\n' "$runner"
+		printf 'runner_sha256=%s\n' "$runner_sha256"
 		printf 'reporter_path=%s\n' "$reporter_path"
 		printf 'out_path=%s\n' "$out"
 		printf 'receipt_path=%s\n' "$receipt"
