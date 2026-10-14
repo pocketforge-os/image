@@ -702,7 +702,8 @@ export SOURCE_DATE_EPOCH="${PF_GPU_UM_SOURCE_DATE_EPOCH:?}"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ccache g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
-  libdrm-dev:arm64 libexpat1-dev:arm64 libglvnd-dev:arm64 libvulkan-dev:arm64 libwayland-dev:arm64 \
+  libdrm-dev:arm64 libexpat1-dev:arm64 libgbm-dev:arm64 libglvnd-dev:arm64 libvulkan-dev:arm64 \
+  libwayland-dev:arm64 \
   libwayland-egl-backend-dev:arm64 \
   libx11-dev:arm64 libx11-xcb-dev:arm64 libxext-dev:arm64 \
   libxrandr-dev:arm64 libxcb-dri3-dev:arm64 libxcb-glx0-dev:arm64 \
@@ -771,7 +772,7 @@ for pass in 1 2; do
     --cross-file /usr/local/share/mesa-cross/ge8300-aarch64.ini \
     --native-file /usr/local/share/mesa-cross/ge8300-native.ini \
     --wrap-mode=nodownload \
-    -Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=disabled \
+    -Dvulkan-drivers=imagination,virtio -Dimagination-srv=false -Dllvm=disabled \
     -Dmesa-clc=system \
     -Dprecomp-compiler=system -Dgallium-drivers=zink -Dplatforms=x11,wayland \
     -Dglx=dri -Degl=enabled -Dgbm=enabled \
@@ -799,7 +800,8 @@ install -D -m 0644 /tmp/10-pocketforge-zink.conf \
   /instroot/usr/local/share/drirc.d/10-pocketforge-zink.conf
 meson introspect --buildoptions build-cross >/instroot/.pf-gpu-um-build-options.json
 aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
-  /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe -lvulkan
+  /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe \
+  -lvulkan -lEGL -lGLESv2 -lgbm
 readelf -h /tmp/open-gpu-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
 install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
 /tmp/run-gamescope-pvr-cache.sh \
