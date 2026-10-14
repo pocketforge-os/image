@@ -944,15 +944,6 @@ if [ ! -s "${ROOTFS}/lib/modules/${KREL}/modules.dep" ]; then
 fi
 install_open_gpu_module_options
 
-# App-policy runtime paths are audited against one image-owned producer
-# inventory. The optional Gamescope installer replaces this base manifest with
-# its g1 union before the audit runs; the not-shipped profile retains this one.
-if [ "${PF_GPU_MODEL:-ddk}" = open ]; then
-    install -D -m 0644 \
-        /work/src/rootfs-overlay/usr/share/pocketforge/runtime-path-producers.json \
-        "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
-fi
-
 # --- Firmware install --------------------------------------------------------
 echo "[customize] Installing firmware..."
 install -d "${ROOTFS}/lib/firmware"
@@ -1302,6 +1293,15 @@ if [ -f "${RUNTIME_BIN}" ]; then
     echo "[customize] pf-input-decode installed at /usr/bin/pf-input-decode + enabled (multi-user.target.wants/)"
 else
     echo "[customize] runtime NOT-SHIPPED for this device (no ${RUNTIME_BIN}) — skipping pf-input-decode install"
+fi
+
+# App-policy runtime paths are audited against one image-owned producer
+# inventory. Keep this independent rootfs feature outside the kernel-module
+# transaction above so module-only probes do not need app-policy artifacts.
+if [ "${PF_GPU_MODEL:-ddk}" = open ]; then
+    install -D -m 0644 \
+        /work/src/rootfs-overlay/usr/share/pocketforge/runtime-path-producers.json \
+        "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
 fi
 
 # The generic default-app mechanism is an A133-open-only atomic set. Its helper
