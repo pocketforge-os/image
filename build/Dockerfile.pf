@@ -56,7 +56,7 @@
 # can point at a locally-built tag; CI/`pf build` pass the pinned digest.
 ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
 ARG PF_CURSOR_TOOLS_IMAGE=10.0.32.86:5555/pocketforge/ci-tools@sha256:2ff536627228c90e5c32b7d6345b21600a38a17481c075b41683db47ead3e862
-ARG PF_CURSOR_TOOLS_RECIPE_SHA=22b8c9feb04565c9ee84858687ed30455da7ed58
+ARG PF_CURSOR_TOOLS_RECIPE_SHA=ec5b2621f636261978d3bb4fd9843ae22a59c320
 
 # Declared before the first FROM (global pre-FROM scope) SOLELY so the gpu-um-mesa
 # selector stage below can interpolate it into a `FROM gpu-um-mesa-${PF_GPU_MODEL}`
@@ -2094,8 +2094,11 @@ ARG PF_CURSOR_TOOLS_RECIPE_SHA
 ARG PF_CURSOR_THEME_SHA
 COPY --from=cursor-theme-src . /work/cursor-theme
 COPY --chmod=0444 --from=image-src scripts/verify-cursor-theme.py /work/verify-cursor-theme.py
+COPY --chmod=0444 --from=image-src scripts/verify-cursor-tools-recipe.py /work/verify-cursor-tools-recipe.py
 RUN --network=none <<'CURSOR_THEME'
 set -eux
+python3 -B /work/verify-cursor-tools-recipe.py \
+  "${PF_CURSOR_TOOLS_IMAGE}" "${PF_CURSOR_TOOLS_RECIPE_SHA}"
 test "$(cat /work/cursor-theme/.pf-source-revision)" = "${PF_CURSOR_THEME_SHA}"
 python3 /work/cursor-theme/build_cursors.py --out /tmp/build-a
 python3 /work/cursor-theme/build_cursors.py --out /tmp/build-b
