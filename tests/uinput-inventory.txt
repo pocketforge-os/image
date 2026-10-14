@@ -4,7 +4,8 @@
 # Documentation and tests are assertions/fixtures; service/app lines are live policy.
 # tests/input-harness/tools/fake-input.c is the sole creator; it is guarded and
 # retained only for VM/DUT execution. Its device-free guard test uses a mock opener.
-apps/hello-pocketforge/slice.conf	a2be80aca0bb647dfac7b646c4ffd099f3c6000622f5514474ad21032caa0e50	# apps/hello-pocketforge/slice.conf:16 DeviceAllow=/dev/uinput rw
+apps/hello-pocketforge/slice.conf	35f267ec4258478b7a13c0362de6b6dfeaea28b87360cd3b60d95f8f405ddcba	# apps/hello-pocketforge/slice.conf:17 # No /dev/uinput grant: this starter reads input through pf-input-broker
+apps/hello-pocketforge/slice.conf	a1bb0ef5d7c79fec21c63c3755ac1811b6868937964848bfb32e5375b5b76fa8	# apps/hello-pocketforge/slice.conf:19 # generic pf-app@.service already hides the node (InaccessiblePaths=-/dev/uinput).
 docs/DEFAULT-APPS.md	37ac9d45ee5b23be254324bc00d08fe351660e1e4f9400865703953a6a974b63	# docs/DEFAULT-APPS.md:377 InaccessiblePaths=-/dev/uinput
 docs/DEFAULT-APPS.md	69f2db799c750053a1ba6fb1629d4088975bc5f79824c3d8c8f89c3ad644d4eb	# docs/DEFAULT-APPS.md:920 Apps also get `InaccessiblePaths=-/dev/uinput`: even if device-node permissions or group
 docs/DEFAULT-APPS.md	d143cd434ae21cf62194cea694a800f33f1386bf8b005f36bbc1536b9f7c24ca	# docs/DEFAULT-APPS.md:962 AssertPathExists=/dev/uinput
@@ -34,6 +35,19 @@ tests/session-authority-systemd/session-authority-test-tmpfiles.conf	85b63d4d9d8
 tests/session-authority-systemd/session-authority-test-tmpfiles.conf	b0498c04f8ff7861f2826c7a3fa7075d89c61936443db78612b5f5ecd20d195c	# tests/session-authority-systemd/session-authority-test-tmpfiles.conf:6 # requires its --source path to exist. drive.py removes /dev/uinput to prove a
 tests/session-authority-systemd/session-authority-test-tmpfiles.conf	e92e5b9caa438523508dae93546f1a7666576ca0d9b219557232f835675aeb72	# tests/session-authority-systemd/session-authority-test-tmpfiles.conf:8 f /dev/uinput 0666 root root -
 tests/test-default-app-rootfs.sh	37ac9d45ee5b23be254324bc00d08fe351660e1e4f9400865703953a6a974b63	# tests/test-default-app-rootfs.sh:49 InaccessiblePaths=-/dev/uinput
+tests/test-default-app-rootfs.sh	d7fa41c715809e13ed85c8369e67e591416af846cd1cc90b4ef18b338156613a	# tests/test-default-app-rootfs.sh:276 # uinput is broker-owned (pf-input-broker AssertPathExists=/dev/uinput) and the
+tests/test-default-app-rootfs.sh	0807a4cd45ebfb08141b6f76631f109a24b75088f6929041b45f23c5abaf8bfa	# tests/test-default-app-rootfs.sh:277 # generic pf-app@.service already hides it (InaccessiblePaths=-/dev/uinput), so a
+tests/test-default-app-rootfs.sh	e7fd7b53d1fb724b4bfbb6e75f6d9e27b456b1ade083c229b98c9332c2a13b71	# tests/test-default-app-rootfs.sh:278 # slice.conf DeviceAllow=/dev/uinput is both over-broad and redundant: an app reads
+tests/test-default-app-rootfs.sh	0f712b16b9df5f93f7e37b2c5fb1ce60f068428679f5af63965960b2f9095e2a	# tests/test-default-app-rootfs.sh:285 # line -- so no spelling systemd would parse as a /dev/uinput grant can slip
+tests/test-default-app-rootfs.sh	4514ca24b2c8ff5984d12457863e0b10bd202f6f058c7f2a22ea9dff5addc231	# tests/test-default-app-rootfs.sh:316 echo 'an app slice.conf declares a /dev/uinput DeviceAllow grant' >&2
+tests/test-default-app-rootfs.sh	a2be80aca0bb647dfac7b646c4ffd099f3c6000622f5514474ad21032caa0e50	# tests/test-default-app-rootfs.sh:328 DeviceAllow=/dev/uinput rw
+tests/test-default-app-rootfs.sh	67d96fee6380441c2b326a414b425635d9b08d914e1793c4d115a547fdd138ef	# tests/test-default-app-rootfs.sh:329 DeviceAllow =/dev/uinput rw
+tests/test-default-app-rootfs.sh	abcaaa42c5ac7a03e36c8ed38e36cde6f523b587d96541b41e878d49dc1ad20b	# tests/test-default-app-rootfs.sh:330 DeviceAllow= /dev/uinput rw
+tests/test-default-app-rootfs.sh	86e66beef701d6b4e953f2923475e1daf051691e309946ed9b04352df2ec63dd	# tests/test-default-app-rootfs.sh:331 DeviceAllow = /dev/uinput rw
+tests/test-default-app-rootfs.sh	d5a313013d4f7246aebefd128c2620e49e64f8588a17a8d1615660e4466987c3	# tests/test-default-app-rootfs.sh:332 DeviceAllow\t=\t/dev/uinput rw
+tests/test-default-app-rootfs.sh	a2be80aca0bb647dfac7b646c4ffd099f3c6000622f5514474ad21032caa0e50	# tests/test-default-app-rootfs.sh:333 DeviceAllow=/dev/uinput rw
+tests/test-default-app-rootfs.sh	03628dece5c5fb8985b9ce1ce7b12d1de261efe51b33c34ac20be1ed891a2cb2	# tests/test-default-app-rootfs.sh:337 printf 'DevicePolicy=strict\nDeviceAllow=\\\n/dev/uinput rw\n' > "${planted}/evil${evil_last}/slice.conf"
+tests/test-default-app-rootfs.sh	0d11937f7fab21a412706a3c14cda3296dce4282766ea149bf5051bb092bde7c	# tests/test-default-app-rootfs.sh:339 printf '# DeviceAllow=/dev/uinput rw\n;DeviceAllow = /dev/uinput rw\nDeviceAllow=/dev/fb0 rw\n' \
 tests/test-input-harness-selftest.py	0be388598cdfa66fa560ffa52ec05788f7fa40b0070a5cd7a7069f92572b0936	# tests/test-input-harness-selftest.py:151 ("uinput_path", re.compile(r"/dev/uinput(?:\s|$)")),
 tests/test-input-harness-selftest.py	e9d44b75f091862f7ee947862c6741d407162e1c57a93baee9c226f080d5f80c	# tests/test-input-harness-selftest.py:155 r"(?:-v|--volume)\s+[^\n]*?/dev/input(?:[/:\s]|$)"
 tests/test-input-harness-selftest.py	729f049896d870cc79a33917c04d0e4181dd3aeb194a4af2e3d17865ca16e025	# tests/test-input-harness-selftest.py:156 r"|--mount[^\n]*(?:source|src)=/dev/input(?:[,/\s]|$)"
