@@ -30,8 +30,14 @@ RUN apt-get update -qq \
        libluajit-5.1-dev \
        libxcb-composite0-dev libxcb-xfixes0-dev libxcb-render0-dev \
        libxcb-ewmh-dev libxcb-icccm4-dev libxcb-res0-dev libxcb-errors-dev \
-       libavif-dev libpipewire-0.3-dev libbenchmark-dev catch2 hwdata \
+      libavif-dev libpipewire-0.3-dev libbenchmark-dev catch2 hwdata \
        libegl-dev libgles-dev xwayland x11-xkb-utils \
+ && find /var/lib/apt/lists -mindepth 1 -delete
+
+# gamescope#17's runtime-orientation client parses session-authority JSON.
+RUN apt-get update -qq \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+      libjson-c-dev \
  && find /var/lib/apt/lists -mindepth 1 -delete
 
 COPY tests/input-harness/tools/provision-wayland-protocols.sh /usr/local/bin/

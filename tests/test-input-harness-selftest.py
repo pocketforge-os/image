@@ -494,6 +494,10 @@ def section_asset_audit(work):
             "Containerfile does not default to the admitted wayland-protocols closure pin",
         )
         require(
+            "libjson-c-dev" in containerfile,
+            "Containerfile does not provision gamescope's required json-c dependency",
+        )
+        require(
             'checkout "${WAYLAND_PROTOCOLS_COMMIT}"' in containerfile,
             "Containerfile does not materialize the exact wayland-protocols commit",
         )
