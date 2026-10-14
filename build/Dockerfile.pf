@@ -1245,20 +1245,25 @@ CLOUD_INIT
 
 # =============================================================================
 # platform-inputs — the ONE staged platform device descriptor (bd: tsp-f3fm.202.1
-# R1 / B3 platform#217 / B4). Platform stages devices/<ID>/capabilities.toml into
-# the `platform-inputs-src` named context ONLY for the A133-open app-runtime
-# profiles (the same profiles that emit PF_APP_*). Mirrors the launcher/recovery
-# pattern: only the open stage names the open-only context, and the selector
-# below prunes it from every other build, so ddk/none never reference a context
-# that is not staged for them. Both branches export /out; the runtime stage
-# verifies the ID/SHA-256 contract and parses the file before anything ships.
+# R1 / B3 platform#217 / B4). Platform stages the descriptor into the
+# `platform-inputs-src` named context ONLY for the A133-open app-runtime
+# profiles (the same profiles that emit PF_APP_*). Since platform#341
+# (tsp-mc9m.41.1026.4) the context holds the same bytes twice: the per-SoC
+# devices/<ID>/capabilities.toml and the device-neutral
+# device/capabilities.toml that the runtime consumers install from. Mirrors the
+# launcher/recovery pattern: only the open stage names the open-only context,
+# and the selector below prunes it from every other build, so ddk/none never
+# reference a context that is not staged for them. Both branches export /out;
+# the runtime stage verifies the ID/SHA-256 contract and the exact two-copy
+# tree (a missing or divergent device-neutral copy is a named FATAL, with no
+# fallback to the per-SoC path) and parses the file before anything ships.
 # =============================================================================
 FROM pf-build-base AS platform-inputs-ddk
 RUN mkdir -p /out
 FROM pf-build-base AS platform-inputs-none
 RUN mkdir -p /out
 FROM pf-build-base AS platform-inputs-open
-COPY --from=platform-inputs-src devices /out/devices
+COPY --from=platform-inputs-src . /out
 FROM platform-inputs-${PF_GPU_MODEL} AS platform-inputs
 
 # =============================================================================
@@ -1289,8 +1294,10 @@ set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
 [ "${PF_RUNTIME_SHA}" = "53af03d72165ce2c7b74bcd8864339912d3ab8e8" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
-# file exist for A133-open only. Non-open: all three must be empty (prints nothing).
-# Open: exactly devices/a133/capabilities.toml with the pinned digest (prints its path).
+# files exist for A133-open only. Non-open: all three must be empty (prints nothing).
+# Open: exactly devices/a133/capabilities.toml plus the byte-identical device-neutral
+# device/capabilities.toml (platform#341), both at the pinned digest (prints the
+# per-SoC path; a missing/divergent neutral copy is a named FATAL, no fallback).
 DESCRIPTOR="$(check-device-descriptor "${PF_GPU_MODEL:-ddk}" /work/platform-inputs \
   "${PF_DEVICE_DESCRIPTOR_ID}" "${PF_DEVICE_DESCRIPTOR_SHA256}")"
 export SOURCE_DATE_EPOCH="${PF_RUNTIME_SOURCE_DATE_EPOCH:?}"
@@ -1416,6 +1423,14 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   cargo build --offline --locked --release -p pf-input-broker --example pf-descriptor-validate
   target/release/examples/pf-descriptor-validate "${DESCRIPTOR}" "${PF_DEVICE_DESCRIPTOR_ID}"
   install -D -m 0644 "${DESCRIPTOR}" "/out/share/devices/${PF_DEVICE_DESCRIPTOR_ID}/capabilities.toml"
+  # Device-neutral copy (tsp-mc9m.41.1026.4, platform#341): the bytes every
+  # runtime consumer (PF_DESCRIPTOR, broker --descriptor) loads, installed as
+  # share/device/capabilities.toml. check-device-descriptor already proved it
+  # exists and hashes to the pinned digest; this guard keeps the named error at
+  # the install site too. No fallback to the per-SoC path.
+  NEUTRAL_DESCRIPTOR="/work/platform-inputs/device/capabilities.toml"
+  [ -f "${NEUTRAL_DESCRIPTOR}" ] || { echo "FATAL: device-neutral descriptor missing: ${NEUTRAL_DESCRIPTOR}"; exit 1; }
+  install -D -m 0644 "${NEUTRAL_DESCRIPTOR}" /out/share/device/capabilities.toml
   # (2) pf-input-broker, static musl like every other runtime daemon. Its runtime
   #     unit ships verbatim; the image's drop-in scopes it to app sessions.
   CARGO_NET_LOCKED=1 \
