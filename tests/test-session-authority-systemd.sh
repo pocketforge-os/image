@@ -10,6 +10,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixtures="${root}/tests/session-authority-systemd"
 app_unit="${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
+app_dropin_verifier="${root}/tests/verify-session-authority-app-dropins.py"
 owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf"
 broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
@@ -594,6 +595,9 @@ cleanup_docker_resources=1
 actual_unit_sha256="$(sha256sum "${app_unit}" | awk '{print $1}')"
 [ "${actual_unit_sha256}" = "${app_unit_sha256}" ] \
     || fail "APP_UNIT_DRIFT: expected ${app_unit_sha256}, got ${actual_unit_sha256}"
+app_dropin_check="$(python3 "${app_dropin_verifier}" 2>&1)" \
+    || fail "APP_DROPIN_NOT_ENV_ONLY: ${app_dropin_check}"
+echo "${app_dropin_check}"
 for pinned in "broker_dropin:${broker_dropin}:${broker_dropin_sha256}" \
     "shell_dropin:${shell_dropin}:${shell_dropin_sha256}"; do
     IFS=: read -r pinned_name pinned_path pinned_sha256 <<<"${pinned}"
