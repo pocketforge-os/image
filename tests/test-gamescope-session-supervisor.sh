@@ -20,7 +20,8 @@ test -x "${installer}" || fail "Gamescope session installer is missing"
 grep -F 'tests/test-gamescope-session-supervisor.sh' "${workflow}" >/dev/null \
     || fail "hermetic workflow does not run this test"
 grep -F 'install-gamescope-session.sh "${PF_GAMESCOPE_MODE}" "${ROOTFS}"' "${builder}" >/dev/null
-grep -F 'check-runtime-path-producers.py' "${builder}" >/dev/null
+test "$(grep -Fc '/work/src/scripts/check-runtime-path-producers.py' "${builder}")" -eq 1 \
+    || fail "rootfs build must invoke the shared producer audit exactly once"
 grep -F 'COPY --from=image-src build/app-policy-a133-open-g1-v1.json' "${dockerfile}" >/dev/null
 grep -F 'g1) POLICY=/work/app-policy-a133-open-g1-v1.json' "${dockerfile}" >/dev/null
 
