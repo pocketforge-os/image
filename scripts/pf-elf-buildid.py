@@ -28,11 +28,26 @@
 #     .zdebug_info both count.
 #   - Deterministic: manifest rows sorted by (build-id, path); store paths are
 #     a pure function of the build-id.
-#   - Walkers lstat every entry (never os.path.isfile): a symlink of any class
-#     is skipped, so an in-image symlink can never resolve against, be recorded
-#     for, or mutate anything outside ROOTFS (objcopy/strip only ever see
-#     regular files physically inside the tree). Closed prefixes must likewise
-#     be real directories; a symlinked prefix is not walked.
+#   - Traversal is descriptor-bound and no-follow: the root and every
+#     subdirectory are opened O_RDONLY|O_NOFOLLOW|O_DIRECTORY and children are
+#     opened relative to the held directory descriptor with O_NOFOLLOW. fstat
+#     on the opened descriptor is authoritative for what is inspected, so a
+#     symlink of any class is never followed and nothing outside ROOTFS can be
+#     read, recorded or mutated — even if a producer re-targets an entry
+#     mid-scan: (st_dev, st_ino) are re-verified against the pathname before
+#     any path-bound evidence is emitted and before any mutation, and the run
+#     fails closed on mismatch. Closed prefixes must likewise be real
+#     directories; a symlinked prefix is not walked.
+#   - split mutates only through held descriptors: objcopy --only-keep-debug
+#     and objcopy --strip-all read /proc/self/fd/<n> of the verified inode and
+#     renameat() installs the stripped copy over the name without following it
+#     (objcopy --strip-all output is byte-identical to strip; verified on host
+#     binutils 2.42 and the pinned ARM 10.3 binutils 2.36.1). binutils strip
+#     itself re-resolves pathnames and writes its temp beside the target, so it
+#     is not executed.
+#   - PF_ELF_BUILDID_TEST_HOOK (test-only, inert unless set): an executable run
+#     as <hook> <phase> <rel> at preopen/postopen/premutate points so hermetic
+#     tests can re-target entries mid-scan; a failing hook aborts the run.
 import argparse
 import os
 import shutil
@@ -82,110 +97,117 @@ def _parse_notes(blob, endian):
         pos += (descsz + 3) & ~3
 
 
-def build_id_of(path):
+def build_id_of(fd):
     """Return the lowercase-hex GNU build-id of an ELF file, or None when the
     file is not ELF. Raise ElfError on a malformed/truncated ELF.
+
+    fd is a seekable binary file object on the file to inspect; the caller
+    keeps ownership of the descriptor (the walkers hand out entries opened
+    with O_NOFOLLOW so the parsed inode is the verified one).
 
     Reads PT_NOTE program-headers segments AND SHT_NOTE sections: executables
     and DSOs carry the id in a loadable PT_NOTE segment, while relocatable
     objects (kernel .ko modules are linked with `ld -r`) carry it only in the
     .note.gnu.build-id section."""
-    with open(path, "rb") as fd:
-        if _read(fd, 0, 4) != ELF_MAGIC:
-            return None
-        ei_class = _read(fd, 4, 1)[0]
-        endian = _endian(_read(fd, 5, 1)[0])
-        if ei_class == 1:  # ELF32
-            phoff = struct.unpack(endian + "I", _read(fd, 28, 4))[0]
-            phentsize, phnum = struct.unpack(endian + "HH", _read(fd, 42, 4))
-            shoff = struct.unpack(endian + "I", _read(fd, 32, 4))[0]
-            shentsize, shnum = struct.unpack(endian + "HH", _read(fd, 46, 4))
-            # phdr: p_offset@4, p_filesz@16; shdr: sh_offset@16, sh_size@20
-            ph_off_field, ph_sz_field = 4, 16
-            sh_off_field, sh_sz_field = 16, 20
-        elif ei_class == 2:  # ELF64
-            phoff = struct.unpack(endian + "Q", _read(fd, 32, 8))[0]
-            phentsize, phnum = struct.unpack(endian + "HH", _read(fd, 54, 4))
-            shoff = struct.unpack(endian + "Q", _read(fd, 40, 8))[0]
-            shentsize, shnum = struct.unpack(endian + "HH", _read(fd, 58, 4))
-            # phdr: p_offset@8, p_filesz@32; shdr: sh_offset@24, sh_size@32
-            ph_off_field, ph_sz_field = 8, 32
-            sh_off_field, sh_sz_field = 24, 32
+    fd.seek(0)
+    if _read(fd, 0, 4) != ELF_MAGIC:
+        return None
+    ei_class = _read(fd, 4, 1)[0]
+    endian = _endian(_read(fd, 5, 1)[0])
+    if ei_class == 1:  # ELF32
+        phoff = struct.unpack(endian + "I", _read(fd, 28, 4))[0]
+        phentsize, phnum = struct.unpack(endian + "HH", _read(fd, 42, 4))
+        shoff = struct.unpack(endian + "I", _read(fd, 32, 4))[0]
+        shentsize, shnum = struct.unpack(endian + "HH", _read(fd, 46, 4))
+        # phdr: p_offset@4, p_filesz@16; shdr: sh_offset@16, sh_size@20
+        ph_off_field, ph_sz_field = 4, 16
+        sh_off_field, sh_sz_field = 16, 20
+    elif ei_class == 2:  # ELF64
+        phoff = struct.unpack(endian + "Q", _read(fd, 32, 8))[0]
+        phentsize, phnum = struct.unpack(endian + "HH", _read(fd, 54, 4))
+        shoff = struct.unpack(endian + "Q", _read(fd, 40, 8))[0]
+        shentsize, shnum = struct.unpack(endian + "HH", _read(fd, 58, 4))
+        # phdr: p_offset@8, p_filesz@32; shdr: sh_offset@24, sh_size@32
+        ph_off_field, ph_sz_field = 8, 32
+        sh_off_field, sh_sz_field = 24, 32
+    else:
+        raise ElfError("unrecognised EI_CLASS")
+    if shnum == 0xFFFF:  # extended section count needs SHN_XINDEX: refuse
+        raise ElfError("extended section count unsupported")
+    build_id = None
+    for i in range(phnum):
+        ph = _read(fd, phoff + i * phentsize, phentsize)
+        p_type = struct.unpack(endian + "I", ph[0:4])[0]
+        if p_type != PT_NOTE:
+            continue
+        if ei_class == 1:
+            p_offset = struct.unpack(endian + "I", ph[ph_off_field:ph_off_field + 4])[0]
+            p_filesz = struct.unpack(endian + "I", ph[ph_sz_field:ph_sz_field + 4])[0]
         else:
-            raise ElfError("unrecognised EI_CLASS")
-        if shnum == 0xFFFF:  # extended section count needs SHN_XINDEX: refuse
-            raise ElfError("extended section count unsupported")
-        build_id = None
-        for i in range(phnum):
-            ph = _read(fd, phoff + i * phentsize, phentsize)
-            p_type = struct.unpack(endian + "I", ph[0:4])[0]
-            if p_type != PT_NOTE:
+            p_offset = struct.unpack(endian + "Q", ph[ph_off_field:ph_off_field + 8])[0]
+            p_filesz = struct.unpack(endian + "Q", ph[ph_sz_field:ph_sz_field + 8])[0]
+        for name, ntype, desc in _parse_notes(_read(fd, p_offset, p_filesz), endian):
+            if ntype == NT_GNU_BUILD_ID and name == b"GNU" and desc:
+                build_id = desc.hex()
+    if build_id is None:
+        for i in range(shnum):
+            sh = _read(fd, shoff + i * shentsize, shentsize)
+            sh_type = struct.unpack(endian + "I", sh[4:8])[0]
+            if sh_type != 7:  # SHT_NOTE
                 continue
             if ei_class == 1:
-                p_offset = struct.unpack(endian + "I", ph[ph_off_field:ph_off_field + 4])[0]
-                p_filesz = struct.unpack(endian + "I", ph[ph_sz_field:ph_sz_field + 4])[0]
+                sh_offset = struct.unpack(endian + "I", sh[sh_off_field:sh_off_field + 4])[0]
+                sh_size = struct.unpack(endian + "I", sh[sh_sz_field:sh_sz_field + 4])[0]
             else:
-                p_offset = struct.unpack(endian + "Q", ph[ph_off_field:ph_off_field + 8])[0]
-                p_filesz = struct.unpack(endian + "Q", ph[ph_sz_field:ph_sz_field + 8])[0]
-            for name, ntype, desc in _parse_notes(_read(fd, p_offset, p_filesz), endian):
+                sh_offset = struct.unpack(endian + "Q", sh[sh_off_field:sh_off_field + 8])[0]
+                sh_size = struct.unpack(endian + "Q", sh[sh_sz_field:sh_sz_field + 8])[0]
+            for name, ntype, desc in _parse_notes(_read(fd, sh_offset, sh_size), endian):
                 if ntype == NT_GNU_BUILD_ID and name == b"GNU" and desc:
                     build_id = desc.hex()
-        if build_id is None:
-            for i in range(shnum):
-                sh = _read(fd, shoff + i * shentsize, shentsize)
-                sh_type = struct.unpack(endian + "I", sh[4:8])[0]
-                if sh_type != 7:  # SHT_NOTE
-                    continue
-                if ei_class == 1:
-                    sh_offset = struct.unpack(endian + "I", sh[sh_off_field:sh_off_field + 4])[0]
-                    sh_size = struct.unpack(endian + "I", sh[sh_sz_field:sh_sz_field + 4])[0]
-                else:
-                    sh_offset = struct.unpack(endian + "Q", sh[sh_off_field:sh_off_field + 8])[0]
-                    sh_size = struct.unpack(endian + "Q", sh[sh_sz_field:sh_sz_field + 8])[0]
-                for name, ntype, desc in _parse_notes(_read(fd, sh_offset, sh_size), endian):
-                    if ntype == NT_GNU_BUILD_ID and name == b"GNU" and desc:
-                        build_id = desc.hex()
-                        break
-                if build_id is not None:
                     break
-        return build_id
+            if build_id is not None:
+                break
+    return build_id
 
 
-def has_debug_info(path):
-    """True when the ELF keeps a DWARF section (.debug_info / .zdebug_info)."""
+def has_debug_info(fd):
+    """True when the ELF keeps a DWARF section (.debug_info / .zdebug_info).
+
+    fd is a seekable binary file object on the file to inspect; the caller
+    keeps ownership of the descriptor."""
     try:
-        with open(path, "rb") as fd:
-            if _read(fd, 0, 4) != ELF_MAGIC:
-                return False
-            ei_class = _read(fd, 4, 1)[0]
-            endian = _endian(_read(fd, 5, 1)[0])
-            up = endian
-            if ei_class == 1:
-                shoff = struct.unpack(up + "I", _read(fd, 32, 4))[0]
-                shentsize, shnum, shstrndx = struct.unpack(up + "HHH", _read(fd, 46, 6))
-            elif ei_class == 2:
-                shoff = struct.unpack(up + "Q", _read(fd, 40, 8))[0]
-                shentsize, shnum, shstrndx = struct.unpack(up + "HHH", _read(fd, 58, 6))
-            else:
-                return False
-            if not shoff or not shnum:
-                return False
-            shstr = _read(fd, shoff + shstrndx * shentsize, shentsize)
-            if ei_class == 1:
-                str_off = struct.unpack(up + "I", shstr[16:20])[0]
-                str_sz = struct.unpack(up + "I", shstr[20:24])[0]
-            else:
-                str_off = struct.unpack(up + "Q", shstr[24:32])[0]
-                str_sz = struct.unpack(up + "Q", shstr[32:40])[0]
-            names = _read(fd, str_off, str_sz)
-            for i in range(shnum):
-                sh = _read(fd, shoff + i * shentsize, shentsize)
-                name_idx = struct.unpack(up + "I", sh[0:4])[0]
-                end = names.find(b"\x00", name_idx)
-                name = names[name_idx:end if end != -1 else len(names)]
-                if name in (b".debug_info", b".zdebug_info"):
-                    return True
+        fd.seek(0)
+        if _read(fd, 0, 4) != ELF_MAGIC:
             return False
+        ei_class = _read(fd, 4, 1)[0]
+        endian = _endian(_read(fd, 5, 1)[0])
+        up = endian
+        if ei_class == 1:
+            shoff = struct.unpack(up + "I", _read(fd, 32, 4))[0]
+            shentsize, shnum, shstrndx = struct.unpack(up + "HHH", _read(fd, 46, 6))
+        elif ei_class == 2:
+            shoff = struct.unpack(up + "Q", _read(fd, 40, 8))[0]
+            shentsize, shnum, shstrndx = struct.unpack(up + "HHH", _read(fd, 58, 6))
+        else:
+            return False
+        if not shoff or not shnum:
+            return False
+        shstr = _read(fd, shoff + shstrndx * shentsize, shentsize)
+        if ei_class == 1:
+            str_off = struct.unpack(up + "I", shstr[16:20])[0]
+            str_sz = struct.unpack(up + "I", shstr[20:24])[0]
+        else:
+            str_off = struct.unpack(up + "Q", shstr[24:32])[0]
+            str_sz = struct.unpack(up + "Q", shstr[32:40])[0]
+        names = _read(fd, str_off, str_sz)
+        for i in range(shnum):
+            sh = _read(fd, shoff + i * shentsize, shentsize)
+            name_idx = struct.unpack(up + "I", sh[0:4])[0]
+            end = names.find(b"\x00", name_idx)
+            name = names[name_idx:end if end != -1 else len(names)]
+            if name in (b".debug_info", b".zdebug_info"):
+                return True
+        return False
     except ElfError:
         return False
 
