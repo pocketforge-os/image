@@ -362,8 +362,6 @@ Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
-Environment=XCURSOR_THEME=pocketforge-light
-Environment=XCURSOR_SIZE=48
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
@@ -397,10 +395,15 @@ MemoryMax=256M
 Nice=-5
 ```
 
+The image installs `pf-app@.service.d/30-cursor-theme.conf` alongside this security-pinned
+template. Its two `Environment=` directives set `XCURSOR_THEME=pocketforge-light` and
+`XCURSOR_SIZE=48`, so systemd supplies the defaults directly to every app unit without relying on
+PAM interpretation of `/etc/environment`.
+
 The app template deliberately omits the dedicated `pf-pref-writer` supplementary group. Only
 `pf-shell-selected.service` and `pf-foreground@.service` receive that group, while generated
 runtime-root drop-ins reset `SupplementaryGroups=` entirely. The `pf-input-broker.service`
-dependency, the two `PF_*` variables, the two Xcursor defaults, and the session-authority
+dependency, the two `PF_*` variables, and the session-authority
 `InaccessiblePaths=` entry are the `tsp-f3fm.202.1` amendment. The fail-closed prefsd entry keeps
 preference state behind the broker's read-only API; `BindsTo=pf-prefsd.service` also tears down the
 app namespace if the daemon exits, so socket recreation cannot reveal a replacement inode. The

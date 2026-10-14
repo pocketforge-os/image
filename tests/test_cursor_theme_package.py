@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import hashlib
 import shutil
+import shlex
 import struct
 import subprocess
 import tempfile
@@ -36,6 +38,33 @@ ALIASES = {
     "col-resize": ("split_h", "sb_h_double_arrow_split"), "row-resize": ("split_v",),
     "all-scroll": (), "zoom-in": (), "zoom-out": (), "dnd-ask": (), "all-resize": (),
 }
+
+
+def effective_unit_environment(systemd_root: Path, unit: str) -> dict[str, str]:
+    """Apply Environment= directives from a unit and its ordered drop-ins."""
+    fragments = [systemd_root / unit]
+    fragments.extend(sorted((systemd_root / f"{unit}.d").glob("*.conf")))
+    environment: dict[str, str] = {}
+    for fragment in fragments:
+        section = ""
+        for raw in fragment.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith(("#", ";")):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1]
+                continue
+            if section != "Service" or not line.startswith("Environment="):
+                continue
+            value = line.removeprefix("Environment=")
+            if not value:
+                environment.clear()
+                continue
+            for assignment in shlex.split(value):
+                name, separator, setting = assignment.partition("=")
+                if separator:
+                    environment[name] = setting
+    return environment
 
 
 def xcursor() -> bytes:
@@ -94,9 +123,8 @@ class CursorPackage(unittest.TestCase):
         self.assertIn("diff -r", stage)
         for forbidden in ("apt-get", "pip install", "git clone", "curl ", "wget "):
             self.assertNotIn(forbidden, stage)
-        unit = (ROOT / "rootfs-overlay/etc/systemd/system/pf-app@.service").read_text()
-        self.assertIn("Environment=XCURSOR_THEME=pocketforge-light", unit)
-        self.assertIn("Environment=XCURSOR_SIZE=48", unit)
+        installer = (ROOT / "scripts/install-default-app-support.sh").read_text()
+        self.assertIn("30-cursor-theme.conf", installer)
         for builder in ("scripts/build-rootfs.sh", "scripts/build-rootfs-a523.sh"):
             self.assertIn("install-cursor-theme.sh", (ROOT / builder).read_text())
 
@@ -143,6 +171,24 @@ class CursorPackage(unittest.TestCase):
             cursor.chmod(0o644); cursor.write_bytes(b"Xcur" + b"\0" * 12)
             cursor.chmod(0o444)
             self.run_verify(wrong_sizes, ok=False)
+
+    def test_app_unit_effective_environment_preserves_pinned_base(self) -> None:
+        systemd = ROOT / "rootfs-overlay/etc/systemd/system"
+        unit = systemd / "pf-app@.service"
+        self.assertEqual(
+            hashlib.sha256(unit.read_bytes()).hexdigest(),
+            "15db6a1a46dd2facee1787d196d7b0aad7df971081a0cece804dab79876fdd67",
+        )
+        environment = effective_unit_environment(systemd, unit.name)
+        self.assertEqual(environment.get("XCURSOR_THEME"), "pocketforge-light")
+        self.assertEqual(environment.get("XCURSOR_SIZE"), "48")
+
+        with tempfile.TemporaryDirectory(prefix="pf-cursor-unit-env.") as td:
+            fixture = Path(td)
+            shutil.copy2(unit, fixture / unit.name)
+            missing = effective_unit_environment(fixture, unit.name)
+            self.assertNotIn("XCURSOR_THEME", missing)
+            self.assertNotIn("XCURSOR_SIZE", missing)
 
 
 if __name__ == "__main__":
