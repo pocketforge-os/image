@@ -332,6 +332,15 @@ def section_asset_audit(work):
             and 'open("/dev/input' not in private_input_text,
             "private-input.c opens a host input device",
         )
+        require(
+            "send(fd, events, size, MSG_NOSIGNAL)" in private_input_text
+            and "event(EV_SYN, SYN_REPORT, 0)" in private_input_text,
+            "private-input.c does not frame complete input_event packets",
+        )
+        require(
+            "open(" not in bridge_text and "open(" not in private_input_text,
+            "private input path opens a filesystem object",
+        )
         for rel, source in (
             ("session/driver.py", driver_text),
             ("tools/eis-bridge.c", bridge_text),
