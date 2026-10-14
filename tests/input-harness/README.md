@@ -23,6 +23,7 @@ type `screen_buffer` for golden comparison) and `screenshots/manifest.json`.
 | Path | What |
 | --- | --- |
 | `run.sh` | one-command entry (build + run + verdict) |
+| `negative-control.sh` | explicitly authorized laptop run wrapper; brackets the session with host input and journal checks |
 | `Containerfile` | 3-stage build: pinned gamescope fork → clients/tools → slim runtime (lavapipe) |
 | `pins.env` | gamescope fork URL/branch/commit + base image digest |
 | `schema/transcript-schema.md` | transcript JSONL schema (documented, closed) |
@@ -34,7 +35,9 @@ type `screen_buffer` for golden comparison) and `screenshots/manifest.json`.
 | `session/mangoapp` | trusted-client relay for `gamescopectl screenshot` |
 | `tools/private-input.c` | command reader that writes native `struct input_event` packets to an inherited private fd |
 | `tools/eis-bridge.c` | private input-event fds → libeis sender bridge into gamescope |
-| `tools/fake-input.c` | retained source for guarded VM/DUT runs only; not built into the default harness image |
+| `tools/fake-input.c` | retained source for guarded VM/DUT runs only; calls the vendored domain guard before its opener and is not built into the default harness image |
+| `tools/pf_uinput_domain_guard.h` | byte-for-byte runtime guard vendored from `bb923b328eced983daef2210aded6febe3ce2fdf` |
+| `selftest/uinput-domain-v1.{tsv,SOURCE}` | shared 23-case domain fixture plus pinned source/hashes |
 | `session/udev-shim.sh` | retained source for guarded VM/DUT runs only; unused by the default harness |
 | `tools/pf-shot.c` | trusted `gamescope_control` screenshot (type 4, waits for `screenshot_taken`) |
 | `tools/provision-wayland-protocols.sh` | exposes the closure-pinned 1.49 protocol XMLs to Meson before trixie's 1.44 package |
@@ -120,9 +123,12 @@ tests/test-input-harness-selftest.sh
 ```
 
 The full Docker session is not wired into CI. Following the host-uinput
-incident, do not run it on any host until the execution-domain guards have
-merged and input-coord explicitly lifts the session freeze. The fixture-only
-self-test above remains safe to run.
+incident, do not run it on any host until input-coord explicitly lifts the
+session freeze. The fixture-only self-test above remains safe to run. It
+compiles `fake-input.c` against a mocked probe/opener (never a device node),
+checks the shared execution-domain fixture and hashes, exercises the laptop
+negative-control wrapper with fake `/proc` and journal inputs, and runs the
+repo-wide uinput occurrence inventory with seeded red controls.
 
 ## Safety and blast radius
 
@@ -143,8 +149,27 @@ self-test above remains safe to run.
   device cgroup rule, `/dev/uinput` reference or `/dev/input` bind in `run.sh`,
   and proves the detector with a seeded copy of the former unsafe grants.
 - The 2026-10-13 incident established that uinput is host-kernel global and
-  containers do not isolate it. `fake-input.c` must therefore run only behind
-  the approved positive-identity guard in a pfvd guest or on a DUT.
+  containers do not isolate it. The source-only `fake-input.c` therefore calls
+  the approved positive-identity guard before opening uinput. It refuses bare
+  metal and a desktop VM with
+  `reason=unsafe_uinput_domain domain=<class>` and reaches its opener only in
+  a pfvd guest or on a DUT. The vendored header SHA256 is
+  `eef274664360cac95c7087a3a1ac0be960710eee8eea77768340fa1f80ba79ef`;
+  the shared fixture SHA256 is
+  `538fce952f5de6cb901c46c1919aedc44dcd436e753f7786c1a6e5fe21ad2fb9`.
+- `tests/uinput_inventory.py` classifies exact line hashes for every owned
+  uinput creation/exposure reference in this repo, fails on new or stale
+  entries, and proves the gate with duplicate, stale and seeded-violation red
+  controls.
+- Once input-coord explicitly authorizes the one laptop negative control, run
+  `negative-control.sh --out DIR --receipt FILE`. It snapshots
+  `/proc/bus/input/devices`, records user/system journal cursors, polls for any
+  added input-device entry while the private-FD harness runs, and terminates
+  the session immediately on an addition. Its receipt contains the before and
+  after device lists verbatim, both journal deltas, the harness log, and a
+  second functional report covering widget text, pointer activation, the
+  deliberately broken transcript and pixel deltas. It fails on any
+  `PocketForge`, libinput or X input-device journal activity.
 - `--network none` at run time (build needs network; the run does not).
 - No device, node, labgrid or PSU actions; laptop only.
 

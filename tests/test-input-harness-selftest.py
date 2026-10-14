@@ -177,6 +177,7 @@ def section_asset_audit(work):
         "Containerfile",
         "pins.env",
         "run.sh",
+        "negative-control.sh",
         "report/report.py",
         "validate/validate_transcript.py",
         "selftest/make_fixtures.py",
@@ -185,6 +186,7 @@ def section_asset_audit(work):
         "session/mangoapp",
         "session/udev-shim.sh",
         "tools/fake-input.c",
+        "tools/pf_uinput_domain_guard.h",
         "tools/private-input.c",
         "tools/pf-shot.c",
         "tools/provision-wayland-protocols.sh",
@@ -201,6 +203,11 @@ def section_asset_audit(work):
         "clients/no-im.c",
         "clients/broken-client.c",
         "schema/transcript-schema.md",
+        "selftest/fake_input_guard_test.c",
+        "selftest/test-fake-input-guard.sh",
+        "selftest/test-negative-control-wrapper.sh",
+        "selftest/uinput-domain-v1.SOURCE",
+        "selftest/uinput-domain-v1.tsv",
     ]
     for rel in required_assets:
         require(

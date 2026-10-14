@@ -21,11 +21,38 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "pf_uinput_domain_guard.h"
+
 #ifndef UI_CREATE
 #define UI_CREATE _IO('U', 1)
 #endif
 
+#ifndef PF_FAKE_INPUT_GUARDED_OPEN
+#define PF_FAKE_INPUT_GUARDED_OPEN(path, flags, opener, ctx, reported) \
+	pf_uinput_guarded_open(path, flags, opener, ctx, reported)
+#endif
+
 static int g_fd = -1;
+
+static int fake_input_open_uinput(void)
+{
+	struct pf_uinput_verdict verdict;
+	int fd = PF_FAKE_INPUT_GUARDED_OPEN("/dev/uinput",
+					  O_WRONLY | O_NONBLOCK,
+					  pf_uinput_real_open, NULL, &verdict);
+	if (fd >= 0)
+		return fd;
+	if (errno == EPERM) {
+		fprintf(stderr, "reason=%s domain=%s%s%s\n", verdict.reason,
+			pf_uinput_domain_name(verdict.domain),
+			verdict.probe ? " probe=" : "",
+			verdict.probe ? verdict.probe : "");
+	} else {
+		fprintf(stderr, "fake-input: open /dev/uinput: %s\n",
+			strerror(errno));
+	}
+	return -1;
+}
 
 static void die(const char *msg)
 {
@@ -95,9 +122,9 @@ int main(int argc, char **argv)
 	const char *kind = argv[1];
 
 	struct uinput_setup usetup = { 0 };
-	g_fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+	g_fd = fake_input_open_uinput();
 	if (g_fd < 0)
-		die("open /dev/uinput");
+		return 2;
 	if (ioctl(g_fd, UI_SET_EVBIT, EV_KEY) < 0)
 		die("UI_SET_EVBIT EV_KEY");
 
