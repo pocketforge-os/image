@@ -205,6 +205,126 @@ class CursorPackage(unittest.TestCase):
             cursor.chmod(0o444)
             self.run_verify(wrong_sizes, ok=False)
 
+    def test_installer_copies_drop_producer_ownership(self) -> None:
+        """CI-enforced ownership gate (tsp-ihne1.1.2).
+
+        The ci-tools producer runs as uid 1000 (USER 1000:1000 in its pinned
+        Containerfile), so a bare `cp -a` carries 1000:1000 into the rootfs --
+        the Build 10 DUT defect. This text-level check runs unprivileged on
+        every CI job; the behavioural probe below SKIPs where no root
+        semantics exist, so this is the gate CI actually enforces.
+        """
+        text = INSTALL.read_text()
+        copies = [line for line in text.splitlines() if "cp -a" in line]
+        self.assertTrue(copies, "installer has no cp -a payload copies?")
+        for line in copies:
+            self.assertIn("--no-preserve=ownership", line,
+                          f"producer-ownership leak: {line}")
+        verifies = [line for line in text.splitlines()
+                    if "verify-cursor-theme.py" in line]
+        self.assertEqual(len(verifies), 2, verifies)
+        producer_side, rootfs_side = verifies
+        self.assertIn('"${producer}"', producer_side)
+        self.assertNotIn("--require-root-ownership", producer_side,
+                         "producer-side verify must stay ownership-agnostic")
+        self.assertIn("--require-env", rootfs_side)
+        self.assertIn("--require-root-ownership", rootfs_side)
+
+    def test_verifier_ownership_gate_is_euid_scoped(self) -> None:
+        """The producer stage (build/Dockerfile.pf, uid 1000) and unprivileged
+        CI must never trip root-ownership enforcement; only an euid-0 run
+        enforces. Unprivileged: the flag is accepted, the check is skipped
+        with a printed typed notice, rc stays 0."""
+        with tempfile.TemporaryDirectory(prefix="pf-cursor-gate.") as td:
+            base = Path(td)
+            producer = base / "producer"
+            rootfs = base / "rootfs"
+            fixture(producer)
+            subprocess.run([str(INSTALL), str(producer), str(rootfs)], check=True)
+            result = subprocess.run(
+                ["python3", str(VERIFY), str(rootfs),
+                 "--require-env", "--require-root-ownership"],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            if os.geteuid() != 0:
+                self.assertIn(
+                    "cursor-theme verify: ownership_check_skipped reason=not_euid0",
+                    result.stdout)
+
+    def test_foreign_uid_producer_installs_root_owned_payload(self) -> None:
+        """Behavioural probe for the Build 10 DUT leak (tsp-ihne1.1.2).
+
+        Chowns a fixture producer to 1000:1000 (the ci-tools producer uid),
+        runs the real installer, and requires uid/gid 0 on EVERY installed
+        path (lstat, alias symlinks included). Root semantics are mandatory:
+        real euid 0, or fakeroot (faked euid 0 + faked chown/stat).
+        `unshare -r` is deliberately NOT used: its single-uid map makes the
+        fixture appear root-owned and the unfixed installer pass (false
+        GREEN). The pf-builder-vm toolset (pocketforge-automation
+        scripts/install-ci-runner-toolset.sh PACKAGES) ships no fakeroot and
+        CI runs unprivileged, so in CI this probe SKIPs with a printed reason.
+        """
+        if os.geteuid() == 0:
+            wrapper: list[str] = []
+            mode = "euid0"
+        elif shutil.which("fakeroot"):
+            wrapper = ["fakeroot", "--"]
+            mode = "fakeroot"
+        else:
+            reason = ("cursor-theme ownership behavioural probe: SKIP "
+                      f"reason=no_root_semantics euid={os.geteuid()} "
+                      "fakeroot=absent (pf-builder-vm toolset has no fakeroot; "
+                      "text gate test_installer_copies_drop_producer_ownership "
+                      "enforces this in CI)")
+            print(reason, flush=True)
+            self.skipTest(reason)
+            return
+        with tempfile.TemporaryDirectory(prefix="pf-cursor-owner.") as td:
+            base = Path(td)
+            producer = base / "producer"
+            rootfs = base / "rootfs"
+            fixture(producer)
+            probe = base / "ownership-probe.sh"
+            probe.write_text(
+                "set -euo pipefail\n"
+                'producer="$1"; rootfs="$2"; installer="$3"; verifier="$4"\n'
+                'chown -R 1000:1000 "${producer}"\n'
+                '"${installer}" "${producer}" "${rootfs}"\n'
+                "find \"${rootfs}\" -mindepth 1 "
+                "-exec stat -c 'OWNERSHIP %u %g %n' {} +\n"
+                # Negative control: corrupt one installed path's ownership; the
+                # rootfs-side verifier must refuse with the typed reason.
+                'chown 1000:1000 "${rootfs}/usr/share/pocketforge/cursor-theme.provenance"\n'
+                'refusal="$(python3 -B "${verifier}" "${rootfs}" '
+                '--require-env --require-root-ownership 2>&1)" '
+                '&& { echo "NEGATIVE_CONTROL=unexpected_pass"; exit 1; }\n'
+                'case "${refusal}" in\n'
+                '  *reason=non_root_ownership*) '
+                'echo "NEGATIVE_CONTROL=refused typed=non_root_ownership" ;;\n'
+                '  *) echo "NEGATIVE_CONTROL=refused typed=MISSING ${refusal}"; exit 1 ;;\n'
+                'esac\n')
+            probe.chmod(0o755)
+            result = subprocess.run(
+                [*wrapper, "bash", str(probe),
+                 str(producer), str(rootfs), str(INSTALL), str(VERIFY)],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self.assertEqual(result.returncode, 0, f"[{mode}] {result.stdout}")
+            self.assertIn("NEGATIVE_CONTROL=refused typed=non_root_ownership",
+                          result.stdout)
+            probed = 0
+            offenders = []
+            for line in result.stdout.splitlines():
+                if not line.startswith("OWNERSHIP "):
+                    continue
+                probed += 1
+                fields = line.split(" ", 3)
+                if fields[1] != "0" or fields[2] != "0":
+                    offenders.append(line)
+            self.assertGreater(probed, 0, f"[{mode}] no installed paths probed")
+            self.assertEqual(
+                offenders, [],
+                f"[{mode}] installed paths not owned by root: {offenders}")
+
     def test_app_unit_effective_environment_preserves_pinned_base(self) -> None:
         systemd = ROOT / "rootfs-overlay/etc/systemd/system"
         unit = systemd / "pf-app@.service"
