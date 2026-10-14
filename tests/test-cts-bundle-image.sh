@@ -195,7 +195,12 @@ cat > "${fake_readelf}" <<'STUB'
 #!/bin/sh
 case "$1" in
     -h) printf '  Machine:                           %s\n' "${PF_TEST_MACHINE:-AArch64}" ;;
-    -d) sed -n 's|^# NEEDED: \(.*\)$|  0x0000000000000001 (NEEDED)             Shared library: [\1]|p' "$2" ;;
+    -d) case "$2" in
+            */"${PF_TEST_DYNAMIC_FAIL:-/unreadable}")
+                printf 'readelf: Error: %s: no dynamic section\n' "$2" >&2
+                exit 1 ;;
+        esac
+        sed -n 's|^# NEEDED: \(.*\)$|  0x0000000000000001 (NEEDED)             Shared library: [\1]|p' "$2" ;;
     *) exit 2 ;;
 esac
 STUB
@@ -288,6 +293,17 @@ if PF_TEST_MACHINE=ARM PF_CTS_READELF="${fake_readelf}" \
     exit 1
 fi
 grep -F 'reason=library_target_not_aarch64' "${scratch}/arch.err" >/dev/null
+
+# Negative control: an unreadable dynamic section dies instead of resolving an
+# incomplete name set (the NEEDED leg is a scan, not a best-effort hint).
+if PF_TEST_DYNAMIC_FAIL=deqp-gles31 PF_CTS_READELF="${fake_readelf}" \
+        "${verify_runtime}" "${versioned_rootfs}" \
+        >"${scratch}/dynamic.out" 2>"${scratch}/dynamic.err"; then
+    echo 'FAIL: unreadable dynamic section passed' >&2
+    exit 1
+fi
+grep -F 'reason=binary_dynamic_scan_failed binary=deqp-gles31' \
+    "${scratch}/dynamic.err" >/dev/null
 
 # Fail-closed control: a payload without any library name still dies.
 nameless_archive="${scratch}/nameless.tar.gz"
