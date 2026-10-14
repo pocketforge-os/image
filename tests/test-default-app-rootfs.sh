@@ -272,4 +272,26 @@ none_body="$(sed -n '/^FROM ${PF_CONTAINER} AS launcher-none$/,/^# launcher-open
 ! grep -F 'launcher-src' <<<"${none_body}"
 test "$(grep -c '^COPY --from=launcher-src ' "${dockerfile}")" -eq 1
 
-echo 'default-app rootfs contract: PASS (verbatim dormant unit, open-only install incl. app-session broker never enabled, libpocketforge.so.1, devices/a133 and byte-identical device-neutral descriptor, no per-SoC PF_DESCRIPTOR hard-code; non-open no-op with every leak refused)'
+# No app bundle may declare a cgroup uinput grant (incident tsp-ihne1.56, PR6).
+# uinput is broker-owned (pf-input-broker AssertPathExists=/dev/uinput) and the
+# generic pf-app@.service already hides it (InaccessiblePaths=-/dev/uinput), so a
+# slice.conf DeviceAllow=/dev/uinput is both over-broad and redundant: an app reads
+# input through the broker, it never creates input devices. hello-pocketforge used
+# to ship one; this guard keeps every apps/*/slice.conf free of it.
+if find "${root}/apps" -mindepth 2 -maxdepth 2 -name slice.conf -print0 \
+    | xargs -0 -r grep -nHE 'DeviceAllow=[^[:space:]]*/dev/uinput'; then
+    echo 'an app slice.conf declares a broad /dev/uinput DeviceAllow grant' >&2
+    exit 1
+fi
+# Negative control: the same scan catches a planted grant in a fake app bundle.
+planted_app="${tmp}/planted-apps/evil-app"
+mkdir -p "${planted_app}"
+printf 'DevicePolicy=strict\nDeviceAllow=/dev/fb0 rw\nDeviceAllow=/dev/uinput rw\n' \
+    > "${planted_app}/slice.conf"
+if ! find "${tmp}/planted-apps" -mindepth 2 -maxdepth 2 -name slice.conf -print0 \
+    | xargs -0 -r grep -qE 'DeviceAllow=[^[:space:]]*/dev/uinput'; then
+    echo 'negative control: uinput grant scan missed a planted DeviceAllow=/dev/uinput' >&2
+    exit 1
+fi
+
+echo 'default-app rootfs contract: PASS (verbatim dormant unit, open-only install incl. app-session broker never enabled, libpocketforge.so.1, devices/a133 and byte-identical device-neutral descriptor, no per-SoC PF_DESCRIPTOR hard-code, no app slice.conf uinput grant; non-open no-op with every leak refused)'
