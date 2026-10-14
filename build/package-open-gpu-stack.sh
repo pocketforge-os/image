@@ -96,7 +96,8 @@ fi
 # route below so one physical device is not enumerated twice.
 if [ -d "$stage/usr/local/share/vulkan/icd.d" ]; then
     find "$stage/usr/local/share/vulkan/icd.d" -mindepth 1 \
-        -maxdepth 1 -name 'powervr_mesa_icd.aarch64.json' -delete
+        -maxdepth 1 \( -name 'powervr_mesa_icd.aarch64.json' \
+        -o -name 'virtio_icd.aarch64.json' \) -delete
 fi
 
 install -D -m 0644 "$producer/.pf-gpu-um-provenance" \
@@ -158,6 +159,18 @@ producer_icd="$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.js
 }
 install -D -m 0644 "$producer_icd" \
     "$stage/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+
+# The virtual GPU branch (tsp-mc9m.41.984.54.18) selects its ICD from the
+# bound DRM driver: a virtio_gpu render node gets the Mesa Venus manifest.
+# Like the PowerVR manifest it must exist in the producer tree, and only the
+# canonical system route is packaged.
+venus_icd="$producer/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.json"
+[ -f "$venus_icd" ] || {
+    echo "Venus ICD manifest is missing: $venus_icd" >&2
+    exit 1
+}
+install -D -m 0644 "$venus_icd" \
+    "$stage/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
 
 # dpkg-deb honors SOURCE_DATE_EPOCH; normalizing the staging mtimes also makes
 # the data archive stable across two otherwise identical producer invocations.

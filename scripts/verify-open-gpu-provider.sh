@@ -284,7 +284,7 @@ expected = {
     "gbm": "enabled",
     "xmlconfig": "enabled",
     "gallium-drivers": ["zink"],
-    "vulkan-drivers": ["imagination"],
+    "vulkan-drivers": ["imagination", "virtio"],
 }
 for name, wanted in expected.items():
     actual = options.get(name)
@@ -378,19 +378,30 @@ fi
 
 producer_icd="$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
 rootfs_icd="$rootfs/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+producer_venus_icd="$producer/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.json"
+rootfs_venus_icd="$rootfs/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
 [ -f "$producer_icd" ] || fatal 'producer PowerVR ICD JSON is missing'
+[ -f "$producer_venus_icd" ] || fatal 'producer Venus ICD JSON is missing'
 rootfs_icd_count=$(find "$rootfs" \( -type f -o -type l \) \
     -path '*/vulkan/icd.d/*.json' -print | wc -l)
-[ "$rootfs_icd_count" -eq 1 ] \
-    || fatal "expected exactly one Vulkan ICD manifest, found $rootfs_icd_count"
+[ "$rootfs_icd_count" -eq 2 ] \
+    || fatal "expected exactly two Vulkan ICD manifests, found $rootfs_icd_count"
 if [ ! -f "$rootfs_icd" ] || [ -L "$rootfs_icd" ]; then
     fatal 'canonical PowerVR ICD JSON is missing or not regular'
 fi
+if [ ! -f "$rootfs_venus_icd" ] || [ -L "$rootfs_venus_icd" ]; then
+    fatal 'canonical Venus ICD JSON is missing or not regular'
+fi
 grep -Fx '/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json' "$provider_list" >/dev/null \
     || fatal 'provider does not own canonical PowerVR ICD JSON'
+grep -Fx '/usr/share/vulkan/icd.d/virtio_icd.aarch64.json' "$provider_list" >/dev/null \
+    || fatal 'provider does not own canonical Venus ICD JSON'
 [ "$(sha256sum "$producer_icd" | awk '{ print $1 }')" = \
   "$(sha256sum "$rootfs_icd" | awk '{ print $1 }')" ] \
     || fatal 'canonical PowerVR ICD JSON differs from the producer'
+[ "$(sha256sum "$producer_venus_icd" | awk '{ print $1 }')" = \
+  "$(sha256sum "$rootfs_venus_icd" | awk '{ print $1 }')" ] \
+    || fatal 'canonical Venus ICD JSON differs from the producer'
 
 for boundary in usr/lib/aarch64-linux-gnu lib/aarch64-linux-gnu; do
     directory="$rootfs/$boundary"
@@ -412,4 +423,4 @@ glx_vendor_count=$(find "$rootfs" \( -type f -o -type l \) \
 [ -e "$rootfs/usr/local/lib/libGLX_mesa.so.0" ] \
     || fatal 'canonical GLVND Mesa GLX vendor is missing from /usr/local/lib'
 
-echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=${kmsro_evidence} vulkan=powervr vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
+echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=${kmsro_evidence} vulkan=powervr+venus vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
