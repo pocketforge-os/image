@@ -944,6 +944,14 @@ if [ ! -s "${ROOTFS}/lib/modules/${KREL}/modules.dep" ]; then
 fi
 install_open_gpu_module_options
 
+# App-policy runtime paths are audited against one image-owned producer
+# inventory. The optional Gamescope installer replaces this base manifest with
+# its g1 union before the audit runs; the not-shipped profile retains this one.
+if [ "${PF_GPU_MODEL:-ddk}" = open ]; then
+    install -D -m 0644 \
+        /work/src/rootfs-overlay/usr/share/pocketforge/runtime-path-producers.json \
+        "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
+fi
 /work/src/scripts/install-gamescope-session.sh "${PF_GAMESCOPE_MODE}" "${ROOTFS}"
 
 # --- Firmware install --------------------------------------------------------
@@ -1307,13 +1315,6 @@ fi
     "${LAUNCHER_DIR}" \
     /work/src/rootfs-overlay/etc/systemd/system/pf-app@.service
 
-if [ "${PF_GAMESCOPE_MODE}" = g1 ]; then
-    /work/src/scripts/check-runtime-path-producers.py \
-        --root "${ROOTFS}" \
-        --inventory /work/src/build/app-policy-a133-open-g1-v1.json \
-        --producers "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
-fi
-
 # Private input-method bus and per-app X11 door (bd tsp-ihne1.5). These files
 # stay dormant until the session/manifest work starts pf-fcitx5, pf-osk or an
 # explicitly opted-in X11 app; no unit is enabled at boot here.
@@ -1387,6 +1388,12 @@ if [ -f "${PREFSD_BIN}" ]; then
     ln -sf /etc/systemd/system/pf-prefsd.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-prefsd.service"
     echo "[customize] pf-prefsd installed and enabled as the preference state authority"
+fi
+
+if [ "${PF_GPU_MODEL:-ddk}" = open ]; then
+    /work/src/scripts/check-runtime-path-producers.py \
+        --root "${ROOTFS}" \
+        --producers "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
 fi
 
 if [ "${PF_HAS_DISPLAY}" = 1 ]; then
