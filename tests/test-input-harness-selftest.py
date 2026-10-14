@@ -253,6 +253,17 @@ def section_asset_audit(work):
         and "gamescope must not be included" in payload_builder,
         "guest attachment lacks pinned Bookworm/squashfs/product-gamescope exclusions",
     )
+    with open(
+        os.path.join(REPO, ".github", "workflows", "input-harness-payload.yml"),
+        "r",
+        encoding="utf-8",
+    ) as handle:
+        payload_workflow = handle.read()
+    require(
+        'docker pull "$PF_BUILD_IMAGE"' in payload_workflow
+        and '--build-arg PF_BUILD_IMAGE="$PF_BUILD_IMAGE"' in payload_workflow,
+        "payload workflow does not seed BuildKit through the runner's approved registry path",
+    )
     with open(os.path.join(HARNESS, "run-guest.sh"), "r", encoding="utf-8") as handle:
         guest_runner = handle.read()
     require(

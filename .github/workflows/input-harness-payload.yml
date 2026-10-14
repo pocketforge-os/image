@@ -14,6 +14,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PF_BUILD_IMAGE: 10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
+
 concurrency:
   group: input-harness-payload-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -25,6 +28,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Seed BuildKit from the runner's approved insecure registry
+        run: docker pull "$PF_BUILD_IMAGE"
       - name: Build reproducible arm64 attachment
         timeout-minutes: 40
         run: |
@@ -32,6 +37,7 @@ jobs:
           out="$RUNNER_TEMP/input-harness-payload"
           test ! -e "$out"
           docker buildx build --builder default --pull=false --progress=plain \
+            --build-arg PF_BUILD_IMAGE="$PF_BUILD_IMAGE" \
             --build-arg PF_APT_PROXY=http://10.0.32.86:3142 \
             --label pf.bead=tsp-ihne1.56.4 \
             -f tests/input-harness/Containerfile.guest-payload \
