@@ -30,6 +30,9 @@ UNIT_DIRS = (
     "lib/systemd/system",
 )
 TMPFILES_DIRS = ("etc/tmpfiles.d", "usr/lib/tmpfiles.d", "lib/tmpfiles.d")
+TMPFILES_CREATION_TYPES = frozenset(
+    ("f", "d", "D", "v", "q", "Q", "p", "L", "c", "b", "C")
+)
 
 
 class AuditError(Exception):
@@ -114,6 +117,27 @@ def shipped_tmpfiles(root: Path) -> dict[str, Path]:
     return result
 
 
+def tmpfiles_creates_exact_path(fields: list[str]) -> bool:
+    if len(fields) < 2 or not fields[0] or not fields[1].startswith("/"):
+        return False
+    entry_type, path = fields[:2]
+    return entry_type[0] in TMPFILES_CREATION_TYPES and not any(
+        character in path for character in "*?["
+    )
+
+
+def tmpfiles_created_paths(config: Path) -> set[str]:
+    result: set[str] = set()
+    for line in logical_lines(config):
+        try:
+            fields = shlex.split(line, comments=True, posix=True)
+        except ValueError as error:
+            raise AuditError(f"cannot parse tmpfiles {config}: {error}") from error
+        if tmpfiles_creates_exact_path(fields):
+            result.add(fields[1])
+    return result
+
+
 def declarative_producers(
     units: dict[str, Path], tmpfiles: dict[str, Path]
 ) -> dict[str, str]:
@@ -133,13 +157,8 @@ def declarative_producers(
                     if path.startswith("/"):
                         result.setdefault(path, f"socket:{name}")
     for name, config in tmpfiles.items():
-        for line in logical_lines(config):
-            try:
-                fields = shlex.split(line, comments=True, posix=True)
-            except ValueError as error:
-                raise AuditError(f"cannot parse tmpfiles {config}: {error}") from error
-            if len(fields) >= 2 and fields[1].startswith("/"):
-                result.setdefault(fields[1], f"tmpfiles:{name}")
+        for path in tmpfiles_created_paths(config):
+            result.setdefault(path, f"tmpfiles:{name}")
     return result
 
 
@@ -186,6 +205,13 @@ def verify_manifest(
             errors.append(f"producer {kind} missing: {produced_path}: {name}")
         elif kind == "tmpfiles" and name not in tmpfiles:
             errors.append(f"producer tmpfiles missing: {produced_path}: {name}")
+        elif kind == "tmpfiles" and produced_path not in tmpfiles_created_paths(
+            tmpfiles[name]
+        ):
+            errors.append(
+                "producer tmpfiles does not create exact path: "
+                f"{produced_path}: {name}"
+            )
         else:
             verified[produced_path] = f"{kind}:{name}"
     if errors:

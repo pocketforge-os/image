@@ -91,6 +91,69 @@ EOF
     --unit "${scratch}/pf-app@org.pocketforge.fixture.service" \
     --producers "${scratch}/all-producers.json"
 
+# Only tmpfiles directives that create the exact path are producers. Removal,
+# exclusion, metadata-only and write-if-present entries must not make a
+# required policy source pass merely by naming it.
+for nonproducer_type in r R x X z Z t T h H a A w 'w+'; do
+    printf '%s /run/from-tmpfiles - - - - -\n' "${nonproducer_type}" \
+        > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"
+    if "${checker}" \
+        --root "${fixture}" \
+        --unit "${scratch}/pf-app@org.pocketforge.fixture.service" \
+        --producers "${scratch}/all-producers.json" \
+        > "${scratch}/tmpfiles-${nonproducer_type//+/plus}.out" 2>&1; then
+        fail "audit accepted tmpfiles ${nonproducer_type} as a producer"
+    fi
+    grep -F 'missing producer: /run/from-tmpfiles: consumer=' \
+        "${scratch}/tmpfiles-${nonproducer_type//+/plus}.out" >/dev/null
+done
+
+cat > "${scratch}/wildcard-inventory.json" <<'EOF'
+{"resources":{"display-sockets":["/run/from-*"]}}
+EOF
+printf 'd /run/from-* 0755 root root -\n' \
+    > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"
+if "${checker}" \
+    --root "${fixture}" \
+    --inventory "${scratch}/wildcard-inventory.json" \
+    --producers "${scratch}/all-producers.json" \
+    > "${scratch}/tmpfiles-wildcard.out" 2>&1; then
+    fail "audit accepted a wildcard tmpfiles path as an exact producer"
+fi
+grep -F 'missing producer: /run/from-*: consumer=' \
+    "${scratch}/tmpfiles-wildcard.out" >/dev/null
+
+# A manifest's named tmpfiles file is still evidence, not an exemption: that
+# file must contain an exact creation-capable declaration for the named path.
+cat > "${scratch}/named-tmpfiles-inventory.json" <<'EOF'
+{"resources":{"display-sockets":["/run/from-named-tmpfiles"]}}
+EOF
+cat > "${scratch}/named-tmpfiles-producers.json" <<'EOF'
+{"schema":"pocketforge.runtime-path-producers/v1","producers":{"/run/from-named-tmpfiles":{"tmpfiles":"fixture.conf"}},"optional":[]}
+EOF
+printf 'r /run/from-named-tmpfiles - - - - -\n' \
+    > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"
+if "${checker}" \
+    --root "${fixture}" \
+    --inventory "${scratch}/named-tmpfiles-inventory.json" \
+    --producers "${scratch}/named-tmpfiles-producers.json" \
+    > "${scratch}/named-tmpfiles-nonproducer.out" 2>&1; then
+    fail "audit accepted a named non-producing tmpfiles entry"
+fi
+grep -F 'producer tmpfiles does not create exact path: /run/from-named-tmpfiles: fixture.conf' \
+    "${scratch}/named-tmpfiles-nonproducer.out" >/dev/null
+
+printf 'd /run/from-named-tmpfiles 0755 root root -\n' \
+    > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"
+"${checker}" \
+    --root "${fixture}" \
+    --inventory "${scratch}/named-tmpfiles-inventory.json" \
+    --producers "${scratch}/named-tmpfiles-producers.json"
+
+# Restore the creation-capable positive control for installed-unit discovery.
+printf 'd /run/from-tmpfiles 0755 root root -\n' \
+    > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"
+
 # The production Poolsuite policy is one flattened full instance unit, not a
 # drop-in. Prove rootfs discovery audits that shape and any accompanying
 # instance drop-ins without requiring explicit --unit arguments.
