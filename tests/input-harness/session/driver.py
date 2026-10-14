@@ -213,10 +213,18 @@ class KernelInput:
             [os.path.join(BIN, "fake-input"), kind],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
         )
-        line = self.proc.stdout.readline().strip()
-        info = json.loads(line)
-        if info.get("kind") != kind or not info.get("event_node"):
-            raise RuntimeError(f"fake-input {kind} reported bad device line: {line}")
+        try:
+            line = self.proc.stdout.readline().strip()
+            info = json.loads(line)
+            if info.get("kind") != kind or not info.get("event_node"):
+                raise RuntimeError(
+                    f"fake-input {kind} reported bad device line: {line}")
+        except BaseException:
+            # Popen has already created a real guest uinput producer. It is not
+            # yet reachable from main's inputs list, so constructor failure
+            # must synchronously remove it before propagating the error.
+            self.destroy()
+            raise
         self.node = info["event_node"]
         sw.emit("device_created", kind=kind, name=info["name"],
                 event_node=self.node, event_source="guest-kernel-uinput")
@@ -236,6 +244,16 @@ class KernelInput:
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait(timeout=5)
+
+
+def create_kernel_inputs(sw: SessionWriter,
+                         inputs: list[PrivateInput | KernelInput]):
+    """Create and immediately register each real-kernel input source."""
+    kbd = KernelInput("keyboard", sw)
+    inputs.append(kbd)
+    pointer = KernelInput("mouse", sw)
+    inputs.append(pointer)
+    return kbd, pointer
 
 
 def screenshot(sw: SessionWriter, name: str, phase: str,
@@ -424,9 +442,7 @@ def main() -> int:
         log(f"compositor ready: wayland={wl_name} x={os.environ.get('DISPLAY')}")
 
         if os.environ.get("PF_INPUT_SOURCE") == "guest-kernel":
-            kbd = KernelInput("keyboard", sw)
-            pointer = KernelInput("mouse", sw)
-            inputs.extend([kbd, pointer])
+            kbd, pointer = create_kernel_inputs(sw, inputs)
         else:
             kbd_reader, kbd_writer = socket.socketpair(
                 socket.AF_UNIX, socket.SOCK_SEQPACKET)

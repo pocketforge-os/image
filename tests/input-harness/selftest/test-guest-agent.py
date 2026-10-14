@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
+import importlib.util
 import json
 import os
 import socket
@@ -7,10 +8,18 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENT = ROOT / "guest" / "agent.py"
+
+
+def load_agent():
+    spec = importlib.util.spec_from_file_location("pf_guest_agent_cleanup", AGENT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def send_frame(sock, header, payload=b""):
@@ -109,7 +118,56 @@ def main():
         )
         assert refused.returncode != 0
         assert "virtio port absent" in refused.stdout
-    print("guest-agent: PASS artifacts=3 symlink=refused oversized=refused malformed=refused absent_port=refused channel=mocked")
+
+        agent = load_agent()
+        timeout_left, timeout_right = socket.socketpair()
+        timeout_request = dict(request, request_id=11)
+        send_frame(timeout_left, timeout_request)
+        original_run_runner = agent.run_runner
+
+        def injected_timeout(*_args, **_kwargs):
+            raise agent.RunnerTimeout("injected")
+
+        agent.run_runner = injected_timeout
+        try:
+            agent.serve_once(timeout_right.fileno(), "/unused-runner")
+        finally:
+            agent.run_runner = original_run_runner
+            timeout_right.close()
+        timeout_frame = recv_frame(timeout_left)
+        timeout_left.close()
+        assert timeout_frame[0]["kind"] == "complete"
+        assert timeout_frame[0]["reason"] == "runner_timeout"
+
+        timeout_runner = work / "timeout-runner.py"
+        timeout_runner.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, signal, subprocess, sys, time\n"
+            "out = sys.argv[sys.argv.index('--out') + 1]\n"
+            "code = 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'\n"
+            "child = subprocess.Popen([sys.executable, '-c', code])\n"
+            "with open(os.path.join(out, 'descendant.pid'), 'w') as target: target.write(str(child.pid))\n"
+            "time.sleep(60)\n"
+        )
+        timeout_runner.chmod(0o755)
+        timeout_output = work / "timeout-output"
+        timeout_output.mkdir()
+        try:
+            agent.run_runner(str(timeout_runner), str(timeout_output), timeout=0.2, terminate_grace=0.2)
+            raise AssertionError("timed-out runner was accepted")
+        except agent.RunnerTimeout:
+            pass
+        descendant = int((timeout_output / "descendant.pid").read_text())
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            try:
+                os.kill(descendant, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("timed-out runner descendant survived process-group cleanup")
+    print("guest-agent: PASS artifacts=3 symlink=refused oversized=refused malformed=refused absent_port=refused timeout_group=cleaned channel=mocked")
 
 
 if __name__ == "__main__":

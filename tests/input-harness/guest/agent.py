@@ -4,10 +4,12 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 import stat
 import struct
 import subprocess
 import tempfile
+import time
 
 PROTOCOL = "pf-input-harness.control/v1"
 PORT = os.environ.get("PF_INPUT_HARNESS_PORT", "/dev/virtio-ports/org.pocketforge.input-harness.0")
@@ -24,6 +26,66 @@ class ProtocolError(Exception):
 
 class UnsafeArtifact(Exception):
     pass
+
+
+class RunnerTimeout(Exception):
+    pass
+
+
+def process_group_exists(group):
+    try:
+        os.killpg(group, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def terminate_process_group(process, grace):
+    """Terminate the runner session, escalating until no group member lives."""
+    group = process.pid
+    try:
+        os.killpg(group, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + grace
+    while process_group_exists(group) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    if process_group_exists(group):
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        try:
+            process.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=grace)
+
+
+def run_runner(runner, output, timeout=1800, terminate_grace=5):
+    process = subprocess.Popen(
+        [runner, "--out", output], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        start_new_session=True,
+    )
+    try:
+        try:
+            stdout, _ = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            terminate_process_group(process, terminate_grace)
+            try:
+                stdout, _ = process.communicate(timeout=terminate_grace)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, _ = process.communicate(timeout=terminate_grace)
+            raise RunnerTimeout("runner exceeded time bound") from error
+        return subprocess.CompletedProcess(
+            process.args, process.returncode, stdout=stdout)
+    finally:
+        # A runner that exits while a detached descendant remains is also a
+        # failed lifecycle. The dedicated session makes that cleanup bounded.
+        terminate_process_group(process, terminate_grace)
 
 
 def read_exact(stream, size):
@@ -117,9 +179,11 @@ def serve_once(stream, runner):
             return
         run_root = "/run" if os.path.isdir("/run") and os.access("/run", os.W_OK) else None
         with tempfile.TemporaryDirectory(prefix="pf-input-harness.", dir=run_root) as output:
-            result = subprocess.run([runner, "--out", output], stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, timeout=1800, check=False)
+            try:
+                result = run_runner(runner, output)
+            except RunnerTimeout:
+                complete(stream, request_id, False, "runner_timeout")
+                return
             for name, media_type, data in artifact_files(output):
                 write_frame(stream, {
                     "kind": "artifact", "request_id": request_id, "name": name,

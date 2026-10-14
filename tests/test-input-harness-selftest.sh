@@ -8,4 +8,5 @@ python3 -B "${repo_root}/tests/uinput_inventory.py" --self-test
 "${repo_root}/tests/input-harness/selftest/test-apt-proxy-guard.sh"
 "${repo_root}/tests/input-harness/selftest/test-payload-reproducibility.sh"
 python3 -B "${repo_root}/tests/input-harness/selftest/test-guest-agent.py"
+python3 -B "${repo_root}/tests/input-harness/selftest/test-guest-kernel-cleanup.py"
 exec python3 -B "${repo_root}/tests/test-input-harness-selftest.py"
