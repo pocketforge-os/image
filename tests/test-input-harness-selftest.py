@@ -498,6 +498,10 @@ def section_asset_audit(work):
             "Containerfile does not provision gamescope's required json-c dependency",
         )
         require(
+            "libjson-c5" in containerfile,
+            "Containerfile does not provision gamescope's json-c runtime library",
+        )
+        require(
             'checkout "${WAYLAND_PROTOCOLS_COMMIT}"' in containerfile,
             "Containerfile does not materialize the exact wayland-protocols commit",
         )
