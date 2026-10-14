@@ -2270,7 +2270,7 @@ COPY --from=launcher /out           /work/launcher
 COPY --from=platform-runtime-steamlink-ffmpeg59 /out /work/platform-runtime
 COPY --from=gamescope /out /work/gamescope-package
 COPY --from=cts-bundle /out /work/cts-bundle
-COPY --from=cursor-theme /tmp/out /work/cursor-theme
+COPY --chown=0:0 --from=cursor-theme /tmp/out /work/cursor-theme
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
