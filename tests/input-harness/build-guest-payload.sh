@@ -60,6 +60,12 @@ cp -a "$sdl_source/sdl3" "$stage/build-root/src/sdl3"
 cp -a "$libei_source" "$stage/build-root/src/libei"
 cp "$gamescope_source/protocol/gamescope-control.xml" "$stage/build-root/src/gamescope-control.xml"
 cp "$repo/tests/input-harness/guest/build-tools.sh" "$stage/build-root/build-tools.sh"
+# The former in-BuildKit clones stamped their checkouts with wall-clock mtimes,
+# while the network-free git archives carry commit mtimes. Neither metadata
+# source may influence compiler output or build IDs.
+find "$stage/build-root/src" -print0 | LC_ALL=C sort -z | \
+    xargs -0 touch -h --date="@${SOURCE_DATE_EPOCH}"
+touch -h --date="@${SOURCE_DATE_EPOCH}" "$stage/build-root/build-tools.sh"
 chroot "$stage/build-root" /bin/bash /build-tools.sh
 
 mkdir "$stage/payload"

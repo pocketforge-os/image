@@ -249,6 +249,8 @@ def section_asset_audit(work):
     require(
         "mmdebstrap" in payload_container
         and "snapshot.debian.org" in payload_container
+        and ". /work/guest-payload.pins" in payload_container
+        and "export SOURCE_DATE_EPOCH" in payload_container
         and payload_container.count(". /usr/local/libexec/require-apt-proxy.sh") == 3
         and '--aptopt=Acquire::http::Proxy' in payload_container
         and "git clone" not in payload_container
@@ -257,6 +259,37 @@ def section_asset_audit(work):
         and "contains_product_gamescope" in payload_builder
         and "gamescope must not be included" in payload_builder,
         "guest attachment lacks pinned Bookworm/squashfs/product-gamescope exclusions",
+    )
+    # Positive/negative controls for cross-run reproducibility. Repacking one
+    # already-built tree twice cannot detect mmdebstrap or source-tree clock
+    # inputs, so both producer phases must consume the committed epoch.
+    require(
+        'find "$stage/build-root/src" -print0' in payload_builder
+        and payload_builder.index('find "$stage/build-root/src" -print0')
+        < payload_builder.index('chroot "$stage/build-root"'),
+        "payload producer does not normalize source mtimes before compilation",
+    )
+    nonreproducible_container = payload_container.replace(
+        "export SOURCE_DATE_EPOCH", "# seeded missing epoch"
+    )
+    require(
+        "export SOURCE_DATE_EPOCH" not in nonreproducible_container,
+        "reproducibility audit missed its absent-mmdebstrap-epoch negative control",
+    )
+    nonreproducible_builder = payload_builder.replace(
+        'find "$stage/build-root/src" -print0', "# seeded missing normalization"
+    )
+    require(
+        'find "$stage/build-root/src" -print0' not in nonreproducible_builder,
+        "reproducibility audit missed its absent-source-normalization negative control",
+    )
+    with open(os.path.join(HARNESS, "verify-guest-payload.sh"), "r", encoding="utf-8") as handle:
+        payload_verifier = handle.read()
+    require(
+        "guest-payload-observed" in payload_verifier
+        and payload_verifier.index("guest-payload-observed")
+        < payload_verifier.index('[[ "$actual_sha" =='),
+        "payload verifier does not report observed addresses before pin refusal",
     )
     with open(
         os.path.join(REPO, ".github", "workflows", "input-harness-payload.yml"),

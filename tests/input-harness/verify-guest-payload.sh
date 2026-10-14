@@ -21,6 +21,7 @@ source "$root/guest-payload.lock"
 actual_sha=$(sha256sum "$payload" | awk '{print $1}')
 actual_bytes=$(stat -c %s "$payload")
 actual_manifest_sha=$(sha256sum "$manifest" | awk '{print $1}')
+echo "guest-payload-observed sha256=$actual_sha bytes=$actual_bytes manifest_sha256=$actual_manifest_sha"
 [[ "$actual_sha" == "$PF_INPUT_HARNESS_PAYLOAD_SHA256" ]] || {
     echo "guest payload verify: sha mismatch expected=$PF_INPUT_HARNESS_PAYLOAD_SHA256 actual=$actual_sha" >&2
     exit 1

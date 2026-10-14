@@ -27,7 +27,11 @@ RUN set -eux; \
 FROM builder AS sysroots
 ARG SNAPSHOT_DATE=20260601T000000Z
 ARG PF_APT_PROXY
+COPY tests/input-harness/guest-payload.pins /work/guest-payload.pins
 RUN set -eux; \
+    . /work/guest-payload.pins; \
+    test "${SOURCE_DATE_EPOCH}" = 0; \
+    export SOURCE_DATE_EPOCH; \
     . /usr/local/libexec/require-apt-proxy.sh; \
     mirror="http://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE}/"; \
     set -- "--aptopt=Acquire::http::Proxy \"${PF_APT_PROXY}\""; \
