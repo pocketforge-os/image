@@ -75,6 +75,12 @@ mismatch fails before publication. `manifest.json` records the
 snapshot, external commits, recipe/source hashes, runtime package closure,
 payload size and digest.
 
+The bootstrap loader cache is discarded with the other install-time state,
+then regenerated once from the completed arm64 tree with its own
+`/usr/sbin/ldconfig -i`. The auxiliary cache is removed afterward. This keeps
+the `/etc/ld.so.conf.d` search paths available without allowing producer-host
+cache state into the attachment.
+
 The required `PF_APT_PROXY` build argument routes each producer apt invocation
 through the fleet apt-cacher-ng because BuildKit RUN steps have no DNS. A
 missing or non-HTTP value is refused before apt starts; mmdebstrap still

@@ -87,6 +87,7 @@ chmod 0755 "$stage/payload/guest/agent.py" "$stage/payload/run-guest.sh" \
 # identity, logs, caches and bytecode. None is a harness input; canonicalize it
 # before recording or packing the payload.
 "$repo/tests/input-harness/tools/normalize-guest-payload-root.sh" "$stage/payload"
+"$repo/tests/input-harness/tools/regenerate-guest-ld-cache.sh" "$stage/payload"
 
 # Query the target package database with the builder's dpkg-query; no arm64
 # code is executed. This is the exact installed package/version set.

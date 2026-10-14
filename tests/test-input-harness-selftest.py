@@ -193,6 +193,7 @@ def section_asset_audit(work):
         "tools/pf_uinput_domain_guard.h",
         "tools/require-apt-proxy.sh",
         "tools/normalize-guest-payload-root.sh",
+        "tools/regenerate-guest-ld-cache.sh",
         "tools/inventory-guest-payload.py",
         "tools/private-input.c",
         "tools/pf-shot.c",
@@ -297,6 +298,12 @@ def section_asset_audit(work):
         and payload_builder.index('find "$stage/build-root/src" -print0')
         < payload_builder.index('chroot "$stage/build-root"'),
         "payload producer does not normalize source mtimes before compilation",
+    )
+    require(
+        payload_builder.index("normalize-guest-payload-root.sh")
+        < payload_builder.index("regenerate-guest-ld-cache.sh")
+        < payload_builder.index("inventory-guest-payload.py"),
+        "payload producer does not inventory the final regenerated loader cache",
     )
     nonreproducible_container = payload_container.replace(
         "export SOURCE_DATE_EPOCH", "# seeded missing epoch"

@@ -18,7 +18,8 @@ make_fixture() {
         "$tree/var/lib/systemd/catalog" "$tree/var/lib/dpkg" \
         "$tree/var/log/apt" "$tree/var/cache/ldconfig" "$tree/var/cache/debconf" \
         "$tree/var/cache/fontconfig" "$tree/usr/lib/python3/test/__pycache__" \
-        "$tree/usr/share/icons/Adwaita" "$tree/tmp" "$tree/var/tmp" "$tree/opt"
+        "$tree/usr/share/icons/Adwaita" "$tree/usr/sbin" \
+        "$tree/tmp" "$tree/var/tmp" "$tree/opt"
     printf 'stable\n' > "$tree/opt/stable.txt"
     printf 'machine-%s\n' "$variant" > "$tree/etc/machine-id"
     printf 'dbus-%s\n' "$variant" > "$tree/var/lib/dbus/machine-id"
@@ -41,6 +42,8 @@ make_fixture() {
     printf 'debconf-config-%s\n' "$variant" > "$tree/var/cache/debconf/config.dat-old"
     printf 'debconf-templates-%s\n' "$variant" > "$tree/var/cache/debconf/templates.dat-old"
     printf 'ld-cache-%s\n' "$variant" > "$tree/etc/ld.so.cache"
+    printf '#!/bin/sh\nexit 99\n' > "$tree/usr/sbin/ldconfig"
+    chmod 0755 "$tree/usr/sbin/ldconfig"
     printf 'icon-cache-%s\n' "$variant" > "$tree/usr/share/icons/Adwaita/icon-theme.cache"
     printf 'tmp-%s\n' "$variant" > "$tree/tmp/work"
     printf 'host-%s\n' "$variant" > "$tree/etc/hostname"
@@ -51,8 +54,29 @@ make_fixture "$work/one" 1
 make_fixture "$work/two" 2
 find "$work/two/etc/resolv.conf" -maxdepth 0 -delete
 ln -s /run/producer-specific-resolv.conf "$work/two/etc/resolv.conf"
+mkdir "$work/bin"
+cat > "$work/bin/chroot" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+tree=$1
+shift
+[[ $# -eq 2 && $1 == /usr/sbin/ldconfig && $2 == -i ]]
+if [[ -e "$tree/etc/fixture-ldconfig-fail" ]]; then
+    exit 9
+fi
+if [[ -e "$tree/etc/fixture-ldconfig-no-cache" ]]; then
+    exit 0
+fi
+printf 'deterministic target cache\n' > "$tree/etc/ld.so.cache"
+printf 'auxiliary cache must be removed\n' > "$tree/var/cache/ldconfig/aux-cache"
+EOF
+chmod 0755 "$work/bin/chroot"
 SOURCE_DATE_EPOCH=$fixed_epoch "$root/tools/normalize-guest-payload-root.sh" "$work/one"
 SOURCE_DATE_EPOCH=$fixed_epoch "$root/tools/normalize-guest-payload-root.sh" "$work/two"
+PATH="$work/bin:$PATH" SOURCE_DATE_EPOCH=$fixed_epoch \
+    "$root/tools/regenerate-guest-ld-cache.sh" "$work/one"
+PATH="$work/bin:$PATH" SOURCE_DATE_EPOCH=$fixed_epoch \
+    "$root/tools/regenerate-guest-ld-cache.sh" "$work/two"
 python3 -B "$root/tools/inventory-guest-payload.py" "$work/one" "$work/one.tsv"
 python3 -B "$root/tools/inventory-guest-payload.py" "$work/two" "$work/two.tsv"
 if ! cmp "$work/one.tsv" "$work/two.tsv"; then
@@ -62,12 +86,14 @@ fi
 [[ $(cut -d: -f3 "$work/one/etc/shadow") == "$fixed_epoch_days" ]]
 [[ $fixed_epoch_days -gt 0 ]]
 for relative in \
-    etc/shadow- etc/passwd- etc/group- etc/gshadow- etc/ld.so.cache \
+    etc/shadow- etc/passwd- etc/group- etc/gshadow- \
     var/lib/dpkg/status-old var/lib/dpkg/diversions-old \
     var/cache/debconf/config.dat-old var/cache/debconf/templates.dat-old \
     var/lib/systemd/catalog/database usr/share/icons/Adwaita/icon-theme.cache; do
     [[ ! -e "$work/one/$relative" && ! -L "$work/one/$relative" ]]
 done
+[[ -s "$work/one/etc/ld.so.cache" ]]
+[[ ! -e "$work/one/var/cache/ldconfig/aux-cache" ]]
 
 # Stable content remains a meaningful negative control after volatile state is
 # removed: a real payload difference must still change the inventory.
@@ -99,4 +125,54 @@ if env -u SOURCE_DATE_EPOCH "$root/tools/normalize-guest-payload-root.sh" "$work
     exit 1
 fi
 grep -q 'reason=invalid_source_date_epoch' "$work/missing-epoch-refusal.out"
-echo 'payload-repro=PASS volatile=normalized stable_difference=visible invalid_root=refused invalid_epoch=refused'
+
+find "$work/invalid-epoch/usr/sbin/ldconfig" -maxdepth 0 -delete
+if PATH="$work/bin:$PATH" SOURCE_DATE_EPOCH=$fixed_epoch \
+    "$root/tools/regenerate-guest-ld-cache.sh" "$work/invalid-epoch" \
+    >"$work/ldconfig-refusal.out" 2>&1; then
+    echo 'payload-repro=FAIL reason=missing_ldconfig_accepted' >&2
+    exit 1
+fi
+grep -q 'reason=missing_target_ldconfig' "$work/ldconfig-refusal.out"
+
+if PATH="$work/bin:$PATH" SOURCE_DATE_EPOCH=$fixed_epoch \
+    "$root/tools/regenerate-guest-ld-cache.sh" "$work/not-a-root" \
+    >"$work/ldconfig-root-refusal.out" 2>&1; then
+    echo 'payload-repro=FAIL reason=invalid_ldconfig_root_accepted' >&2
+    exit 1
+fi
+grep -q 'reason=invalid_payload_root' "$work/ldconfig-root-refusal.out"
+
+make_fixture "$work/ldconfig-zero-epoch" 4
+if PATH="$work/bin:$PATH" SOURCE_DATE_EPOCH=0 \
+    "$root/tools/regenerate-guest-ld-cache.sh" "$work/ldconfig-zero-epoch" \
+    >"$work/ldconfig-epoch-refusal.out" 2>&1; then
+    echo 'payload-repro=FAIL reason=zero_ldconfig_epoch_accepted' >&2
+    exit 1
+fi
+grep -q 'reason=invalid_source_date_epoch' "$work/ldconfig-epoch-refusal.out"
+
+make_fixture "$work/ldconfig-fails" 5
+SOURCE_DATE_EPOCH=$fixed_epoch "$root/tools/normalize-guest-payload-root.sh" \
+    "$work/ldconfig-fails"
+touch "$work/ldconfig-fails/etc/fixture-ldconfig-fail"
+if PATH="$work/bin:$PATH" SOURCE_DATE_EPOCH=$fixed_epoch \
+    "$root/tools/regenerate-guest-ld-cache.sh" "$work/ldconfig-fails" \
+    >"$work/ldconfig-failed.out" 2>&1; then
+    echo 'payload-repro=FAIL reason=failed_ldconfig_accepted' >&2
+    exit 1
+fi
+grep -q 'reason=target_ldconfig_failed' "$work/ldconfig-failed.out"
+
+make_fixture "$work/ldconfig-no-cache" 6
+SOURCE_DATE_EPOCH=$fixed_epoch "$root/tools/normalize-guest-payload-root.sh" \
+    "$work/ldconfig-no-cache"
+touch "$work/ldconfig-no-cache/etc/fixture-ldconfig-no-cache"
+if PATH="$work/bin:$PATH" SOURCE_DATE_EPOCH=$fixed_epoch \
+    "$root/tools/regenerate-guest-ld-cache.sh" "$work/ldconfig-no-cache" \
+    >"$work/ldconfig-no-cache.out" 2>&1; then
+    echo 'payload-repro=FAIL reason=missing_generated_cache_accepted' >&2
+    exit 1
+fi
+grep -q 'reason=cache_not_created' "$work/ldconfig-no-cache.out"
+echo 'payload-repro=PASS volatile=normalized ld_cache=regenerated stable_difference=visible invalid_root=refused invalid_epoch=refused'
