@@ -169,7 +169,11 @@ repo-wide uinput occurrence inventory with seeded red controls.
   after device lists verbatim, both journal deltas, the harness log, and a
   second functional report covering widget text, pointer activation, the
   deliberately broken transcript and pixel deltas. It fails on any
-  `PocketForge`, libinput or X input-device journal activity.
+  `PocketForge`, libinput or X input-device journal activity. The wrapper
+  creates its snapshots rather than copying procfs permissions, preserves the
+  original before snapshot and journal cursor records in a mode-0700
+  `<receipt>.evidence/` directory, and writes a typed receipt from its EXIT
+  finalizer on success, host-safety abort, timeout, or internal failure.
 - `--network none` at run time (build needs network; the run does not).
 - No device, node, labgrid or PSU actions; laptop only.
 
