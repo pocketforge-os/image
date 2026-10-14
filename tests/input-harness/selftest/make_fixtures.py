@@ -89,14 +89,29 @@ def keys(builder, text=PHRASE):
         builder.event("key", keycode=keycode, keysym=keysym, state="released", mods=0)
 
 
-def make_png(path, width=WIDTH, height=HEIGHT, rgb=(40, 44, 52), mark=False):
+def make_png(
+    path,
+    width=WIDTH,
+    height=HEIGHT,
+    rgb=(40, 44, 52),
+    mark=False,
+    gtk_focus_border=False,
+):
     raw = bytearray()
-    row = bytes(rgb) * width
-    marked_row = (bytes(rgb) * 300 + bytes((240, 240, 240)) * 320
-                  + bytes(rgb) * (width - 620))
     for y in range(height):
+        pixels = bytearray(bytes(rgb) * width)
+        if mark and 376 <= y < 395:
+            pixels[300 * 3:620 * 3] = bytes((240, 240, 240)) * 320
+        if gtk_focus_border:
+            # Match the focused GtkEntry outline seen in a 1280x720 capture,
+            # but deliberately leave its text interior unchanged.
+            if 359 <= y < 363 or 404 <= y < 408:
+                pixels[187 * 3:1093 * 3] = bytes((53, 132, 228)) * 906
+            elif 363 <= y < 404:
+                pixels[187 * 3:191 * 3] = bytes((53, 132, 228)) * 4
+                pixels[1089 * 3:1093 * 3] = bytes((53, 132, 228)) * 4
         raw.append(0)
-        raw.extend(marked_row if mark and 340 <= y < 370 else row)
+        raw.extend(pixels)
 
     def chunk(tag, payload):
         return (
@@ -280,6 +295,13 @@ def build_negatives(good_dir):
         os.path.join(d, "screenshots", "gtk4-text.png"),
     )
     negatives["neg-stale-frame"] = (d, "stale_frame")
+
+    d = clone(good_dir, "neg-gtk-focus-only")
+    make_png(
+        os.path.join(d, "screenshots", "gtk4-text.png"),
+        gtk_focus_border=True,
+    )
+    negatives["neg-gtk-focus-only"] = (d, "stale_frame")
 
     def write_gtk_raw(directory, text):
         b = Builder("gtk4-text")

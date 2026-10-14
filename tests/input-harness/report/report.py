@@ -131,7 +131,10 @@ SPECS = {
 
 SESSION_REQUIRED_DEVICES = ("pad", "keyboard", "mouse")
 TEXT_REGIONS = {
-    "gtk4-text": (190, 340, 1090, 420),
+    # GtkEntry's outer bounds are approximately x=187..1092, y=359..407
+    # in the fixed 1280x720 harness layout. Keep this region inside its
+    # padding so focus-ring and border-only repaints cannot satisfy the gate.
+    "gtk4-text": (204, 369, 1076, 398),
     "qt6-text": (190, 340, 1090, 420),
     "sdl3-text": (220, 290, 1050, 410),
     "sdl2-game": (220, 290, 1050, 410),
