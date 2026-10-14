@@ -67,7 +67,7 @@ def publish(args: argparse.Namespace) -> None:
     store = parent / ".session-generations"
     deadline = time.monotonic() + args.timeout
     while True:
-        if socket_ready(args.wayland, connect=True) and socket_ready(args.x11, connect=False):
+        if socket_ready(args.wayland, connect=True) and socket_ready(args.x11, connect=True):
             break
         if time.monotonic() >= deadline:
             refuse("socket_readiness_timeout", f"timeout={args.timeout}")

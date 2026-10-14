@@ -115,7 +115,7 @@ listeners = []
 for path in (wayland, x11):
     sock = socket.socket(socket.AF_UNIX)
     sock.bind(str(path))
-    sock.listen(1)
+    sock.listen(16)
     listeners.append(sock)
 
 proc = scratch / "proc-net-unix"
@@ -161,6 +161,21 @@ subprocess.run([
     "--capability", "audio",
 ], check=True)
 assert not denied.exists()
+
+stale_x11 = x11_dir / "X1"
+stale_listener = socket.socket(socket.AF_UNIX)
+stale_listener.bind(str(stale_x11))
+stale_listener.listen(1)
+stale_listener.close()
+stale = scratch / "stale-x11"
+failed = subprocess.run([
+    publisher, "publish", "--session", str(stale),
+    "--wayland", str(wayland), "--x11", str(stale_x11), "--display", "1",
+    "--proc-net-unix", str(proc), "--gid", str(os.getgid()), "--timeout", "0",
+], text=True, capture_output=True)
+assert failed.returncode != 0
+assert "socket_readiness_timeout" in failed.stderr
+assert not stale.exists()
 
 refused = scratch / "refused"
 proc.write_text(
