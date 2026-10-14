@@ -68,8 +68,10 @@ tier; it is test tooling, not product code.
 `[self-hosted, pf-builder-vm]`; it cannot select `trimui-build-lab`. The
 digest-pinned build container creates two Bookworm arm64 sysroots from the
 pinned Debian snapshot, builds libei, SDL3, the clients and guarded helper,
-normalizes every timestamp, then runs `mksquashfs` twice with one compressor
-thread. A byte mismatch fails before publication. `manifest.json` records the
+normalizes every timestamp to the snapshot's fixed nonzero epoch, then runs
+`mksquashfs` twice with one compressor thread. Squashfs has no filesystem UUID,
+and mksquashfs sorts each directory before assigning inode numbers. A byte
+mismatch fails before publication. `manifest.json` records the
 snapshot, external commits, recipe/source hashes, runtime package closure,
 payload size and digest.
 

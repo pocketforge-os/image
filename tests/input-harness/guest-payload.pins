@@ -8,4 +8,4 @@ GAMESCOPE_URL=https://github.com/pocketforge-os/gamescope.git
 GAMESCOPE_COMMIT=298881e3dff1ade108d57a257e8bf59bf8c6436f
 LIBEI_URL=https://gitlab.freedesktop.org/libinput/libei.git
 LIBEI_COMMIT=08f1d41085a6ae4bac7bc52abe2955d3354342cb
-SOURCE_DATE_EPOCH=0
+SOURCE_DATE_EPOCH=1780272000

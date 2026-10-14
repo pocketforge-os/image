@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-export SOURCE_DATE_EPOCH=0
+export SOURCE_DATE_EPOCH=1780272000
 export LC_ALL=C.UTF-8
 
 meson setup /src/libei/build /src/libei --buildtype=release \

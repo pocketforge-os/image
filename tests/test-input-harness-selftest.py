@@ -14,6 +14,7 @@ Registered in .github/workflows/hermetic-tests.yml.
 
 from __future__ import annotations
 
+import datetime
 import importlib.util
 import os
 import re
@@ -249,6 +250,31 @@ def section_asset_audit(work):
         payload_builder = handle.read()
     with open(os.path.join(HARNESS, "Containerfile.guest-payload"), "r", encoding="utf-8") as handle:
         payload_container = handle.read()
+    payload_pins = {}
+    with open(os.path.join(HARNESS, "guest-payload.pins"), "r", encoding="utf-8") as handle:
+        for line in handle:
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, value = line.rstrip("\n").split("=", 1)
+                payload_pins[key] = value
+    snapshot_epoch = int(
+        datetime.datetime.strptime(
+            payload_pins.get("SNAPSHOT_DATE", ""), "%Y%m%dT%H%M%SZ"
+        )
+        .replace(tzinfo=datetime.timezone.utc)
+        .timestamp()
+    )
+    require(
+        int(payload_pins.get("SOURCE_DATE_EPOCH", "0")) == snapshot_epoch
+        and snapshot_epoch > 0,
+        "payload SOURCE_DATE_EPOCH is not the fixed, nonzero snapshot instant",
+    )
+    with open(os.path.join(HARNESS, "guest", "build-tools.sh"), "r", encoding="utf-8") as handle:
+        payload_build_tools = handle.read()
+    require(
+        f"export SOURCE_DATE_EPOCH={snapshot_epoch}" in payload_build_tools
+        and f'test "${{SOURCE_DATE_EPOCH}}" = {snapshot_epoch}' in payload_container,
+        "payload producer phases do not share the snapshot epoch",
+    )
     require(
         "mmdebstrap" in payload_container
         and "snapshot.debian.org" in payload_container

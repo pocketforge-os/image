@@ -30,7 +30,7 @@ ARG PF_APT_PROXY
 COPY tests/input-harness/guest-payload.pins /work/guest-payload.pins
 RUN set -eux; \
     . /work/guest-payload.pins; \
-    test "${SOURCE_DATE_EPOCH}" = 0; \
+    test "${SOURCE_DATE_EPOCH}" = 1780272000; \
     export SOURCE_DATE_EPOCH; \
     . /usr/local/libexec/require-apt-proxy.sh; \
     mirror="http://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE}/"; \
