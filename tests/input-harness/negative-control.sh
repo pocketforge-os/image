@@ -10,6 +10,7 @@ if [[ "$test_mode" == 1 ]]; then
 	devices_path="${PF_INPUT_DEVICES_PATH:?test mode needs PF_INPUT_DEVICES_PATH}"
 	journalctl_cmd="${PF_NEGATIVE_CONTROL_JOURNALCTL:?test mode needs PF_NEGATIVE_CONTROL_JOURNALCTL}"
 	runner="${PF_NEGATIVE_CONTROL_RUNNER:?test mode needs PF_NEGATIVE_CONTROL_RUNNER}"
+	reporter_path="${PF_NEGATIVE_CONTROL_REPORTER:?test mode needs PF_NEGATIVE_CONTROL_REPORTER}"
 	poll_interval="${PF_NEGATIVE_CONTROL_POLL_INTERVAL:?test mode needs PF_NEGATIVE_CONTROL_POLL_INTERVAL}"
 else
 	if [[ -n "${PF_INPUT_DEVICES_PATH+x}" ||
@@ -22,8 +23,9 @@ else
 		exit 1
 	fi
 	devices_path=/proc/bus/input/devices
-	journalctl_cmd=journalctl
+	journalctl_cmd="$(command -v journalctl)"
 	runner="$root/run.sh"
+	reporter_path="$root/report/report.py"
 	poll_interval=0.1
 fi
 
@@ -53,10 +55,22 @@ announced=0
 poll_count=0
 user_cursor=""
 system_cursor=""
-user_pocketforge_count=0
-user_input_device_count=0
-system_pocketforge_count=0
-system_input_device_count=0
+hazard_pattern_pocketforge_fake='PocketForge Fake'
+hazard_pattern_xinput_xf86='(XINPUT|xf86).*(Adding( extended)? input device)'
+hazard_pattern_desktop_input='(libinput|gnome|mutter).*(input device|Adding device)'
+hazard_pattern_kernel_input='kernel.*input: '
+user_pocketforge_info_count=0
+user_hazard_pocketforge_fake_count=0
+user_hazard_xinput_xf86_count=0
+user_hazard_desktop_input_count=0
+user_hazard_kernel_input_count=0
+user_input_hazard_count=0
+system_pocketforge_info_count=0
+system_hazard_pocketforge_fake_count=0
+system_hazard_xinput_xf86_count=0
+system_hazard_desktop_input_count=0
+system_hazard_kernel_input_count=0
+system_input_hazard_count=0
 journal_collection="not_attempted"
 
 for file in devices.after user.after system.after harness.log report.log; do
@@ -89,6 +103,12 @@ count_pattern()
 	awk -v pattern="$pattern" 'BEGIN { IGNORECASE=1 } $0 ~ pattern { count++ } END { print count + 0 }' "$file"
 }
 
+count_generic_pocketforge()
+{
+	local file="$1"
+	awk 'BEGIN { IGNORECASE=1 } /PocketForge/ && !/PocketForge Fake/ { count++ } END { print count + 0 }' "$file"
+}
+
 collect_after()
 {
 	local ok=0
@@ -109,10 +129,18 @@ collect_after()
 	else
 		ok=1
 	fi
-	user_pocketforge_count="$(count_pattern 'PocketForge' "$tmp/user.after")"
-	user_input_device_count="$(count_pattern 'XINPUT: Adding extended input device|config/udev: Adding input device|libinput.*(Adding|added|device added)' "$tmp/user.after")"
-	system_pocketforge_count="$(count_pattern 'PocketForge' "$tmp/system.after")"
-	system_input_device_count="$(count_pattern 'XINPUT: Adding extended input device|config/udev: Adding input device|libinput.*(Adding|added|device added)' "$tmp/system.after")"
+	user_pocketforge_info_count="$(count_generic_pocketforge "$tmp/user.after")"
+	user_hazard_pocketforge_fake_count="$(count_pattern "$hazard_pattern_pocketforge_fake" "$tmp/user.after")"
+	user_hazard_xinput_xf86_count="$(count_pattern "$hazard_pattern_xinput_xf86" "$tmp/user.after")"
+	user_hazard_desktop_input_count="$(count_pattern "$hazard_pattern_desktop_input" "$tmp/user.after")"
+	user_hazard_kernel_input_count="$(count_pattern "$hazard_pattern_kernel_input" "$tmp/user.after")"
+	user_input_hazard_count=$((user_hazard_pocketforge_fake_count + user_hazard_xinput_xf86_count + user_hazard_desktop_input_count + user_hazard_kernel_input_count))
+	system_pocketforge_info_count="$(count_generic_pocketforge "$tmp/system.after")"
+	system_hazard_pocketforge_fake_count="$(count_pattern "$hazard_pattern_pocketforge_fake" "$tmp/system.after")"
+	system_hazard_xinput_xf86_count="$(count_pattern "$hazard_pattern_xinput_xf86" "$tmp/system.after")"
+	system_hazard_desktop_input_count="$(count_pattern "$hazard_pattern_desktop_input" "$tmp/system.after")"
+	system_hazard_kernel_input_count="$(count_pattern "$hazard_pattern_kernel_input" "$tmp/system.after")"
+	system_input_hazard_count=$((system_hazard_pocketforge_fake_count + system_hazard_xinput_xf86_count + system_hazard_desktop_input_count + system_hazard_kernel_input_count))
 	if [[ $ok -eq 0 ]]; then
 		journal_collection=complete
 	else
@@ -132,14 +160,33 @@ write_receipt()
 		printf 'rc=%s\n' "$final_rc"
 		printf 'reason=%s\n' "$final_reason"
 		printf 'poll_count=%s\n' "$poll_count"
+		printf 'test_mode=%s\n' "$test_mode"
 		printf 'devices_path=%s\n' "$devices_path"
+		printf 'journalctl_path=%s\n' "$journalctl_cmd"
+		printf 'runner_path=%s\n' "$runner"
+		printf 'reporter_path=%s\n' "$reporter_path"
+		printf 'out_path=%s\n' "$out"
+		printf 'receipt_path=%s\n' "$receipt"
+		printf 'evidence_path=%s\n' "$evidence"
 		printf 'user_cursor=%s\n' "$user_cursor"
 		printf 'system_cursor=%s\n' "$system_cursor"
 		printf 'journal_collection=%s\n' "$journal_collection"
-		printf 'user_pocketforge_count=%s\n' "$user_pocketforge_count"
-		printf 'user_input_device_count=%s\n' "$user_input_device_count"
-		printf 'system_pocketforge_count=%s\n' "$system_pocketforge_count"
-		printf 'system_input_device_count=%s\n' "$system_input_device_count"
+		printf 'journal_hazard_pattern_pocketforge_fake=%s\n' "$hazard_pattern_pocketforge_fake"
+		printf 'journal_hazard_pattern_xinput_xf86=%s\n' "$hazard_pattern_xinput_xf86"
+		printf 'journal_hazard_pattern_desktop_input=%s\n' "$hazard_pattern_desktop_input"
+		printf 'journal_hazard_pattern_kernel_input=%s\n' "$hazard_pattern_kernel_input"
+		printf 'user_pocketforge_info_count=%s\n' "$user_pocketforge_info_count"
+		printf 'user_hazard_pocketforge_fake_count=%s\n' "$user_hazard_pocketforge_fake_count"
+		printf 'user_hazard_xinput_xf86_count=%s\n' "$user_hazard_xinput_xf86_count"
+		printf 'user_hazard_desktop_input_count=%s\n' "$user_hazard_desktop_input_count"
+		printf 'user_hazard_kernel_input_count=%s\n' "$user_hazard_kernel_input_count"
+		printf 'user_input_hazard_count=%s\n' "$user_input_hazard_count"
+		printf 'system_pocketforge_info_count=%s\n' "$system_pocketforge_info_count"
+		printf 'system_hazard_pocketforge_fake_count=%s\n' "$system_hazard_pocketforge_fake_count"
+		printf 'system_hazard_xinput_xf86_count=%s\n' "$system_hazard_xinput_xf86_count"
+		printf 'system_hazard_desktop_input_count=%s\n' "$system_hazard_desktop_input_count"
+		printf 'system_hazard_kernel_input_count=%s\n' "$system_hazard_kernel_input_count"
+		printf 'system_input_hazard_count=%s\n' "$system_input_hazard_count"
 		printf '%s\n' '--- before /proc/bus/input/devices (verbatim) ---'
 		[[ -f "$evidence/devices.before" ]] && dd if="$evidence/devices.before" status=none
 		printf '\n%s\n' '--- after /proc/bus/input/devices (verbatim) ---'
@@ -270,7 +317,7 @@ comm -13 "$tmp/entries.before" "$tmp/entries.after" >"$tmp/entries.added.after"
 if [[ $appeared -eq 1 || -s "$tmp/entries.added.after" ]]; then
 	finish host_input_device_appeared 1
 fi
-if (( user_pocketforge_count + user_input_device_count + system_pocketforge_count + system_input_device_count > 0 )); then
+if (( user_input_hazard_count + system_input_hazard_count > 0 )); then
 	finish host_input_journal_activity 1
 fi
 if [[ $harness_rc -eq 124 ]]; then
@@ -285,9 +332,9 @@ fi
 
 set +e
 if [[ "$test_mode" == 1 ]]; then
-	"$PF_NEGATIVE_CONTROL_REPORTER" "$out" >"$tmp/report.log" 2>&1
+	"$reporter_path" "$out" >"$tmp/report.log" 2>&1
 else
-	python3 -B "$root/report/report.py" "$out" >"$tmp/report.log" 2>&1
+	python3 -B "$reporter_path" "$out" >"$tmp/report.log" 2>&1
 fi
 report_rc=$?
 set -e

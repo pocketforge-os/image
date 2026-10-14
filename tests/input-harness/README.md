@@ -168,12 +168,16 @@ repo-wide uinput occurrence inventory with seeded red controls.
   the session immediately on an addition. Its receipt contains the before and
   after device lists verbatim, both journal deltas, the harness log, and a
   second functional report covering widget text, pointer activation, the
-  deliberately broken transcript and pixel deltas. It fails on any
-  `PocketForge`, libinput or X input-device journal activity. The wrapper
+  deliberately broken transcript and pixel deltas. It fails on the input-device
+  hazard signatures `PocketForge Fake`, XINPUT/xf86 device addition,
+  libinput/GNOME/mutter device addition, or kernel `input:` registration;
+  generic PocketForge service lines are counted as receipt information. The wrapper
   creates its snapshots rather than copying procfs permissions, preserves the
   original before snapshot and journal cursor records in a mode-0700
   `<receipt>.evidence/` directory, and writes a typed receipt from its EXIT
-  finalizer on success, host-safety abort, timeout, or internal failure.
+  finalizer on success, host-safety abort, timeout, or internal failure. Receipts
+  also serialize test mode, every injected/real source path, the named journal
+  patterns, and per-pattern counts.
 - `--network none` at run time (build needs network; the run does not).
 - No device, node, labgrid or PSU actions; laptop only.
 

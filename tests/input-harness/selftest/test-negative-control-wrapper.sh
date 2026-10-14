@@ -40,8 +40,24 @@ if [[ "$args" == *" --show-cursor "* ]]; then
   else
     printf '%s\n' '-- cursor: system-fixture-cursor'
   fi
-elif [[ "${PF_TEST_CASE:?}" == journal && "$args" == *" --user "* ]]; then
-  printf '%s\n' 'fixture XINPUT: Adding extended input device "PocketForge seeded"'
+elif [[ "$args" == *" --user "* ]]; then
+  case "${PF_TEST_CASE:?}" in
+    generic_service)
+      printf '%s\n' 'systemd: Starting service - PocketForge exclusively owned Beads SSH transport'
+      ;;
+    hazard_fake)
+      printf '%s\n' 'fixture: PocketForge Fake Keyboard appeared'
+      ;;
+    hazard_xinput)
+      printf '%s\n' 'xf86-input-libinput: XINPUT: Adding extended input device "seeded"'
+      ;;
+    hazard_desktop)
+      printf '%s\n' 'gnome-shell: libinput Adding device seeded pointer'
+      ;;
+    hazard_kernel)
+      printf '%s\n' 'kernel: input: seeded keyboard registered'
+      ;;
+  esac
 fi
 JOURNAL
 
@@ -66,6 +82,7 @@ run_case() {
   local name="$1" expected="$2"
   local case_dir="$tmp/$name"
   local timeout=2s
+  local hazard_key=""
   mkdir -p "$case_dir"
   printf '%s\n' \
     'I: Bus=0019 Vendor=0000 Product=0001 Version=0000' \
@@ -79,6 +96,12 @@ run_case() {
   if [[ "$name" == timeout ]]; then
     timeout=0.3s
   fi
+  case "$name" in
+    hazard_fake) hazard_key=pocketforge_fake ;;
+    hazard_xinput) hazard_key=xinput_xf86 ;;
+    hazard_desktop) hazard_key=desktop_input ;;
+    hazard_kernel) hazard_key=kernel_input ;;
+  esac
   set +e
   PF_TEST_CASE="$name" \
     PF_NEGATIVE_CONTROL_TESTING=1 \
@@ -119,13 +142,31 @@ run_case() {
   grep -Fq -- '--- after /proc/bus/input/devices (verbatim) ---' "$case_dir/receipt"
   grep -Fq 'N: Name="baseline input"' "$case_dir/receipt"
   grep -Fqx "reason=$expected" "$case_dir/receipt"
+  grep -Fqx 'test_mode=1' "$case_dir/receipt"
+  grep -Fqx "devices_path=$case_dir/devices" "$case_dir/receipt"
+  grep -Fqx "journalctl_path=$tmp/fake-journalctl" "$case_dir/receipt"
+  grep -Fqx "runner_path=$tmp/fake-runner" "$case_dir/receipt"
+  grep -Fqx "reporter_path=$tmp/fake-reporter" "$case_dir/receipt"
+  grep -Fqx "out_path=$case_dir/out" "$case_dir/receipt"
+  grep -Fqx "receipt_path=$case_dir/receipt" "$case_dir/receipt"
+  grep -Fqx "evidence_path=$case_dir/receipt.evidence" "$case_dir/receipt"
+  grep -Eq '^journal_hazard_pattern_pocketforge_fake=' "$case_dir/receipt"
+  grep -Eq '^journal_hazard_pattern_xinput_xf86=' "$case_dir/receipt"
+  grep -Eq '^journal_hazard_pattern_desktop_input=' "$case_dir/receipt"
+  grep -Eq '^journal_hazard_pattern_kernel_input=' "$case_dir/receipt"
   if [[ "$name" != appeared ]]; then
     awk -F= '$1 == "poll_count" { found=1; if ($2 < 2) exit 1 } END { if (!found) exit 1 }' "$case_dir/receipt"
   fi
-  grep -Eq '^user_pocketforge_count=[0-9]+$' "$case_dir/receipt"
-  grep -Eq '^user_input_device_count=[0-9]+$' "$case_dir/receipt"
-  grep -Eq '^system_pocketforge_count=[0-9]+$' "$case_dir/receipt"
-  grep -Eq '^system_input_device_count=[0-9]+$' "$case_dir/receipt"
+  grep -Eq '^user_pocketforge_info_count=[0-9]+$' "$case_dir/receipt"
+  grep -Eq '^user_input_hazard_count=[0-9]+$' "$case_dir/receipt"
+  grep -Eq '^system_pocketforge_info_count=[0-9]+$' "$case_dir/receipt"
+  grep -Eq '^system_input_hazard_count=[0-9]+$' "$case_dir/receipt"
+  if [[ "$name" == generic_service ]]; then
+    grep -Fqx 'user_pocketforge_info_count=1' "$case_dir/receipt"
+    grep -Fqx 'user_input_hazard_count=0' "$case_dir/receipt"
+  elif [[ -n "$hazard_key" ]]; then
+    grep -Fqx "user_hazard_${hazard_key}_count=1" "$case_dir/receipt"
+  fi
   [[ -r "$case_dir/receipt.evidence/devices.before" ]]
   [[ -r "$case_dir/receipt.evidence/user.cursor.raw" ]]
   [[ -r "$case_dir/receipt.evidence/system.cursor.raw" ]]
@@ -138,9 +179,13 @@ run_case() {
   grep -Fq -- '-- cursor: system-fixture-cursor' "$case_dir/receipt.evidence/system.cursor.raw"
 }
 
+run_case generic_service pass
 run_case internal wrapper_internal_error
 run_case appeared host_input_device_appeared
 run_case timeout harness_timeout
-run_case journal host_input_journal_activity
+run_case hazard_fake host_input_journal_activity
+run_case hazard_xinput host_input_journal_activity
+run_case hazard_desktop host_input_journal_activity
+run_case hazard_kernel host_input_journal_activity
 run_case clean pass
-printf '%s\n' 'negative-control-wrapper: PASS internal=receipted appeared=aborted timeout=receipted journal=refused clean=passed proc_mode=0444 device_inputs=faked'
+printf '%s\n' 'negative-control-wrapper: PASS internal=receipted appeared=aborted timeout=receipted generic_pocketforge=info hazards=4_refused clean=passed proc_mode=0444 device_inputs=faked'
