@@ -25,6 +25,8 @@ cp "${root}/rootfs-overlay/usr/share/pocketforge/runtime-path-producers.json" \
     "${fixture}/usr/share/pocketforge/runtime-path-producers.json"
 printf '[Service]\nExecStart=/usr/bin/pf-prefsd\n' \
     > "${fixture}/etc/systemd/system/pf-prefsd.service"
+printf '[Service]\nExecStart=/usr/bin/pf-input-broker --acquire-sock /run/pocketforge/input-broker.sock\n' \
+    > "${fixture}/etc/systemd/system/pf-input-broker.service"
 printf '[Socket]\nListenStream=/run/dbus/system_bus_socket\n' \
     > "${fixture}/etc/systemd/system/dbus.socket"
 printf 'd /run/from-tmpfiles 0755 root root -\n' \
@@ -35,6 +37,23 @@ grep -F 'tests/test-runtime-path-producers.sh' "${pair_workflow}" >/dev/null
 grep -F '/work/src/scripts/check-runtime-path-producers.py' "${builder}" >/dev/null
 grep -F 'rootfs-overlay/usr/share/pocketforge/runtime-path-producers.json' \
     "${builder}" >/dev/null
+
+python3 - "${inventory}" \
+    "${fixture}/usr/share/pocketforge/runtime-path-producers.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+inventory, producers = (json.loads(Path(path).read_text(encoding="utf-8")) for path in sys.argv[1:])
+assert inventory["resources"]["broker-sockets"] == [
+    "/run/pocketforge/input-broker.sock"
+]
+assert inventory["resources"]["input-devices"] == ["/dev/input/event0"]
+assert producers["producers"]["/run/pocketforge/input-broker.sock"] == {
+    "unit": "pf-input-broker.service",
+    "type": "socket",
+}
+PY
 
 # Positive control in the RED invocation: kernel-produced device resources do
 # not require a build-time producer record.
@@ -53,6 +72,30 @@ EOF
     --root "${fixture}" \
     --inventory "${inventory}" \
     --producers "${fixture}/usr/share/pocketforge/runtime-path-producers.json"
+
+# The shipped input broker owns the broker route selected by the app-policy
+# inventory. Its exact socket must be named in the production producer manifest;
+# the presence of the service must not exempt any other /run path.
+cat > "${scratch}/input-broker-route.json" <<'EOF'
+{"resources":{"broker-sockets":["/run/pocketforge/input-broker.sock"]}}
+EOF
+"${checker}" \
+    --root "${fixture}" \
+    --inventory "${scratch}/input-broker-route.json" \
+    --producers "${fixture}/usr/share/pocketforge/runtime-path-producers.json"
+
+cat > "${scratch}/unproduced-run-route.json" <<'EOF'
+{"resources":{"broker-sockets":["/run/pocketforge/unproduced.sock"]}}
+EOF
+if "${checker}" \
+    --root "${fixture}" \
+    --inventory "${scratch}/unproduced-run-route.json" \
+    --producers "${fixture}/usr/share/pocketforge/runtime-path-producers.json" \
+    > "${scratch}/unproduced-run-route.out" 2>&1; then
+    fail "audit accepted an unproduced /run inventory path"
+fi
+grep -F 'missing producer: /run/pocketforge/unproduced.sock: consumer=' \
+    "${scratch}/unproduced-run-route.out" >/dev/null
 
 printf '[Service]\nExecStart=/bin/true\n' \
     > "${fixture}/etc/systemd/system/fixture-producer.service"

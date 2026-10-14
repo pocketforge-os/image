@@ -1,6 +1,10 @@
 {
   "schema": "pocketforge.runtime-path-producers/v1",
   "producers": {
+    "/run/pocketforge/input-broker.sock": {
+      "unit": "pf-input-broker.service",
+      "type": "socket"
+    },
     "/run/pocketforge/prefsd.sock": {
       "unit": "pf-prefsd.service",
       "type": "socket"

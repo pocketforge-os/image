@@ -8,6 +8,9 @@
     "display-devices": [
       "/dev/fb0"
     ],
+    "broker-sockets": [
+      "/run/pocketforge/input-broker.sock"
+    ],
     "input-devices": [
       "/dev/input/event0"
     ],
