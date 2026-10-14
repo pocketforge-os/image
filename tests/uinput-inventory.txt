@@ -1,0 +1,59 @@
+# path<TAB>sha256(stripped matching line); comments classify reviewed occurrences.
+# Every tracked UTF-8 text file is scanned; NUL-bearing binaries are excluded.
+# A non-NUL file that cannot decode as UTF-8 fails the audit closed.
+# Documentation and tests are assertions/fixtures; service/app lines are live policy.
+# tests/input-harness/tools/fake-input.c is the sole creator; it is guarded and
+# retained only for VM/DUT execution. Its device-free guard test uses a mock opener.
+apps/hello-pocketforge/slice.conf	35f267ec4258478b7a13c0362de6b6dfeaea28b87360cd3b60d95f8f405ddcba	# apps/hello-pocketforge/slice.conf:17 # No /dev/uinput grant: this starter reads input through pf-input-broker
+apps/hello-pocketforge/slice.conf	a1bb0ef5d7c79fec21c63c3755ac1811b6868937964848bfb32e5375b5b76fa8	# apps/hello-pocketforge/slice.conf:19 # generic pf-app@.service already hides the node (InaccessiblePaths=-/dev/uinput).
+docs/DEFAULT-APPS.md	37ac9d45ee5b23be254324bc00d08fe351660e1e4f9400865703953a6a974b63	# docs/DEFAULT-APPS.md:377 InaccessiblePaths=-/dev/uinput
+docs/DEFAULT-APPS.md	69f2db799c750053a1ba6fb1629d4088975bc5f79824c3d8c8f89c3ad644d4eb	# docs/DEFAULT-APPS.md:920 Apps also get `InaccessiblePaths=-/dev/uinput`: even if device-node permissions or group
+docs/DEFAULT-APPS.md	d143cd434ae21cf62194cea694a800f33f1386bf8b005f36bbc1536b9f7c24ca	# docs/DEFAULT-APPS.md:962 AssertPathExists=/dev/uinput
+docs/DEFAULT-APPS.md	d9afad5ae45cd71eee6cf02de79c64912c10ef4f4ed06c569f77fca6ba60a589	# docs/DEFAULT-APPS.md:973 `ConditionPathExists=` followed by `AssertPathExists=/dev/uinput` is a B4 addition to the
+docs/DEFAULT-APPS.md	b87e05722f2607547131cd6e672627977bc6f42a97c1ea5657b60d96ed9c58b6	# docs/DEFAULT-APPS.md:974 ruling's list. The runtime unit's `ConditionPathExists=/dev/uinput` would turn a missing uinput
+docs/DEFAULT-APPS.md	058e61c48a5c43e7629b5b4af3c0dc3d830b8dd8063b3eaf93065563c6f1a3f3	# docs/DEFAULT-APPS.md:1010 | Broker cannot start (no `/dev/uinput`) | The assertion fails the broker job, the app job fails as a dependency, the authority records `Crash` (`systemd_start_failed`), and the panel must return | Harness `broker_start_failure`: no app invocation, no broker grab, owner re-activated, `Crash` receipt |
+rootfs-overlay/etc/systemd/system/pf-app@.service	37ac9d45ee5b23be254324bc00d08fe351660e1e4f9400865703953a6a974b63	# rootfs-overlay/etc/systemd/system/pf-app@.service:33 InaccessiblePaths=-/dev/uinput
+rootfs-overlay/etc/systemd/system/pf-foreground@.service	7a9301a6cc560f8119366f4a8491e6457d67ed8def623e3299fdec2a0d1af1e7	# rootfs-overlay/etc/systemd/system/pf-foreground@.service:16 ExecStart=/usr/bin/pf-shell --fbdev --device /dev/fb0 --input /dev/input/pf-gamepad --state-dir /var/lib/pocketforge/sessions/%i
+rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf	8215475329315071f1ab21500d9c2ddbf4d9b38483724d266cff067e126a3f7a	# rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf:31 # Fail, never skip. The runtime unit's ConditionPathExists=/dev/uinput turns a
+rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf	d143cd434ae21cf62194cea694a800f33f1386bf8b005f36bbc1536b9f7c24ca	# rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf:37 AssertPathExists=/dev/uinput
+rootfs-overlay/etc/systemd/system/pf-shell-selected.service	4565ff85f353b043fd11b1ed7ac94640fbd9af35bc7dc73639c51727a0aad8d2	# rootfs-overlay/etc/systemd/system/pf-shell-selected.service:47 ExecStart=/usr/bin/pf-shell --fbdev --device /dev/fb0 --input /dev/input/pf-gamepad --state-dir /var/lib/pocketforge/shell
+tests/input-harness/README.md	8496bb6746ca702e73aad2aef9976a4700642d879b215f122e10e941f0e789ce	# tests/input-harness/README.md:149 device cgroup rule, `/dev/uinput` reference or `/dev/input` bind in `run.sh`,
+tests/input-harness/tools/fake-input.c	7d8d1726747b3051e536848c87b9b26583c24fde445261e616537c6d69d7c0e7	# tests/input-harness/tools/fake-input.c:26 #ifndef UI_CREATE
+tests/input-harness/tools/fake-input.c	df51bb0fd5a5ae091bb8df9a6ca4c65ae6f4effe868b6aac844df2be56963f15	# tests/input-harness/tools/fake-input.c:27 #define UI_CREATE _IO('U', 1)
+tests/input-harness/tools/fake-input.c	17015a23df29900fbc8bfe28491f0555b3fbdf38a38faa015025ce20ace0e79b	# tests/input-harness/tools/fake-input.c:40 int fd = PF_FAKE_INPUT_GUARDED_OPEN("/dev/uinput",
+tests/input-harness/tools/fake-input.c	1178240e6f4fa3af40b25a788acdfe47add5ce7fa6a12d13bb2619ba38c11453	# tests/input-harness/tools/fake-input.c:51 fprintf(stderr, "fake-input: open /dev/uinput: %s\n",
+tests/input-harness/tools/fake-input.c	10da8cfd32ba6107bc008bc26c1f63bc66c3854ac76ea24bed450ed9d86b0db8	# tests/input-harness/tools/fake-input.c:87 * appears asynchronously after UI_CREATE, so retry for ~3s. Returns 0 on
+tests/input-harness/tools/fake-input.c	43e42bc3c2838ac87b5d06bea9351d597674300f489356601586f1e5ec5cacc8	# tests/input-harness/tools/fake-input.c:209 if (ioctl(g_fd, UI_CREATE) < 0)
+tests/input-harness/tools/fake-input.c	4684ad987494268c9541627b6e25e4223382fa03e2e3517e625d946a8e532c48	# tests/input-harness/tools/fake-input.c:210 die("UI_CREATE");
+tests/session-authority-systemd/drive.py	dfb0537135886b2e481ab9385bcf1eaa953df52415884c0e1474760f738977e2	# tests/session-authority-systemd/drive.py:44 UINPUT = Path("/dev/uinput")
+tests/session-authority-systemd/drive.py	b7d31176ebdeecf769c2f0f7f2034fc0caaed8395d145cb27cece0ee790a2da1	# tests/session-authority-systemd/drive.py:560 f"app can open /dev/uinput and create a built-in-controller lookalike: {probe}",
+tests/session-authority-systemd/drive.py	656fbdc14d68d8695e8a656c527bfd08b2a6af31d83779a946e6da3532df9157	# tests/session-authority-systemd/drive.py:574 "import os; fd = os.open('/dev/uinput', os.O_WRONLY | os.O_CLOEXEC); "
+tests/session-authority-systemd/drive.py	4c3f383ba798da6000aa081321c963f356f95332400be1f597fcc2306a0d5e65	# tests/session-authority-systemd/drive.py:580 "positive control failed: gamer outside pf-app@ cannot open the 0666 fake /dev/uinput: "
+tests/session-authority-systemd/drive.py	ceec2eb51cf656221d24e54e48d20c075026ebb3a723e2b758f5a3ef047e36ea	# tests/session-authority-systemd/drive.py:803 require(assert_result == "no", f"broker AssertPathExists=/dev/uinput did not fail: {assert_result!r}")
+tests/session-authority-systemd/fixture	3f744a4c77a7abc317ee8d288a19c8b00f1e0dc163e62b88a0da923c146a3509	# tests/session-authority-systemd/fixture:112 "uinput_open": open_write("/dev/uinput"),
+tests/session-authority-systemd/session-authority-test-tmpfiles.conf	85b63d4d9d8f7e97428756a137b1f43876dacf1431c78667cb9b13452fd63d31	# tests/session-authority-systemd/session-authority-test-tmpfiles.conf:5 # device nodes: the broker drop-in asserts /dev/uinput, and the fake broker
+tests/session-authority-systemd/session-authority-test-tmpfiles.conf	b0498c04f8ff7861f2826c7a3fa7075d89c61936443db78612b5f5ecd20d195c	# tests/session-authority-systemd/session-authority-test-tmpfiles.conf:6 # requires its --source path to exist. drive.py removes /dev/uinput to prove a
+tests/session-authority-systemd/session-authority-test-tmpfiles.conf	e92e5b9caa438523508dae93546f1a7666576ca0d9b219557232f835675aeb72	# tests/session-authority-systemd/session-authority-test-tmpfiles.conf:8 f /dev/uinput 0666 root root -
+tests/test-default-app-rootfs.sh	37ac9d45ee5b23be254324bc00d08fe351660e1e4f9400865703953a6a974b63	# tests/test-default-app-rootfs.sh:49 InaccessiblePaths=-/dev/uinput
+tests/test-default-app-rootfs.sh	d7fa41c715809e13ed85c8369e67e591416af846cd1cc90b4ef18b338156613a	# tests/test-default-app-rootfs.sh:276 # uinput is broker-owned (pf-input-broker AssertPathExists=/dev/uinput) and the
+tests/test-default-app-rootfs.sh	0807a4cd45ebfb08141b6f76631f109a24b75088f6929041b45f23c5abaf8bfa	# tests/test-default-app-rootfs.sh:277 # generic pf-app@.service already hides it (InaccessiblePaths=-/dev/uinput), so a
+tests/test-default-app-rootfs.sh	e7fd7b53d1fb724b4bfbb6e75f6d9e27b456b1ade083c229b98c9332c2a13b71	# tests/test-default-app-rootfs.sh:278 # slice.conf DeviceAllow=/dev/uinput is both over-broad and redundant: an app reads
+tests/test-default-app-rootfs.sh	0f712b16b9df5f93f7e37b2c5fb1ce60f068428679f5af63965960b2f9095e2a	# tests/test-default-app-rootfs.sh:285 # line -- so no spelling systemd would parse as a /dev/uinput grant can slip
+tests/test-default-app-rootfs.sh	4514ca24b2c8ff5984d12457863e0b10bd202f6f058c7f2a22ea9dff5addc231	# tests/test-default-app-rootfs.sh:316 echo 'an app slice.conf declares a /dev/uinput DeviceAllow grant' >&2
+tests/test-default-app-rootfs.sh	a2be80aca0bb647dfac7b646c4ffd099f3c6000622f5514474ad21032caa0e50	# tests/test-default-app-rootfs.sh:328 DeviceAllow=/dev/uinput rw
+tests/test-default-app-rootfs.sh	67d96fee6380441c2b326a414b425635d9b08d914e1793c4d115a547fdd138ef	# tests/test-default-app-rootfs.sh:329 DeviceAllow =/dev/uinput rw
+tests/test-default-app-rootfs.sh	abcaaa42c5ac7a03e36c8ed38e36cde6f523b587d96541b41e878d49dc1ad20b	# tests/test-default-app-rootfs.sh:330 DeviceAllow= /dev/uinput rw
+tests/test-default-app-rootfs.sh	86e66beef701d6b4e953f2923475e1daf051691e309946ed9b04352df2ec63dd	# tests/test-default-app-rootfs.sh:331 DeviceAllow = /dev/uinput rw
+tests/test-default-app-rootfs.sh	d5a313013d4f7246aebefd128c2620e49e64f8588a17a8d1615660e4466987c3	# tests/test-default-app-rootfs.sh:332 DeviceAllow\t=\t/dev/uinput rw
+tests/test-default-app-rootfs.sh	a2be80aca0bb647dfac7b646c4ffd099f3c6000622f5514474ad21032caa0e50	# tests/test-default-app-rootfs.sh:333 DeviceAllow=/dev/uinput rw
+tests/test-default-app-rootfs.sh	03628dece5c5fb8985b9ce1ce7b12d1de261efe51b33c34ac20be1ed891a2cb2	# tests/test-default-app-rootfs.sh:337 printf 'DevicePolicy=strict\nDeviceAllow=\\\n/dev/uinput rw\n' > "${planted}/evil${evil_last}/slice.conf"
+tests/test-default-app-rootfs.sh	0d11937f7fab21a412706a3c14cda3296dce4282766ea149bf5051bb092bde7c	# tests/test-default-app-rootfs.sh:339 printf '# DeviceAllow=/dev/uinput rw\n;DeviceAllow = /dev/uinput rw\nDeviceAllow=/dev/fb0 rw\n' \
+tests/test-input-harness-selftest.py	0be388598cdfa66fa560ffa52ec05788f7fa40b0070a5cd7a7069f92572b0936	# tests/test-input-harness-selftest.py:151 ("uinput_path", re.compile(r"/dev/uinput(?:\s|$)")),
+tests/test-input-harness-selftest.py	e9d44b75f091862f7ee947862c6741d407162e1c57a93baee9c226f080d5f80c	# tests/test-input-harness-selftest.py:155 r"(?:-v|--volume)\s+[^\n]*?/dev/input(?:[/:\s]|$)"
+tests/test-input-harness-selftest.py	729f049896d870cc79a33917c04d0e4181dd3aeb194a4af2e3d17865ca16e025	# tests/test-input-harness-selftest.py:156 r"|--mount[^\n]*(?:source|src)=/dev/input(?:[,/\s]|$)"
+tests/test-input-harness-selftest.py	e732d782fdef4a97e53f7a46e21400a487b682fceaa6e611a52dbb441455f89f	# tests/test-input-harness-selftest.py:255 "\ndocker run --device /dev/uinput "
+tests/test-input-harness-selftest.py	a27e74154a101fb77b829d4918e1c97be3d5d84cf3ceb3f137358978db52bc17	# tests/test-input-harness-selftest.py:257 "-v /dev/input:/dev/input image\n"
+tests/test-input-harness-selftest.py	510d712ca7255e3c82afeafc37722f21abd33dda445d376fbd9912c514ccf4cc	# tests/test-input-harness-selftest.py:338 'open("/dev/uinput"' not in private_input_text
+tests/test-input-harness-selftest.py	b8e6cf4c1aa03684c5f8714c4665240a0d94cdfa609a31422274b06a55c5fdd7	# tests/test-input-harness-selftest.py:357 "/dev/uinput" not in source and "/dev/input/" not in source,
+tests/verify-input-broker-wiring.py	68a96cd238b5625759d288c1d6ab87ec009cab55590b90ce05f7916ceb8de770	# tests/verify-input-broker-wiring.py:93 "-/dev/uinput",
+tests/verify-input-broker-wiring.py	27ece3f6e90edd131b136d09acd0a19b4b89452099a01d1c0d62d68e50464fcf	# tests/verify-input-broker-wiring.py:117 ("Unit", "AssertPathExists", "/dev/uinput"),
