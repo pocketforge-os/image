@@ -6,11 +6,11 @@ from collections import Counter, defaultdict
 import hashlib
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests/uinput-inventory.txt"
-SOURCE_SUFFIXES = {".c", ".h", ".py", ".sh", ".toml", ".service", ".yml", ".yaml"}
 PATTERN = re.compile(
     r"/dev/uinput|\bUI_(?:DEV_)?CREATE\b|\bUInput\s*\(|"
     r"\bVirtualDevice(?:::\w+)?\s*\(|(?:--device|-v|--mount)[^\n]*/dev/input"
@@ -23,29 +23,29 @@ def fingerprint(path, line):
 
 
 def tracked():
-    paths = []
-    for path in ROOT.rglob("*"):
-        rel = path.relative_to(ROOT)
-        if not path.is_file() or any(
-            part in {".git", "vendor", "target", "build", "__pycache__"}
-            for part in rel.parts
-        ):
-            continue
-        paths.append(rel)
-    return paths
+    result = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    return [Path(raw.decode("utf-8")) for raw in result.stdout.split(b"\0") if raw]
 
 
 def occurrences(extra=None):
     found = []
     for rel in tracked():
-        if rel.name in {MANIFEST.name, Path(__file__).name}:
+        if rel in {MANIFEST.relative_to(ROOT), Path(__file__).relative_to(ROOT)}:
             continue
-        if rel.suffix not in SOURCE_SUFFIXES and rel.name != "Makefile":
+        raw = (ROOT / rel).read_bytes()
+        if b"\0" in raw:
             continue
         try:
-            lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
-        except UnicodeDecodeError:
-            continue
+            lines = raw.decode("utf-8").splitlines()
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(
+                f"tracked non-NUL file is not UTF-8 and cannot be inventoried: {rel}"
+            ) from exc
         for number, line in enumerate(lines, 1):
             if PATTERN.search(line):
                 found.append(
@@ -95,6 +95,24 @@ def main():
         for key, path, number, line in occurrences():
             print(f"{key}\t# {path}:{number} {line}")
         return 0
+    required_occurrences = {
+        "apps/hello-pocketforge/slice.conf",
+        "rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf",
+        "tests/session-authority-systemd/session-authority-test-tmpfiles.conf",
+        "tests/session-authority-systemd/fixture",
+    }
+    observed_paths = {item[1] for item in occurrences()}
+    missing_classes = sorted(required_occurrences - observed_paths)
+    tracked_paths = {path.as_posix() for path in tracked()}
+    if "build/Dockerfile.pf" not in tracked_paths:
+        missing_classes.append("build/Dockerfile.pf (not scanned)")
+    if args.self_test and missing_classes:
+        print(
+            "inventory self-test failed: source/policy classes were skipped: "
+            + ", ".join(missing_classes),
+            file=sys.stderr,
+        )
+        return 2
     known = occurrences()[0]
     if args.self_test and check([(known[1], known[3])], quiet=True):
         print(
@@ -110,16 +128,24 @@ def main():
             file=sys.stderr,
         )
         return 2
-    if args.self_test and check(
-        [("seeded/violation.c", 'open("/dev/uinput", O_RDWR);')], quiet=True
-    ):
-        print("inventory self-test failed: seeded violation was accepted", file=sys.stderr)
-        return 2
+    seeded_classes = (
+        ("seeded/violation.conf", "DeviceAllow=/dev/uinput rw"),
+        ("seeded/fixture", 'open("/dev/uinput", O_RDWR);'),
+        ("seeded/Dockerfile", "RUN test -e /dev/uinput"),
+        ("build/seeded-policy", "--device /dev/input/event0"),
+    )
+    for path, line in seeded_classes:
+        if args.self_test and check([(path, line)], quiet=True):
+            print(
+                f"inventory self-test failed: seeded violation was accepted: {path}",
+                file=sys.stderr,
+            )
+            return 2
     if not check():
         return 1
     print(
-        "uinput-inventory: PASS seeded_violation=red duplicate_live=red "
-        "stale_manifest=red clean_tree=green"
+        "uinput-inventory: PASS seeded_classes=conf,extensionless,Dockerfile,build:red "
+        "duplicate_live=red stale_manifest=red clean_tree=green"
     )
     return 0
 
