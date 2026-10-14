@@ -151,6 +151,48 @@ for nonproducer_type in r R x X z Z t T h H a A w 'w+'; do
         "${scratch}/tmpfiles-${nonproducer_type//+/plus}.out" >/dev/null
 done
 
+# A creation type is one complete token, not merely a recognized first byte.
+# systemd-tmpfiles rejects unknown suffixes, so neither auto-discovery nor a
+# manifest reference may turn such a typo into producer evidence.
+for creation_type in f d D v q Q p L c b C; do
+    malformed_type="${creation_type}TYPO"
+    printf '%s /run/from-tmpfiles - - - - -\n' "${malformed_type}" \
+        > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"
+    if "${checker}" \
+        --root "${fixture}" \
+        --unit "${scratch}/pf-app@org.pocketforge.fixture.service" \
+        --producers "${scratch}/all-producers.json" \
+        > "${scratch}/tmpfiles-malformed-${creation_type}.out" 2>&1; then
+        fail "audit accepted malformed tmpfiles type ${malformed_type}"
+    fi
+    grep -F 'missing producer: /run/from-tmpfiles: consumer=' \
+        "${scratch}/tmpfiles-malformed-${creation_type}.out" >/dev/null
+done
+
+for malformed_type in 'd~' 'd^' 'f++' 'd!!'; do
+    output_name=${malformed_type//+/plus}
+    printf '%s /run/from-tmpfiles - - - - -\n' "${malformed_type}" \
+        > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"
+    if "${checker}" \
+        --root "${fixture}" \
+        --unit "${scratch}/pf-app@org.pocketforge.fixture.service" \
+        --producers "${scratch}/all-producers.json" \
+        > "${scratch}/tmpfiles-invalid-modifier-${output_name}.out" 2>&1; then
+        fail "audit accepted invalid tmpfiles modifier token ${malformed_type}"
+    fi
+    grep -F 'missing producer: /run/from-tmpfiles: consumer=' \
+        "${scratch}/tmpfiles-invalid-modifier-${output_name}.out" >/dev/null
+done
+
+# Force, boot-only, allow-failure and replacement are valid generic modifiers;
+# the complete token still names a creation directive.
+printf 'd+!-= /run/from-tmpfiles 0755 root root -\n' \
+    > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"
+"${checker}" \
+    --root "${fixture}" \
+    --unit "${scratch}/pf-app@org.pocketforge.fixture.service" \
+    --producers "${scratch}/all-producers.json"
+
 cat > "${scratch}/wildcard-inventory.json" <<'EOF'
 {"resources":{"display-sockets":["/run/from-*"]}}
 EOF
@@ -185,6 +227,33 @@ if "${checker}" \
 fi
 grep -F 'producer tmpfiles does not create exact path: /run/from-named-tmpfiles: fixture.conf' \
     "${scratch}/named-tmpfiles-nonproducer.out" >/dev/null
+
+for creation_type in f d D v q Q p L c b C; do
+    malformed_type="${creation_type}TYPO"
+    printf '%s /run/from-named-tmpfiles - - - - -\n' "${malformed_type}" \
+        > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"
+    if "${checker}" \
+        --root "${fixture}" \
+        --inventory "${scratch}/named-tmpfiles-inventory.json" \
+        --producers "${scratch}/named-tmpfiles-producers.json" \
+        > "${scratch}/named-tmpfiles-malformed-${creation_type}.out" 2>&1; then
+        fail "audit accepted named malformed tmpfiles type ${malformed_type}"
+    fi
+    grep -F 'producer tmpfiles does not create exact path: /run/from-named-tmpfiles: fixture.conf' \
+        "${scratch}/named-tmpfiles-malformed-${creation_type}.out" >/dev/null
+done
+
+printf 'f++ /run/from-named-tmpfiles - - - - -\n' \
+    > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"
+if "${checker}" \
+    --root "${fixture}" \
+    --inventory "${scratch}/named-tmpfiles-inventory.json" \
+    --producers "${scratch}/named-tmpfiles-producers.json" \
+    > "${scratch}/named-tmpfiles-duplicate-modifier.out" 2>&1; then
+    fail "audit accepted named tmpfiles type with a duplicate modifier"
+fi
+grep -F 'producer tmpfiles does not create exact path: /run/from-named-tmpfiles: fixture.conf' \
+    "${scratch}/named-tmpfiles-duplicate-modifier.out" >/dev/null
 
 printf 'd /run/from-named-tmpfiles 0755 root root -\n' \
     > "${fixture}/usr/lib/tmpfiles.d/fixture.conf"

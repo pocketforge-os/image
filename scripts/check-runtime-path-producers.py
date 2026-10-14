@@ -33,6 +33,8 @@ TMPFILES_DIRS = ("etc/tmpfiles.d", "usr/lib/tmpfiles.d", "lib/tmpfiles.d")
 TMPFILES_CREATION_TYPES = frozenset(
     ("f", "d", "D", "v", "q", "Q", "p", "L", "c", "b", "C")
 )
+TMPFILES_TYPE_MODIFIERS = frozenset(("+", "!", "-", "=", "~", "^"))
+TMPFILES_CONTENT_TYPES = frozenset(("f",))
 
 
 class AuditError(Exception):
@@ -121,9 +123,20 @@ def tmpfiles_creates_exact_path(fields: list[str]) -> bool:
     if len(fields) < 2 or not fields[0] or not fields[1].startswith("/"):
         return False
     entry_type, path = fields[:2]
-    return entry_type[0] in TMPFILES_CREATION_TYPES and not any(
-        character in path for character in "*?["
-    )
+    base_type = entry_type[0]
+    modifiers = entry_type[1:]
+    if base_type not in TMPFILES_CREATION_TYPES:
+        return False
+    if any(modifier not in TMPFILES_TYPE_MODIFIERS for modifier in modifiers):
+        return False
+    if len(set(modifiers)) != len(modifiers):
+        return False
+    if (
+        any(modifier in modifiers for modifier in "~^")
+        and base_type not in TMPFILES_CONTENT_TYPES
+    ):
+        return False
+    return not any(character in path for character in "*?[")
 
 
 def tmpfiles_created_paths(config: Path) -> set[str]:
