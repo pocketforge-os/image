@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the proposed runtime-root extension into a pf-app@ drop-in.
+"""Render the proposed runtime-root extension as a pf-app@ service fragment.
 
 This is an offline, source-owned contract prototype.  It deliberately does
 not install a second launcher or modify the production manifest parser while
@@ -506,10 +506,10 @@ def compile_policy(
             refuse("policy_render_failed", f"policy JSON is invalid: {error}")
         if not isinstance(decision, dict) or decision.get("app_id") != app_id:
             refuse("policy_render_failed", "policy JSON app identity differs")
-        dropin = run("systemd-dropin").splitlines()
-        if not dropin or dropin[0] != "[Service]":
-            refuse("policy_render_failed", "policy drop-in lacks [Service]")
-        return decision, dropin[1:]
+        fragment = run("systemd-dropin").splitlines()
+        if not fragment or fragment[0] != "[Service]":
+            refuse("policy_render_failed", "policy service fragment lacks [Service]")
+        return decision, fragment[1:]
 
 
 def render(

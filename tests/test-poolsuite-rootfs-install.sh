@@ -39,11 +39,16 @@ printf 'poolsuite@fixture\n' > "${stage}/.pf-poolsuite-provenance"
 printf 'cmake\tfixture\n' > "${stage}/toolchain-packages.txt"
 mkdir -p \
     "${stage}/app-policy" \
-    "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service.d"
+    "${stage}/systemd" \
+    "${rootfs}/etc/systemd/system/pf-app@.service.d"
 printf '{"platform_runtime":"/usr","resources":{}}\n' \
     > "${stage}/app-policy/org.pocketforge.poolsuite.resources.json"
+cp "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service" \
+    "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service"
 printf '[Service]\nPrivateNetwork=no\n# derived dns tcp udp 53\n' \
-    > "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service.d/50-policy.conf"
+    >> "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service"
+cp "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf" \
+    "${rootfs}/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf"
 chmod 0755 "${stage}/app/ps-app" "${stage}/app/launch"
 
 "${installer}" dev open "${rootfs}" "${stage}"
@@ -56,7 +61,13 @@ test -f "${app}/oci/slice.conf"
 test -f "${rootfs}/usr/share/pocketforge/poolsuite-provenance"
 test -f "${rootfs}/usr/share/pocketforge/poolsuite-toolchain-packages.txt"
 test -f "${rootfs}/usr/share/pocketforge/app-policy/org.pocketforge.poolsuite.resources.json"
-test -f "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.poolsuite.service.d/50-policy.conf"
+test -f "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.poolsuite.service"
+test ! -e "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.poolsuite.service.d"
+grep -Fx 'PrivateNetwork=no' \
+    "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.poolsuite.service"
+dropin_result="$(python3 "${root}/tests/verify-session-authority-app-dropins.py" \
+    --systemd-root "${rootfs}/etc/systemd/system")"
+test "${dropin_result}" = 'session-authority app-dropins: PASS files=1'
 test ! -e "${rootfs}/etc/systemd/system/pocketforge-poolsuite.service"
 test ! -e "${root}/rootfs-overlay/etc/systemd/system/pocketforge-poolsuite.service"
 
@@ -71,4 +82,4 @@ if "${installer}" dev ddk "${rootfs}" "${tmp}/bad-non-open" >/dev/null 2>&1; the
     exit 1
 fi
 
-echo 'poolsuite rootfs install contract: PASS (migration and release file lists unchanged)'
+echo 'poolsuite rootfs install contract: PASS (exact unit policy; environment-only drop-ins)'

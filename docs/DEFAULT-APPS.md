@@ -395,10 +395,19 @@ MemoryMax=256M
 Nice=-5
 ```
 
+The image installs `pf-app@.service.d/30-cursor-theme.conf` alongside this security-pinned
+template. Its two `Environment=` directives set `XCURSOR_THEME=pocketforge-light` and
+`XCURSOR_SIZE=48`, so systemd supplies the defaults directly to every app unit without relying on
+PAM interpretation of `/etc/environment`.
+
 The app template deliberately carries no supplementary group. Only
 `pf-shell-selected.service` and `pf-foreground@.service` receive the dedicated
-`pf-pref-writer` group, while compiler-generated app policy drop-ins populate the exact
-capability-derived groups for each app. The `pf-input-broker.service`
+`pf-pref-writer` group. Generated runtime-root service fragments first reset
+`SupplementaryGroups=`, then compiler-generated app policy directives populate the exact
+capability-derived groups for each app. Image-shipped Poolsuite appends those directives to a
+complete `pf-app@org.pocketforge.poolsuite.service` exact-instance unit; it does not put security
+policy in a drop-in. Every installed `pf-app@*.service.d` file is therefore environment-only. The
+`pf-input-broker.service`
 dependency, the two `PF_*` variables, and the session-authority
 `InaccessiblePaths=` entry are the `tsp-f3fm.202.1` amendment. The fail-closed prefsd entry keeps
 preference state behind the broker's read-only API; `BindsTo=pf-prefsd.service` also tears down the

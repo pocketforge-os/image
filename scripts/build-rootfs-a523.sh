@@ -25,6 +25,7 @@ set -euo pipefail
 
 SRC_DIR="${SRC_DIR:-/work/src}"
 OUT_DIR="${OUT_DIR:-/work/out}"
+CURSOR_THEME_DIR="${CURSOR_THEME_DIR:-/work/cursor-theme}"
 BOARD_DIR="${SRC_DIR}/boards/tsp-s"
 VARIANT="dev"
 OWNER_UID=""; OWNER_GID=""
@@ -91,6 +92,9 @@ mmdebstrap \
 echo "=== deterministic ext4 assembly ==="
 EXT="${WORK}/rootfs-extracted"; mkdir -p "${EXT}"
 tar -xf "${ROOTFS_TAR}" -C "${EXT}"
+
+"${SRC_DIR}/scripts/install-cursor-theme.sh" \
+    "${CURSOR_THEME_DIR}" "${EXT}"
 
 # Re-assert user-home ownership in the extracted tree. In this build path the
 # mmdebstrap tar landed /home/<user> as root:root (the A133 build-rootfs.sh path

@@ -66,8 +66,8 @@ done
     echo "FATAL: Poolsuite dev stage lacks its policy resource inventory" >&2
     exit 1
 }
-[ -f "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service.d/50-policy.conf" ] || {
-    echo "FATAL: Poolsuite dev stage lacks its generated app policy drop-in" >&2
+[ -f "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service" ] || {
+    echo "FATAL: Poolsuite dev stage lacks its generated exact-instance unit" >&2
     exit 1
 }
 install -d "${app_root}/themes" "${app_root}/oci"
@@ -84,7 +84,7 @@ install -D -m 0644 \
     "${stage}/app-policy/org.pocketforge.poolsuite.resources.json" \
     "${rootfs}/usr/share/pocketforge/app-policy/org.pocketforge.poolsuite.resources.json"
 install -D -m 0644 \
-    "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service.d/50-policy.conf" \
-    "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.poolsuite.service.d/50-policy.conf"
+    "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service" \
+    "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.poolsuite.service"
 
 echo "[customize] Poolsuite installed for A133-open dev"

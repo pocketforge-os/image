@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
-RUNTIME_SHA = "f2402f59630ea76c2f6d4a767c9e4e362f73adbc"
-LAUNCHER_SHA = "549307574631a8dd478b594fd223415f66b82f4b"
+RUNTIME_SHA = "2736751f2dcd48155da02fb605cdc261da1ae5fc"
+LAUNCHER_SHA = "8a276aecf087d32a143d9db0d7a895d7f8222796"
 
 
 def text(path: Path) -> str:
@@ -41,7 +41,11 @@ assert 'chroot "$ROOTFS" groupadd --system pf-pref-writer' in rootfs_builder
 assert not re.search(r"usermod[^\n]*pf-pref-writer[^\n]*gamer", rootfs_builder)
 assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
 
-assert text(ROOT / "rootfs-overlay/etc/environment").strip() == f"PF_PREFSD_SOCK={SOCKET}"
+assert text(ROOT / "rootfs-overlay/etc/environment").splitlines() == [
+    f"PF_PREFSD_SOCK={SOCKET}",
+    "XCURSOR_THEME=pocketforge-light",
+    "XCURSOR_SIZE=48",
+]
 
 dockerfile = text(ROOT / "build/Dockerfile.pf")
 runtime_guard = re.findall(

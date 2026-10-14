@@ -283,7 +283,7 @@ class RendererTest(unittest.TestCase):
         return result
 
     def test_omitted_root_is_exact_legacy_default(self) -> None:
-        self.output.write_text("stale generated drop-in\n", encoding="utf-8")
+        self.output.write_text("stale generated service fragment\n", encoding="utf-8")
         result = self.render(manifest(root=False))
         self.assertEqual(result.stdout, "runtime_root=absent action=unchanged\n")
         self.assertFalse(self.output.exists())
