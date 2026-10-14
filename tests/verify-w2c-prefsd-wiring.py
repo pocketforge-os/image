@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
-RUNTIME_SHA = "b289235d8cbdc8d542e551b8139d22b6abf31ec1"
-LAUNCHER_SHA = "8209c392ea19abfe6377d7254cb063eed43c491b"
+RUNTIME_SHA = "2736751f2dcd48155da02fb605cdc261da1ae5fc"
+LAUNCHER_SHA = "8a276aecf087d32a143d9db0d7a895d7f8222796"
 
 
 def text(path: Path) -> str:
@@ -41,7 +41,11 @@ assert 'chroot "$ROOTFS" groupadd --system pf-pref-writer' in rootfs_builder
 assert not re.search(r"usermod[^\n]*pf-pref-writer[^\n]*gamer", rootfs_builder)
 assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
 
-assert text(ROOT / "rootfs-overlay/etc/environment").strip() == f"PF_PREFSD_SOCK={SOCKET}"
+assert text(ROOT / "rootfs-overlay/etc/environment").splitlines() == [
+    f"PF_PREFSD_SOCK={SOCKET}",
+    "XCURSOR_THEME=pocketforge-light",
+    "XCURSOR_SIZE=48",
+]
 
 dockerfile = text(ROOT / "build/Dockerfile.pf")
 runtime_guard = re.findall(
@@ -51,7 +55,7 @@ runtime_guard = re.findall(
     flags=re.MULTILINE,
 )
 assert runtime_guard == [RUNTIME_SHA], (
-    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime b289235d, "
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to the paired runtime, "
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
@@ -71,7 +75,7 @@ launcher_guard = re.findall(
     flags=re.MULTILINE,
 )
 assert launcher_guard == [LAUNCHER_SHA], (
-    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher 8209c392, "
+    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to the paired launcher, "
     f"found: {launcher_guard}"
 )
 assert "ab9fb7fde36e633add69b94c36bf1213f7cff5d9" not in dockerfile

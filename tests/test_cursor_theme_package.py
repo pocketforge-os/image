@@ -47,7 +47,19 @@ ALIASES = {
 def effective_unit_environment(systemd_root: Path, unit: str) -> dict[str, str]:
     """Apply Environment= directives from a unit and its ordered drop-ins."""
     fragments = [systemd_root / unit]
-    fragments.extend(sorted((systemd_root / f"{unit}.d").glob("*.conf")))
+    dropins: dict[str, Path] = {}
+    if "@" in unit and "@." not in unit:
+        stem, suffix = unit.rsplit(".", 1)
+        template = f"{stem.split('@', 1)[0]}@.{suffix}"
+        dropins.update(
+            (path.name, path)
+            for path in (systemd_root / f"{template}.d").glob("*.conf")
+        )
+    dropins.update(
+        (path.name, path)
+        for path in (systemd_root / f"{unit}.d").glob("*.conf")
+    )
+    fragments.extend(dropins[name] for name in sorted(dropins))
     environment: dict[str, str] = {}
     for fragment in fragments:
         section = ""
@@ -198,7 +210,7 @@ class CursorPackage(unittest.TestCase):
         unit = systemd / "pf-app@.service"
         self.assertEqual(
             hashlib.sha256(unit.read_bytes()).hexdigest(),
-            "f44e28d7e4b46a7f5eff775a00704e70be50d941d921570b11bd9200d185b77e",
+            "4ab57976a5f4c00614b277cfaf8c0f65d860844ac160b015fbe5a71d549c6f05",
         )
         environment = effective_unit_environment(systemd, unit.name)
         self.assertEqual(environment.get("XCURSOR_THEME"), "pocketforge-light")
@@ -210,6 +222,24 @@ class CursorPackage(unittest.TestCase):
             missing = effective_unit_environment(fixture, unit.name)
             self.assertNotIn("XCURSOR_THEME", missing)
             self.assertNotIn("XCURSOR_SIZE", missing)
+
+    def test_poolsuite_exact_unit_inherits_cursor_template_dropin(self) -> None:
+        systemd = ROOT / "rootfs-overlay/etc/systemd/system"
+        with tempfile.TemporaryDirectory(prefix="pf-cursor-poolsuite-unit.") as td:
+            fixture = Path(td)
+            instance = fixture / "pf-app@org.pocketforge.poolsuite.service"
+            shutil.copy2(systemd / "pf-app@.service", instance)
+            with instance.open("a", encoding="utf-8") as handle:
+                handle.write("[Service]\nPrivateNetwork=no\n")
+            shutil.copytree(
+                systemd / "pf-app@.service.d",
+                fixture / "pf-app@.service.d",
+            )
+
+            environment = effective_unit_environment(fixture, instance.name)
+            self.assertEqual(environment.get("XCURSOR_THEME"), "pocketforge-light")
+            self.assertEqual(environment.get("XCURSOR_SIZE"), "48")
+            self.assertNotIn("XCURSOR_THEME", instance.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

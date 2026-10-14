@@ -27,7 +27,7 @@ ConditionPathExists=/dev/fb0
 Type=simple
 User=gamer
 Group=gamer
-SupplementaryGroups=audio input video
+SupplementaryGroups=
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
