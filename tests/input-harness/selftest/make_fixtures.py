@@ -225,9 +225,10 @@ def build_good(out_dir):
 
     b = Builder("session")
     b.event("start", pid=1, argv=["driver.py"], backend="headless", display="gamescope-0")
-    b.event("device_created", kind="pad", name="PocketForge Fake Pad", event_node="/dev/input/event3")
-    b.event("device_created", kind="keyboard", name="PocketForge Fake Keyboard", event_node="/dev/input/event4")
-    b.event("device_created", kind="mouse", name="PocketForge Fake Mouse", event_node="/dev/input/event5")
+    b.event("device_created", kind="keyboard", name="PocketForge Private Keyboard",
+            event_source="private-seqpacket")
+    b.event("device_created", kind="pointer", name="PocketForge Private Pointer",
+            event_source="private-seqpacket")
     b.event("compositor_ready", pid=50, wayland_display="gamescope-0", x_display=":0", backend="headless")
     for i, client in enumerate(LAUNCHED):
         b.event("client_launch", target=client)
@@ -409,7 +410,7 @@ def build_negatives(good_dir):
 
     d = clone(good_dir, "neg-session-missing-device")
     lines = open(os.path.join(d, "session.jsonl"), encoding="utf-8").read().splitlines()
-    kept = [ln for ln in lines if '"mouse"' not in ln]
+    kept = [ln for ln in lines if '"pointer"' not in ln]
     # renumber seq after dropping a line
     fixed = []
     for i, ln in enumerate(kept, start=1):

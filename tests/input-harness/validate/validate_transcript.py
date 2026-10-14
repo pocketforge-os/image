@@ -52,7 +52,7 @@ IM_PROTOCOLS = (
 )
 IM_STATES = ("available", "unavailable", "enabled", "disabled")
 AXES = ("vertical", "horizontal")
-DEVICE_KINDS = ("pad", "keyboard", "mouse")
+DEVICE_KINDS = ("keyboard", "pointer")
 
 _STR = "str"
 _INT = "int"
@@ -111,7 +111,7 @@ EVENTS = {
     "device_created": {
         "kind": _enum(DEVICE_KINDS),
         "name": _STR,
-        "event_node": _STR,
+        "event_source": _STR,
     },
     "compositor_ready": {
         "pid": _INT,

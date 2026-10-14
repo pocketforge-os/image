@@ -1,9 +1,9 @@
 # PocketForge input harness (tsp-ihne1.2)
 
-Shared laptop harness for all gamescope/input work: a **headless gamescope
-session** (our fork, branch `pocketforge-linear`, pinned in `pins.env`) with
-Xwayland, fake uinput controller/keyboard/mouse, and one test client per
-row of the design's *When the keyboard opens* table. Every client writes a
+Hermetic gamescope/input harness: a **headless gamescope session** (our fork,
+branch `pocketforge-linear`, pinned in `pins.env`) with Xwayland, private
+keyboard/pointer event streams, and one test client per row of the design's
+*When the keyboard opens* table. Every client writes a
 machine-readable **transcript** plus pre/post text-region frames so downstream
 beads assert both widget state and visible compositor output.
 
@@ -30,11 +30,12 @@ type `screen_buffer` for golden comparison) and `screenshots/manifest.json`.
 | `report/report.py` | run-directory evaluation → `PASS:`/`FAIL:`/`SKIP:` verdict |
 | `selftest/make_fixtures.py` | fixture generator for the hermetic CI self-test |
 | `session/entry.sh` | container entrypoint; execs headless gamescope + driver |
-| `session/driver.py` | session orchestrator (devices → EIS bridge → clients → screenshots → report) |
+| `session/driver.py` | session orchestrator (private streams → EIS bridge → clients → screenshots → report) |
 | `session/mangoapp` | trusted-client relay for `gamescopectl screenshot` |
-| `session/udev-shim.sh` | synthetic udev seat tags for the fake devices |
-| `tools/fake-input.c` | uinput daemon: fake pad/keyboard/mouse |
-| `tools/eis-bridge.c` | evdev → libeis sender bridge into gamescope |
+| `tools/private-input.c` | command reader that writes native `struct input_event` packets to an inherited private fd |
+| `tools/eis-bridge.c` | private input-event fds → libeis sender bridge into gamescope |
+| `tools/fake-input.c` | retained source for guarded VM/DUT runs only; not built into the default harness image |
+| `session/udev-shim.sh` | retained source for guarded VM/DUT runs only; unused by the default harness |
 | `tools/pf-shot.c` | trusted `gamescope_control` screenshot (type 4, waits for `screenshot_taken`) |
 | `tools/provision-wayland-protocols.sh` | exposes the closure-pinned 1.49 protocol XMLs to Meson before trixie's 1.44 package |
 | `tools/transcript.{h,c}` | `libpf-transcript.so` used by every client |
@@ -42,9 +43,10 @@ type `screen_buffer` for golden comparison) and `screenshots/manifest.json`.
 | `clients/*.c(pp)` | the test clients, one per design table row |
 
 Placement decision (bead asked to record it): everything lives in the
-**image repo** under `tests/input-harness/`, next to the existing
-gamescope session tests. The fake-pad helper stayed a small C program here
-instead of a runtime crate — it is test tooling, not product code.
+**image repo** under `tests/input-harness/`, next to the existing gamescope
+session tests. The default path uses only process-private sockets. The legacy
+kernel-device helper remains source-only here for the separate guarded VM/DUT
+tier; it is test tooling, not product code.
 
 ## Clients and expected behaviour
 
@@ -117,8 +119,10 @@ positive and negative controls in one invocation:
 tests/test-input-harness-selftest.sh
 ```
 
-The full docker run is a laptop/one-command thing by design (the hermetic
-workflow has no docker daemon); it is not wired into CI yet.
+The full Docker session is not wired into CI. Following the host-uinput
+incident, do not run it on any host until the execution-domain guards have
+merged and input-coord explicitly lifts the session freeze. The fixture-only
+self-test above remains safe to run.
 
 ## Safety and blast radius
 
@@ -127,22 +131,20 @@ workflow has no docker daemon); it is not wired into CI yet.
   buildx builder.
 - `docker run --rm` only; no anonymous volumes; image labelled
   `pf.bead=tsp-ihne1.2`.
-- Container runs as root **inside** its own user namespace only because
-  `/dev/uinput` needs it; outputs in the host run dir are chowned back to
-  the invoking host user (`HOST_UID`/`HOST_GID`) before exit, so no
-  root-owned files land in the worktree or cache.
-- Host mounts: `/dev/input` (bind) and the run dir only. `--device
-  /dev/uinput` grants creation of **host-visible** input devices — this is
-  the harness blast radius: a bug in `fake-input` could inject keystrokes
-  into the host session. Mitigations: the daemon destroys its devices on
-  stdin EOF, the driver always destroys them in `finally`, and `run.sh`
-  refuses to start without `/dev/uinput`.
-- `--device-cgroup-rule "c 13:* rmw"` lets the container open input event
-  nodes (major 13). It is required because the fake devices are created
-  through `/dev/uinput` **after** container start, so they are not in the
-  `--device` allow-list and every `open()` of `/dev/input/eventN` would
-  fail with EPERM. Scope: input event devices only — still no
-  `--privileged`, and no access to disks, DRM or other majors.
+- The runtime receives no host device option, no device cgroup rule, and no
+  host input bind. Its only host bind is the chosen output directory.
+- `driver.py` creates two `AF_UNIX/SOCK_SEQPACKET` socketpairs. It passes the
+  writer ends only to `private-input` and the reader ends only to `eis-bridge`.
+  Both endpoints are ordinary process-private fds; no kernel input device,
+  udev announcement, host libinput subscription or host-session event exists.
+- `private-input` accepts commands on stdin and sends complete native
+  `struct input_event` packets with `SYN_REPORT`. It never opens a path.
+- The fixture-only CI self-test statically rejects any Docker device option,
+  device cgroup rule, `/dev/uinput` reference or `/dev/input` bind in `run.sh`,
+  and proves the detector with a seeded copy of the former unsafe grants.
+- The 2026-10-13 incident established that uinput is host-kernel global and
+  containers do not isolate it. `fake-input.c` must therefore run only behind
+  the approved positive-identity guard in a pfvd guest or on a DUT.
 - `--network none` at run time (build needs network; the run does not).
 - No device, node, labgrid or PSU actions; laptop only.
 
@@ -153,11 +155,11 @@ workflow has no docker daemon); it is not wired into CI yet.
    (`src/wlserver.cpp:2114`, `src/Backends/HeadlessBackend.cpp:224`
    `IsSessionBased()==false`). The harness therefore injects input through
    gamescope's EIS (libeis) input-emulation socket:
-   `driver → fake-input (uinput) → kernel evdev → eis-bridge (libeis
-   sender) → gamescope`. Topology matches production (`pf-input-decode →
-   evdev → compositor`); the bridge stands in for the missing libinput.
-   When pf-input-broker/router work starts, `session/udev-shim.sh` already
-   provides seat-tagged udev entries for the same devices.
+   `driver → private-input → SOCK_SEQPACKET input_event stream → eis-bridge
+   (libeis sender) → gamescope`. The private stream exercises gamescope's
+   keyboard, absolute-pointer, focus and button paths without entering the
+   host kernel input subsystem. Real evdev fidelity belongs to the guarded
+   pfvd guest/DUT tier.
 2. **sdl2-compat**: no `pocketforge-os/sdl2-compat` fork exists; Debian
    trixie's `libsdl2` is sdl2-compat (2.32.x), which covers the row until
    the hint-ignoring patch (D2-E2) needs a fork.

@@ -129,7 +129,7 @@ SPECS = {
     "broken-client": Spec(expect_invalid=True),
 }
 
-SESSION_REQUIRED_DEVICES = ("pad", "keyboard", "mouse")
+SESSION_REQUIRED_DEVICES = ("keyboard", "pointer")
 TEXT_REGIONS = {
     # GtkEntry's outer bounds are approximately x=187..1092, y=359..407
     # in the fixed 1280x720 harness layout. Keep this region inside its

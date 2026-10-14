@@ -145,12 +145,30 @@ FORBIDDEN_PATTERNS = (
     "--cap-add SYS_ADMIN",
 )
 
+RUN_DEVICE_EXPOSURE_PATTERNS = (
+    ("device_flag", re.compile(r"(?:^|\s)--device(?:=|\s)", re.MULTILINE)),
+    ("device_cgroup_rule", re.compile(r"--device-cgroup-rule")),
+    ("uinput_path", re.compile(r"/dev/uinput(?:\s|$)")),
+    (
+        "input_bind",
+        re.compile(
+            r"(?:-v|--volume)\s+[^\n]*?/dev/input(?:[/:\s]|$)"
+            r"|--mount[^\n]*(?:source|src)=/dev/input(?:[,/\s]|$)"
+        ),
+    ),
+)
+
 
 def audit_file(path):
     """Return the forbidden patterns found in a harness asset."""
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         text = handle.read()
     return [pattern for pattern in FORBIDDEN_PATTERNS if pattern in text]
+
+
+def audit_run_device_exposure(text):
+    """Return host-device grants forbidden in the default harness runner."""
+    return [name for name, pattern in RUN_DEVICE_EXPOSURE_PATTERNS if pattern.search(text)]
 
 
 def section_asset_audit(work):
@@ -167,6 +185,7 @@ def section_asset_audit(work):
         "session/mangoapp",
         "session/udev-shim.sh",
         "tools/fake-input.c",
+        "tools/private-input.c",
         "tools/pf-shot.c",
         "tools/provision-wayland-protocols.sh",
         "tools/require-empty-output.sh",
@@ -218,6 +237,23 @@ def section_asset_audit(work):
         require(os.access(run_sh, os.X_OK), "run.sh is not executable")
         with open(run_sh, "r", encoding="utf-8") as handle:
             text = handle.read()
+        require(
+            audit_run_device_exposure(text) == [],
+            f"run.sh exposes host input devices: {audit_run_device_exposure(text)}",
+        )
+
+        # Negative control for the host-input audit: the former unsafe grants
+        # must all be rejected without executing the poisoned runner.
+        poisoned_device_run = text + (
+            "\ndocker run --device /dev/uinput "
+            "--device-cgroup-rule 'c 13:* rmw' "
+            "-v /dev/input:/dev/input image\n"
+        )
+        require(
+            set(audit_run_device_exposure(poisoned_device_run))
+            == {"device_flag", "device_cgroup_rule", "uinput_path", "input_bind"},
+            "host-input auditor failed its seeded legacy-grants negative control",
+        )
         require(
             "--label pf.bead" in text or "pf.bead=" in text,
             "run.sh does not label built images with pf.bead",
@@ -271,6 +307,51 @@ def section_asset_audit(work):
                     ["bash", "-n", path], capture_output=True, text=True
                 )
             require(proc.returncode == 0, f"{entry} fails syntax check:\n{proc.stderr}")
+
+    private_input = os.path.join(HARNESS, "tools", "private-input.c")
+    driver = os.path.join(HARNESS, "session", "driver.py")
+    bridge = os.path.join(HARNESS, "tools", "eis-bridge.c")
+    if all(os.path.exists(path) for path in (private_input, driver, bridge)):
+        with open(driver, "r", encoding="utf-8") as handle:
+            driver_text = handle.read()
+        with open(bridge, "r", encoding="utf-8") as handle:
+            bridge_text = handle.read()
+        with open(private_input, "r", encoding="utf-8") as handle:
+            private_input_text = handle.read()
+        require(
+            "socket.SOCK_SEQPACKET" in driver_text,
+            "driver.py does not create private SOCK_SEQPACKET streams",
+        )
+        require(
+            '"--keyboard-event-fd"' in bridge_text
+            and '"--pointer-event-fd"' in bridge_text,
+            "eis-bridge.c does not require explicit private event fds",
+        )
+        require(
+            'open("/dev/uinput"' not in private_input_text
+            and 'open("/dev/input' not in private_input_text,
+            "private-input.c opens a host input device",
+        )
+        for rel, source in (
+            ("session/driver.py", driver_text),
+            ("tools/eis-bridge.c", bridge_text),
+            ("tools/private-input.c", private_input_text),
+        ):
+            require(
+                "/dev/uinput" not in source and "/dev/input/" not in source,
+                f"default input path {rel} references a host input device",
+            )
+        require(
+            '"fake-input"' not in driver_text and "udev-shim.sh" not in driver_text,
+            "driver.py still launches the kernel-device path",
+        )
+        with open(os.path.join(HARNESS, "Containerfile"), "r", encoding="utf-8") as handle:
+            container_text = handle.read()
+        require(
+            "/src/tools/private-input.c" in container_text
+            and "/src/tools/fake-input.c" not in container_text,
+            "default harness image does not exclusively build private-input",
+        )
 
     # Gamescope may start its primary child before exporting WAYLAND_DISPLAY.
     # The driver must make its documented gamescope-0 fallback visible to all
@@ -353,8 +434,8 @@ def section_asset_audit(work):
         "driver requests a screenshot before any surface can trigger a repaint",
     )
     require(
-        'mouse.cmd("abs 320 240")' in driver_source
-        and 'mouse.cmd("abs 640 360")' not in driver_source,
+        'pointer.cmd("abs 320 240")' in driver_source
+        and 'pointer.cmd("abs 640 360")' not in driver_source,
         "driver does not target the logical center shared by its 640x480 clients",
     )
     x_ready = driver_source.find("wait_for_x_display(")
@@ -368,8 +449,8 @@ def section_asset_audit(work):
         and 'kbd.cmd("key 42 0")' in driver_source,
         "driver does not initialize the emulated keyboard before acceptance input",
     )
-    first_click = driver_source.find('mouse.cmd("btn 272 1")')
-    second_click = driver_source.find('mouse.cmd("btn 272 1")', first_click + 1)
+    first_click = driver_source.find('pointer.cmd("btn 272 1")')
+    second_click = driver_source.find('pointer.cmd("btn 272 1")', first_click + 1)
     require(
         first_click >= 0 and second_click > first_click
         and "A newly mapped gamescope window may consume the first click"

@@ -111,7 +111,7 @@ RUN set -eux; \
         $(pkg-config --cflags wayland-client) \
         -lwayland-client -ldl -lpthread; \
     TX="-L/opt/harness/lib -lpf-transcript -Wl,-rpath,/harness/lib"; \
-    gcc -O1 -Wall -o /opt/harness/bin/fake-input /src/tools/fake-input.c; \
+    gcc -O1 -Wall -o /opt/harness/bin/private-input /src/tools/private-input.c; \
     gcc -O1 -Wall -o /opt/harness/bin/eis-bridge /src/tools/eis-bridge.c \
         $(pkg-config --cflags --libs libei-1.0); \
     gcc -O1 -Wall -I/src/build -o /opt/harness/bin/pf-shot \
@@ -169,8 +169,8 @@ COPY tests/input-harness/report /harness/report
 COPY tests/input-harness/validate /harness/validate
 
 RUN set -eux; \
-    chmod +x /harness/session/entry.sh /harness/session/udev-shim.sh \
-             /harness/session/driver.py /harness/session/mangoapp; \
+    chmod +x /harness/session/entry.sh /harness/session/driver.py \
+             /harness/session/mangoapp; \
     ln -sf /harness/session/mangoapp /usr/local/bin/mangoapp; \
     if ldd /usr/local/bin/gamescope | grep -q "not found"; then \
         ldd /usr/local/bin/gamescope; exit 1; \

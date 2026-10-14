@@ -1,12 +1,13 @@
-/* PocketForge EIS bridge: forwards uinput evdev events into gamescope's
- * headless input path over libeis (EIS_EVENT_* sender protocol).
+/* PocketForge EIS bridge: forwards private struct input_event streams into
+ * gamescope's headless input path over libeis (EIS_EVENT_* sender protocol).
  *
- * Usage: eis-bridge <eis-socket> <keyboard-event-node> <mouse-event-node>
+ * Usage: eis-bridge <eis-socket> --keyboard-event-fd FD
+ *                   --pointer-event-fd FD
  *
  * Headless gamescope has no libinput session backend, so the harness feeds
- * real kernel evdev devices (created by fake-input) through this bridge,
- * which is a libeis *sender* client. Prints READY on stdout once the
- * virtual device is emulating.
+ * private SOCK_SEQPACKET streams through this bridge, which is a libeis
+ * *sender* client. No kernel input device is involved. Prints READY on stdout
+ * once the virtual device is emulating.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -30,15 +31,21 @@ static void die(const char *msg)
 	exit(1);
 }
 
-static int open_evdev(const char *path)
+static int parse_event_fd(const char *text, const char *option)
 {
-	int fd = open(path, O_RDONLY | O_NONBLOCK);
-	if (fd < 0) {
-		fprintf(stderr, "eis-bridge: cannot open %s: %s\n", path,
+	char *end = NULL;
+	errno = 0;
+	long value = strtol(text, &end, 10);
+	if (errno || !end || *end || value < 0 || value > 0x7fffffffL) {
+		fprintf(stderr, "eis-bridge: invalid %s: %s\n", option, text);
+		exit(1);
+	}
+	if (fcntl((int)value, F_GETFD) < 0) {
+		fprintf(stderr, "eis-bridge: %s fd is not open: %s\n", option,
 			strerror(errno));
 		exit(1);
 	}
-	return fd;
+	return (int)value;
 }
 
 static void handle_ei_events(void)
@@ -87,6 +94,10 @@ static void forward_keyboard(int fd)
 	ssize_t n = read(fd, ev, sizeof ev);
 	if (n <= 0)
 		return;
+	if ((size_t)n % sizeof(struct input_event) != 0) {
+		fprintf(stderr, "eis-bridge: malformed keyboard event packet\n");
+		exit(1);
+	}
 	for (ssize_t i = 0; i + (ssize_t)sizeof(struct input_event) <= n;
 	     i += sizeof(struct input_event)) {
 		const struct input_event *e =
@@ -100,12 +111,16 @@ static void forward_keyboard(int fd)
 	}
 }
 
-static void forward_mouse(int fd)
+static void forward_pointer(int fd)
 {
 	struct input_event ev[64];
 	ssize_t n = read(fd, ev, sizeof ev);
 	if (n <= 0)
 		return;
+	if ((size_t)n % sizeof(struct input_event) != 0) {
+		fprintf(stderr, "eis-bridge: malformed pointer event packet\n");
+		exit(1);
+	}
 	int have = 0;
 	static int last_x = -1, last_y = -1;
 	for (ssize_t i = 0; i + (ssize_t)sizeof(struct input_event) <= n;
@@ -153,9 +168,11 @@ static void forward_mouse(int fd)
 
 int main(int argc, char **argv)
 {
-	if (argc != 4) {
+	if (argc != 6 || strcmp(argv[2], "--keyboard-event-fd") ||
+	    strcmp(argv[4], "--pointer-event-fd")) {
 		fprintf(stderr,
-			"usage: eis-bridge <eis-socket> <kbd-node> <mouse-node>\n");
+			"usage: eis-bridge <eis-socket> --keyboard-event-fd FD "
+			"--pointer-event-fd FD\n");
 		return 2;
 	}
 	g_ei = ei_new_sender(NULL);
@@ -164,15 +181,15 @@ int main(int argc, char **argv)
 	ei_configure_name(g_ei, "pocketforge-input-harness");
 	ei_setup_backend_socket(g_ei, argv[1]);
 
-	int kfd = open_evdev(argv[2]);
-	int mfd = open_evdev(argv[3]);
+	int kfd = parse_event_fd(argv[3], "--keyboard-event-fd");
+	int pfd = parse_event_fd(argv[5], "--pointer-event-fd");
 	int efd = ei_get_fd(g_ei);
 
 	for (;;) {
 		struct pollfd pfds[3] = {
 			{ .fd = efd, .events = POLLIN },
 			{ .fd = kfd, .events = POLLIN },
-			{ .fd = mfd, .events = POLLIN },
+			{ .fd = pfd, .events = POLLIN },
 		};
 		int rc = poll(pfds, 3, -1);
 		if (rc < 0) {
@@ -187,7 +204,12 @@ int main(int argc, char **argv)
 		if (pfds[1].revents & POLLIN)
 			forward_keyboard(kfd);
 		if (pfds[2].revents & POLLIN)
-			forward_mouse(mfd);
+			forward_pointer(pfd);
+		if ((pfds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) ||
+		    (pfds[2].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+			fprintf(stderr, "eis-bridge: private event stream failed\n");
+			return 1;
+		}
 	}
 	return 0;
 }

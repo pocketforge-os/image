@@ -5,8 +5,8 @@ Runs as gamescope's primary child (inherits WAYLAND_DISPLAY, DISPLAY and
 LIBEI_SOCKET). Sequence:
 
   1. wait for the wayland + EIS sockets
-  2. create uinput fake pad/keyboard/mouse and shim their udev seat tags
-  3. start the EIS bridge (evdev -> libeis sender -> gamescope)
+  2. create private SOCK_SEQPACKET keyboard and pointer streams
+  3. start the EIS bridge (private input_event fd -> libeis -> gamescope)
   4. take an idle screenshot, then run every test client in turn:
      launch -> wait mapped -> focus click -> type PHRASE -> screenshot -> SIGTERM
   5. always run the deliberately broken client last-but-one (negative control)
@@ -21,6 +21,7 @@ import ctypes
 import json
 import os
 import signal
+import socket
 import struct
 import subprocess
 import sys
@@ -33,7 +34,6 @@ TX_DIR = os.path.join(OUT, "transcripts")
 SHOT_DIR = os.path.join(OUT, "screenshots")
 SESSION_TX = os.path.join(OUT, "session.jsonl")
 BIN = "/harness/bin"
-SESSION_DIR = "/harness/session"
 PRELOAD = "/harness/lib/libpf-transcript-preload.so"
 MANGO_FIFO = os.environ.get("PF_MANGO_FIFO", "/run/pf-mango.fifo")
 XDG = os.environ.get("XDG_RUNTIME_DIR", "/run/xdg")
@@ -168,28 +168,25 @@ def wait_event_in(tx_path: str, event: str, timeout: float,
     return False
 
 
-class FakeInput:
-    def __init__(self, kind: str, sw: SessionWriter):
+class PrivateInput:
+    def __init__(self, kind: str, event_socket: socket.socket,
+                 sw: SessionWriter):
         self.kind = kind
-        self.proc = subprocess.Popen(
-            [os.path.join(BIN, "fake-input"), kind],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
-        line = self.proc.stdout.readline().strip()
-        info = json.loads(line)
-        if info.get("kind") != kind or not info.get("event_node"):
-            raise RuntimeError(f"fake-input {kind} reported bad device line: {line}")
-        self.name = info["name"]
-        self.node = info["event_node"]
-        subprocess.run(
-            [os.path.join(SESSION_DIR, "udev-shim.sh"), self.node, kind],
-            check=True,
-        )
-        sw.emit("device_created", kind=kind, name=self.name,
-                event_node=self.node)
-        log(f"fake {kind} at {self.node} ({self.name})")
+        event_fd = event_socket.fileno()
+        try:
+            self.proc = subprocess.Popen(
+                [os.path.join(BIN, "private-input"),
+                 "--event-fd", str(event_fd), kind],
+                stdin=subprocess.PIPE,
+                text=True,
+                pass_fds=(event_fd,),
+            )
+        finally:
+            event_socket.close()
+        sw.emit("device_created", kind=kind,
+                name=f"PocketForge Private {kind.title()}",
+                event_source="private-seqpacket")
+        log(f"private {kind} event stream ready")
 
     def cmd(self, line: str) -> None:
         self.proc.stdin.write(line + "\n")
@@ -266,7 +263,7 @@ def screenshot(sw: SessionWriter, name: str, phase: str,
     return False
 
 
-def type_phrase(kbd: FakeInput, phrase: str) -> None:
+def type_phrase(kbd: PrivateInput, phrase: str) -> None:
     for ch in phrase:
         code = KEYMAP[ch]
         kbd.cmd(f"key {code} 1")
@@ -302,7 +299,7 @@ def read_jsonl(path: str):
 
 def run_client(sw: SessionWriter, name: str, backend: str, purpose, phrase,
                gui: bool, preload: bool, extra_env: dict,
-               kbd: FakeInput, mouse: FakeInput) -> None:
+               kbd: PrivateInput, pointer: PrivateInput) -> None:
     tx_path = os.path.join(TX_DIR, f"{name}.jsonl")
     if os.path.lexists(tx_path):
         raise RuntimeError(f"stale transcript exists before {name} launch: {tx_path}")
@@ -322,23 +319,23 @@ def run_client(sw: SessionWriter, name: str, backend: str, purpose, phrase,
             # gamescope headless delivers EIS absolute coordinates in the
             # client's logical space even when the 640x480 surface is scaled
             # into the 1280x720 output. Target the shared logical center.
-            mouse.cmd("abs 320 240")
+            pointer.cmd("abs 320 240")
             time.sleep(0.3)
             # A newly mapped gamescope window may consume the first click to
             # activate it.  Keep activation separate from the second click,
             # whose delivery is part of the client acceptance evidence.
-            mouse.cmd("btn 272 1")
+            pointer.cmd("btn 272 1")
             time.sleep(0.05)
-            mouse.cmd("btn 272 0")
+            pointer.cmd("btn 272 0")
             time.sleep(0.3)
-            mouse.cmd("btn 272 1")
+            pointer.cmd("btn 272 1")
             time.sleep(0.05)
-            mouse.cmd("btn 272 0")
+            pointer.cmd("btn 272 0")
             time.sleep(0.3)
             if not wait_event_in(tx_path, "enter", 10, proc):
                 log(f"WARN: {name} did not report enter within 10s")
             # move slightly so cursor-theme lookups happen again
-            mouse.cmd("abs 641 361")
+            pointer.cmd("abs 641 361")
         if phrase is not None:
             if not screenshot(sw, name, "before", f"{name}-before"):
                 raise RuntimeError(f"{name} pre-typing screenshot failed")
@@ -371,7 +368,8 @@ def main() -> int:
     sw.emit("start", pid=os.getpid(), argv=sys.argv, backend="headless",
             display=os.environ.get("WAYLAND_DISPLAY", ""))
 
-    fakes: list[FakeInput] = []
+    inputs: list[PrivateInput] = []
+    event_readers: list[socket.socket] = []
     bridge = None
     rc = 1
     try:
@@ -388,15 +386,29 @@ def main() -> int:
                 backend="headless")
         log(f"compositor ready: wayland={wl_name} x={os.environ.get('DISPLAY')}")
 
-        pad = FakeInput("pad", sw)
-        kbd = FakeInput("keyboard", sw)
-        mouse = FakeInput("mouse", sw)
-        fakes = [pad, kbd, mouse]
+        kbd_reader, kbd_writer = socket.socketpair(
+            socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        pointer_reader, pointer_writer = socket.socketpair(
+            socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        event_readers = [kbd_reader, pointer_reader]
+        kbd = PrivateInput("keyboard", kbd_writer, sw)
+        inputs.append(kbd)
+        pointer = PrivateInput("pointer", pointer_writer, sw)
+        inputs.append(pointer)
 
-        bridge = subprocess.Popen(
-            [os.path.join(BIN, "eis-bridge"), eis_path, kbd.node, mouse.node],
-            stdout=subprocess.PIPE, text=True,
-        )
+        try:
+            bridge = subprocess.Popen(
+                [os.path.join(BIN, "eis-bridge"), eis_path,
+                 "--keyboard-event-fd", str(kbd_reader.fileno()),
+                 "--pointer-event-fd", str(pointer_reader.fileno())],
+                stdout=subprocess.PIPE,
+                text=True,
+                pass_fds=(kbd_reader.fileno(), pointer_reader.fileno()),
+            )
+        finally:
+            for reader in event_readers:
+                reader.close()
+            event_readers = []
         deadline = time.monotonic() + 30
         ready = False
         while time.monotonic() < deadline:
@@ -425,12 +437,7 @@ def main() -> int:
         for (name, backend, purpose, phrase, gui, preload,
              extra_env) in CLIENTS:
             run_client(sw, name, backend, purpose, phrase, gui, preload, extra_env,
-                       kbd, mouse)
-
-        # exercise the pad once so downstream beads have a known-good path
-        pad.cmd("btn 304 1")
-        time.sleep(0.05)
-        pad.cmd("btn 304 0")
+                       kbd, pointer)
 
         rc = 0
     except Exception as exc:  # noqa: BLE001 - driver must always write stop
@@ -438,8 +445,10 @@ def main() -> int:
         sw.emit("error", message=str(exc))
         rc = 1
     finally:
-        for f in fakes:
-            f.destroy()
+        for reader in event_readers:
+            reader.close()
+        for source in inputs:
+            source.destroy()
         if bridge is not None and bridge.poll() is None:
             bridge.terminate()
             try:

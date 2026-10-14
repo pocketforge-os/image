@@ -9,8 +9,8 @@
 # Prints PASS/FAIL with transcript paths.
 #
 # Safety: docker run --rm only, no anonymous volumes, never privileged,
-# never an init/systemd PID 1, never mounts the host root or the docker
-# socket. Images are labelled pf.bead=tsp-ihne1.2. Blast radius: README.md.
+# never an init/systemd PID 1, never mounts the host root, docker socket or
+# host devices. Images are labelled pf.bead=tsp-ihne1.2. See README.md.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,11 +38,6 @@ fi
 
 "$HERE/tools/require-empty-output.sh" "$OUT"
 
-if [ ! -e /dev/uinput ]; then
-	echo "FAIL: input-harness reason=no_uinput hint=/dev/uinput missing or not permitted on this host"
-	exit 1
-fi
-
 if [ "$BUILD" = 1 ]; then
 	echo "==> building $IMAGE_TAG (gamescope ${GAMESCOPE_COMMIT:0:12})"
 	docker build \
@@ -63,9 +58,6 @@ set +e
 docker run --rm \
 	--label pf.bead=tsp-ihne1.2 \
 	--network none \
-	--device /dev/uinput \
-	--device-cgroup-rule "c 13:* rmw" \
-	-v /dev/input:/dev/input \
 	-v "$OUT":/out \
 	-e HOST_UID="$(id -u)" \
 	-e HOST_GID="$(id -g)" \

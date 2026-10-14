@@ -84,8 +84,9 @@ screenshots) is logged by the driver to `<out>/session.jsonl` using the
 same envelope with `client` = `session` (including `start` first and
 `stop` last, `backend` = `headless`) and these extra events:
 
-- `device_created` — Fields: `kind` (`pad` | `keyboard` | `mouse`),
-  `name` (string), `event_node` (string, e.g. `/dev/input/event7`).
+- `device_created` — Fields: `kind` (`keyboard` | `pointer`), `name`
+  (string), `event_source` (string; currently `private-seqpacket`). These are
+  process-private streams, not kernel devices.
 - `compositor_ready` — Fields: `pid` (int), `wayland_display` (string),
   `x_display` (string), `backend` (string, e.g. `headless`).
 - `client_launch` / `client_stop` / `client_exit` — Fields: `client` is
