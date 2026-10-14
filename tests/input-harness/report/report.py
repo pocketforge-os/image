@@ -152,8 +152,12 @@ MIN_FRAME_CHANGE = {
     # hundreds of pixels wide, so require evidence across the whole line.
     "sdl3-text": (2048, 300),
     "sdl2-game": (2048, 300),
-    "xim-only": (2048, 300),
     "no-im": (2048, 300),
+    # The pure-Xlib XIM control uses XDrawString's compact server font rather
+    # than the glyph atlas. Its full phrase is 117 px wide on the hermetic
+    # Xwayland server, so retain enough tolerance for font rasterization while
+    # still rejecting a partial first-glyph/short-prefix frame.
+    "xim-only": (512, 96),
 }
 
 

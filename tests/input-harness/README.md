@@ -95,6 +95,12 @@ one-glyph compositor frame fails with
 `screenshots/manifest.json` (run-dir-relative, so the report works both
 in-container and on the host).
 
+The pure-Xlib `xim-only` control uses XDrawString's compact server font, so
+its calibrated floor is lower than the source-owned glyph-atlas clients while
+still rejecting a seeded short-prefix frame. This keeps the gate tied to the
+renderer's actual text footprint instead of assuming every client uses the
+same font scale.
+
 `gamescopectl screenshot` is deliberately NOT used: its `Execute()`
 forwards only two strings over `gamescope_private`, so the type
 argument is dropped and the compositor's console command falls back to

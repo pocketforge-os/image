@@ -95,13 +95,16 @@ def make_png(
     height=HEIGHT,
     rgb=(40, 44, 52),
     mark=False,
+    mark_width=320,
     gtk_focus_border=False,
 ):
     raw = bytearray()
     for y in range(height):
         pixels = bytearray(bytes(rgb) * width)
         if mark and 376 <= y < 395:
-            pixels[300 * 3:620 * 3] = bytes((240, 240, 240)) * 320
+            pixels[300 * 3:(300 + mark_width) * 3] = (
+                bytes((240, 240, 240)) * mark_width
+            )
         if gtk_focus_border:
             # Match the focused GtkEntry outline seen in a 1280x720 capture,
             # but deliberately leave its text interior unchanged.
@@ -295,6 +298,14 @@ def build_negatives(good_dir):
         os.path.join(d, "screenshots", "gtk4-text.png"),
     )
     negatives["neg-stale-frame"] = (d, "stale_frame")
+
+    d = clone(good_dir, "neg-xim-partial-frame")
+    make_png(
+        os.path.join(d, "screenshots", "xim-only.png"),
+        mark=True,
+        mark_width=64,
+    )
+    negatives["neg-xim-partial-frame"] = (d, "stale_frame")
 
     d = clone(good_dir, "neg-gtk-focus-only")
     make_png(
