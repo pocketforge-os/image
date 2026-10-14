@@ -12,14 +12,17 @@ RUN set -eu; \
 
 FROM builder AS sources
 COPY tests/input-harness/guest-payload.pins /work/guest-payload.pins
+COPY --from=sdl-src . /work/sdl
+COPY --from=gamescope-src . /work/gamescope
+COPY --from=libei-src . /work/libei
 RUN set -eux; \
     . /work/guest-payload.pins; \
-    git clone --filter=blob:none "${SDL_URL}" /work/sdl; \
-    git -C /work/sdl checkout "${SDL_COMMIT}"; \
-    git clone --filter=blob:none "${GAMESCOPE_URL}" /work/gamescope; \
-    git -C /work/gamescope checkout "${GAMESCOPE_COMMIT}"; \
-    git clone --filter=blob:none "${LIBEI_URL}" /work/libei; \
-    git -C /work/libei checkout "${LIBEI_COMMIT}"
+    test "$(cat /work/sdl/.pf-source-revision)" = "${SDL_COMMIT}"; \
+    test "$(cat /work/gamescope/.pf-source-revision)" = "${GAMESCOPE_COMMIT}"; \
+    test "$(cat /work/libei/.pf-source-revision)" = "${LIBEI_COMMIT}"; \
+    test -d /work/sdl/sdl3; \
+    test -f /work/gamescope/protocol/gamescope-control.xml; \
+    test -f /work/libei/meson.build
 
 FROM builder AS sysroots
 ARG SNAPSHOT_DATE=20260601T000000Z

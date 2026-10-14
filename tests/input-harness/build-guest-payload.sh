@@ -34,9 +34,9 @@ done
 source "$repo/tests/input-harness/guest-payload.pins"
 export SNAPSHOT_DATE SDL_URL SDL_COMMIT GAMESCOPE_URL GAMESCOPE_COMMIT \
     LIBEI_URL LIBEI_COMMIT SOURCE_DATE_EPOCH
-[[ "$(git -C "$sdl_source" rev-parse HEAD)" == "$SDL_COMMIT" ]]
-[[ "$(git -C "$gamescope_source" rev-parse HEAD)" == "$GAMESCOPE_COMMIT" ]]
-[[ "$(git -C "$libei_source" rev-parse HEAD)" == "$LIBEI_COMMIT" ]]
+[[ "$(cat "$sdl_source/.pf-source-revision")" == "$SDL_COMMIT" ]]
+[[ "$(cat "$gamescope_source/.pf-source-revision")" == "$GAMESCOPE_COMMIT" ]]
+[[ "$(cat "$libei_source/.pf-source-revision")" == "$LIBEI_COMMIT" ]]
 [[ "$(cat "$repo/snapshot-date.txt")" == "$SNAPSHOT_DATE" ]]
 
 parent=$(dirname "$output")

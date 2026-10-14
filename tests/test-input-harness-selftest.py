@@ -251,6 +251,7 @@ def section_asset_audit(work):
         and "snapshot.debian.org" in payload_container
         and payload_container.count(". /usr/local/libexec/require-apt-proxy.sh") == 3
         and '--aptopt=Acquire::http::Proxy' in payload_container
+        and "git clone" not in payload_container
         and "mksquashfs" in payload_builder
         and "-all-time" in payload_builder
         and "contains_product_gamescope" in payload_builder
@@ -273,6 +274,14 @@ def section_asset_audit(work):
     require(
         '--build-arg PF_APT_PROXY=http://10.0.32.86:3142' in payload_workflow,
         "payload workflow does not pass the fleet apt-cacher-ng endpoint",
+    )
+    require(
+        '--build-context sdl-src="$RUNNER_TEMP/payload-contexts/sdl"' in payload_workflow
+        and '--build-context gamescope-src="$RUNNER_TEMP/payload-contexts/gamescope"'
+        in payload_workflow
+        and '--build-context libei-src="$RUNNER_TEMP/payload-contexts/libei"'
+        in payload_workflow,
+        "payload workflow does not stage pinned source contexts outside BuildKit RUN",
     )
     with open(os.path.join(HARNESS, "run-guest.sh"), "r", encoding="utf-8") as handle:
         guest_runner = handle.read()

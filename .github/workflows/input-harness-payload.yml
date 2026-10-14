@@ -30,6 +30,31 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Verify the runner's approved insecure-registry builder
         run: docker buildx inspect pf-insecure --bootstrap
+      - name: Stage pinned source contexts outside BuildKit
+        run: |
+          set -euo pipefail
+          source tests/input-harness/guest-payload.pins
+          checkouts="$RUNNER_TEMP/payload-checkouts"
+          contexts="$RUNNER_TEMP/payload-contexts"
+          test ! -e "$checkouts"
+          test ! -e "$contexts"
+          mkdir "$checkouts" "$contexts"
+          stage_source() {
+            name=$1
+            url=$2
+            commit=$3
+            checkout="$checkouts/$name"
+            context="$contexts/$name"
+            git clone --filter=blob:none --no-checkout "$url" "$checkout"
+            git -C "$checkout" checkout --detach "$commit"
+            test "$(git -C "$checkout" rev-parse HEAD)" = "$commit"
+            mkdir "$context"
+            git -C "$checkout" archive --format=tar "$commit" | tar -xf - -C "$context"
+            printf '%s\n' "$commit" > "$context/.pf-source-revision"
+          }
+          stage_source sdl "$SDL_URL" "$SDL_COMMIT"
+          stage_source gamescope "$GAMESCOPE_URL" "$GAMESCOPE_COMMIT"
+          stage_source libei "$LIBEI_URL" "$LIBEI_COMMIT"
       - name: Build reproducible arm64 attachment
         timeout-minutes: 40
         run: |
@@ -39,6 +64,9 @@ jobs:
           docker buildx build --builder pf-insecure --pull=false --progress=plain \
             --build-arg PF_BUILD_IMAGE="$PF_BUILD_IMAGE" \
             --build-arg PF_APT_PROXY=http://10.0.32.86:3142 \
+            --build-context sdl-src="$RUNNER_TEMP/payload-contexts/sdl" \
+            --build-context gamescope-src="$RUNNER_TEMP/payload-contexts/gamescope" \
+            --build-context libei-src="$RUNNER_TEMP/payload-contexts/libei" \
             --label pf.bead=tsp-ihne1.56.4 \
             -f tests/input-harness/Containerfile.guest-payload \
             --output "type=local,dest=$out" . 2>&1 | tee "$RUNNER_TEMP/payload-build.log"
@@ -59,3 +87,12 @@ jobs:
             ${{ runner.temp }}/input-harness-payload/manifest.json
           if-no-files-found: error
           retention-days: 7
+      - name: Remove staged source contexts
+        if: always()
+        run: |
+          for path in "$RUNNER_TEMP/payload-checkouts" "$RUNNER_TEMP/payload-contexts"; do
+            if test -d "$path"; then
+              find "$path" -mindepth 1 -delete
+              rmdir "$path"
+            fi
+          done

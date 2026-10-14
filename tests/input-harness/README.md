@@ -76,8 +76,10 @@ payload size and digest.
 The required `PF_APT_PROXY` build argument routes each producer apt invocation
 through the fleet apt-cacher-ng because BuildKit RUN steps have no DNS. A
 missing or non-HTTP value is refused before apt starts; mmdebstrap still
-verifies the snapshot's signed package metadata. The output is test-only and
-is never installed into a product rootfs.
+verifies the snapshot's signed package metadata. External source commits are
+checked out and archived on the runner, SHA-verified there, then supplied as
+named read-only build contexts; no BuildKit RUN step performs a DNS lookup.
+The output is test-only and is never installed into a product rootfs.
 
 ## Clients and expected behaviour
 
