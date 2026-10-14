@@ -56,6 +56,7 @@
 # can point at a locally-built tag; CI/`pf build` pass the pinned digest.
 ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
 ARG PF_CURSOR_TOOLS_IMAGE=10.0.32.86:5555/pocketforge/ci-tools@sha256:2ff536627228c90e5c32b7d6345b21600a38a17481c075b41683db47ead3e862
+ARG PF_CURSOR_TOOLS_RECIPE_SHA=22b8c9feb04565c9ee84858687ed30455da7ed58
 
 # Declared before the first FROM (global pre-FROM scope) SOLELY so the gpu-um-mesa
 # selector stage below can interpolate it into a `FROM gpu-um-mesa-${PF_GPU_MODEL}`
@@ -2129,6 +2130,7 @@ FROM gamescope-${PF_GAMESCOPE_MODE} AS gamescope
 # source context. A second build is compared before either output can ship.
 FROM ${PF_CURSOR_TOOLS_IMAGE} AS cursor-theme
 ARG PF_CURSOR_TOOLS_IMAGE
+ARG PF_CURSOR_TOOLS_RECIPE_SHA
 ARG PF_CURSOR_THEME_SHA
 COPY --from=cursor-theme-src . /work/cursor-theme
 COPY --chmod=0444 --from=image-src scripts/verify-cursor-theme.py /work/verify-cursor-theme.py
@@ -2142,8 +2144,8 @@ mkdir -p /tmp/out/usr/share/icons /tmp/out/usr/share/licenses/pocketforge-cursor
 cp -a /tmp/build-a/pocketforge-light /tmp/build-a/pocketforge-dark /tmp/out/usr/share/icons/
 install -m 0444 /work/cursor-theme/LICENSE /tmp/out/usr/share/licenses/pocketforge-cursor-theme/LICENSE
 install -m 0444 /work/cursor-theme/ATTRIBUTION.md /tmp/out/usr/share/licenses/pocketforge-cursor-theme/ATTRIBUTION.md
-printf 'source_sha=%s\ntools_image=%s\n' \
-  "${PF_CURSOR_THEME_SHA}" "${PF_CURSOR_TOOLS_IMAGE}" \
+printf 'source_sha=%s\ntools_image=%s\ntools_recipe_sha=%s\n' \
+  "${PF_CURSOR_THEME_SHA}" "${PF_CURSOR_TOOLS_IMAGE}" "${PF_CURSOR_TOOLS_RECIPE_SHA}" \
   > /tmp/out/usr/share/pocketforge/cursor-theme.provenance
 find /tmp/out -type f -exec chmod 0444 {} +
 find /tmp/out -type d -exec chmod 0555 {} +
@@ -2231,6 +2233,7 @@ ARG PF_CTS_BUNDLE_URL=
 ARG PF_CTS_BUNDLE_SHA256=
 ARG PF_CURSOR_THEME_SHA
 ARG PF_CURSOR_TOOLS_IMAGE
+ARG PF_CURSOR_TOOLS_RECIPE_SHA
 ARG PF_ODYSSEY_CAPTURE=
 ARG APT_SNAPSHOT_DATE
 ARG SOURCE_DATE_EPOCH

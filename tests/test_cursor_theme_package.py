@@ -107,10 +107,7 @@ def fixture(root: Path) -> None:
     (license_dir / "ATTRIBUTION.md").write_text("phisch/phinger-cursors d8196cd\n")
     provenance = root / "usr/share/pocketforge/cursor-theme.provenance"
     provenance.parent.mkdir(parents=True)
-    provenance.write_text(
-        "source_sha=dbeaa3c4ac5726e0dd81efd6846ca67a7c6a74d6\n"
-        "tools_image=registry.invalid/ci-tools@sha256:" + "1" * 64 + "\n"
-    )
+    provenance.write_text("source_sha=dbeaa3c4ac5726e0dd81efd6846ca67a7c6a74d6\n")
     for path in sorted(root.rglob("*"), reverse=True):
         if path.is_symlink():
             continue
@@ -127,8 +124,7 @@ class CursorPackage(unittest.TestCase):
         text = (ROOT / "build/Dockerfile.pf").read_text()
         digest = "10.0.32.86:5555/pocketforge/ci-tools@sha256:2ff536627228c90e5c32b7d6345b21600a38a17481c075b41683db47ead3e862"
         self.assertIn(f"ARG PF_CURSOR_TOOLS_IMAGE={digest}", text)
-        self.assertNotIn("PF_CURSOR_TOOLS_RECIPE_SHA", text)
-        self.assertNotIn("tools_recipe_sha=", text)
+        self.assertIn("ARG PF_CURSOR_TOOLS_RECIPE_SHA=22b8c9feb04565c9ee84858687ed30455da7ed58", text)
         start = text.index("FROM ${PF_CURSOR_TOOLS_IMAGE} AS cursor-theme")
         end = text.index("\nFROM ", start + 6)
         stage = text[start:end]
