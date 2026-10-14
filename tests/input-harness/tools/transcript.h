@@ -20,7 +20,7 @@ extern "C" {
 #endif
 
 /* Open the transcript and emit the start event (always line 1).
- * backend: "wayland" | "x11" | "headless". display: WAYLAND_DISPLAY or
+ * backend: "wayland" | "x11" | "headless" | "drm". display: WAYLAND_DISPLAY or
  * DISPLAY value the client connected to. */
 int pf_tx_begin(const char *client, const char *backend,
                 const char *display, int argc, char **argv);

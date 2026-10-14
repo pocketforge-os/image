@@ -33,8 +33,9 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else "/out"
 TX_DIR = os.path.join(OUT, "transcripts")
 SHOT_DIR = os.path.join(OUT, "screenshots")
 SESSION_TX = os.path.join(OUT, "session.jsonl")
-BIN = "/harness/bin"
-PRELOAD = "/harness/lib/libpf-transcript-preload.so"
+HARNESS_ROOT = os.environ.get("PF_HARNESS_ROOT", "/harness")
+BIN = os.path.join(HARNESS_ROOT, "bin")
+PRELOAD = os.path.join(HARNESS_ROOT, "lib", "libpf-transcript-preload.so")
 MANGO_FIFO = os.environ.get("PF_MANGO_FIFO", "/run/pf-mango.fifo")
 XDG = os.environ.get("XDG_RUNTIME_DIR", "/run/xdg")
 
@@ -187,6 +188,39 @@ class PrivateInput:
                 name=f"PocketForge Private {kind.title()}",
                 event_source="private-seqpacket")
         log(f"private {kind} event stream ready")
+
+    def cmd(self, line: str) -> None:
+        self.proc.stdin.write(line + "\n")
+        self.proc.stdin.flush()
+
+    def destroy(self) -> None:
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=5)
+
+
+class KernelInput:
+    """Guest-only uinput source; fake-input performs the binding domain guard."""
+    def __init__(self, kind: str, sw: SessionWriter):
+        self.kind = kind
+        self.proc = subprocess.Popen(
+            [os.path.join(BIN, "fake-input"), kind],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        )
+        line = self.proc.stdout.readline().strip()
+        info = json.loads(line)
+        if info.get("kind") != kind or not info.get("event_node"):
+            raise RuntimeError(f"fake-input {kind} reported bad device line: {line}")
+        self.node = info["event_node"]
+        sw.emit("device_created", kind=kind, name=info["name"],
+                event_node=self.node, event_source="guest-kernel-uinput")
+        log(f"guest kernel {kind} ready at {self.node}")
 
     def cmd(self, line: str) -> None:
         self.proc.stdin.write(line + "\n")
@@ -365,17 +399,20 @@ def main() -> int:
         print(f"FAIL: input-harness reason=output_not_empty hint={exc}", flush=True)
         return 1
     sw = SessionWriter(SESSION_TX)
-    sw.emit("start", pid=os.getpid(), argv=sys.argv, backend="headless",
+    sw.emit("start", pid=os.getpid(), argv=sys.argv,
+            backend=os.environ.get("PF_COMPOSITOR_BACKEND", "headless"),
             display=os.environ.get("WAYLAND_DISPLAY", ""))
 
-    inputs: list[PrivateInput] = []
+    inputs: list[PrivateInput | KernelInput] = []
     event_readers: list[socket.socket] = []
     bridge = None
     rc = 1
     try:
         wl_name = configure_wayland_display(os.environ)
         wait_for_socket(wl_name, 60)
-        eis_path = wait_for_socket(f"{wl_name}-ei", 60)
+        eis_path = None
+        if os.environ.get("PF_INPUT_SOURCE") != "guest-kernel":
+            eis_path = wait_for_socket(f"{wl_name}-ei", 60)
         x_display = os.environ.get("DISPLAY", "")
         if not x_display:
             raise RuntimeError("gamescope did not export DISPLAY")
@@ -383,47 +420,52 @@ def main() -> int:
         sw.emit("compositor_ready", pid=os.getppid(),
                 wayland_display=wl_name,
                 x_display=x_display,
-                backend="headless")
+                backend=os.environ.get("PF_COMPOSITOR_BACKEND", "headless"))
         log(f"compositor ready: wayland={wl_name} x={os.environ.get('DISPLAY')}")
 
-        kbd_reader, kbd_writer = socket.socketpair(
-            socket.AF_UNIX, socket.SOCK_SEQPACKET)
-        pointer_reader, pointer_writer = socket.socketpair(
-            socket.AF_UNIX, socket.SOCK_SEQPACKET)
-        event_readers = [kbd_reader, pointer_reader]
-        kbd = PrivateInput("keyboard", kbd_writer, sw)
-        inputs.append(kbd)
-        pointer = PrivateInput("pointer", pointer_writer, sw)
-        inputs.append(pointer)
+        if os.environ.get("PF_INPUT_SOURCE") == "guest-kernel":
+            kbd = KernelInput("keyboard", sw)
+            pointer = KernelInput("mouse", sw)
+            inputs.extend([kbd, pointer])
+        else:
+            kbd_reader, kbd_writer = socket.socketpair(
+                socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            pointer_reader, pointer_writer = socket.socketpair(
+                socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            event_readers = [kbd_reader, pointer_reader]
+            kbd = PrivateInput("keyboard", kbd_writer, sw)
+            inputs.append(kbd)
+            pointer = PrivateInput("pointer", pointer_writer, sw)
+            inputs.append(pointer)
 
-        try:
-            bridge = subprocess.Popen(
-                [os.path.join(BIN, "eis-bridge"), eis_path,
-                 "--keyboard-event-fd", str(kbd_reader.fileno()),
-                 "--pointer-event-fd", str(pointer_reader.fileno())],
-                stdout=subprocess.PIPE,
-                text=True,
-                pass_fds=(kbd_reader.fileno(), pointer_reader.fileno()),
-            )
-        finally:
-            for reader in event_readers:
-                reader.close()
-            event_readers = []
-        deadline = time.monotonic() + 30
-        ready = False
-        while time.monotonic() < deadline:
-            if bridge.poll() is not None:
-                raise RuntimeError(
-                    f"eis-bridge exited early rc={bridge.returncode}")
-            line = bridge.stdout.readline().strip()
-            if line == "READY":
-                ready = True
-                break
-            if line:
-                log(f"eis-bridge: {line}")
-        if not ready:
-            return fail(sw, "eis_bridge_not_ready",
-                        "libeis sender never reached emulating state")
+            try:
+                bridge = subprocess.Popen(
+                    [os.path.join(BIN, "eis-bridge"), eis_path,
+                     "--keyboard-event-fd", str(kbd_reader.fileno()),
+                     "--pointer-event-fd", str(pointer_reader.fileno())],
+                    stdout=subprocess.PIPE,
+                    text=True,
+                    pass_fds=(kbd_reader.fileno(), pointer_reader.fileno()),
+                )
+            finally:
+                for reader in event_readers:
+                    reader.close()
+                event_readers = []
+            deadline = time.monotonic() + 30
+            ready = False
+            while time.monotonic() < deadline:
+                if bridge.poll() is not None:
+                    raise RuntimeError(
+                        f"eis-bridge exited early rc={bridge.returncode}")
+                line = bridge.stdout.readline().strip()
+                if line == "READY":
+                    ready = True
+                    break
+                if line:
+                    log(f"eis-bridge: {line}")
+            if not ready:
+                return fail(sw, "eis_bridge_not_ready",
+                            "libeis sender never reached emulating state")
 
         # Xwayland creates its emulated keyboard keymap lazily on the first
         # libei key frame. Prime it with a non-text modifier before any client
@@ -461,7 +503,7 @@ def main() -> int:
     report = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "report", "report.py")
     if not os.path.exists(report):
-        report = "/harness/report/report.py"
+        report = os.path.join(HARNESS_ROOT, "report", "report.py")
     rep = subprocess.run([sys.executable, "-B", report, OUT])
     return rep.returncode
 

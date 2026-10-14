@@ -1,0 +1,55 @@
+name: input harness payload
+
+on:
+  pull_request:
+    paths:
+      - tests/input-harness/**
+      - tests/test-input-harness-selftest.py
+      - tests/test-input-harness-selftest.sh
+      - tests/uinput_inventory.py
+      - tests/uinput-inventory.txt
+      - snapshot-date.txt
+      - .github/workflows/input-harness-payload.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: input-harness-payload-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  payload:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, pf-builder-vm]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Build reproducible arm64 attachment
+        timeout-minutes: 40
+        run: |
+          set -o pipefail
+          out="$RUNNER_TEMP/input-harness-payload"
+          test ! -e "$out"
+          docker buildx build --builder default --pull=false --progress=plain \
+            --build-arg PF_APT_PROXY=http://10.0.32.86:3142 \
+            --label pf.bead=tsp-ihne1.56.4 \
+            -f tests/input-harness/Containerfile.guest-payload \
+            --output "type=local,dest=$out" . 2>&1 | tee "$RUNNER_TEMP/payload-build.log"
+          tests/input-harness/verify-guest-payload.sh \
+            --payload "$out/input-harness.squashfs" \
+            --manifest "$out/manifest.json"
+      - id: pin
+        name: Read content address
+        run: |
+          source tests/input-harness/guest-payload.lock
+          echo "sha=$PF_INPUT_HARNESS_PAYLOAD_SHA256" >> "$GITHUB_OUTPUT"
+      - name: Upload content-addressed attachment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: input-harness-${{ steps.pin.outputs.sha }}
+          path: |
+            ${{ runner.temp }}/input-harness-payload/input-harness.squashfs
+            ${{ runner.temp }}/input-harness-payload/manifest.json
+          if-no-files-found: error
+          retention-days: 7

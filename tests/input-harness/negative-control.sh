@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bracket one explicitly authorized laptop harness run with host-input checks.
+# Bracket one explicitly authorized host-side harness run with input checks.
 # This wrapper is committed before use; do not run it without input-coord's go.
 set -Eeuo pipefail
 umask 077
@@ -37,11 +37,21 @@ while [[ $# -gt 0 ]]; do
 		--timeout) limit="${2:?--timeout needs a duration}"; shift 2 ;;
 		--out) out="${2:?--out needs a directory}"; shift 2 ;;
 		--receipt) receipt="${2:?--receipt needs a file}"; shift 2 ;;
-		*) echo "usage: negative-control.sh [--timeout 50m] --out DIR --receipt FILE" >&2; exit 2 ;;
+		--runner)
+			[[ "$test_mode" == 0 ]] || {
+				echo "FAIL: input-harness-negative-control reason=runner_option_in_test_mode"
+				exit 2
+			}
+			runner="${2:?--runner needs an executable}"; shift 2 ;;
+		*) echo "usage: negative-control.sh [--timeout 50m] [--runner PATH] --out DIR --receipt FILE" >&2; exit 2 ;;
 	esac
 done
 [[ -n "$out" && -n "$receipt" ]] || {
-	echo "usage: negative-control.sh [--timeout 50m] --out DIR --receipt FILE" >&2
+	echo "usage: negative-control.sh [--timeout 50m] [--runner PATH] --out DIR --receipt FILE" >&2
+	exit 2
+}
+[[ "$runner" = /* && -f "$runner" && -x "$runner" && ! -L "$runner" ]] || {
+	echo "FAIL: input-harness-negative-control reason=invalid_runner path=$runner"
 	exit 2
 }
 

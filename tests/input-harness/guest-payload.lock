@@ -1,0 +1,6 @@
+# Generated content-addressed pins for the guest-only input harness payload.
+# Regenerate through Containerfile.guest-payload and verify both output copies
+# are byte-identical before updating these values.
+PF_INPUT_HARNESS_PAYLOAD_SHA256=a17d712f2e7f8b12f1d73e7e22285afdbd5623a4c6385246555c24e428ae3aae
+PF_INPUT_HARNESS_PAYLOAD_BYTES=203497472
+PF_INPUT_HARNESS_MANIFEST_SHA256=51c1a765b984f6e613bba0da508da2d76735b8a90f09ec55db5483ee640f5f4c

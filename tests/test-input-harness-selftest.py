@@ -177,6 +177,9 @@ def section_asset_audit(work):
         "Containerfile",
         "pins.env",
         "run.sh",
+        "run-guest.sh",
+        "build-guest-payload.sh",
+        "guest-payload.pins",
         "negative-control.sh",
         "report/report.py",
         "validate/validate_transcript.py",
@@ -206,6 +209,10 @@ def section_asset_audit(work):
         "selftest/fake_input_guard_test.c",
         "selftest/test-fake-input-guard.sh",
         "selftest/test-negative-control-wrapper.sh",
+        "selftest/test-guest-agent.py",
+        "guest/agent.py",
+        "guest/build-tools.sh",
+        "session/entry-guest.sh",
         "selftest/uinput-domain-v1.SOURCE",
         "selftest/uinput-domain-v1.tsv",
     ]
@@ -223,6 +230,37 @@ def section_asset_audit(work):
             continue
         hits = audit_file(os.path.join(HARNESS, rel))
         require(not hits, f"forbidden pattern(s) {hits} in tests/input-harness/{rel}")
+
+    with open(os.path.join(REPO, "scripts", "build-rootfs.sh"), "r", encoding="utf-8") as handle:
+        rootfs_build = handle.read()
+    require(
+        'tests/input-harness/guest/agent.py' not in rootfs_build
+        and 'tests/input-harness/run-guest.sh' not in rootfs_build
+        and 'pf-input-harness-agent.service' not in rootfs_build,
+        "product rootfs unexpectedly packages the test-only harness",
+    )
+    payload_builder_path = os.path.join(HARNESS, "build-guest-payload.sh")
+    with open(payload_builder_path, "r", encoding="utf-8") as handle:
+        payload_builder = handle.read()
+    with open(os.path.join(HARNESS, "Containerfile.guest-payload"), "r", encoding="utf-8") as handle:
+        payload_container = handle.read()
+    require(
+        "mmdebstrap" in payload_container
+        and "snapshot.debian.org" in payload_container
+        and "mksquashfs" in payload_builder
+        and "-all-time" in payload_builder
+        and "contains_product_gamescope" in payload_builder
+        and "gamescope must not be included" in payload_builder,
+        "guest attachment lacks pinned Bookworm/squashfs/product-gamescope exclusions",
+    )
+    with open(os.path.join(HARNESS, "run-guest.sh"), "r", encoding="utf-8") as handle:
+        guest_runner = handle.read()
+    require(
+        "reason=unsafe_uinput_domain" in guest_runner
+        and "systemd-detect-virt --container --quiet" in guest_runner
+        and "/proc/device-tree/compatible" in guest_runner,
+        "guest runner lacks the positive-identity fail-closed preflight",
+    )
 
     # Negative control for the auditor itself: injecting --privileged into
     # a copy of run.sh must be caught by the same scan.
@@ -358,8 +396,11 @@ def section_asset_audit(work):
                 f"default input path {rel} references a host input device",
             )
         require(
-            '"fake-input"' not in driver_text and "udev-shim.sh" not in driver_text,
-            "driver.py still launches the kernel-device path",
+            'os.environ.get("PF_INPUT_SOURCE") == "guest-kernel"' in driver_text
+            and 'class KernelInput:' in driver_text
+            and '"fake-input"' in driver_text
+            and "udev-shim.sh" not in driver_text,
+            "driver.py does not confine the kernel-device path to the explicit guest mode",
         )
         with open(os.path.join(HARNESS, "Containerfile"), "r", encoding="utf-8") as handle:
             container_text = handle.read()
@@ -431,12 +472,13 @@ def section_asset_audit(work):
 
     # A socket alone is insufficient: gamescope only manages native
     # xdg-shell surfaces when its Wayland exposure path is enabled.
-    entry_path = os.path.join(HARNESS, "session", "entry.sh")
+    entry_path = os.path.join(HARNESS, "session", "entry-guest.sh")
     with open(entry_path, "r", encoding="utf-8") as handle:
         entry_source = handle.read()
     require(
-        "gamescope --backend headless --expose-wayland" in entry_source,
-        "headless gamescope launch does not enable managed Wayland clients",
+        "/usr/bin/gamescope --backend drm --expose-wayland" in entry_source
+        and "--backend headless" not in entry_source,
+        "guest real-kernel tier must use product gamescope's libinput-capable DRM session",
     )
 
     with open(os.path.join(HARNESS, "session", "driver.py"), "r", encoding="utf-8") as handle:

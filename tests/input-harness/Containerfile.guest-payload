@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1.6
+ARG PF_BUILD_IMAGE=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
+FROM ${PF_BUILD_IMAGE} AS builder
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      dpkg-dev fakechroot fakeroot libfakechroot:arm64 libfakeroot:arm64 \
+ && find /var/lib/apt/lists -mindepth 1 -delete
+
+FROM builder AS sources
+COPY tests/input-harness/guest-payload.pins /work/guest-payload.pins
+RUN set -eux; \
+    . /work/guest-payload.pins; \
+    git clone --filter=blob:none "${SDL_URL}" /work/sdl; \
+    git -C /work/sdl checkout "${SDL_COMMIT}"; \
+    git clone --filter=blob:none "${GAMESCOPE_URL}" /work/gamescope; \
+    git -C /work/gamescope checkout "${GAMESCOPE_COMMIT}"; \
+    git clone --filter=blob:none "${LIBEI_URL}" /work/libei; \
+    git -C /work/libei checkout "${LIBEI_COMMIT}"
+
+FROM builder AS sysroots
+ARG SNAPSHOT_DATE=20260601T000000Z
+ARG PF_APT_PROXY=
+RUN set -eux; \
+    mirror="http://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE}/"; \
+    set --; \
+    if [ -n "${PF_APT_PROXY}" ]; then \
+      set -- "--aptopt=Acquire::http::Proxy \"${PF_APT_PROXY}\""; \
+    fi; \
+    build_packages="build-essential,cmake,meson,ninja-build,pkg-config,python3,python3-attr,python3-jinja2,libxml2-utils,wayland-protocols,libwayland-dev,libgtk-4-dev,libgtk-3-dev,qt6-base-dev,libsdl2-dev,libx11-dev,libxkbcommon-dev"; \
+    runtime_packages="python3,libwayland-client0,libwayland-cursor0,libgtk-4-1,libgtk-3-0,libqt6widgets6,qt6-wayland,libsdl2-2.0-0,libx11-6,libxkbcommon0,xwayland,x11-xkb-utils,xkb-data,fontconfig,fonts-dejavu-core"; \
+    mmdebstrap "$@" --mode=fakechroot --architectures=arm64 --variant=minbase \
+      --include="$build_packages" --aptopt='Acquire::Check-Valid-Until "false"' \
+      --aptopt='Acquire::Retries "5"' bookworm /work/build.tar "$mirror"; \
+    mmdebstrap "$@" --mode=fakechroot --architectures=arm64 --variant=minbase \
+      --include="$runtime_packages" --aptopt='Acquire::Check-Valid-Until "false"' \
+      --aptopt='Acquire::Retries "5"' bookworm /work/runtime.tar "$mirror"
+
+FROM builder AS payload-tools
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends squashfs-tools \
+ && find /var/lib/apt/lists -mindepth 1 -delete
+
+FROM payload-tools AS payload
+COPY . /work/image
+COPY --from=sources /work/sdl /work/sdl
+COPY --from=sources /work/gamescope /work/gamescope
+COPY --from=sources /work/libei /work/libei
+COPY --from=sysroots /work/build.tar /work/build.tar
+COPY --from=sysroots /work/runtime.tar /work/runtime.tar
+WORKDIR /work
+RUN set -eux; \
+    /work/image/tests/input-harness/build-guest-payload.sh \
+      --repo /work/image --sdl-source /work/sdl \
+      --gamescope-source /work/gamescope --libei-source /work/libei \
+      --build-tar /work/build.tar --runtime-tar /work/runtime.tar \
+      --output /work/result
+
+FROM scratch
+COPY --from=payload /work/result/ /
