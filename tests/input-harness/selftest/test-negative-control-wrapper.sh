@@ -99,6 +99,46 @@ check_runner_allowlist arbitrary "$tmp/arbitrary-runner" 1
 check_runner_allowlist symlink "$tmp/run-link" 1
 check_runner_allowlist traversal "$root/selftest/../run.sh" 1
 
+pfvd_checkout="$tmp/pfvd"
+mkdir -p "$pfvd_checkout/ci"
+git init -q "$pfvd_checkout"
+cat >"$pfvd_checkout/ci/run-input-harness-e2e.sh" <<'HOST_DRIVER'
+#!/bin/sh
+set -eu
+[ "$1" = --out ]
+mkdir -p "$2"
+printf '%s\n' 'host-dispatch=PASS' >"$2/host-dispatch.txt"
+HOST_DRIVER
+chmod +x "$pfvd_checkout/ci/run-input-harness-e2e.sh"
+git -C "$pfvd_checkout" add ci/run-input-harness-e2e.sh
+git -C "$pfvd_checkout" -c user.name=test -c user.email=test@example.invalid \
+  commit -q -m fixture
+pfvd_commit="$(git -C "$pfvd_checkout" rev-parse HEAD)"
+PF_INPUT_HARNESS_PFVD_ROOT="$pfvd_checkout" \
+  PF_INPUT_HARNESS_PFVD_COMMIT="$pfvd_commit" \
+  "$root/run-guest.sh" --out "$tmp/host-out"
+grep -Fqx 'host-dispatch=PASS' "$tmp/host-out/host-dispatch.txt"
+set +e
+PF_INPUT_HARNESS_PFVD_ROOT="$pfvd_checkout" \
+  PF_INPUT_HARNESS_PFVD_COMMIT=0000000000000000000000000000000000000000 \
+  "$root/run-guest.sh" --out "$tmp/host-mismatch" \
+  >"$tmp/host-mismatch.stdout" 2>"$tmp/host-mismatch.stderr"
+host_mismatch_rc=$?
+set -e
+[[ $host_mismatch_rc -ne 0 ]]
+grep -Fq 'reason=pfvd_commit_mismatch' "$tmp/host-mismatch.stdout"
+mv "$pfvd_checkout/ci/run-input-harness-e2e.sh" "$tmp/original-host-driver"
+ln -s "$tmp/arbitrary-runner" "$pfvd_checkout/ci/run-input-harness-e2e.sh"
+set +e
+PF_INPUT_HARNESS_PFVD_ROOT="$pfvd_checkout" \
+  PF_INPUT_HARNESS_PFVD_COMMIT="$pfvd_commit" \
+  "$root/run-guest.sh" --out "$tmp/host-symlink" \
+  >"$tmp/host-symlink.stdout" 2>"$tmp/host-symlink.stderr"
+host_symlink_rc=$?
+set -e
+[[ $host_symlink_rc -ne 0 ]]
+grep -Fq 'reason=invalid_pfvd_driver' "$tmp/host-symlink.stdout"
+
 set +e
 PF_INPUT_DEVICES_PATH="$tmp/not-real-proc" \
   "$root/negative-control.sh" --timeout 1s --out "$tmp/override-out" \
@@ -219,4 +259,4 @@ run_case hazard_xinput host_input_journal_activity
 run_case hazard_desktop host_input_journal_activity
 run_case hazard_kernel host_input_journal_activity
 run_case clean pass
-printf '%s\n' 'negative-control-wrapper: PASS runner_allowlist=run-guest-only arbitrary=refused symlink=refused traversal=refused internal=receipted appeared=aborted timeout=receipted generic_pocketforge=info hazards=4_refused clean=passed proc_mode=0444 device_inputs=faked'
+printf '%s\n' 'negative-control-wrapper: PASS runner_allowlist=run-guest-only arbitrary=refused symlink=refused traversal=refused host_dispatch=fixed-commit mismatch=refused nested_symlink=refused internal=receipted appeared=aborted timeout=receipted generic_pocketforge=info hazards=4_refused clean=passed proc_mode=0444 device_inputs=faked'

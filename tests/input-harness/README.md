@@ -208,7 +208,9 @@ repo-wide uinput occurrence inventory with seeded red controls.
   accepts only its canonical sibling `run.sh` or `run-guest.sh`; arbitrary
   executables, symlinks and non-canonical traversal spellings fail with
   `reason=runner_not_allowlisted`. The receipt records the canonical runner
-  path and its SHA256.
+  path and its SHA256. The manual pfvd workflow enters through `run-guest.sh`,
+  which delegates only to `ci/run-input-harness-e2e.sh` in the exact committed
+  pfvd checkout; no caller-selected nested executable is accepted.
 - `--network none` at run time (build needs network; the run does not).
 - No host input passthrough: QEMU command lines must reject `input-linux`,
   `usb-host`, evdev passthrough, `/dev/uinput`, and `/dev/input/*` routes.

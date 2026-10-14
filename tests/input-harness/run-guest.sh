@@ -11,6 +11,31 @@ while [ $# -gt 0 ]; do
 done
 test -n "$out" || { echo "FAIL: input-harness reason=missing_output"; exit 2; }
 
+# The host bracket allowlists this file by its canonical path. In the manual
+# pfvd workflow it delegates only to the fixed driver in the exact checked-out
+# pfvd commit; it does not accept a caller-selected executable. The guest agent
+# does not set these variables and follows the guest-only path below.
+if [[ -n "${PF_INPUT_HARNESS_PFVD_ROOT:-}" ]]; then
+	pfvd_root="$(realpath -e -- "$PF_INPUT_HARNESS_PFVD_ROOT" 2>/dev/null || :)"
+	commit="${PF_INPUT_HARNESS_PFVD_COMMIT:-}"
+	[[ -n "$pfvd_root" && "$pfvd_root" == "$PF_INPUT_HARNESS_PFVD_ROOT" &&
+	    -d "$pfvd_root/.git" && -n "$commit" ]] || {
+		echo "FAIL: input-harness reason=invalid_pfvd_checkout"
+		exit 2
+	}
+	[[ "$(git -C "$pfvd_root" rev-parse HEAD)" == "$commit" ]] || {
+		echo "FAIL: input-harness reason=pfvd_commit_mismatch"
+		exit 2
+	}
+	driver="$pfvd_root/ci/run-input-harness-e2e.sh"
+	driver_real="$(realpath -e -- "$driver" 2>/dev/null || :)"
+	[[ "$driver_real" == "$driver" && -f "$driver" && -x "$driver" && ! -L "$driver" ]] || {
+		echo "FAIL: input-harness reason=invalid_pfvd_driver"
+		exit 2
+	}
+	exec "$driver" --out "$out"
+fi
+
 if systemd-detect-virt --container --quiet; then
 	echo "FAIL: input-harness reason=unsafe_uinput_domain domain=container"
 	exit 77
