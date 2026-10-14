@@ -141,6 +141,7 @@ jobs:
             tests/test-poolsuite-rootfs-install.sh
             tests/test-poolsuite-variant-stage.sh
             tests/test-recovery-entry.sh
+            tests/test-runtime-path-producers.sh
             tests/test-rootfs-abi-check.sh
             tests/test-rootfs-build-logs.sh
             tests/test-rootfs-bluetooth.sh

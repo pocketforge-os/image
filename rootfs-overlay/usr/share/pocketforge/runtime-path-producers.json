@@ -1,0 +1,10 @@
+{
+  "schema": "pocketforge.runtime-path-producers/v1",
+  "producers": {
+    "/run/pocketforge/prefsd.sock": {
+      "unit": "pf-prefsd.service",
+      "type": "socket"
+    }
+  },
+  "optional": []
+}

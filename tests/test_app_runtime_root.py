@@ -522,9 +522,26 @@ class RendererTest(unittest.TestCase):
 
         data = inventory()
         del data["resources"]["audio-devices"]  # type: ignore[index]
+        del data["resources"]["audio-sockets"]  # type: ignore[index]
         self.inventory.write_text(json.dumps(data), encoding="utf-8")
-        result = self.render(manifest(capabilities=("audio",)), expect=66)
-        self.assertIn("reason=required_resource_missing", result.stderr)
+        result = self.render(manifest(capabilities=("audio",)), expect=65)
+        self.assertIn("reason=policy_render_failed", result.stderr)
+        self.assertIn("expected audio-devices or audio-sockets", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_display_devices_are_confined_to_framebuffer_nodes(self) -> None:
+        data = inventory()
+        data["resources"]["display-devices"] = ["/dev/fb0"]  # type: ignore[index]
+        self.inventory.write_text(json.dumps(data), encoding="utf-8")
+        self.render(manifest())
+        policy = json.loads(self.policy_output.read_text(encoding="utf-8"))
+        self.assertEqual(policy["resources"]["display-devices"], ["/dev/fb0"])
+
+        data["resources"]["display-devices"] = ["/tmp/fb0"]  # type: ignore[index]
+        self.inventory.write_text(json.dumps(data), encoding="utf-8")
+        result = self.render(manifest(), expect=65)
+        self.assertIn("reason=platform_runtime_invalid", result.stderr)
+        self.assertIn("display-devices has forbidden path", result.stderr)
         self.assertFalse(self.output.exists())
 
     def test_missing_or_changed_artifacts_refuse_without_output(self) -> None:
