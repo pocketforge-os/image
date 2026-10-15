@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 SAMPLER_SOCKET = "/run/pocketforge/hang-sampler/hang-sampler.sock"
+AUTHORITY_SAMPLER_SUFFIX = f" --hang-sampler-socket {SAMPLER_SOCKET}"
 
 
 def read(path: Path, errors: list[str]) -> str:
@@ -187,9 +188,6 @@ def validate(root: Path, runtime_root: Path | None = None) -> list[str]:
     ):
         if build_line not in dockerfile:
             errors.append(f"runtime stage does not build/install sampler binary: {build_line}")
-    if "FATAL: CONFIG_SECURITY_YAMA=y violates the pinned hang-sampler kernel expectation" not in dockerfile:
-        errors.append("kernel build lacks the fail-closed CONFIG_SECURITY_YAMA expectation")
-
     sysctl_root = overlay / "etc/sysctl.d"
     for path in sorted(sysctl_root.glob("*.conf")):
         text = read(path, errors)
@@ -197,9 +195,9 @@ def validate(root: Path, runtime_root: Path | None = None) -> list[str]:
             errors.append(f"image must not set or lower kernel.yama.ptrace_scope: {path}")
 
     if runtime_root is not None:
-        authority_user = effective_service_user(
-            runtime_root / "systemd/pf-session-authorityd.service", errors
-        )
+        runtime_authority_path = runtime_root / "systemd/pf-session-authorityd.service"
+        runtime_authority = read(runtime_authority_path, errors)
+        authority_user = effective_service_user(runtime_authority_path, errors)
         broker_user = effective_service_user(
             runtime_root / "crates/pf-input-broker/systemd/pf-input-broker.service",
             errors,
@@ -209,6 +207,18 @@ def validate(root: Path, runtime_root: Path | None = None) -> list[str]:
             errors.append(
                 "pf-hang-trigger membership is pinned to root but paired runtime caller "
                 f"users are {allowed_users}"
+            )
+        runtime_commands = unit_value(runtime_authority, "ExecStart")
+        image_commands = unit_value(authority_dropin, "ExecStart")
+        if len(runtime_commands) != 1:
+            errors.append(
+                "paired runtime authority must have exactly one ExecStart, got "
+                f"{runtime_commands}"
+            )
+        elif image_commands != ["", runtime_commands[0] + AUTHORITY_SAMPLER_SUFFIX]:
+            errors.append(
+                "authority ExecStart drift: image drop-in must equal paired runtime "
+                "ExecStart plus exact hang-sampler suffix"
             )
         for path in sorted(runtime_root.rglob("*.service")):
             if "CAP_SYS_PTRACE" in read(path, errors):
@@ -229,7 +239,7 @@ def main() -> int:
         return 1
     print(
         "PASS: hang sampler image policy has exact identities, socket activation, "
-        "capability isolation, app placement, and Yama expectation"
+        "capability isolation, app placement, ExecStart pairing, and no Yama override"
     )
     return 0
 

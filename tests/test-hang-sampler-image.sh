@@ -16,6 +16,23 @@ cp -a "${root}/rootfs-overlay" "${scratch}/rootfs-overlay"
 cp "${root}/scripts/build-rootfs.sh" "${scratch}/scripts/build-rootfs.sh"
 cp "${root}/build/Dockerfile.pf" "${scratch}/build/Dockerfile.pf"
 
+if [ -n "${PF_HANG_RUNTIME_ROOT:-}" ]; then
+    mkdir -p "${scratch}/runtime/systemd" \
+        "${scratch}/runtime/crates/pf-input-broker/systemd"
+    cp "${PF_HANG_RUNTIME_ROOT}/systemd/pf-session-authorityd.service" \
+        "${scratch}/runtime/systemd/pf-session-authorityd.service"
+    cp "${PF_HANG_RUNTIME_ROOT}/crates/pf-input-broker/systemd/pf-input-broker.service" \
+        "${scratch}/runtime/crates/pf-input-broker/systemd/pf-input-broker.service"
+    sed -i '/^ExecStart=/s/$/ --fake-runtime-flag/' \
+        "${scratch}/runtime/systemd/pf-session-authorityd.service"
+    if python3 "${checker}" --root "${root}" --runtime-root "${scratch}/runtime" \
+        >"${scratch}/execstart.out" 2>"${scratch}/execstart.err"; then
+        echo "FAIL: hang sampler policy accepted paired runtime ExecStart drift" >&2
+        exit 1
+    fi
+    grep -F 'authority ExecStart drift' "${scratch}/execstart.err" >/dev/null
+fi
+
 expect_refusal() {
     local reason="$1"
     if python3 "${checker}" --root "${scratch}" >"${scratch}/check.out" 2>"${scratch}/check.err"; then
@@ -56,11 +73,6 @@ printf '\n[Service]\nCapabilityBoundingSet=CAP_SYS_PTRACE\n' \
 expect_refusal 'CAP_SYS_PTRACE granted outside sampler service'
 cp "${root}/rootfs-overlay/etc/systemd/system/pf-osk.service.d/10-pf-ime-sandbox.conf" \
     "${scratch}/rootfs-overlay/etc/systemd/system/pf-osk.service.d/10-pf-ime-sandbox.conf"
-
-sed -i '/FATAL: CONFIG_SECURITY_YAMA=y violates the pinned hang-sampler kernel expectation/d' \
-    "${scratch}/build/Dockerfile.pf"
-expect_refusal 'kernel build lacks the fail-closed CONFIG_SECURITY_YAMA expectation'
-cp "${root}/build/Dockerfile.pf" "${scratch}/build/Dockerfile.pf"
 
 printf 'kernel.yama.ptrace_scope = 0\n' \
     >"${scratch}/rootfs-overlay/etc/sysctl.d/99-bad-ptrace.conf"

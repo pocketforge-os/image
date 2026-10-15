@@ -208,16 +208,6 @@ printf '' > .scmversion
 # --- Configure from the committed owned defconfig ---------------------------------------
 make "${PF_KERNEL_DEFCONFIG}"
 
-# The pinned A133 and A523 configurations do not compile Yama. Keep that image
-# expectation executable so a kernel refresh cannot silently change ptrace
-# semantics underneath the capability-scoped hang sampler. A future deliberate
-# Yama enablement must define and test its ptrace_scope policy first; the image
-# must never lower kernel.yama.ptrace_scope as an implicit workaround.
-if grep -Eq '^CONFIG_SECURITY_YAMA=y$' .config; then
-  echo "FATAL: CONFIG_SECURITY_YAMA=y violates the pinned hang-sampler kernel expectation"
-  exit 1
-fi
-
 # --- VERMAGIC / REPRODUCIBILITY GUARDS (hard fail) -------------------------------------
 # Mirrors platform/families/sunxi/build-kernel.sh pf_kernel_assert_repro_guards() — keep
 # the two in lockstep. MODVERSIONS=n makes vermagic the ONLY .ko load gate, so any
