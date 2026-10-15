@@ -22,7 +22,7 @@ containerfile="${fixtures}/Containerfile"
 ephemeral_marker=/etc/pocketforge/ephemeral-runner.conf
 run_label_key=org.pocketforge.session-authority-run
 
-runtime_sha=511109df552a97b5a5c28e5564eba71d3f8999e2
+runtime_sha=0b36a9e880d7294677e899b2f6db03262cdc7774
 runtime_repository=https://github.com/pocketforge-os/runtime.git
 app_unit_sha256=dc0931940164e368766ea9d6d5d1333354691f08390d7ea34678b6c6e9f8d5e3
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit

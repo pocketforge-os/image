@@ -16,13 +16,13 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# The paired runtime adds the one app capability-policy compiler; the paired
-# launcher vendors that exact generation. The image guard rejects any crossed
-# or preceding source generation.
-expected_runtime=31eaa601b57464349e04fcbcb235f5537bf1fcca
-expected_launcher=55acd7fc0afe338899b283ac774023ad89662d15
-prior_runtime=9e48779641953a846d7010479956478a537e9e26
-prior_launcher=8629eebc508638fd78f087727aca475ca6848733
+# The paired runtime fixes the resident-monitor presentation deadline contract;
+# the paired launcher vendors that exact generation. The image guard rejects
+# any crossed or preceding source generation.
+expected_runtime=0b36a9e880d7294677e899b2f6db03262cdc7774
+expected_launcher=6de0ad32af207ea208ccb29a42b3f3ae4e8d2777
+prior_runtime=31eaa601b57464349e04fcbcb235f5537bf1fcca
+prior_launcher=55acd7fc0afe338899b283ac774023ad89662d15
 older_runtime=de890215bd97eb0b5b63287a51e8b9a2e18d1125
 older_launcher=95302865bc584ce5e1c96e09df387aa5f58455f6
 old_launcher=73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5
@@ -57,9 +57,9 @@ reject_guard_pair() {
         exit 1
     fi
 }
-# The production guards accept exactly the compatible target pair. Keeping both
-# preceding identities together is still invalid because their source trees
-# drift at pf-session-authority; crossing either generation is invalid too.
+# The production guards accept exactly the target pair. The preceding matched
+# pair is still invalid because it lacks the resident-monitor deadline fix;
+# crossing either generation is invalid because pf-session-authority drifts.
 new_guard_accepts "$expected_runtime" "$expected_launcher"
 reject_guard_pair "$prior_runtime" "$prior_launcher"
 reject_guard_pair "$expected_runtime" "$old_launcher"
