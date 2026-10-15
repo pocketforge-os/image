@@ -72,7 +72,7 @@ for binary in gamescope systemctl; do
     printf '#!/bin/sh\nexit 0\n' > "${verify_root}/usr/bin/${binary}"
     chmod 0755 "${verify_root}/usr/bin/${binary}"
 done
-for service in pf-input-broker.service pf-open-gpu-gate.service pf-prefsd.service pocketforge-boot-animator.service \
+for service in pf-input-broker.service pf-kbd-layout-env.service pf-open-gpu-gate.service pf-prefsd.service pocketforge-boot-animator.service \
     pf-shell-selected.service systemd-udev-settle.service; do
     printf '[Unit]\nDescription=fixture\n[Service]\nType=oneshot\nExecStart=/usr/bin/systemctl\n' \
         > "${unit_root}/${service}"

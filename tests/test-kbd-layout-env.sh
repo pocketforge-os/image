@@ -16,6 +16,8 @@ set -euo pipefail
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GENERATOR="${SRC_DIR}/rootfs-overlay/usr/lib/pocketforge/kbd-layout-env"
 UNIT="${SRC_DIR}/rootfs-overlay/etc/systemd/system/pf-kbd-layout-env.service"
+GAMESCOPE_UNIT="${SRC_DIR}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope.service"
+FCITX_DROPIN="${SRC_DIR}/rootfs-overlay/etc/systemd/system/pf-fcitx5.service.d/10-pf-ime-sandbox.conf"
 
 SCRATCH="$(mktemp -d "${RUNNER_TEMP:-/tmp}/kbd-layout-env.XXXXXX")"
 cleanup() {
@@ -78,6 +80,15 @@ env_value() {
 fail() {
     echo "FAIL: test-kbd-layout-env reason=$1 hint=$2"
     exit 1
+}
+
+consumer_has_layout_env() {
+    local consumer=$1
+    grep -Eq '^Requires=(.*[[:space:]])?pf-kbd-layout-env\.service([[:space:]].*)?$' \
+        "${consumer}" \
+        && grep -Eq '^After=(.*[[:space:]])?pf-kbd-layout-env\.service([[:space:]].*)?$' \
+            "${consumer}" \
+        && grep -Fxq 'EnvironmentFile=/run/pocketforge/kbd-layout.env' "${consumer}"
 }
 
 # --- 1. no store, no seed: the schema default renders -------------------------
@@ -191,6 +202,23 @@ grep -q '^ExecStart=/usr/lib/pocketforge/kbd-layout-env$' "${UNIT}" \
     || fail unit_execstart "ExecStart must match the installed generator path"
 grep -q '^Before=pf-shell-selected.service$' "${UNIT}" \
     || fail unit_before "session units must be able to order after the generator"
+for consumer in "${GAMESCOPE_UNIT}" "${FCITX_DROPIN}"; do
+    consumer_has_layout_env "${consumer}" \
+        || fail consumer_wiring "${consumer} must require/order after the generator and load its EnvironmentFile"
+done
+# Negative controls prove the contract rejects either missing ordering or a
+# missing environment import rather than merely accepting the production text.
+cp "${GAMESCOPE_UNIT}" "${SCRATCH}/consumer-missing-after.service"
+sed -i 's/ pf-kbd-layout-env\.service//' "${SCRATCH}/consumer-missing-after.service"
+if consumer_has_layout_env "${SCRATCH}/consumer-missing-after.service"; then
+    fail negative_consumer_after "consumer without generator ordering passed"
+fi
+cp "${GAMESCOPE_UNIT}" "${SCRATCH}/consumer-missing-env.service"
+sed -i '\|^EnvironmentFile=/run/pocketforge/kbd-layout.env$|d' \
+    "${SCRATCH}/consumer-missing-env.service"
+if consumer_has_layout_env "${SCRATCH}/consumer-missing-env.service"; then
+    fail negative_consumer_env "consumer without EnvironmentFile passed"
+fi
 # No install-target cycle: multi-user.target must not appear in After=.
 if grep '^After=' "${UNIT}" | grep -q 'multi-user.target'; then
     fail unit_cycle "install target must not appear in After="
