@@ -23,6 +23,9 @@ shell_fixture_verifier="${root}/tests/verify-session-authority-shell-fixture.py"
 app_fixture_verifier="${root}/tests/verify-session-authority-app-fixture.py"
 app_dropin_verifier="${root}/tests/verify-session-authority-app-dropins.py"
 app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"
+platform_renderer="${root}/scripts/render-platform-capabilities.py"
+platform_descriptor="${root}/tests/session-authority-systemd/capabilities.toml"
+handwritten_platform="${root}/tests/session-authority-systemd/platform-capabilities.toml"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
 fake_root="${tmp}/host"
 fake_bin="${fake_root}/.test-bin"
@@ -122,6 +125,39 @@ PY
             "${recipe}"
 }
 
+verify_platform_policy_producer_fixture() {
+    local test_harness="$1"
+
+    [ ! -e "${handwritten_platform}" ] \
+        && grep -Fq 'platform_renderer="${root}/scripts/render-platform-capabilities.py"' \
+            "${test_harness}" \
+        && grep -Fq 'PF_APP_RUNTIME_FAMILY=pocketforge/a133-powervr' "${test_harness}" \
+        && grep -Fq 'PF_APP_CAPABILITIES=' "${test_harness}" \
+        && grep -Fq '"${platform_renderer}" --soc sun50iw10p1 --gpu-model open' \
+            "${test_harness}" \
+        && grep -Fq -- '--gamescope-mode g1' "${test_harness}" \
+        && grep -Fq -- '--runtime-source "${runtime}"' "${test_harness}" \
+        && grep -Fq -- '--descriptor "${fixtures}/capabilities.toml"' "${test_harness}" \
+        && grep -Fq -- '--output "${context}/platform-capabilities.toml"' "${test_harness}" \
+        && ! grep -Fq '"${fixtures}/platform-capabilities.toml"' "${test_harness}" \
+        && python3 - "${platform_descriptor}" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+descriptor = tomllib.loads(Path(sys.argv[1]).read_text())
+primary = [screen for screen in descriptor.get("screens", []) if screen.get("role") == "primary"]
+valid = (
+    descriptor.get("schema_version") in (2, 3)
+    and set(descriptor.get("memory", {})) >= {"physical_mib", "app_budget_mib"}
+    and len(primary) == 1
+    and set(primary[0].get("render_canvas", {})) == {"w", "h"}
+    and bool(descriptor.get("inputs"))
+)
+raise SystemExit(0 if valid else 1)
+PY
+}
+
 # pf-app@ now consumes the compositor session environment and socket. Exercise
 # the real target + publisher bytes around a fake socket-owning Gamescope, and
 # prove that dropping the publisher readiness edge is rejected.
@@ -157,6 +193,20 @@ Path(sys.argv[2]).write_text(json.dumps(inventory))
 PY
 if verify_app_policy_inventory_fixture "${tmp}/incomplete-resources.json"; then
     echo 'session-authority systemd-safety: FAIL: incomplete compositor inventory passed' >&2
+    exit 1
+fi
+
+# The systemd integration fixture must consume the same image-owned platform
+# contract producer as real apps. A hand-written schema-1 contract can drift
+# past required policy fields such as the production Landlock declaration.
+verify_platform_policy_producer_fixture "${harness}" || {
+    echo 'session-authority systemd-safety: FAIL: platform policy bypasses the image producer' >&2
+    exit 1
+}
+sed 's/--gamescope-mode g1/--gamescope-mode not-shipped/' \
+    "${harness}" >"${tmp}/wrong-session-platform-harness"
+if verify_platform_policy_producer_fixture "${tmp}/wrong-session-platform-harness"; then
+    echo 'session-authority systemd-safety: FAIL: non-g1 platform producer passed' >&2
     exit 1
 fi
 
