@@ -24,6 +24,7 @@ app_fixture_verifier="${root}/tests/verify-session-authority-app-fixture.py"
 app_dropin_verifier="${root}/tests/verify-session-authority-app-dropins.py"
 app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"
 platform_renderer="${root}/scripts/render-platform-capabilities.py"
+nonproduction_platform_renderer="${root}/tests/session-authority-systemd/make-nonproduction-platform.py"
 platform_descriptor="${root}/tests/session-authority-systemd/capabilities.toml"
 handwritten_platform="${root}/tests/session-authority-systemd/platform-capabilities.toml"
 app_manifest="${root}/tests/session-authority-systemd/app.toml"
@@ -139,7 +140,10 @@ verify_platform_policy_producer_fixture() {
         && grep -Fq -- '--gamescope-mode g1' "${test_harness}" \
         && grep -Fq -- '--runtime-source "${runtime}"' "${test_harness}" \
         && grep -Fq -- '--descriptor "${fixtures}/capabilities.toml"' "${test_harness}" \
-        && grep -Fq -- '--output "${context}/platform-capabilities.toml"' "${test_harness}" \
+        && grep -Fq -- '--output "${context}/platform-capabilities.production.toml"' "${test_harness}" \
+        && grep -Fq '"${nonproduction_platform_renderer}"' "${test_harness}" \
+        && grep -Fq '"${context}/platform-capabilities.production.toml"' "${test_harness}" \
+        && grep -Fq '"${context}/platform-capabilities.toml"' "${test_harness}" \
         && ! grep -Fq '"${fixtures}/platform-capabilities.toml"' "${test_harness}" \
         && python3 - "${platform_descriptor}" <<'PY'
 import sys
@@ -161,21 +165,35 @@ PY
 
 verify_ci_landlock_fixture() {
     local test_manifest="$1"
+    local production_contract="$2"
+    local live_contract="$3"
 
-    if ! python3 - "${test_manifest}" <<'PY'
+    if ! python3 - "${test_manifest}" "${production_contract}" "${live_contract}" <<'PY'
 import sys
 import tomllib
 from pathlib import Path
 
 manifest = tomllib.loads(Path(sys.argv[1]).read_text())
+production = tomllib.loads(Path(sys.argv[2]).read_text())
+live = tomllib.loads(Path(sys.argv[3]).read_text())
+expected_live = dict(production)
+expected_live["production"] = False
+expected_live["landlock_mode"] = "best_effort"
 raise SystemExit(
-    0 if manifest.get("app", {}).get("use") == ["sandbox.nested_userns"] else 1
+    0 if (
+        manifest.get("app", {}).get("use") == []
+        and production.get("production") is True
+        and production.get("landlock_mode") == "required"
+        and production.get("landlock_full_min_abi") == 10
+        and production.get("landlock_browser_min_abi") == 6
+        and live == expected_live
+    ) else 1
 )
 PY
     then
         return 1
     fi
-    grep -Fq "PF_APP_CAPABILITIES='audio entropy input sandbox.nested_userns settings'" \
+    grep -Fq "PF_APP_CAPABILITIES='audio entropy input settings'" \
         "${harness}" \
         && grep -Fqx '        "landlock_full_min_abi": 10,' "${platform_renderer}" \
         && grep -Fqx '        "landlock_browser_min_abi": 6,' "${platform_renderer}" \
@@ -235,18 +253,41 @@ if verify_platform_policy_producer_fixture "${tmp}/wrong-session-platform-harnes
 fi
 
 
-# The production contract remains full-app ABI 10 / nested-userns ABI 6. The
-# lifecycle VM deliberately declares its fixture as the existing nested class
-# so it exercises real enforcement on the CI kernel without weakening either
-# minimum or post-processing the generated platform contract.
-verify_ci_landlock_fixture "${app_manifest}" || {
-    echo 'session-authority systemd-safety: FAIL: CI fixture does not use the contracted ABI-6 app class' >&2
+# Keep the real producer's production policy byte path intact, then derive the
+# live VM's explicitly non-production contract. The CI kernel may predate the
+# production ABI minimum; this lifecycle test must not weaken image policy.
+cat >"${tmp}/production-platform.toml" <<'EOF'
+schema_version = 2
+runtime_family = "pocketforge/a133-powervr"
+runtime_abi = "1"
+platform_version = "20"
+supported_capabilities = ["audio", "entropy", "input", "settings", "x11"]
+physical_memory_mib = 970
+app_memory_budget_mib = 600
+production = true
+landlock_mode = "required"
+landlock_full_min_abi = 10
+landlock_browser_min_abi = 6
+gles_max = "3.0"
+inputs = ["buttons"]
+display = { width = 1280, height = 720 }
+EOF
+python3 "${nonproduction_platform_renderer}" \
+    "${tmp}/production-platform.toml" "${tmp}/live-platform.toml"
+verify_ci_landlock_fixture \
+    "${app_manifest}" "${tmp}/production-platform.toml" "${tmp}/live-platform.toml" || {
+    echo 'session-authority systemd-safety: FAIL: CI fixture Landlock contract is not isolated' >&2
     exit 1
 }
-sed 's/use = \["sandbox.nested_userns"\]/use = []/' \
-    "${app_manifest}" >"${tmp}/full-app.toml"
-if verify_ci_landlock_fixture "${tmp}/full-app.toml"; then
-    echo 'session-authority systemd-safety: FAIL: full-app fixture passed the CI ABI guard' >&2
+sed 's/landlock_mode = "required"/landlock_mode = "best_effort"/' \
+    "${tmp}/production-platform.toml" >"${tmp}/invalid-production-platform.toml"
+if python3 "${nonproduction_platform_renderer}" \
+    "${tmp}/invalid-production-platform.toml" "${tmp}/invalid-live-platform.toml"; then
+    echo 'session-authority systemd-safety: FAIL: non-production source contract passed' >&2
+    exit 1
+fi
+if [ -e "${tmp}/invalid-live-platform.toml" ]; then
+    echo 'session-authority systemd-safety: FAIL: refused contract left output' >&2
     exit 1
 fi
 
