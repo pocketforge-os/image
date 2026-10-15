@@ -31,8 +31,7 @@ trap cleanup EXIT INT TERM
 wait_for_socket() {
     local socket=$1
     local owner_pid=$2
-    local count
-    for count in $(seq 1 100); do
+    for _ in $(seq 1 100); do
         if [ -S "${socket}" ]; then
             return 0
         fi
@@ -68,7 +67,7 @@ DBUS_SESSION_BUS_ADDRESS="${bus_address}" python3 -B \
 stub_pid=$!
 pids+=("${stub_pid}")
 
-for count in $(seq 1 100); do
+for _ in $(seq 1 100); do
     if grep -Fxq READY "${logs}/stub.log"; then
         break
     fi
@@ -148,9 +147,10 @@ fi
 printf 'PASS ime_bus_pss_budget: bus=%s KiB proxy=%s KiB combined=%s KiB budget=6144 KiB\n' \
     "${bus_pss}" "${proxy_pss}" "${combined_pss}"
 
-# Re-resolve the exact shipped policy with pf-ime assigned to another numeric
-# uid. The same current-uid client that passed above must then fail. This tests
-# the daemon's uid policy rather than merely relying on the 0700 directory.
+# Re-resolve the exact shipped policy with its one admitted identity changed to
+# nobody (uid 65534). The same current-uid client that passed above must then
+# fail. This tests the daemon's uid policy rather than merely relying on the
+# 0700 directory, without requiring a nested user namespace to overlay passwd.
 for pid in "${proxy_a_pid}" "${proxy_pid}" "${stub_pid}" "${bus_pid}"; do
     if kill -0 "${pid}" 2>/dev/null; then
         kill "${pid}"
@@ -165,14 +165,24 @@ for pid in "${proxy_a_pid}" "${proxy_pid}" "${stub_pid}" "${bus_pid}"; do
     fi
 done
 find /run/pf-ime -mindepth 1 -delete
-awk -F: '$1 != "pf-ime" { print }' "${PF_IME_TEST_ROOT}/passwd" > "${PF_IME_TEST_ROOT}/passwd.next"
-printf 'pf-ime:x:65534:65534:PocketForge input method:/nonexistent:/usr/sbin/nologin\n' \
-    >> "${PF_IME_TEST_ROOT}/passwd.next"
-cp "${PF_IME_TEST_ROOT}/passwd.next" "${PF_IME_TEST_ROOT}/passwd"
-find "${PF_IME_TEST_ROOT}/passwd.next" -delete
+wrong_uid_policy=${PF_IME_TEST_ROOT}/wrong-uid-bus.conf
+python3 -B - \
+    "${PF_IME_REPO_ROOT}/rootfs-overlay/usr/share/pocketforge/ime/bus.conf" \
+    "${wrong_uid_policy}" <<'PY'
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = '<allow user="pf-ime"/>'
+if source.count(needle) != 1:
+    raise SystemExit("FAIL: shipped policy must have exactly one pf-ime admission")
+Path(sys.argv[2]).write_text(
+    source.replace(needle, '<allow user="nobody"/>'), encoding="utf-8"
+)
+PY
 
 dbus-daemon \
-    --config-file="${PF_IME_REPO_ROOT}/rootfs-overlay/usr/share/pocketforge/ime/bus.conf" \
+    --config-file="${wrong_uid_policy}" \
     --nofork --nopidfile --nosyslog >"${logs}/wrong-uid-bus.log" 2>&1 &
 wrong_bus_pid=$!
 pids+=("${wrong_bus_pid}")

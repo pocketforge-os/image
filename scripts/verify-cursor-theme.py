@@ -60,7 +60,33 @@ def readonly(path: Path) -> None:
         fail(f"writable payload path: {path}")
 
 
-def verify(root: Path, require_env: bool) -> None:
+def require_root_ownership(root: Path) -> None:
+    """Refuse payload paths not owned by 0:0 (tsp-ihne1.1.2).
+
+    Rootfs-side gate only: the producer stage runs as uid 1000 and the
+    producer-side verify call must stay ownership-agnostic, so this runs
+    solely under --require-root-ownership, and solely at euid 0 -- an
+    unprivileged run (CI fixture) cannot observe or create root ownership
+    and skips with a typed notice instead of failing open or closed.
+    """
+    if os.geteuid() != 0:
+        print("cursor-theme verify: ownership_check_skipped reason=not_euid0")
+        return
+    bases = [root / "usr/share/icons" / theme for theme in THEMES]
+    bases.append(root / "usr/share/licenses/pocketforge-cursor-theme")
+    bases.append(root / "usr/share/pocketforge/cursor-theme.provenance")
+    offenders = []
+    for base in bases:
+        paths = [base, *sorted(base.rglob("*"))] if base.is_dir() else [base]
+        for path in paths:
+            st = path.lstat()
+            if st.st_uid != 0 or st.st_gid != 0:
+                offenders.append(f"path={path} uid={st.st_uid} gid={st.st_gid}")
+    if offenders:
+        fail("reason=non_root_ownership " + " ".join(offenders))
+
+
+def verify(root: Path, require_env: bool, root_ownership: bool) -> None:
     expected_names = set(ALIASES)
     expected_names.update(alias for aliases in ALIASES.values() for alias in aliases)
     for theme in THEMES:
@@ -106,15 +132,18 @@ def verify(root: Path, require_env: bool) -> None:
         env = (root / "etc/environment").read_text().splitlines()
         if "XCURSOR_THEME=pocketforge-light" not in env or "XCURSOR_SIZE=48" not in env:
             fail("Xcursor session environment is missing")
+    if root_ownership:
+        require_root_ownership(root)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
     parser.add_argument("--require-env", action="store_true")
+    parser.add_argument("--require-root-ownership", action="store_true")
     args = parser.parse_args()
     try:
-        verify(args.root, args.require_env)
+        verify(args.root, args.require_env, args.require_root_ownership)
     except (OSError, ValueError, struct.error) as error:
         print(f"cursor-theme verify: {error}", file=sys.stderr)
         return 1

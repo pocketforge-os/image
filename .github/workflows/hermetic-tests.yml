@@ -121,6 +121,7 @@ jobs:
             tests/test-elf-buildid.sh
             tests/test-gamescope-package-path.sh
             tests/test-gamescope-pvr-cache.sh
+            tests/test-gamescope-session-supervisor.sh
             tests/test-hwprobe-variant-stage.sh
             tests/test-initrd-selfflash-watchdog.sh
             tests/test-initrd-volatile-root.sh
@@ -141,6 +142,7 @@ jobs:
             tests/test-poolsuite-rootfs-install.sh
             tests/test-poolsuite-variant-stage.sh
             tests/test-recovery-entry.sh
+            tests/test-runtime-path-producers.sh
             tests/test-rootfs-abi-check.sh
             tests/test-rootfs-build-logs.sh
             tests/test-rootfs-bluetooth.sh

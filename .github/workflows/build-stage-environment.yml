@@ -5,6 +5,8 @@ on:
     paths:
       - 'build/Dockerfile.pf'
       - 'tests/test-build-stage-environment.sh'
+      - 'tests/test-public-ci-workflows.sh'
+      - 'tests/prove-public-ci-fit.sh'
       - '.github/workflows/build-stage-environment.yml'
 
 permissions:
@@ -16,12 +18,15 @@ concurrency:
 
 jobs:
   build-stage-environment:
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, pf-builder-vm]
+    runs-on: [self-hosted, pf-public-ci]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Verify public runner contract
+        run: tests/test-public-ci-workflows.sh
+      - name: Prove workload fits the public runner envelope
+        run: tests/prove-public-ci-fit.sh
       - name: Prove BuildKit tracing is absent from RUN
         run: tests/test-build-stage-environment.sh

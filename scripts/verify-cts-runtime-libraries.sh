@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Verify that every unversioned library literal dlopened by the CTS binaries
-# resolves to an AArch64 ELF in the assembled rootfs.
+# Verify that every library name the CTS binaries pull in at runtime resolves to
+# an AArch64 ELF inside the assembled rootfs. The names come from three scans of
+# each binary: unversioned dlopen literals (libEGL.so), versioned dlopen
+# literals (libEGL.so.1, libstdc++.so.6.0.30) and dynamic NEEDED entries. The
+# runtime loader accepts all three forms, so a payload that dlopens only
+# versioned sonames is just as loadable as one that dlopens unversioned ones.
 set -euo pipefail
 
 die() {
@@ -17,6 +21,7 @@ fi
 readelf_command=${PF_CTS_READELF:-readelf}
 command -v "${readelf_command}" >/dev/null 2>&1 || die 'reason=readelf_unavailable'
 command -v strings >/dev/null 2>&1 || die 'reason=strings_unavailable'
+command -v sed >/dev/null 2>&1 || die 'reason=sed_unavailable'
 
 work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-cts-runtime.XXXXXX")
 cleanup() {
@@ -24,8 +29,14 @@ cleanup() {
     rmdir "${work}"
 }
 trap cleanup EXIT
-names_file="${work}/dlopen-names"
+names_file="${work}/runtime-names"
 : > "${names_file}"
+
+# A library literal is `lib<name>.so` followed by zero or more numeric version
+# components; the numeric suffix is what distinguishes an unversioned dlopen
+# name from a versioned soname.
+library_literal='^lib[A-Za-z0-9_+.-]+\.so(\.[0-9]+)*$'
+needed_field='s/^[[:space:]]*0x[0-9a-fA-F]*[[:space:]]*(NEEDED)[[:space:]].*Shared library: \[\([^]]*\)\].*$/\1/p'
 
 for binary in deqp-gles2 deqp-gles3 deqp-gles31 glcts; do
     path="${rootfs}/opt/pocketforge/cts/bin/${binary}"
@@ -33,11 +44,18 @@ for binary in deqp-gles2 deqp-gles3 deqp-gles31 glcts; do
         die "reason=binary_missing binary=${binary}"
     fi
     if binary_names=$(strings -a "${path}" \
-            | LC_ALL=C grep -E '^lib[A-Za-z0-9_+.-]+\.so$'); then
+            | LC_ALL=C grep -E "${library_literal}"); then
         printf '%s\n' "${binary_names}" >> "${names_file}"
     else
         status=$?
         [ "${status}" -eq 1 ] || die "reason=binary_scan_failed binary=${binary}"
+    fi
+    if ! dynamic=$("${readelf_command}" -d "${path}" 2>&1); then
+        die "reason=binary_dynamic_scan_failed binary=${binary}"
+    fi
+    needed_names=$(printf '%s\n' "${dynamic}" | LC_ALL=C sed -n "${needed_field}")
+    if [ -n "${needed_names}" ]; then
+        printf '%s\n' "${needed_names}" >> "${names_file}"
     fi
 done
 
@@ -55,7 +73,8 @@ while IFS= read -r library; do
         fi
     done
     [ -n "${resolved}" ] || die "reason=library_missing library=${library}"
-    [ -L "${resolved}" ] || die "reason=library_not_symlink library=${library}"
+    # A versioned soname is normally a regular file, not a symlink, so the
+    # entry itself may be either; only its final target is constrained below.
     target=$(readlink -f "${resolved}") \
         || die "reason=library_target_missing library=${library}"
     case "${target}" in
@@ -73,5 +92,5 @@ while IFS= read -r library; do
     resolved_names="${resolved_names}${resolved_names:+,}${library}"
 done < "${names_file}"
 
-printf 'cts_runtime_libraries=PASS libraries=%s evidence=cts-binary-strings rootfs=exact\n' \
+printf 'cts_runtime_libraries=PASS libraries=%s evidence=cts-binary-strings+readelf-needed rootfs=exact\n' \
     "${resolved_names}"

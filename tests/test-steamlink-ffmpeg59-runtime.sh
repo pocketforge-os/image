@@ -268,15 +268,15 @@ run_contract_builder() {
     )
 }
 
-previous_uapi_sha=de8ca3df549158834e1459dc0cd555bb97536be4
-build9_uapi_sha=45b87a7d0e68a5aaafdc94523db791483e8a27cd
+previous_uapi_sha=45b87a7d0e68a5aaafdc94523db791483e8a27cd
+build11_uapi_sha=07bb60764cbc64b5a5d760c34709f07f8259e985
 if run_contract_builder "${previous_uapi_sha}" \
         >"${scratch}/stale-uapi.log" 2>&1; then
     echo 'FAIL: previous platform UAPI pin was accepted' >&2
     exit 1
 fi
 if ! grep -Fxq \
-        "steamlink-ffmpeg59: PF_FFMPEG_UAPI_SHA drift: got '${previous_uapi_sha}', want '${build9_uapi_sha}'" \
+        "steamlink-ffmpeg59: PF_FFMPEG_UAPI_SHA drift: got '${previous_uapi_sha}', want '${build11_uapi_sha}'" \
         "${scratch}/stale-uapi.log"; then
     echo 'FAIL: stale kernel UAPI pin did not report the current image witness' >&2
     exit 1
@@ -286,27 +286,27 @@ if grep -Fq 'kernel UAPI source receipt missing' "${scratch}/stale-uapi.log"; th
     exit 1
 fi
 
-# Preserve the real Build 9 failure as a negative control: the previous image
+# Preserve the real Build 11 failure as a negative control: the previous image
 # witness admits the previous platform value, then rejects the boot-kernel tree.
 legacy_definition="${scratch}/legacy-definition"
 mkdir -p "${legacy_definition}"
 cp "${builder}" "${legacy_definition}/build.sh"
 cp "${root}/build/platform-runtimes/steamlink-ffmpeg59/v1/source.lock" \
     "${legacy_definition}/source.lock"
-sed -i "s/${build9_uapi_sha}/${previous_uapi_sha}/" \
+sed -i "s/${build11_uapi_sha}/${previous_uapi_sha}/" \
     "${legacy_definition}/source.lock"
-printf '%s\n' "${build9_uapi_sha}" \
+printf '%s\n' "${build11_uapi_sha}" \
     > "${scratch}/contract-kernel/.pf-source-revision"
 if builder="${legacy_definition}/build.sh" \
         run_contract_builder "${previous_uapi_sha}" \
         >"${scratch}/legacy-receipt.log" 2>&1; then
-    echo 'FAIL: previous image witness accepted the Build 9 kernel receipt' >&2
+    echo 'FAIL: previous image witness accepted the Build 11 kernel receipt' >&2
     exit 1
 fi
 if ! grep -Fxq \
-        "steamlink-ffmpeg59: kernel-uapi-receipt drift: got '${build9_uapi_sha}', want '${previous_uapi_sha}'" \
+        "steamlink-ffmpeg59: kernel-uapi-receipt drift: got '${build11_uapi_sha}', want '${previous_uapi_sha}'" \
         "${scratch}/legacy-receipt.log"; then
-    echo 'FAIL: previous image witness did not reproduce the Build 9 refusal' >&2
+    echo 'FAIL: previous image witness did not reproduce the Build 11 refusal' >&2
     exit 1
 fi
 
@@ -323,7 +323,7 @@ exec /bin/mkdir "$@"
 EOF
 chmod +x "${scratch}/contract-bin/mkdir"
 if PATH="${scratch}/contract-bin:${PATH}" \
-        run_contract_builder "${build9_uapi_sha}" \
+        run_contract_builder "${build11_uapi_sha}" \
         >"${scratch}/contract.log" 2>&1; then
     echo 'FAIL: hermetic producer stop was not reached' >&2
     exit 1

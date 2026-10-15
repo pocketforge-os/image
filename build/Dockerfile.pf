@@ -551,7 +551,7 @@ GPUUMNONE
 
 # --- 1/5 toolchain: Ubuntu 24.04 (native x86_64) + the arm64 cross toolchain + LLVM 20 ---
 # Keep the load-bearing toolchain settings aligned with gpu-um-tsp's
-# docker/Dockerfile.ge8300-mesa-cross at 8cda9585d05d72c072c82a436b4d4db92ee93386. Do NOT add
+# docker/Dockerfile.ge8300-mesa-cross at 3f045e0ae9ac2855df143060200b18922e155fa1. Do NOT add
 # --platform=linux/arm64 anywhere in this subgraph: every program this recipe executes is
 # x86_64 (the "native precompilers" stage below is the whole reason a cross build needs a
 # native pass at all — mesa_clc/pco_clc/vtn_bindgen2 run at BUILD time, not on-device).
@@ -1296,7 +1296,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "2736751f2dcd48155da02fb605cdc261da1ae5fc" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "679eb323a7eddb27b6af3273fa77ce63c33c42cd" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # files exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml plus the byte-identical device-neutral
@@ -1757,6 +1757,7 @@ POOLSUITEFETCH
 FROM poolsuite-toolchain AS poolsuite-dev
 ARG PF_POOLSUITE_SHA
 ARG PF_POOLSUITE_SOURCE_DATE_EPOCH
+ARG PF_GAMESCOPE_MODE=not-shipped
 ENV CARGO_HOME=/opt/poolsuite-cargo-home \
     CARGO_INCREMENTAL=0
 COPY --from=poolsuite-src . /work/poolsuite
@@ -1765,6 +1766,7 @@ COPY --from=runtime /out/build-tools/pf-app-validate /usr/local/bin/pf-app-valid
 COPY --from=runtime /out/build-tools/pf-app-policy-render /usr/local/bin/pf-app-policy-render
 COPY --from=runtime /out/share/platform-capabilities.toml /work/platform-capabilities.toml
 COPY --from=image-src build/app-policy-a133-open-v1.json /work/app-policy-a133-open-v1.json
+COPY --from=image-src build/app-policy-a133-open-g1-v1.json /work/app-policy-a133-open-g1-v1.json
 COPY --from=image-src rootfs-overlay/etc/systemd/system/pf-app@.service /work/pf-app@.service
 WORKDIR /work/poolsuite
 RUN --network=none \
@@ -1826,7 +1828,12 @@ mv /tmp/default-app-root/org.pocketforge.poolsuite /out/app
 # Compile the exact staged manifest through runtime's one capability-policy
 # surface. The inventory is image-owned and installed beside the generated
 # exact-instance unit so launch-time compilation consumes the same signed decision inputs.
-install -D -m 0644 /work/app-policy-a133-open-v1.json \
+case "${PF_GAMESCOPE_MODE}" in
+  not-shipped) POLICY=/work/app-policy-a133-open-v1.json ;;
+  g1) POLICY=/work/app-policy-a133-open-g1-v1.json ;;
+  *) echo "FATAL: invalid PF_GAMESCOPE_MODE=${PF_GAMESCOPE_MODE}" >&2; exit 2 ;;
+esac
+install -D -m 0644 "${POLICY}" \
   /out/app-policy/org.pocketforge.poolsuite.resources.json
 pf-app-policy-render \
   --manifest /out/app/app.toml \
@@ -2025,7 +2032,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "8a276aecf087d32a143d9db0d7a895d7f8222796" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "77c0f054558b1dac8ff2d2795576577963f60760" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fourteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
@@ -2270,7 +2277,7 @@ COPY --from=launcher /out           /work/launcher
 COPY --from=platform-runtime-steamlink-ffmpeg59 /out /work/platform-runtime
 COPY --from=gamescope /out /work/gamescope-package
 COPY --from=cts-bundle /out /work/cts-bundle
-COPY --from=cursor-theme /tmp/out /work/cursor-theme
+COPY --chown=0:0 --from=cursor-theme /tmp/out /work/cursor-theme
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the

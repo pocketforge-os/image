@@ -1,0 +1,21 @@
+[Unit]
+Description=Publish the PocketForge compositor session ABI
+Requires=pocketforge-gamescope.service
+BindsTo=pocketforge-gamescope.service
+After=pocketforge-gamescope.service
+Before=pocketforge-gamescope-session.target
+PartOf=pocketforge-gamescope-session.target
+OnFailure=pocketforge-gamescope-fallback.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=root
+ExecStart=/usr/lib/pocketforge/pf-session-publish publish --session /run/pocketforge/session --wayland /run/pocketforge/gamescope/gamescope-0 --x11 /tmp/.X11-unix/X0 --proc-net-unix /proc/net/unix --group pf-session --timeout 9
+ExecStop=/usr/lib/pocketforge/pf-session-publish cleanup --session /run/pocketforge/session
+TimeoutStartSec=10s
+Restart=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/pocketforge /tmp/.X11-unix
