@@ -173,6 +173,28 @@ if verify_broker_session_state_fixture "${tmp}/broker-with-aliased-targets" "${d
     exit 1
 fi
 
+verify_r4_forced_close_fixture() {
+    local test_driver=$1
+
+    grep -Fq 'pending == "ForcedClose"' "${test_driver}" \
+        && grep -Fq 'session_events(final_events, scope, "forced_close")' "${test_driver}" \
+        && grep -Fq 'history_entry(scope.session_id)["receipt"] == "ForcedClose"' "${test_driver}" \
+        && grep -Fq 'R4=ForcedClose systemctl_stop_exit_after_sigkill=' "${test_driver}"
+}
+
+# Runtime's v2 close contract escalates at 1500 ms, before the image unit's 2 s
+# SIGKILL backstop. Pin the resulting ForcedClose receipt and prove that the old
+# Returned expectation cannot satisfy this integration guard.
+verify_r4_forced_close_fixture "${driver}" || {
+    echo 'session-authority systemd-safety: FAIL: R4 does not require ForcedClose' >&2
+    exit 1
+}
+sed 's/ForcedClose/Returned/g' "${driver}" >"${tmp}/returned-r4-drive.py"
+if verify_r4_forced_close_fixture "${tmp}/returned-r4-drive.py"; then
+    echo 'session-authority systemd-safety: FAIL: old Returned R4 contract passed' >&2
+    exit 1
+fi
+
 verify_app_policy_inventory_fixture() {
     local test_inventory="$1"
 

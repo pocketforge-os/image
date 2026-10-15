@@ -909,16 +909,17 @@ the list would otherwise overflow.
 
 The authority honours the shared SafeReturn intake in `Starting`/`Running`:
 
-1. It runs the blocking `systemctl stop pf-app@<id>.service`: SIGTERM, then SIGKILL at
-   `TimeoutStopSec=2s`.
-2. It enters `StoppingGracefully`.
-3. It maps the inactive unit, whether its result was `success` or `timeout`, to `UnitInactive`,
-   and so to a `Returned` receipt.
-4. The receipt is published after the restored shell acknowledges presentation.
+1. It runs `systemctl stop --no-block pf-app@<id>.service` and enters
+   `StoppingGracefully`.
+2. An inactive unit observed inside the 1500 ms grace window produces `Returned`.
+3. If the app is still active when that window expires, the authority samples the hang and
+   sends the forced-stop command before the unit's `TimeoutStopSec=2s` backstop. That path
+   produces `ForcedClose`, including when systemd ultimately records `Result=timeout`.
+4. Either receipt is published only after the restored owner acknowledges presentation.
 
-The authority's SafeReturn state machine is unchanged. Runtime#108 and launcher#154 supply
-the SystemMenu router and its matching vendored input contract; this image pins their merged
-heads as one compatible pair.
+This is runtime's v2 close-progress contract: `StoppingGracefully`, then (when needed)
+`ForceStopping{reason: stop_timeout}`, followed by the terminal receipt. The 1500 ms authority
+budget intentionally precedes the image unit's 2 s last-resort backstop.
 
 **Who else can request it.** The broker's fail-safe and an authenticated provider's `return`
 request both enter the broker-owned intake. `pf-app@` gets
@@ -932,28 +933,16 @@ membership would otherwise allow it, an app cannot create a controller that rese
 built-in pad. The real-systemd harness makes its fake node mode 0666 and proves both sides in one
 run: `gamer` outside the unit can open it, while the same uid inside `pf-app@` cannot.
 
-**R3/R4.** R3 treats a SIGKILL at the 2 s timeout as `Returned`, not `ForcedClose`. The concern
-behind R4 was `pf-session-authority` `lib.rs:995-1004`: a non-zero `systemctl stop` would be
-followed by `systemctl kill` and then `ForcedClose` or `RecoveryRequired`. The ephemeral
-real-systemd harness pins the outcome:
+**R3/R4.** Runtime's v2 progress contract supersedes the earlier runtime `d75beedf` evidence
+that classified the unit backstop as `Returned`. The real-systemd harness now pins both paths:
 
-Evidence: image#143 CI run 36528282419, live job 109276248107 on a `pf-builder-vm` ephemeral
-runner. The run used runtime `d75beedf`, the real authority and `pf-app-launch`, the runtime's
-verbatim `pf-input-broker.service` plus this drop-in, and systemd `252.39-1~deb12u2`.
-
-- **Direct probe of the authority's exact stop command.** The app ignores SIGTERM. `systemctl stop
-  pf-app@<id>.service` returned after 2.17 s with the unit `failed`/`Result=timeout`, and it
-  **exited 0**. `systemctl kill --kill-who=all` on the failed unit also exits 0, so even the
-  non-zero branch would not have reached `RecoveryRequired`.
-- **Providerless System Menu fallback with the app ignoring SIGTERM** (session-4). Guide to `failed`/`timeout` took
-  2.09 s. The authority was left at `Restoring{receipt: Returned, rung: PresentationAcknowledged}`
-  and published exactly one `Returned` after the presentation acknowledgement. There was no
-  `ForcedClose`, `Crash`, or `RecoveryRequired`.
-- **Graceful providerless fallback** (session-3). Guide to inactive took 0.08 s, with `Result=success` and
-  receipt `Returned`.
-
-**R4 holds: `Returned`, not `RecoveryRequired`.** The device bench (B6) repeats it on the target
-systemd.
+- **Graceful providerless fallback.** An app which accepts SIGTERM becomes inactive inside the
+  authority grace window and produces exactly one `Returned` after presentation acknowledgement.
+- **Escalated providerless fallback.** An app which ignores SIGTERM is still active at 1500 ms,
+  so the authority publishes `ForceStopping{reason: stop_timeout}`, invokes the forced stop,
+  and owes exactly one `ForcedClose` after presentation acknowledgement. The unit may then show
+  `Result=timeout` at its 2 s backstop; that does not rewrite the already escalated close as a
+  clean return. Neither path may end in `RecoveryRequired`.
 
 ### Updated units
 
@@ -1021,7 +1010,7 @@ After=pf-input-broker.service
 | Broker cannot start (no `/dev/uinput`) | The assertion fails the broker job, the app job fails as a dependency, the authority records `Crash` (`systemd_start_failed`), and the panel must return | Harness `broker_start_failure`: no app invocation, no broker grab, owner re-activated, `Crash` receipt |
 | Broker exits before READY (bad source or descriptor; the .215 trap) | It fails once (`Restart=no`) and the app is never invoked. `Wants=` releases the target, and `OnSuccess=` restores the shell, which stays up. The receipt is `Crash` (`systemd_start_failed`). Before the fix, the runtime unit's `Restart=on-failure` restarted the broker every 2 s, and each start stopped the shell again through `Conflicts=` | Harness `broker_exit_before_ready`: NRestarts 0, one start attempt, shell back within 10 s, one shell PID and zero broker activity over 30 s, no grab conflicts. Negative control `control_restart_on_failure`: the same broker with `Restart=on-failure` restored must restart |
 | Broker exits mid-session, after READY | It fails once (`Restart=no`). `BindsTo=` stops the app (SIGTERM, `Result=success`), the target is released, and the shell returns. The authority treats it as the app exiting, so the receipt is `Returned`. Under `Requires=` alone, the app kept running with no broker, no shell and no Menu intake | Harness `broker_exit_mid_session`, with grab order checked; B6 `kill -9` fault case on the target systemd |
-| App ignores SIGTERM | SIGKILL at `TimeoutStopSec=2s`; receipt `Returned` (R3) | Harness `r4_sigkill`, plus the direct `systemctl stop` exit probe |
+| App ignores SIGTERM | Authority escalates after 1500 ms; SIGKILL is bounded by `TimeoutStopSec=2s`; receipt `ForcedClose` | Harness `r4_sigkill`, plus the direct `systemctl stop` exit probe |
 | App SIGSTOPped, then Menu | systemd sends SIGCONT with SIGTERM, then SIGKILL at 2 s; the receipt is as above | B6 fault case |
 | Shell and broker hold the pad at once | Prevented by `Conflicts=` plus ordering | Harness grab model plus timestamp checkpoints in every session |
 | App reaches the authority socket | Prevented by `InaccessiblePaths=` | Harness sandbox probe, with a positive control outside the unit |
@@ -1047,7 +1036,7 @@ After=pf-input-broker.service
 6. **B6 bench** (inside `.215`):
    - the broker is inactive at boot;
    - the pad drives the player;
-   - Menu returns in under 2 s with a `Returned` receipt;
+   - a cooperative app returns with `Returned`; an app still active at the 1500 ms authority deadline returns with `ForcedClose` after bounded escalation;
    - 10 cycles with no `RecoveryRequired`;
    - fault cases: `kill -9` the broker; SIGSTOP the app, then Menu.
 
@@ -1060,8 +1049,8 @@ After=pf-input-broker.service
 - Replacing today's manifest-scoped raw input grant with mediated input. The one capability
   compiler currently maps `input` to the `input` group and selected device paths; the input
   mediation follow-up changes that mapping in place rather than adding another policy list.
-- Distinguishing `ForcedClose` from `Returned` for a SIGKILLed app (R3); that would change a
-  launcher-vendored crate.
+- Changing runtime's v2 distinction between `ForcedClose` and `Returned`; the image consumes
+  that launcher-vendored contract and tests both outcomes.
 - Any of this on A133 vendor/default or A523. The broker, library and descriptor are
   A133-open-only, like the rest of the default-app mechanism.
 

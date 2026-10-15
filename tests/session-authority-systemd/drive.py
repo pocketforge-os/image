@@ -834,7 +834,7 @@ def probe_systemctl_stop_after_sigkill(order: GrabOrder) -> dict[str, Any]:
 
 
 def assert_system_menu_fallback_after_sigkill(order: GrabOrder, r4: dict[str, Any]) -> str:
-    """R4 GATE: providerless SystemMenu fallback through SafeReturn must end Returned."""
+    """R4 GATE: the 1500 ms authority grace must escalate before the 2 s unit backstop."""
     scope = launch_held("ignore-term")
     before_timeouts = app_timeout_log_count()
     pressed = press_system_menu_without_provider()
@@ -876,17 +876,23 @@ def assert_system_menu_fallback_after_sigkill(order: GrabOrder, r4: dict[str, An
     require(
         phase_name == "Restoring"
         and payload.get("rung") == "PresentationAcknowledged"
-        and pending == "Returned",
+        and pending == "ForcedClose",
         f"R4 GATE FAILED: authority phase after SIGKILL at TimeoutStopSec=2s is {phase} "
         f"(systemctl stop exit {r4['stop_exit']}, systemctl kill exit {r4['kill_exit']})",
     )
     observed = rpc({"method": "observe", "observation": {"kind": "presentation_acknowledged"}})
     require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
     final_events = events()
-    require(len(session_events(final_events, scope, "returned")) == 1, "R4: Returned not published once")
-    for other in ("crash", "forced_close", "recovery_required"):
+    require(
+        len(session_events(final_events, scope, "forced_close")) == 1,
+        "R4: ForcedClose not published once",
+    )
+    for other in ("returned", "crash", "recovery_required"):
         require(not session_events(final_events, scope, other), f"R4 session published {other}")
-    require(history_entry(scope.session_id)["receipt"] == "Returned", "R4 receipt not durable")
+    require(
+        history_entry(scope.session_id)["receipt"] == "ForcedClose",
+        "R4 ForcedClose receipt not durable",
+    )
     order.checkpoint(scope.session_id)
     return scope.session_id
 
@@ -1743,7 +1749,7 @@ def main() -> None:
         f"{exit_mid_session} "
         f"broker_failure_session={broker_failure_session} "
         f"broker_exit_before_ready_session={exit_before_ready_session} "
-        f"R4=Returned systemctl_stop_exit_after_sigkill={r4['stop_exit']}"
+        f"R4=ForcedClose systemctl_stop_exit_after_sigkill={r4['stop_exit']}"
     )
     control_restart_on_failure_reproduces_trap()
 
