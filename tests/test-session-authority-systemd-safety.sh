@@ -4,7 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 harness="${root}/tests/test-session-authority-systemd.sh"
 driver="${root}/tests/session-authority-systemd/drive.py"
-fake_shell="${root}/tests/session-authority-systemd/fake-shell"
+driver_unit="${root}/tests/session-authority-systemd/session-authority-driver.service"
+authority_peer_dropin="${root}/tests/session-authority-systemd/10-test-driver-peer.conf"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
@@ -34,35 +35,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
-verify_shell_rpc_identity_fixture() {
-    local test_driver="$1"
-    local test_shell="$2"
+verify_driver_peer_fixture() {
+    local test_unit="$1"
+    local test_dropin="$2"
+    local test_harness="$3"
 
-    grep -Fq 'SHELL_RPC_SOCKET = GRAB / "shell-rpc.sock"' "${test_driver}" \
-        && grep -Fq 'stream.connect(str(SHELL_RPC_SOCKET))' "${test_driver}" \
-        && ! sed -n '/^def rpc(/,/^$/p' "${test_driver}" | grep -Fq 'stream.connect(str(SOCKET))' \
-        && grep -Fq 'AUTHORITY_SOCKET = Path("/run/pocketforge/session-authority.sock")' "${test_shell}" \
-        && grep -Fq 'proxy_one(client, AUTHORITY_SOCKET)' "${test_shell}"
+    grep -Fqx 'User=root' "${test_unit}" \
+        && grep -Fqx 'ExecStart=/usr/local/libexec/drive.py' "${test_unit}" \
+        && grep -Fq -- '--shell-user root --shell-unit session-authority-driver.service' \
+            "${test_dropin}" \
+        && grep -Fq 'session-authority-driver.service' "${test_harness}" \
+        && ! grep -Fq '/usr/local/libexec/drive.py 2>&1' "${test_harness}"
 }
 
-# Runtime authenticates the process which opens its shell socket. The Docker-exec
-# driver is deliberately outside a service, so every authority RPC must be relayed
-# by the fake shell in pf-shell-selected.service. Positive control plus a mutation
-# proving that a direct driver connection is rejected by this guard.
-verify_shell_rpc_identity_fixture "${driver}" "${fake_shell}" || {
-    echo 'session-authority systemd-safety: FAIL: shell RPCs bypass the service-owned fixture' >&2
+# Runtime authenticates the process which opens its shell socket. Run the root
+# orchestration driver as an explicitly configured test-only service: it must stay
+# alive while pf-shell-selected is stopped during an app session. Positive control
+# plus a mutation proving that a mismatched peer unit is rejected by this guard.
+verify_driver_peer_fixture "${driver_unit}" "${authority_peer_dropin}" "${harness}" || {
+    echo 'session-authority systemd-safety: FAIL: driver lacks a matched service peer identity' >&2
     exit 1
 }
-sed 's/stream.connect(str(SHELL_RPC_SOCKET))/stream.connect(str(SOCKET))/' \
-    "${driver}" >"${tmp}/direct-authority-driver.py"
-if verify_shell_rpc_identity_fixture "${tmp}/direct-authority-driver.py" "${fake_shell}"; then
-    echo 'session-authority systemd-safety: FAIL: direct non-service authority client passed' >&2
+sed 's/--shell-unit session-authority-driver.service/--shell-unit wrong-driver.service/' \
+    "${authority_peer_dropin}" >"${tmp}/mismatched-driver-peer.conf"
+if verify_driver_peer_fixture "${driver_unit}" "${tmp}/mismatched-driver-peer.conf" "${harness}"; then
+    echo 'session-authority systemd-safety: FAIL: mismatched driver peer unit passed' >&2
     exit 1
 fi
-shell_proxy_self_test="$(python3 "${fake_shell}" --proxy-self-test)"
-grep -Fqx \
-    'session-authority shell-rpc proxy self-test: PASS relay=accepted malformed_frame=rejected_before_authority' \
-    <<<"${shell_proxy_self_test}" || exit 1
 
 mkdir -p \
     "${fake_bin}" \
