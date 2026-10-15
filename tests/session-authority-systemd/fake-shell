@@ -13,11 +13,18 @@ from __future__ import annotations
 import fcntl
 import os
 import signal
+import socket
+import struct
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 
 GRAB = Path("/run/pf-grab")
+AUTHORITY_SOCKET = Path("/run/pocketforge/session-authority.sock")
+PROXY_SOCKET = GRAB / "shell-rpc.sock"
+MAX_FRAME = 1024 * 1024
 
 
 def append(name: str, line: str) -> None:
@@ -25,8 +32,134 @@ def append(name: str, line: str) -> None:
         handle.write(line + "\n")
 
 
+def receive_exact(stream: socket.socket, length: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = length
+    while remaining:
+        chunk = stream.recv(remaining)
+        if not chunk:
+            raise EOFError("socket closed during framed message")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def receive_frame(stream: socket.socket) -> bytes:
+    header = receive_exact(stream, 4)
+    length = struct.unpack(">I", header)[0]
+    if length > MAX_FRAME:
+        raise ValueError(f"frame length {length} exceeds {MAX_FRAME}")
+    return header + receive_exact(stream, length)
+
+
+def proxy_one(client: socket.socket, authority_socket: Path) -> None:
+    # Validate the complete request before opening the privileged peer
+    # connection. The authority therefore sees only bounded complete frames
+    # originating from this service-owned process.
+    request = receive_frame(client)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as authority:
+        authority.settimeout(5)
+        authority.connect(str(authority_socket))
+        authority.sendall(request)
+        client.sendall(receive_frame(authority))
+
+
+def serve_proxy(stop: threading.Event, failures: list[str]) -> None:
+    try:
+        try:
+            PROXY_SOCKET.unlink()
+        except FileNotFoundError:
+            pass
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(PROXY_SOCKET))
+            os.chmod(PROXY_SOCKET, 0o600)
+            listener.listen(4)
+            listener.settimeout(0.1)
+            while not stop.is_set():
+                try:
+                    client, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                with client:
+                    client.settimeout(5)
+                    proxy_one(client, AUTHORITY_SOCKET)
+    except Exception as error:  # surfaced through the service exit and journal
+        failures.append(f"{type(error).__name__}: {error}")
+    finally:
+        try:
+            PROXY_SOCKET.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def proxy_self_test() -> None:
+    with tempfile.TemporaryDirectory(prefix="pf-shell-rpc-self-test.") as directory:
+        authority_path = Path(directory) / "authority.sock"
+        received: list[bytes] = []
+        failures: list[BaseException] = []
+        ready = threading.Event()
+
+        def fake_authority() -> None:
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                    listener.bind(str(authority_path))
+                    listener.listen(1)
+                    ready.set()
+                    peer, _ = listener.accept()
+                    with peer:
+                        received.append(receive_frame(peer))
+                        response = b'{"result":"history"}'
+                        peer.sendall(struct.pack(">I", len(response)) + response)
+            except BaseException as error:  # re-raised in the main test thread
+                failures.append(error)
+
+        authority_thread = threading.Thread(target=fake_authority)
+        authority_thread.start()
+        if not ready.wait(timeout=2):
+            raise RuntimeError("fake authority did not become ready")
+        proxy_client, proxy_server = socket.socketpair()
+        proxy_thread = threading.Thread(
+            target=lambda: proxy_one(proxy_server, authority_path)
+        )
+        proxy_thread.start()
+        request_body = b'{"method":"history"}'
+        request = struct.pack(">I", len(request_body)) + request_body
+        proxy_client.sendall(request)
+        response = receive_frame(proxy_client)
+        proxy_client.close()
+        proxy_server.close()
+        proxy_thread.join(timeout=2)
+        authority_thread.join(timeout=2)
+        if proxy_thread.is_alive() or authority_thread.is_alive() or failures:
+            raise RuntimeError(f"relay did not finish cleanly: {failures}")
+        if received != [request] or response[4:] != b'{"result":"history"}':
+            raise RuntimeError("relay changed the framed request or response")
+
+        # Negative control: reject an oversized frame before attempting the
+        # connection to this deliberately absent authority path.
+        malformed_client, malformed_server = socket.socketpair()
+        malformed_client.sendall(struct.pack(">I", MAX_FRAME + 1))
+        malformed_client.shutdown(socket.SHUT_WR)
+        try:
+            proxy_one(malformed_server, Path(directory) / "must-not-connect.sock")
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError("oversized frame reached the authority connector")
+        finally:
+            malformed_client.close()
+            malformed_server.close()
+
+    print(
+        "session-authority shell-rpc proxy self-test: PASS "
+        "relay=accepted malformed_frame=rejected_before_authority"
+    )
+
+
 def main() -> int:
     terminated = False
+    proxy_stop = threading.Event()
+    proxy_failures: list[str] = []
 
     def on_term(*_: object) -> None:
         nonlocal terminated
@@ -41,12 +174,27 @@ def main() -> int:
         append("violations", "GRAB_CONFLICT shell requested while held")
         return 3
     append("timeline", f"grab shell {time.monotonic_ns()} {os.getpid()}")
+    proxy_thread = threading.Thread(
+        target=serve_proxy, args=(proxy_stop, proxy_failures), daemon=True
+    )
+    proxy_thread.start()
     while not terminated:
+        if proxy_failures:
+            append("proxy-errors", proxy_failures[0])
+            return 4
         time.sleep(0.05)
+    proxy_stop.set()
+    proxy_thread.join(timeout=1)
+    if proxy_thread.is_alive() or proxy_failures:
+        append("proxy-errors", proxy_failures[0] if proxy_failures else "stop timeout")
+        return 4
     append("timeline", f"term shell {time.monotonic_ns()} {os.getpid()}")
     time.sleep(0.5)
     return 0
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--proxy-self-test"]:
+        proxy_self_test()
+        sys.exit(0)
     sys.exit(main())

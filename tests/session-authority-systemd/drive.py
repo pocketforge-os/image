@@ -35,6 +35,7 @@ INVOCATIONS = APP_STATE / "invocations"
 PROBE = APP_STATE / "probe.json"
 CLIENT_ID = "image-real-systemd"
 GRAB = Path("/run/pf-grab")
+SHELL_RPC_SOCKET = GRAB / "shell-rpc.sock"
 GRAB_LOCK = GRAB / "pf-gamepad.lock"
 BROKER_CONTROL = GRAB / "broker-control.sock"
 BROKER_MODE = GRAB / "broker-mode"
@@ -100,7 +101,11 @@ def rpc(request: dict[str, Any]) -> dict[str, Any]:
     body = json.dumps(request, separators=(",", ":")).encode()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(5)
-        stream.connect(str(SOCKET))
+        # The authority authenticates the service cgroup of the connecting
+        # process. Relay through fake-shell, which runs in the production-named
+        # pf-shell-selected.service; this Docker-exec driver is only an
+        # orchestrator and intentionally has no service identity.
+        stream.connect(str(SHELL_RPC_SOCKET))
         stream.sendall(struct.pack(">I", len(body)) + body)
         response_length = struct.unpack(">I", receive_exact(stream, 4))[0]
         response = json.loads(receive_exact(stream, response_length))
