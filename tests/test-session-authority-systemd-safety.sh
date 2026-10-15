@@ -939,6 +939,33 @@ if python3 "${tmp}/no-rlimit-as-drive.py" --self-test >"${stdout_log}" 2>"${stde
     exit 1
 fi
 grep -Fq 'self-test: a report with RLIMIT_AS absent passed the core bound' "${stderr_log}" || exit 1
+
+verify_orientation_descriptor_fixture() {
+    local descriptor="$1"
+    local container_recipe="$2"
+    grep -Fq '[[screens]]' "${descriptor}" \
+        && grep -Fq 'role = "primary"' "${descriptor}" \
+        && grep -Fq \
+            'COPY capabilities.toml /usr/share/pocketforge/devices/a133/capabilities.toml' \
+            "${container_recipe}"
+}
+descriptor_fixture="${root}/tests/session-authority-systemd/capabilities.toml"
+verify_orientation_descriptor_fixture "${descriptor_fixture}" "${recipe}" || {
+    echo 'session-authority systemd-safety: FAIL: live orientation descriptor fixture is incomplete' >&2
+    exit 1
+}
+sed '/^\[\[screens\]\]/,$d' "${descriptor_fixture}" >"${tmp}/descriptor-without-screen.toml"
+if verify_orientation_descriptor_fixture "${tmp}/descriptor-without-screen.toml" "${recipe}"; then
+    echo 'session-authority systemd-safety: FAIL: descriptor without a screen passed' >&2
+    exit 1
+fi
+sed '\|COPY capabilities.toml /usr/share/pocketforge/devices/a133/capabilities.toml|d' \
+    "${recipe}" >"${tmp}/recipe-without-installed-descriptor"
+if verify_orientation_descriptor_fixture \
+    "${descriptor_fixture}" "${tmp}/recipe-without-installed-descriptor"; then
+    echo 'session-authority systemd-safety: FAIL: recipe without installed descriptor passed' >&2
+    exit 1
+fi
 for b4_input in fake-input-broker fake-prefsd pf-prefsd.service fake-shell capabilities.toml \
     10-app-session.conf 10-input-broker.conf pocketforge-gamescope-session.target; do
     grep -Fq "${b4_input}" "${harness}" || exit 1
