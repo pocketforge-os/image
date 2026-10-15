@@ -1,11 +1,17 @@
 # PocketForge input harness (tsp-ihne1.2)
 
-Hermetic gamescope/input harness: a **headless gamescope session** (our fork,
+The default hermetic tier is a **headless gamescope session** (our fork,
 branch `pocketforge-linear`, pinned in `pins.env`) with Xwayland, private
 keyboard/pointer event streams, and one test client per row of the design's
 *When the keyboard opens* table. Every client writes a
 machine-readable **transcript** plus pre/post text-region frames so downstream
 beads assert both widget state and visible compositor output.
+
+The guest tier packages the same clients and guarded `fake-input` into a
+separate, content-addressed, read-only arm64 squashfs attachment. pfvd mounts
+that attachment at `/opt/pf-input-harness` only for a requested harness
+session. The production image and its `/usr/bin/gamescope` remain byte-for-byte
+unchanged; the attachment never supplies gamescope.
 
 One command builds the container, runs the whole session and prints the
 house verdict:
@@ -23,7 +29,12 @@ type `screen_buffer` for golden comparison) and `screenshots/manifest.json`.
 | Path | What |
 | --- | --- |
 | `run.sh` | one-command entry (build + run + verdict) |
-| `negative-control.sh` | explicitly authorized laptop run wrapper; brackets the session with host input and journal checks |
+| `run-guest.sh` | guarded real-kernel entry used only in the pfvd guest or matching DUT |
+| `guest/agent.py` | bounded framed virtio-serial request/artifact agent |
+| `Containerfile.guest-payload` | pinned Bookworm arm64 attachment producer; builds the normalized squashfs twice and compares bytes |
+| `guest-payload.{pins,lock}` | external source pins plus the produced squashfs SHA256/size |
+| `verify-guest-payload.sh` | verifies producer output and manifest against the committed content address |
+| `negative-control.sh` | explicitly authorized host-run wrapper; brackets the session with host input and journal checks |
 | `Containerfile` | 3-stage build: pinned gamescope fork → clients/tools → slim runtime (lavapipe) |
 | `pins.env` | gamescope fork URL/branch/commit + base image digest |
 | `schema/transcript-schema.md` | transcript JSONL schema (documented, closed) |
@@ -50,6 +61,33 @@ Placement decision (bead asked to record it): everything lives in the
 session tests. The default path uses only process-private sockets. The legacy
 kernel-device helper remains source-only here for the separate guarded VM/DUT
 tier; it is test tooling, not product code.
+
+## Guest attachment
+
+`.github/workflows/input-harness-payload.yml` builds the attachment on
+`[self-hosted, pf-builder-vm]`; it cannot select `trimui-build-lab`. The
+digest-pinned build container creates two Bookworm arm64 sysroots from the
+pinned Debian snapshot, builds libei, SDL3, the clients and guarded helper,
+normalizes every timestamp to the snapshot's fixed nonzero epoch, then runs
+`mksquashfs` twice with one compressor thread. Squashfs has no filesystem UUID,
+and mksquashfs sorts each directory before assigning inode numbers. A byte
+mismatch fails before publication. `manifest.json` records the
+snapshot, external commits, recipe/source hashes, runtime package closure,
+payload size and digest.
+
+The bootstrap loader cache is discarded with the other install-time state,
+then regenerated once from the completed arm64 tree with its own
+`/usr/sbin/ldconfig -i`. The auxiliary cache is removed afterward. This keeps
+the `/etc/ld.so.conf.d` search paths available without allowing producer-host
+cache state into the attachment.
+
+The required `PF_APT_PROXY` build argument routes each producer apt invocation
+through the fleet apt-cacher-ng because BuildKit RUN steps have no DNS. A
+missing or non-HTTP value is refused before apt starts; mmdebstrap still
+verifies the snapshot's signed package metadata. External source commits are
+checked out and archived on the runner, SHA-verified there, then supplied as
+named read-only build contexts; no BuildKit RUN step performs a DNS lookup.
+The output is test-only and is never installed into a product rootfs.
 
 ## Clients and expected behaviour
 
@@ -122,9 +160,10 @@ positive and negative controls in one invocation:
 tests/test-input-harness-selftest.sh
 ```
 
-The full Docker session is not wired into CI. Following the host-uinput
-incident, do not run it on any host until input-coord explicitly lifts the
-session freeze. The fixture-only self-test above remains safe to run. It
+The payload producer is a source-build PR check. The real-kernel tier is a
+manual-only pfvd workflow on `[self-hosted, pf-builder-vm]` or a modelmaker
+run, always inside the host bracket and only after per-run approval; it is
+never run on the laptop. The fixture-only self-test above remains safe to run. It
 compiles `fake-input.c` against a mocked probe/opener (never a device node),
 checks the shared execution-domain fixture and hashes, exercises the laptop
 negative-control wrapper with fake `/proc` and journal inputs, and runs the
@@ -161,8 +200,8 @@ repo-wide uinput occurrence inventory with seeded red controls.
   uinput creation/exposure reference in this repo, fails on new or stale
   entries, and proves the gate with duplicate, stale and seeded-violation red
   controls.
-- Once input-coord explicitly authorizes the one laptop negative control, run
-  `negative-control.sh --out DIR --receipt FILE`. It snapshots
+- Every approved CI/modelmaker guest run uses
+  `negative-control.sh --out DIR --receipt FILE` as its host bracket. It snapshots
   `/proc/bus/input/devices`, records user/system journal cursors, polls for any
   added input-device entry while the private-FD harness runs, and terminates
   the session immediately on an addition. Its receipt contains the before and
@@ -177,9 +216,17 @@ repo-wide uinput occurrence inventory with seeded red controls.
   `<receipt>.evidence/` directory, and writes a typed receipt from its EXIT
   finalizer on success, host-safety abort, timeout, or internal failure. Receipts
   also serialize test mode, every injected/real source path, the named journal
-  patterns, and per-pattern counts.
+  patterns, and per-pattern counts. In real mode the wrapper resolves and
+  accepts only its canonical sibling `run.sh` or `run-guest.sh`; arbitrary
+  executables, symlinks and non-canonical traversal spellings fail with
+  `reason=runner_not_allowlisted`. The receipt records the canonical runner
+  path and its SHA256. The manual pfvd workflow enters through `run-guest.sh`,
+  which delegates only to `ci/run-input-harness-e2e.sh` in the exact committed
+  pfvd checkout; no caller-selected nested executable is accepted.
 - `--network none` at run time (build needs network; the run does not).
-- No device, node, labgrid or PSU actions; laptop only.
+- No host input passthrough: QEMU command lines must reject `input-linux`,
+  `usb-host`, evdev passthrough, `/dev/uinput`, and `/dev/input/*` routes.
+- No device, node, labgrid or PSU actions from this harness worker.
 
 ## Known gaps / design notes (fed back to the plan)
 

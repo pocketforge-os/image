@@ -1,15 +1,17 @@
 # IME bus security test container
 
 The container uses the image build's Debian snapshot and carries only the tools
-needed by the real-binary private-bus harness. Docker's normal seccomp policy
-blocks the namespace operations bubblewrap needs. `bwrap-seccomp.json` is the
-Flatpak Docker example profile, vendored byte-for-byte from
-`/usr/share/doc/flatpak/examples/flatpak-docker-seccomp.json` in Ubuntu package
-`flatpak 1.14.6-1ubuntu0.1+esm1` (LGPL-2+ and LGPL-2.1+). Its SHA-256 is
-`a775db1206ab90d93aee2313040c1d23d5b2d12a12691021fe060fbe33323ed7`.
+needed by the real-binary private-bus harness. It does not depend on nested user namespaces:
+the image records the invoking runner uid/gid as `pf-ime`, while two
+disposable Docker containers provide the writable runtime and app-visible mount
+views.
 
-The profile remains default-deny while admitting the namespace syscalls. The
-host's AppArmor policy separately blocks bubblewrap's mount setup, so the test
-disables AppArmor only for this non-root, networkless container. The checkout is
-mounted read-only, no capabilities are added, and the container is removed on
-exit.
+Before building the image, the wrapper rejects root, reserved system identities,
+and the `nobody` identity used by the negative control. This keeps both containers
+non-root even if a self-hosted runner service is accidentally configured as root.
+
+Both containers are non-root and networkless, have a read-only root filesystem,
+drop every capability, and are removed on exit. The checkout is mounted read-only.
+The main harness receives only disposable `/run` and `/tmp` tmpfs mounts; the app
+view receives a read-only fixture containing only its own door. No AppArmor or
+seccomp policy is disabled.

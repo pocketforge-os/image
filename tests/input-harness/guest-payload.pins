@@ -1,0 +1,11 @@
+# Content inputs for the guest-only payload. The product gamescope binary is
+# deliberately absent; its source checkout contributes only the matching
+# gamescope-control protocol XML used to build pf-shot.
+SNAPSHOT_DATE=20260601T000000Z
+SDL_URL=https://github.com/pocketforge-os/libsdl3-sunxifb.git
+SDL_COMMIT=7411a94803c95b2f93a898f3773ffe95dfec4263
+GAMESCOPE_URL=https://github.com/pocketforge-os/gamescope.git
+GAMESCOPE_COMMIT=298881e3dff1ade108d57a257e8bf59bf8c6436f
+LIBEI_URL=https://gitlab.freedesktop.org/libinput/libei.git
+LIBEI_COMMIT=08f1d41085a6ae4bac7bc52abe2955d3354342cb
+SOURCE_DATE_EPOCH=1780272000

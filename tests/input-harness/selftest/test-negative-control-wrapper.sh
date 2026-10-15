@@ -69,6 +69,76 @@ printf '%s\n' 'PASS: exact_widget_text pointer_activation negative_control pixel
 REPORTER
 chmod +x "$tmp/fake-runner" "$tmp/fake-journalctl" "$tmp/fake-reporter"
 
+cat >"$tmp/arbitrary-runner" <<'ARBITRARY'
+#!/bin/sh
+exit 0
+ARBITRARY
+chmod +x "$tmp/arbitrary-runner"
+ln -s "$root/run.sh" "$tmp/run-link"
+
+check_runner_allowlist() {
+  local name="$1" candidate="$2" expected_rc="$3"
+  set +e
+  PF_NEGATIVE_CONTROL_TESTING=1 \
+    PF_NEGATIVE_CONTROL_TEST_RUNNER_ALLOWLIST_ONLY=1 \
+    "$root/negative-control.sh" --runner "$candidate" \
+      >"$tmp/allowlist-$name.stdout" 2>"$tmp/allowlist-$name.stderr"
+  local rc=$?
+  set -e
+  if [[ "$expected_rc" == 0 ]]; then
+    [[ $rc -eq 0 ]]
+    grep -Fq 'runner-allowlist=PASS' "$tmp/allowlist-$name.stdout"
+  else
+    [[ $rc -ne 0 ]]
+    grep -Fq 'reason=runner_not_allowlisted' "$tmp/allowlist-$name.stdout"
+  fi
+}
+
+check_runner_allowlist run_guest "$root/run-guest.sh" 0
+check_runner_allowlist arbitrary "$tmp/arbitrary-runner" 1
+check_runner_allowlist symlink "$tmp/run-link" 1
+check_runner_allowlist traversal "$root/selftest/../run.sh" 1
+
+pfvd_checkout="$tmp/pfvd"
+mkdir -p "$pfvd_checkout/ci"
+git init -q "$pfvd_checkout"
+cat >"$pfvd_checkout/ci/run-input-harness-e2e.sh" <<'HOST_DRIVER'
+#!/bin/sh
+set -eu
+[ "$1" = --out ]
+mkdir -p "$2"
+printf '%s\n' 'host-dispatch=PASS' >"$2/host-dispatch.txt"
+HOST_DRIVER
+chmod +x "$pfvd_checkout/ci/run-input-harness-e2e.sh"
+git -C "$pfvd_checkout" add ci/run-input-harness-e2e.sh
+git -C "$pfvd_checkout" -c user.name=test -c user.email=test@example.invalid \
+  commit -q -m fixture
+pfvd_commit="$(git -C "$pfvd_checkout" rev-parse HEAD)"
+PF_INPUT_HARNESS_PFVD_ROOT="$pfvd_checkout" \
+  PF_INPUT_HARNESS_PFVD_COMMIT="$pfvd_commit" \
+  "$root/run-guest.sh" --out "$tmp/host-out"
+grep -Fqx 'host-dispatch=PASS' "$tmp/host-out/host-dispatch.txt"
+set +e
+PF_INPUT_HARNESS_PFVD_ROOT="$pfvd_checkout" \
+  PF_INPUT_HARNESS_PFVD_COMMIT=0000000000000000000000000000000000000000 \
+  "$root/run-guest.sh" --out "$tmp/host-mismatch" \
+  >"$tmp/host-mismatch.stdout" 2>"$tmp/host-mismatch.stderr"
+host_mismatch_rc=$?
+set -e
+[[ $host_mismatch_rc -ne 0 ]]
+grep -Fq 'reason=pfvd_commit_mismatch' "$tmp/host-mismatch.stdout"
+mv "$pfvd_checkout/ci/run-input-harness-e2e.sh" "$tmp/original-host-driver"
+ln -s "$tmp/arbitrary-runner" "$pfvd_checkout/ci/run-input-harness-e2e.sh"
+set +e
+PF_INPUT_HARNESS_PFVD_ROOT="$pfvd_checkout" \
+  PF_INPUT_HARNESS_PFVD_COMMIT="$pfvd_commit" \
+  "$root/run-guest.sh" --out "$tmp/host-symlink" \
+  >"$tmp/host-symlink.stdout" 2>"$tmp/host-symlink.stderr"
+host_symlink_rc=$?
+set -e
+[[ $host_symlink_rc -ne 0 ]]
+grep -Fq 'reason=invalid_pfvd_driver' "$tmp/host-symlink.stdout"
+
 set +e
 PF_INPUT_DEVICES_PATH="$tmp/not-real-proc" \
   "$root/negative-control.sh" --timeout 1s --out "$tmp/override-out" \
@@ -145,7 +215,8 @@ run_case() {
   grep -Fqx 'test_mode=1' "$case_dir/receipt"
   grep -Fqx "devices_path=$case_dir/devices" "$case_dir/receipt"
   grep -Fqx "journalctl_path=$tmp/fake-journalctl" "$case_dir/receipt"
-  grep -Fqx "runner_path=$tmp/fake-runner" "$case_dir/receipt"
+  grep -Fqx "runner=$(realpath -e "$tmp/fake-runner")" "$case_dir/receipt"
+  grep -Fqx "runner_sha256=$(sha256sum "$tmp/fake-runner" | awk '{print $1}')" "$case_dir/receipt"
   grep -Fqx "reporter_path=$tmp/fake-reporter" "$case_dir/receipt"
   grep -Fqx "out_path=$case_dir/out" "$case_dir/receipt"
   grep -Fqx "receipt_path=$case_dir/receipt" "$case_dir/receipt"
@@ -188,4 +259,4 @@ run_case hazard_xinput host_input_journal_activity
 run_case hazard_desktop host_input_journal_activity
 run_case hazard_kernel host_input_journal_activity
 run_case clean pass
-printf '%s\n' 'negative-control-wrapper: PASS internal=receipted appeared=aborted timeout=receipted generic_pocketforge=info hazards=4_refused clean=passed proc_mode=0444 device_inputs=faked'
+printf '%s\n' 'negative-control-wrapper: PASS runner_allowlist=run-guest-only arbitrary=refused symlink=refused traversal=refused host_dispatch=fixed-commit mismatch=refused nested_symlink=refused internal=receipted appeared=aborted timeout=receipted generic_pocketforge=info hazards=4_refused clean=passed proc_mode=0444 device_inputs=faked'

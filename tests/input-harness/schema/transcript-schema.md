@@ -24,8 +24,8 @@ by the validator, not by a human reading logs.
 ## Lifecycle events
 
 - `start` — first line. Fields: `pid` (int), `argv` (array of string),
-  `backend` (`wayland` | `x11` | `headless`; `headless` is used by
-  session.jsonl, whose client is the compositor session itself), `display`
+  `backend` (`wayland` | `x11` | `headless` | `drm`; `headless` and `drm` are
+  used by session.jsonl, whose client is the compositor session itself), `display`
   (string, the WAYLAND_DISPLAY or DISPLAY value the client connected to).
 - `stop` — last line. Fields: `rc` (int, client exit status).
 - `mapped` — the client's top-level surface/window was mapped (Wayland

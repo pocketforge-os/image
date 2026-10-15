@@ -14,7 +14,7 @@ import sys
 
 SCHEMA = "pf-input-harness.transcript/v1"
 
-BACKENDS = ("wayland", "x11", "headless")
+BACKENDS = ("wayland", "x11", "headless", "drm")
 KEY_STATES = ("pressed", "released")
 CONTENT_SOURCES = ("set", "protocol")
 COMMIT_SOURCES = ("im", "toolkit", "key")

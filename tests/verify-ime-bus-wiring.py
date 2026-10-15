@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed static checks for the private PocketForge IME bus."""
 
+import subprocess
 from pathlib import Path
 
 
@@ -17,7 +18,39 @@ def require(text: str, needle: str, where: str) -> None:
     assert needle in text, f"{where}: missing {needle!r}"
 
 
+def verify_runner_identity_guard() -> None:
+    guard = ROOT / "tests/ime-bus-security/validate-runner-identity.sh"
+    assert guard.is_file(), f"missing {guard.relative_to(ROOT)}"
+    positive = subprocess.run(
+        [guard, "1000", "1000"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert positive.returncode == 0, positive.stderr
+    assert positive.stdout == "1000:1000\n"
+
+    for uid, gid in (
+        ("0", "1000"),
+        ("1000", "0"),
+        ("999", "1000"),
+        ("1000", "999"),
+        ("65534", "1000"),
+        ("1000", "65534"),
+        ("not-a-uid", "1000"),
+    ):
+        negative = subprocess.run(
+            [guard, uid, gid],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert negative.returncode != 0, f"guard accepted unsafe identity {uid}:{gid}"
+        assert "FAIL:" in negative.stderr, negative.stderr
+
+
 def main() -> None:
+    verify_runner_identity_guard()
     packages = read("rootfs-packages.txt").splitlines()
     package_names = {
         line.strip()
@@ -137,10 +170,12 @@ def main() -> None:
     )
     workflow = read(".github/workflows/ime-bus-security.yml")
     for needle in (
-        "runs-on: [self-hosted, pf-builder-vm]",
+        "runs-on: [self-hosted, pf-public-ci]",
         "timeout-minutes: 30",
-        "github.event.pull_request.head.repo.full_name == github.repository",
         "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+        "persist-credentials: false",
+        "tests/test-public-ci-workflows.sh",
+        "tests/prove-public-ci-fit.sh",
         "set -o pipefail",
         "tests/test-ime-bus-security.sh",
     ):
@@ -151,6 +186,8 @@ def main() -> None:
         "tests/ime-bus-security-inner.sh",
         "tests/ime-bus-contract.py",
         "tests/verify-ime-bus-wiring.py",
+        "tests/test-public-ci-workflows.sh",
+        "tests/prove-public-ci-fit.sh",
         "tests/ime-bus-security/**",
         "rootfs-packages*.txt",
         "rootfs-overlay/etc/systemd/system/pf-app@.service",
@@ -177,9 +214,10 @@ def main() -> None:
         "IME harness Containerfile",
     )
     require(containerfile, "ARG APT_SNAPSHOT_DATE=20260601T000000Z", "IME harness Containerfile")
+    require(containerfile, "ARG PF_IME_UID", "IME harness Containerfile")
+    require(containerfile, "ARG PF_IME_GID", "IME harness Containerfile")
     require(containerfile, "snapshot.debian.org/archive/debian/${APT_SNAPSHOT_DATE}/", "IME harness Containerfile")
     for package in (
-        "bubblewrap",
         "dbus-bin",
         "dbus-daemon",
         "python3",
@@ -193,36 +231,55 @@ def main() -> None:
     for needle in (
         "command -v docker",
         "--label pf.bead=tsp-ihne1.5",
-        '--user "$(id -u):$(id -g)"',
+        'validate-runner-identity.sh" "$(id -u)" "$(id -g)"',
+        '--user "${runner_identity}"',
+        '--build-arg "PF_IME_UID=${runner_uid}"',
+        '--build-arg "PF_IME_GID=${runner_gid}"',
         "HOME=/tmp",
         "RUNNER_TEMP=/tmp",
         "readonly",
         "--network none",
-        "--security-opt apparmor=unconfined",
-        '--security-opt "seccomp=${container_dir}/bwrap-seccomp.json"',
+        "--read-only",
+        "--cap-drop ALL",
+        "--tmpfs /run",
+        "--tmpfs /tmp",
+        "dst=/run,readonly",
+        "test ! -e /run/pf-ime-door/app-b",
+        "test ! -e /run/pf-ime/bus",
         "--rm",
     ):
         require(harness, needle, "IME harness wrapper")
-    for forbidden in ("--privileged", "--cap-add", "docker.sock", "/sbin/init"):
+    for forbidden in (
+        "--privileged",
+        "--cap-add",
+        "docker.sock",
+        "/sbin/init",
+        "apparmor=unconfined",
+        "seccomp=unconfined",
+        "bwrap-seccomp.json",
+    ):
         assert forbidden not in harness, f"IME harness wrapper uses forbidden Docker option: {forbidden}"
     for failure in (
         'fail "docker is required for the real IME bus security harness"',
+        'fail "runner identity is unsafe for the IME security harness"',
         'fail "IME harness image build failed"',
         'fail "containerized IME bus security harness failed"',
     ):
         require(harness, failure, "IME harness fail-closed contract")
     assert "exit 75" not in harness, "IME harness prerequisites must fail, not skip"
 
-    seccomp = read("tests/ime-bus-security/bwrap-seccomp.json")
-    require(seccomp, '"defaultAction": "SCMP_ACT_ERRNO"', "IME bwrap seccomp profile")
-    for syscall in ('"clone"', '"mount"', '"umount2"', '"unshare"', '"pivot_root"'):
-        require(seccomp, syscall, "IME bwrap seccomp profile")
-    assert "seccomp=unconfined" not in harness, "IME harness must use the committed bwrap profile"
     provenance = read("tests/ime-bus-security/README.md")
-    require(provenance, "a775db1206ab90d93aee2313040c1d23d5b2d12a12691021fe060fbe33323ed7", "seccomp provenance")
+    require(provenance, "does not depend on nested user namespaces", "container provenance")
+    assert not (ROOT / "tests/ime-bus-security/bwrap-seccomp.json").exists(), (
+        "obsolete nested-namespace seccomp profile must not remain"
+    )
 
     container_runner = read("tests/ime-bus-security/run.sh")
     require(container_runner, '"${script_dir}/../ime-bus-security-inner.sh"', "IME container runner")
+    require(container_runner, '"$(id -u):$(id -g)"', "IME container identity check")
+    assert "bwrap" not in container_runner, "IME container runner must not require nested user namespaces"
+    container_inner = read("tests/ime-bus-security-inner.sh")
+    require(container_inner, '<allow user="nobody"/>', "wrong-uid policy control")
     print("PASS ime bus static wiring and fail-closed package policy")
 
 
