@@ -3,6 +3,8 @@ Description=Fixture Gamescope filesystem-socket owner
 Before=pocketforge-session-publisher.service
 PartOf=pocketforge-gamescope-session.target
 Conflicts=pf-shell-selected.service pocketforge-foreground.target
+OnFailure=pocketforge-gamescope-fallback.service
+OnSuccess=pocketforge-gamescope-fallback.service
 
 [Service]
 Type=notify

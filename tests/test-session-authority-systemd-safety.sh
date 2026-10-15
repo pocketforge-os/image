@@ -8,6 +8,7 @@ driver_unit="${root}/tests/session-authority-systemd/session-authority-driver.se
 authority_peer_dropin="${root}/tests/session-authority-systemd/10-test-driver-peer.conf"
 session_target="${root}/tests/session-authority-systemd/pocketforge-gamescope-session.target"
 real_session_target="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-session.target"
+real_gamescope_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope.service"
 fake_gamescope_unit="${root}/tests/session-authority-systemd/pocketforge-gamescope.service"
 fake_gamescope="${root}/tests/session-authority-systemd/fake-gamescope"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
@@ -80,13 +81,23 @@ fi
 
 verify_session_producer_fixture() {
     local test_target="$1"
+    local test_gamescope="$2"
+    local directive
 
-    cmp -s "${test_target}" "${real_session_target}" \
-        && grep -Fq 'Requires=pocketforge-gamescope.service pocketforge-session-publisher.service' \
+    cmp -s "${test_target}" "${real_session_target}" || return 1
+    for directive in \
+        'PartOf=pocketforge-gamescope-session.target' \
+        'Conflicts=pf-shell-selected.service pocketforge-foreground.target' \
+        'OnFailure=pocketforge-gamescope-fallback.service' \
+        'OnSuccess=pocketforge-gamescope-fallback.service'; do
+        grep -Fqx "${directive}" "${real_gamescope_unit}" || return 1
+        grep -Fqx "${directive}" "${test_gamescope}" || return 1
+    done
+    grep -Fq 'Requires=pocketforge-gamescope.service pocketforge-session-publisher.service' \
             "${test_target}" \
         && grep -Fqx 'After=pocketforge-session-publisher.service' "${test_target}" \
-        && grep -Fqx 'Type=notify' "${fake_gamescope_unit}" \
-        && grep -Fqx 'ExecStart=/usr/local/libexec/fake-gamescope' "${fake_gamescope_unit}" \
+        && grep -Fqx 'Type=notify' "${test_gamescope}" \
+        && grep -Fqx 'ExecStart=/usr/local/libexec/fake-gamescope' "${test_gamescope}" \
         && grep -Fq 'WAYLAND = Path("/run/pocketforge/gamescope/gamescope-0")' \
             "${fake_gamescope}" \
         && grep -Fq 'X11 = Path("/tmp/.X11-unix/X0")' "${fake_gamescope}" \
@@ -213,14 +224,20 @@ PY
 # pf-app@ now consumes the compositor session environment and socket. Exercise
 # the real target + publisher bytes around a fake socket-owning Gamescope, and
 # prove that dropping the publisher readiness edge is rejected.
-verify_session_producer_fixture "${session_target}" || {
+verify_session_producer_fixture "${session_target}" "${fake_gamescope_unit}" || {
     echo 'session-authority systemd-safety: FAIL: Gamescope session producer fixture is incomplete' >&2
     exit 1
 }
 sed '/^After=pocketforge-session-publisher.service$/d' \
     "${session_target}" >"${tmp}/unordered-session.target"
-if verify_session_producer_fixture "${tmp}/unordered-session.target"; then
+if verify_session_producer_fixture "${tmp}/unordered-session.target" "${fake_gamescope_unit}"; then
     echo 'session-authority systemd-safety: FAIL: unordered session publisher passed' >&2
+    exit 1
+fi
+sed '/^OnSuccess=pocketforge-gamescope-fallback.service$/d' \
+    "${fake_gamescope_unit}" >"${tmp}/incomplete-gamescope.service"
+if verify_session_producer_fixture "${session_target}" "${tmp}/incomplete-gamescope.service"; then
+    echo 'session-authority systemd-safety: FAIL: compositor without clean-exit fallback passed' >&2
     exit 1
 fi
 gamescope_self_test="$(python3 "${fake_gamescope}" --self-test)"

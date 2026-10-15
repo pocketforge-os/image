@@ -848,6 +848,7 @@ if ! docker_checked exec "${systemd_container}" \
         --unit pf-app@org.pocketforge.fixture.service \
         --unit pf-input-broker.service \
         --unit pocketforge-gamescope.service \
+        --unit pocketforge-gamescope-fallback.service \
         --unit pocketforge-session-publisher.service \
         --unit pocketforge-gamescope-session.target \
         --unit pocketforge-foreground.target \
