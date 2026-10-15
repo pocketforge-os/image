@@ -244,7 +244,7 @@ gamescope_self_test="$(python3 "${fake_gamescope}" --self-test)"
 grep -Fqx 'fake-gamescope self-test: PASS filesystem_sockets=2 abstract_sockets=0' \
     <<<"${gamescope_self_test}" || exit 1
 
-# Runtime 31eaa601 loads the image-owned resource inventory before compiling
+# Runtime d6ae4fa1 loads the image-owned resource inventory before compiling
 # launch policy. Exercise the same g1 inventory as the image and reject a
 # fixture whose compositor route is incomplete.
 verify_app_policy_inventory_fixture "${app_policy_inventory}" || {
