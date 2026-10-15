@@ -14,6 +14,7 @@ Registered in .github/workflows/hermetic-tests.yml.
 
 from __future__ import annotations
 
+import datetime
 import importlib.util
 import os
 import re
@@ -177,6 +178,9 @@ def section_asset_audit(work):
         "Containerfile",
         "pins.env",
         "run.sh",
+        "run-guest.sh",
+        "build-guest-payload.sh",
+        "guest-payload.pins",
         "negative-control.sh",
         "report/report.py",
         "validate/validate_transcript.py",
@@ -187,6 +191,10 @@ def section_asset_audit(work):
         "session/udev-shim.sh",
         "tools/fake-input.c",
         "tools/pf_uinput_domain_guard.h",
+        "tools/require-apt-proxy.sh",
+        "tools/normalize-guest-payload-root.sh",
+        "tools/regenerate-guest-ld-cache.sh",
+        "tools/inventory-guest-payload.py",
         "tools/private-input.c",
         "tools/pf-shot.c",
         "tools/provision-wayland-protocols.sh",
@@ -206,6 +214,13 @@ def section_asset_audit(work):
         "selftest/fake_input_guard_test.c",
         "selftest/test-fake-input-guard.sh",
         "selftest/test-negative-control-wrapper.sh",
+        "selftest/test-guest-agent.py",
+        "selftest/test-guest-kernel-cleanup.py",
+        "selftest/test-apt-proxy-guard.sh",
+        "selftest/test-payload-reproducibility.sh",
+        "guest/agent.py",
+        "guest/build-tools.sh",
+        "session/entry-guest.sh",
         "selftest/uinput-domain-v1.SOURCE",
         "selftest/uinput-domain-v1.tsv",
     ]
@@ -223,6 +238,135 @@ def section_asset_audit(work):
             continue
         hits = audit_file(os.path.join(HARNESS, rel))
         require(not hits, f"forbidden pattern(s) {hits} in tests/input-harness/{rel}")
+
+    with open(os.path.join(REPO, "scripts", "build-rootfs.sh"), "r", encoding="utf-8") as handle:
+        rootfs_build = handle.read()
+    require(
+        'tests/input-harness/guest/agent.py' not in rootfs_build
+        and 'tests/input-harness/run-guest.sh' not in rootfs_build
+        and 'pf-input-harness-agent.service' not in rootfs_build,
+        "product rootfs unexpectedly packages the test-only harness",
+    )
+    payload_builder_path = os.path.join(HARNESS, "build-guest-payload.sh")
+    with open(payload_builder_path, "r", encoding="utf-8") as handle:
+        payload_builder = handle.read()
+    with open(os.path.join(HARNESS, "Containerfile.guest-payload"), "r", encoding="utf-8") as handle:
+        payload_container = handle.read()
+    payload_pins = {}
+    with open(os.path.join(HARNESS, "guest-payload.pins"), "r", encoding="utf-8") as handle:
+        for line in handle:
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, value = line.rstrip("\n").split("=", 1)
+                payload_pins[key] = value
+    snapshot_epoch = int(
+        datetime.datetime.strptime(
+            payload_pins.get("SNAPSHOT_DATE", ""), "%Y%m%dT%H%M%SZ"
+        )
+        .replace(tzinfo=datetime.timezone.utc)
+        .timestamp()
+    )
+    require(
+        int(payload_pins.get("SOURCE_DATE_EPOCH", "0")) == snapshot_epoch
+        and snapshot_epoch > 0,
+        "payload SOURCE_DATE_EPOCH is not the fixed, nonzero snapshot instant",
+    )
+    with open(os.path.join(HARNESS, "guest", "build-tools.sh"), "r", encoding="utf-8") as handle:
+        payload_build_tools = handle.read()
+    require(
+        f"export SOURCE_DATE_EPOCH={snapshot_epoch}" in payload_build_tools
+        and f'test "${{SOURCE_DATE_EPOCH}}" = {snapshot_epoch}' in payload_container,
+        "payload producer phases do not share the snapshot epoch",
+    )
+    require(
+        "mmdebstrap" in payload_container
+        and "snapshot.debian.org" in payload_container
+        and ". /work/guest-payload.pins" in payload_container
+        and "export SOURCE_DATE_EPOCH" in payload_container
+        and payload_container.count(". /usr/local/libexec/require-apt-proxy.sh") == 3
+        and '--aptopt=Acquire::http::Proxy' in payload_container
+        and "git clone" not in payload_container
+        and "mksquashfs" in payload_builder
+        and "-all-time" in payload_builder
+        and "contains_product_gamescope" in payload_builder
+        and "gamescope must not be included" in payload_builder,
+        "guest attachment lacks pinned Bookworm/squashfs/product-gamescope exclusions",
+    )
+    # Positive/negative controls for cross-run reproducibility. Repacking one
+    # already-built tree twice cannot detect mmdebstrap or source-tree clock
+    # inputs, so both producer phases must consume the committed epoch.
+    require(
+        'find "$stage/build-root/src" -print0' in payload_builder
+        and payload_builder.index('find "$stage/build-root/src" -print0')
+        < payload_builder.index('chroot "$stage/build-root"'),
+        "payload producer does not normalize source mtimes before compilation",
+    )
+    require(
+        payload_builder.index("normalize-guest-payload-root.sh")
+        < payload_builder.index("regenerate-guest-ld-cache.sh")
+        < payload_builder.index("inventory-guest-payload.py"),
+        "payload producer does not inventory the final regenerated loader cache",
+    )
+    nonreproducible_container = payload_container.replace(
+        "export SOURCE_DATE_EPOCH", "# seeded missing epoch"
+    )
+    require(
+        "export SOURCE_DATE_EPOCH" not in nonreproducible_container,
+        "reproducibility audit missed its absent-mmdebstrap-epoch negative control",
+    )
+    nonreproducible_builder = payload_builder.replace(
+        'find "$stage/build-root/src" -print0', "# seeded missing normalization"
+    )
+    require(
+        'find "$stage/build-root/src" -print0' not in nonreproducible_builder,
+        "reproducibility audit missed its absent-source-normalization negative control",
+    )
+    with open(os.path.join(HARNESS, "verify-guest-payload.sh"), "r", encoding="utf-8") as handle:
+        payload_verifier = handle.read()
+    require(
+        "guest-payload-observed" in payload_verifier
+        and payload_verifier.index("guest-payload-observed")
+        < payload_verifier.index('[[ "$actual_sha" =='),
+        "payload verifier does not report observed addresses before pin refusal",
+    )
+    with open(
+        os.path.join(REPO, ".github", "workflows", "input-harness-payload.yml"),
+        "r",
+        encoding="utf-8",
+    ) as handle:
+        payload_workflow = handle.read()
+    require(
+        'docker buildx inspect pf-insecure --bootstrap' in payload_workflow
+        and '--builder pf-insecure' in payload_workflow
+        and 'docker pull "$PF_BUILD_IMAGE"' not in payload_workflow
+        and '--build-arg PF_BUILD_IMAGE="$PF_BUILD_IMAGE"' in payload_workflow,
+        "payload workflow does not use the runner's approved insecure-registry builder",
+    )
+    require(
+        '--build-arg PF_APT_PROXY=http://10.0.32.86:3142' in payload_workflow,
+        "payload workflow does not pass the fleet apt-cacher-ng endpoint",
+    )
+    require(
+        '--build-context sdl-src="$RUNNER_TEMP/payload-contexts/sdl"' in payload_workflow
+        and '--build-context gamescope-src="$RUNNER_TEMP/payload-contexts/gamescope"'
+        in payload_workflow
+        and '--build-context libei-src="$RUNNER_TEMP/payload-contexts/libei"'
+        in payload_workflow,
+        "payload workflow does not stage pinned source contexts outside BuildKit RUN",
+    )
+    require(
+        payload_workflow.index('cat "$out/$evidence"')
+        < payload_workflow.index("verify-guest-payload.sh")
+        and "apt-sources.txt runtime-packages.tsv payload-files.tsv" in payload_workflow,
+        "payload workflow does not print full provenance before pin verification",
+    )
+    with open(os.path.join(HARNESS, "run-guest.sh"), "r", encoding="utf-8") as handle:
+        guest_runner = handle.read()
+    require(
+        "reason=unsafe_uinput_domain" in guest_runner
+        and "systemd-detect-virt --container --quiet" in guest_runner
+        and "/proc/device-tree/compatible" in guest_runner,
+        "guest runner lacks the positive-identity fail-closed preflight",
+    )
 
     # Negative control for the auditor itself: injecting --privileged into
     # a copy of run.sh must be caught by the same scan.
@@ -358,8 +502,11 @@ def section_asset_audit(work):
                 f"default input path {rel} references a host input device",
             )
         require(
-            '"fake-input"' not in driver_text and "udev-shim.sh" not in driver_text,
-            "driver.py still launches the kernel-device path",
+            'os.environ.get("PF_INPUT_SOURCE") == "guest-kernel"' in driver_text
+            and 'class KernelInput:' in driver_text
+            and '"fake-input"' in driver_text
+            and "udev-shim.sh" not in driver_text,
+            "driver.py does not confine the kernel-device path to the explicit guest mode",
         )
         with open(os.path.join(HARNESS, "Containerfile"), "r", encoding="utf-8") as handle:
             container_text = handle.read()
@@ -431,12 +578,13 @@ def section_asset_audit(work):
 
     # A socket alone is insufficient: gamescope only manages native
     # xdg-shell surfaces when its Wayland exposure path is enabled.
-    entry_path = os.path.join(HARNESS, "session", "entry.sh")
+    entry_path = os.path.join(HARNESS, "session", "entry-guest.sh")
     with open(entry_path, "r", encoding="utf-8") as handle:
         entry_source = handle.read()
     require(
-        "gamescope --backend headless --expose-wayland" in entry_source,
-        "headless gamescope launch does not enable managed Wayland clients",
+        "/usr/bin/gamescope --backend drm --expose-wayland" in entry_source
+        and "--backend headless" not in entry_source,
+        "guest real-kernel tier must use product gamescope's libinput-capable DRM session",
     )
 
     with open(os.path.join(HARNESS, "session", "driver.py"), "r", encoding="utf-8") as handle:
