@@ -34,7 +34,8 @@ run_session() {
 }
 
 run_layout() {
-	local layout="$1" expected="$2" session_out="$OUT/layout-scenario/$layout"
+	local layout="$1" expected="$2"
+	local session_out="$OUT/layout-scenario/$layout"
 	local state_dir="$LAYOUT_STATE_ROOT/$layout"
 	mkdir -p "$state_dir"
 	printf '{"keyboardLayout":"%s"}\n' "$layout" >"$state_dir/prefs.json"
