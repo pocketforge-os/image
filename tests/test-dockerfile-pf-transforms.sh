@@ -48,13 +48,26 @@ printf 'PASS: Dockerfile preserves conditional cleanup bodies and strips only th
 
 python3 "$root/build/tests/test_gpu_um_toolchain_drift.py"
 
-target_gpu_um_sha=3f045e0ae9ac2855df143060200b18922e155fa1
-stale_gpu_um_sha=8cda9585d05d72c072c82a436b4d4db92ee93386
+missing_installed_repro="$tmpdir/gpu-um-missing-installed-repro.Dockerfile"
+sed '/^COPY --from=gpu-um-build \/src\/installed-cross-build-sha256.txt \/installed-cross-build-sha256.txt$/d' \
+  "$dockerfile" >"$missing_installed_repro"
+gpu_um_missing_installed_repro="$tmpdir/gpu-um-missing-installed-repro.log"
+if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \
+  --dockerfile "$missing_installed_repro" >"$gpu_um_missing_installed_repro" 2>&1; then
+  printf '%s\n' 'FAIL: GPU-UM drift guard accepted a missing installed-output evidence export' >&2
+  exit 1
+fi
+grep -Fq "FAIL: installed output evidence export: expected 'present', got 'missing'" \
+  "$gpu_um_missing_installed_repro"
+printf '%s\n' 'PASS: gpu-um recipe guard rejects a missing installed-output evidence export'
+
+target_gpu_um_sha=1ae75772e7f42251062cf660fc13577b8fd60664
+stale_gpu_um_sha=3f045e0ae9ac2855df143060200b18922e155fa1
 stale_dockerfile="$tmpdir/gpu-um-stale.Dockerfile"
 stale_fixture="$tmpdir/gpu-um-stale-fixture.Dockerfile"
 sed "s/$target_gpu_um_sha/$stale_gpu_um_sha/g" "$dockerfile" >"$stale_dockerfile"
 sed "s/$target_gpu_um_sha/$stale_gpu_um_sha/g" \
-  "$root/build/tests/fixtures/gpu-um-toolchain-3f045e0a.Dockerfile" >"$stale_fixture"
+  "$root/build/tests/fixtures/gpu-um-toolchain-1ae75772.Dockerfile" >"$stale_fixture"
 
 gpu_um_stale="$tmpdir/gpu-um-stale-source-pin.log"
 if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \

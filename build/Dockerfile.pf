@@ -551,7 +551,7 @@ GPUUMNONE
 
 # --- 1/5 toolchain: Ubuntu 24.04 (native x86_64) + the arm64 cross toolchain + LLVM 20 ---
 # Keep the load-bearing toolchain settings aligned with gpu-um-tsp's
-# docker/Dockerfile.ge8300-mesa-cross at 3f045e0ae9ac2855df143060200b18922e155fa1. Do NOT add
+# docker/Dockerfile.ge8300-mesa-cross at 1ae75772e7f42251062cf660fc13577b8fd60664. Do NOT add
 # --platform=linux/arm64 anywhere in this subgraph: every program this recipe executes is
 # x86_64 (the "native precompilers" stage below is the whole reason a cross build needs a
 # native pass at all — mesa_clc/pco_clc/vtn_bindgen2 run at BUILD time, not on-device).
@@ -785,17 +785,34 @@ for pass in 1 2; do
   SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" ninja -C "${build_dir}"
   so=src/imagination/vulkan/libvulkan_powervr_mesa.so
   if [ "${pass}" = 1 ]; then
+    DESTDIR=/instroot-first SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+      meson install -C "${build_dir}" --no-rebuild --skip-subprojects
     cp "${build_dir}/${so}" /first-cross-build.so
+    cp /instroot-first/usr/local/lib/libgallium_dri.so \
+      /first-installed-gallium.so
+    cp /instroot-first/usr/local/lib/libvulkan_powervr_mesa.so \
+      /first-installed-vulkan.so
     find "${build_dir}" -depth -delete
+  else
+    DESTDIR=/instroot SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+      meson install -C "${build_dir}" --no-rebuild --skip-subprojects
   fi
 done
 so=src/imagination/vulkan/libvulkan_powervr_mesa.so
 readelf -h "build-cross/${so}" | grep -Eq 'Machine:[[:space:]]+AArch64'
 cmp /first-cross-build.so "build-cross/${so}"
 sha256sum /first-cross-build.so "build-cross/${so}" >/src/cross-build-sha256.txt
+cmp /first-installed-vulkan.so \
+  /instroot/usr/local/lib/libvulkan_powervr_mesa.so
+cmp /first-installed-gallium.so \
+  /instroot/usr/local/lib/libgallium_dri.so
+sha256sum /first-installed-vulkan.so \
+  /instroot/usr/local/lib/libvulkan_powervr_mesa.so \
+  /first-installed-gallium.so \
+  /instroot/usr/local/lib/libgallium_dri.so \
+  >/src/installed-cross-build-sha256.txt
 elapsed="$(( $(date +%s) - start ))"
 printf 'two_builds_elapsed_seconds=%s\n' "${elapsed}" >/src/cross-build-time.txt
-DESTDIR=/instroot SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" meson install -C build-cross --no-rebuild --skip-subprojects
 install -D -m 0644 /tmp/10-pocketforge-zink.conf \
   /instroot/usr/local/share/drirc.d/10-pocketforge-zink.conf
 meson introspect --buildoptions build-cross >/instroot/.pf-gpu-um-build-options.json
@@ -838,6 +855,7 @@ FROM scratch AS gpu-um-mesa-open
 COPY --from=gpu-um-build /mesa-source-commit /mesa-source-commit
 COPY --from=gpu-um-build /toolchain-packages.txt /toolchain-packages.txt
 COPY --from=gpu-um-build /src/cross-build-sha256.txt /cross-build-sha256.txt
+COPY --from=gpu-um-build /src/installed-cross-build-sha256.txt /installed-cross-build-sha256.txt
 COPY --from=gpu-um-build /src/cross-build-time.txt /cross-build-time.txt
 COPY --from=gpu-um-build /instroot/.pf-gpu-um-provenance /out/.pf-gpu-um-provenance
 COPY --from=gpu-um-build /instroot/.pf-gpu-um-build-options.json /out/.pf-gpu-um-build-options.json
