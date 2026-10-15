@@ -169,9 +169,12 @@ publishes an immutable generation at `/run/pocketforge/session`.
 `Restart=no` and a boot-long one-start limit prevent a
 second Gamescope session after exit. The re-armable
 `pocketforge-gamescope-fallback.service` restores `pf-shell-selected.service`
-after every supervisor exit; it does not remain active and suppress later
-`OnSuccess=` or `OnFailure=` activations. The default-session decision remains
-outside this graph.
+after every supervisor exit. Before starting the shell it clears that unit's
+stale start-limit history: intentional panel handoffs otherwise consume the
+same manager counter as crashes. The shell retains `Restart=on-failure` and its
+rate limit for an autonomous crash loop. The fallback does not remain active
+and suppress later `OnSuccess=` or `OnFailure=` activations. The default-session
+decision remains outside this graph.
 
 Xwayland is capability-scoped. The shared `environment` contains Wayland data
 only. `capabilities/x11` carries `DISPLAY` and the filesystem X socket for a

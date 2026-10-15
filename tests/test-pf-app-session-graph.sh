@@ -136,7 +136,10 @@ def reusable(text: str) -> bool:
     lines = [line.strip() for line in text.splitlines()]
     return (
         "Type=oneshot" in lines
+        and "ExecStart=/usr/bin/systemctl reset-failed pf-shell-selected.service" in lines
         and "ExecStart=/usr/bin/systemctl start --no-block pf-shell-selected.service" in lines
+        and lines.index("ExecStart=/usr/bin/systemctl reset-failed pf-shell-selected.service")
+        < lines.index("ExecStart=/usr/bin/systemctl start --no-block pf-shell-selected.service")
         and not any(line in ("RemainAfterExit=yes", "RemainAfterExit=true") for line in lines)
     )
 
@@ -144,6 +147,9 @@ def reusable(text: str) -> bool:
 production = Path(sys.argv[1]).read_text(encoding="utf-8")
 assert reusable(production)
 assert not reusable(production + "\nRemainAfterExit=yes\n")
+assert not reusable(production.replace(
+    "ExecStart=/usr/bin/systemctl reset-failed pf-shell-selected.service\n", ""
+))
 PY
 
 # The runtime-root extension resets inherited groups before adding its compiled

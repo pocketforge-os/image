@@ -104,7 +104,13 @@ check_rearmable_fallback() {
 
     grep -Fx 'Type=oneshot' "${unit}" >/dev/null \
         && ! grep -Eq '^RemainAfterExit=(yes|true)$' "${unit}" \
-        && test "$(grep -Fc 'ExecStart=' "${unit}")" -eq 1
+        && test "$(grep -Fc 'ExecStart=' "${unit}")" -eq 2 \
+        && grep -Fx 'ExecStart=/usr/bin/systemctl reset-failed pf-shell-selected.service' \
+            "${unit}" >/dev/null \
+        && grep -Fx 'ExecStart=/usr/bin/systemctl start --no-block pf-shell-selected.service' \
+            "${unit}" >/dev/null \
+        && test "$(grep -n '^ExecStart=' "${unit}" | head -n 1 | cut -d: -f2-)" \
+            = 'ExecStart=/usr/bin/systemctl reset-failed pf-shell-selected.service'
 }
 check_rearmable_fallback "${fallback}" \
     || fail "fallback cannot reactivate the selected shell after every session"
@@ -112,6 +118,11 @@ cp "${fallback}" "${scratch}/sticky-fallback.service"
 printf '\nRemainAfterExit=yes\n' >>"${scratch}/sticky-fallback.service"
 if check_rearmable_fallback "${scratch}/sticky-fallback.service"; then
     fail "fallback check accepted a once-per-boot sticky unit"
+fi
+sed '/reset-failed pf-shell-selected.service/d' "${fallback}" \
+    >"${scratch}/fallback-with-stale-start-limit.service"
+if check_rearmable_fallback "${scratch}/fallback-with-stale-start-limit.service"; then
+    fail "fallback check accepted a stale selected-shell start limit"
 fi
 
 rules="${scratch}/g1/etc/udev/rules.d/73-pocketforge-compositor-input.rules"
