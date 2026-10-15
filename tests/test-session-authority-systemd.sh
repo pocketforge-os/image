@@ -663,6 +663,8 @@ install -m 0644 "${containerfile}" "${context}/Containerfile"
 install -m 0644 "${fixtures}/10-test-driver-peer.conf" \
     "${context}/10-test-driver-peer.conf"
 install -m 0644 "${app_unit}" "${context}/pf-app@.service"
+install -m 0644 "${fixtures}/10-test-landlock-unavailable.conf" \
+    "${context}/10-test-landlock-unavailable.conf"
 install -m 0644 "${fixtures}/pocketforge-foreground.target" \
     "${context}/pocketforge-foreground.target"
 install -m 0644 "${fixtures}/pocketforge-gamescope-session.target" \

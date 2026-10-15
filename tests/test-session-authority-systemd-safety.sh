@@ -28,6 +28,7 @@ nonproduction_platform_renderer="${root}/tests/session-authority-systemd/make-no
 platform_descriptor="${root}/tests/session-authority-systemd/capabilities.toml"
 handwritten_platform="${root}/tests/session-authority-systemd/platform-capabilities.toml"
 app_manifest="${root}/tests/session-authority-systemd/app.toml"
+landlock_unavailable_dropin="${root}/tests/session-authority-systemd/10-test-landlock-unavailable.conf"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
 fake_root="${tmp}/host"
 fake_bin="${fake_root}/.test-bin"
@@ -167,6 +168,7 @@ verify_ci_landlock_fixture() {
     local test_manifest="$1"
     local production_contract="$2"
     local live_contract="$3"
+    local test_dropin="$4"
 
     if ! python3 - "${test_manifest}" "${production_contract}" "${live_contract}" <<'PY'
 import sys
@@ -197,7 +199,15 @@ PY
         "${harness}" \
         && grep -Fqx '        "landlock_full_min_abi": 10,' "${platform_renderer}" \
         && grep -Fqx '        "landlock_browser_min_abi": 6,' "${platform_renderer}" \
-        && ! grep -Eq 'sed .*landlock|landlock_(full|browser)_min_abi=' "${harness}"
+        && ! grep -Eq 'sed .*landlock|landlock_(full|browser)_min_abi=' "${harness}" \
+        && grep -Fqx 'SystemCallErrorNumber=EPERM' "${test_dropin}" \
+        && grep -Fqx \
+            'SystemCallFilter=~landlock_create_ruleset landlock_add_rule landlock_restrict_self' \
+            "${test_dropin}" \
+        && grep -Fq 'COPY 10-test-landlock-unavailable.conf /etc/systemd/system/pf-app@.service.d/10-test-landlock-unavailable.conf' \
+            "${recipe}" \
+        && grep -Fq '/etc/systemd/system/pf-app@.service' "${recipe}" \
+        && ! grep -Fq 'SystemCallFilter=' "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
 }
 
 # pf-app@ now consumes the compositor session environment and socket. Exercise
@@ -275,7 +285,8 @@ EOF
 python3 "${nonproduction_platform_renderer}" \
     "${tmp}/production-platform.toml" "${tmp}/live-platform.toml"
 verify_ci_landlock_fixture \
-    "${app_manifest}" "${tmp}/production-platform.toml" "${tmp}/live-platform.toml" || {
+    "${app_manifest}" "${tmp}/production-platform.toml" "${tmp}/live-platform.toml" \
+    "${landlock_unavailable_dropin}" || {
     echo 'session-authority systemd-safety: FAIL: CI fixture Landlock contract is not isolated' >&2
     exit 1
 }
@@ -288,6 +299,14 @@ if python3 "${nonproduction_platform_renderer}" \
 fi
 if [ -e "${tmp}/invalid-live-platform.toml" ]; then
     echo 'session-authority systemd-safety: FAIL: refused contract left output' >&2
+    exit 1
+fi
+sed '/^SystemCallFilter=/d' "${landlock_unavailable_dropin}" \
+    >"${tmp}/unguarded-landlock.conf"
+if verify_ci_landlock_fixture \
+    "${app_manifest}" "${tmp}/production-platform.toml" "${tmp}/live-platform.toml" \
+    "${tmp}/unguarded-landlock.conf"; then
+    echo 'session-authority systemd-safety: FAIL: unguarded Docker Landlock fixture passed' >&2
     exit 1
 fi
 
