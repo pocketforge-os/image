@@ -6,6 +6,7 @@ systemd_root="${root}/rootfs-overlay/etc/systemd/system"
 app="${systemd_root}/pf-app@.service"
 broker="${systemd_root}/pf-input-broker.service.d/10-app-session.conf"
 fallback="${systemd_root}/pocketforge-gamescope-fallback.service"
+resident="${systemd_root}/pocketforge-gamescope-resident.service"
 renderer="${root}/scripts/render-app-runtime-root.py"
 take_panel="${root}/rootfs-overlay/usr/bin/pf-take-panel"
 workflow="${root}/.github/workflows/hermetic-tests.yml"
@@ -99,6 +100,30 @@ for name, candidate in controls.items():
     raise AssertionError(f"negative control was accepted: {name}")
 PY
 
+python3 - "${resident}" "${app}" "${broker}" <<'PY'
+from pathlib import Path
+import sys
+
+resident, app, broker = (Path(path).read_text(encoding="utf-8") for path in sys.argv[1:])
+required = {
+    "BindsTo=pocketforge-gamescope-session.target",
+    "After=pocketforge-gamescope-session.target",
+    "Type=oneshot",
+    "ExecStart=/usr/bin/true",
+    "RemainAfterExit=yes",
+}
+lines = {line.strip() for line in resident.splitlines()}
+assert required <= lines
+assert "[Install]" not in lines
+assert "pocketforge-gamescope-resident.service" not in app
+assert "pocketforge-gamescope-resident.service" not in broker
+
+without_bind = resident.replace("BindsTo=pocketforge-gamescope-session.target\n", "")
+assert "BindsTo=pocketforge-gamescope-session.target" not in {
+    line.strip() for line in without_bind.splitlines()
+}
+PY
+
 # Every terminal path below releases the session target, whose PartOf= edge
 # stops Gamescope. Its OnSuccess=/OnFailure= fallback must be re-armable; a
 # RemainAfterExit oneshot handles only the first app session in a boot.
@@ -146,7 +171,8 @@ for unit in \
     pocketforge-gamescope-session.target \
     pocketforge-gamescope.service \
     pocketforge-session-publisher.service \
-    pocketforge-gamescope-fallback.service; do
+    pocketforge-gamescope-fallback.service \
+    pocketforge-gamescope-resident.service; do
     cp "${systemd_root}/${unit}" "${units}/${unit}"
 done
 cp "${broker}" "${units}/pf-input-broker.service.d/10-app-session.conf"
@@ -166,7 +192,7 @@ printf '[Unit]\nDescription=fixture\n' >"${units}/pocketforge-foreground.target"
 for target in sysinit.target basic.target shutdown.target; do
     printf '[Unit]\nDescription=fixture\n' >"${units}/${target}"
 done
-for binary in pf-app-launch pf-input-broker gamescope systemctl test; do
+for binary in pf-app-launch pf-input-broker gamescope systemctl test true; do
     printf '#!/bin/sh\nexit 0\n' >"${verify}/usr/bin/${binary}"
     chmod 0755 "${verify}/usr/bin/${binary}"
 done
@@ -179,6 +205,7 @@ if ! systemd-analyze verify --man=no --root="${verify}" \
     pocketforge-gamescope.service \
     pocketforge-session-publisher.service \
     pocketforge-gamescope-fallback.service \
+    pocketforge-gamescope-resident.service \
     >"${scratch}/verify.out" 2>&1; then
     cat "${scratch}/verify.out" >&2
     fail "systemd-analyze rejected the pf-app Gamescope graph"

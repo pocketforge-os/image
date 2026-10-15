@@ -61,6 +61,7 @@ COPY pf-app@.service /etc/systemd/system/pf-app@.service
 COPY 10-test-landlock-unavailable.conf /etc/systemd/system/pf-app@.service.d/10-test-landlock-unavailable.conf
 COPY pocketforge-foreground.target /etc/systemd/system/pocketforge-foreground.target
 COPY pocketforge-gamescope-session.target /etc/systemd/system/pocketforge-gamescope-session.target
+COPY pocketforge-gamescope-resident.service /etc/systemd/system/pocketforge-gamescope-resident.service
 COPY pocketforge-gamescope.service /etc/systemd/system/pocketforge-gamescope.service
 COPY pocketforge-session-publisher.service /etc/systemd/system/pocketforge-session-publisher.service
 COPY pocketforge-gamescope-fallback.service /etc/systemd/system/pocketforge-gamescope-fallback.service
@@ -104,6 +105,7 @@ RUN chmod 0755 \
         /etc/systemd/system/pf-app@.service.d/10-test-landlock-unavailable.conf \
         /etc/systemd/system/pocketforge-foreground.target \
         /etc/systemd/system/pocketforge-gamescope-session.target \
+        /etc/systemd/system/pocketforge-gamescope-resident.service \
         /etc/systemd/system/pocketforge-gamescope.service \
         /etc/systemd/system/pocketforge-session-publisher.service \
         /etc/systemd/system/pocketforge-gamescope-fallback.service \
@@ -128,6 +130,7 @@ RUN chmod 0755 \
         /etc/systemd/system/pf-app@.service \
         /etc/systemd/system/session-authority-driver.service \
         /etc/systemd/system/pocketforge-gamescope-session.target \
+        /etc/systemd/system/pocketforge-gamescope-resident.service \
         /etc/systemd/system/pocketforge-gamescope.service \
         /etc/systemd/system/pocketforge-session-publisher.service \
         /etc/systemd/system/pocketforge-gamescope-fallback.service \

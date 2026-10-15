@@ -33,7 +33,8 @@ test -z "$(find "${scratch}/absent" -mindepth 1 -print -quit)" \
 "${installer}" g1 "${scratch}/g1"
 unit_root="${scratch}/g1/etc/systemd/system"
 for unit in pocketforge-gamescope-session.target pocketforge-gamescope.service \
-    pocketforge-session-publisher.service pocketforge-gamescope-fallback.service; do
+    pocketforge-session-publisher.service pocketforge-gamescope-fallback.service \
+    pocketforge-gamescope-resident.service; do
     test -f "${unit_root}/${unit}" || fail "g1 install omitted ${unit}"
 done
 test -z "$(find "${unit_root}" -path '*.wants/*' -print -quit)" \
@@ -75,6 +76,29 @@ grep -F 'SupplementaryGroups=video render pf-compositor-input' "${owner}" >/dev/
 ! grep -E 'SupplementaryGroups=.*(^| )input( |$)' "${owner}" >/dev/null
 grep -F -- '--xwayland-count 1' "${owner}" >/dev/null
 fallback="${unit_root}/pocketforge-gamescope-fallback.service"
+resident="${unit_root}/pocketforge-gamescope-resident.service"
+check_resident_hold() {
+    local unit=$1
+
+    grep -Fx 'BindsTo=pocketforge-gamescope-session.target' "${unit}" >/dev/null \
+        && grep -Fx 'After=pocketforge-gamescope-session.target' "${unit}" >/dev/null \
+        && grep -Fx 'Type=oneshot' "${unit}" >/dev/null \
+        && grep -Fx 'ExecStart=/usr/bin/true' "${unit}" >/dev/null \
+        && grep -Fx 'RemainAfterExit=yes' "${unit}" >/dev/null \
+        && ! grep -q '^\[Install\]$' "${unit}"
+}
+check_resident_hold "${resident}" \
+    || fail "resident opt-in is not an explicit BoundBy hold"
+cp "${resident}" "${scratch}/resident-without-bind.service"
+sed -i '/^BindsTo=/d' "${scratch}/resident-without-bind.service"
+if check_resident_hold "${scratch}/resident-without-bind.service"; then
+    fail "resident hold check accepted a unit without BindsTo"
+fi
+if grep -Eq 'pocketforge-gamescope-resident\.service' \
+    "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service" \
+    "${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"; then
+    fail "an app-session unit starts the resident hold"
+fi
 check_rearmable_fallback() {
     local unit=$1
 
@@ -103,7 +127,7 @@ grep -F 'ATTRS{name}=="PocketForge virtual mouse"' "${rules}" >/dev/null
 # dependencies; the four units under test are the installed production files.
 verify_root="${scratch}/g1"
 mkdir -p "${verify_root}/usr/bin"
-for binary in gamescope systemctl; do
+for binary in gamescope systemctl true; do
     printf '#!/bin/sh\nexit 0\n' > "${verify_root}/usr/bin/${binary}"
     chmod 0755 "${verify_root}/usr/bin/${binary}"
 done
@@ -119,6 +143,7 @@ done
 if ! systemd-analyze verify --man=no --root="${verify_root}" \
     pocketforge-gamescope-session.target pocketforge-gamescope.service \
     pocketforge-session-publisher.service pocketforge-gamescope-fallback.service \
+    pocketforge-gamescope-resident.service \
     >"${scratch}/systemd-verify.out" 2>&1; then
     cat "${scratch}/systemd-verify.out" >&2
     fail "systemd-analyze rejected the Gamescope session graph"

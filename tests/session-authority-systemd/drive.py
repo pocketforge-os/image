@@ -24,6 +24,9 @@ APP_UNIT = f"pf-app@{APP_ID}.service"
 AUTHORITY_UNIT = "pf-session-authorityd.service"
 OWNER_UNIT = "pf-shell-selected.service"
 TARGET_UNIT = "pocketforge-foreground.target"
+SESSION_TARGET = "pocketforge-gamescope-session.target"
+RESIDENT_UNIT = "pocketforge-gamescope-resident.service"
+GAMESCOPE_UNIT = "pocketforge-gamescope.service"
 BROKER_UNIT = "pf-input-broker.service"
 SOCKET = Path("/run/pocketforge/session-authority.sock")
 BROKER_SOCKET = Path("/run/pocketforge/input-broker.sock")
@@ -503,6 +506,80 @@ def assert_broker_dormant_at_boot() -> str:
     require(broker_grab_count() == 0, "broker grabbed before any app session")
     require(grab_lock_is_held(), "negative control: the shell does not hold the pad grab model")
     return enabled
+
+
+def assert_bare_target_is_unneeded() -> str:
+    """A direct target start is transient; only the resident unit is an opt-in hold."""
+    started = command("systemctl", "start", SESSION_TARGET, check=False)
+    require(started.returncode == 0, f"bare target start failed: {started.stderr.strip()}")
+    wait_for(lambda: not unit_is_active(SESSION_TARGET), "bare Gamescope target to stop as unneeded")
+    wait_for(lambda: unit_is_active(OWNER_UNIT), "owner restore after bare target start")
+    wait_for_owner_grab("bare-target")
+    require(not unit_is_active(RESIDENT_UNIT), "bare target start activated the resident hold")
+    evidence("bare_target stop_when_unneeded=stopped resident=inactive owner=active")
+    return "stopped"
+
+
+def assert_resident_session_stays_up() -> str:
+    """The explicit hold survives an app exit and selects Gamescope session_idle."""
+    command("systemctl", "start", RESIDENT_UNIT)
+    wait_for(lambda: unit_is_active(RESIDENT_UNIT), "resident hold")
+    wait_for(lambda: unit_is_active(SESSION_TARGET), "resident Gamescope target")
+    require(not unit_is_active(OWNER_UNIT), "fb0 owner stayed active during resident Gamescope")
+
+    MODE.write_text("0\n")
+    before_invocations = invocation_count()
+    scope = launch()
+    wait_for(lambda: invocation_count() == before_invocations + 1, "resident app invocation")
+    wait_for(lambda: property_value(APP_UNIT, "ActiveState") == "inactive", "resident app exit")
+    wait_for(lambda: not unit_is_active(BROKER_UNIT), "resident broker stop")
+    wait_for(lambda: authority_state()["phase"] == "Idle", "resident session_idle completion")
+    entry = history_entry(scope.session_id)
+    require(entry["receipt"] == "Returned", f"resident receipt: {entry}")
+    require(
+        entry.get("post_app_owner") == {
+            "owner_tier": "gamescope",
+            "post_app_owner": "session_idle",
+        },
+        f"resident post-app owner: {entry}",
+    )
+    require(unit_is_active(SESSION_TARGET), "resident target stopped after app exit")
+    require(unit_is_active(RESIDENT_UNIT), "resident hold stopped after app exit")
+    require(not unit_is_active(OWNER_UNIT), "fb0 owner replaced resident Gamescope after app exit")
+
+    command("systemctl", "stop", RESIDENT_UNIT)
+    wait_for(lambda: not unit_is_active(SESSION_TARGET), "target release after resident stop")
+    wait_for(lambda: unit_is_active(OWNER_UNIT), "owner restore after resident stop")
+    wait_for_owner_grab("resident-stop")
+    evidence(
+        f"resident_session session={scope.session_id} app_receipt=Returned "
+        "post_app_owner=session_idle target_after_app=active resident_after_app=active"
+    )
+    return scope.session_id
+
+
+def assert_gamescope_failure_drops_resident() -> str:
+    """BindsTo makes a compositor failure release both the target and its hold."""
+    command("systemctl", "start", RESIDENT_UNIT)
+    wait_for(lambda: unit_is_active(RESIDENT_UNIT), "resident hold before compositor failure")
+    wait_for(lambda: unit_is_active(GAMESCOPE_UNIT), "Gamescope before failure")
+    killed = command("systemctl", "kill", "--signal=KILL", GAMESCOPE_UNIT, check=False)
+    require(killed.returncode == 0, f"Gamescope kill failed: {killed.stderr.strip()}")
+    wait_for(lambda: not unit_is_active(SESSION_TARGET), "target stop after Gamescope failure")
+    wait_for(lambda: not unit_is_active(RESIDENT_UNIT), "resident drop after Gamescope failure")
+    wait_for(lambda: unit_is_active(OWNER_UNIT), "owner restore after Gamescope failure")
+    wait_for_owner_grab("gamescope-failure")
+    evidence("gamescope_failure target=inactive resident=inactive owner=active")
+    command("systemctl", "reset-failed", GAMESCOPE_UNIT, SESSION_TARGET, RESIDENT_UNIT, check=False)
+    return "dropped"
+
+
+def reset_grab_evidence_after_residency_checks() -> None:
+    """Residency preflights are outside the app-session grab-order measurement."""
+    (GRAB / "timeline").write_text("")
+    (GRAB / "violations").unlink(missing_ok=True)
+    command("systemctl", "restart", OWNER_UNIT)
+    wait_for_owner_grab("post-residency-baseline")
 
 
 def broker_control(request: bytes) -> bytes:
@@ -1581,6 +1658,10 @@ def main() -> None:
     wait_for(lambda: unit_is_active(OWNER_UNIT), "initial selected owner")
     wait_for_owner_grab("boot")
     broker_boot = assert_broker_dormant_at_boot()
+    bare_target = assert_bare_target_is_unneeded()
+    resident_session = assert_resident_session_stays_up()
+    resident_failure = assert_gamescope_failure_drops_resident()
+    reset_grab_evidence_after_residency_checks()
     order = GrabOrder()
 
     assert_refusals_never_reach_systemd()
@@ -1605,7 +1686,9 @@ def main() -> None:
         f"clean_invocations={clean_invocations} crash_invocations={crash_invocations} "
         "fb0=empty-regular-file "
         "session_scoping_negative_control=ok refused_systemctl_starts=0 owner_restore=ok "
-        f"broker_at_boot=inactive,{broker_boot} grab_lock_negative_control=held-by-shell",
+        f"broker_at_boot=inactive,{broker_boot} grab_lock_negative_control=held-by-shell "
+        f"bare_target={bare_target} resident_session={resident_session} "
+        f"resident_failure={resident_failure}",
         flush=True,
     )
     graceful_session = assert_system_menu_fallback_graceful(order)

@@ -1,0 +1,9 @@
+[Unit]
+Description=Hold the PocketForge Gamescope session resident (explicit opt-in)
+BindsTo=pocketforge-gamescope-session.target
+After=pocketforge-gamescope-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/true
+RemainAfterExit=yes

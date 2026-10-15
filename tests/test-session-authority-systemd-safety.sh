@@ -8,6 +8,7 @@ driver_unit="${root}/tests/session-authority-systemd/session-authority-driver.se
 authority_peer_dropin="${root}/tests/session-authority-systemd/10-test-driver-peer.conf"
 session_target="${root}/tests/session-authority-systemd/pocketforge-gamescope-session.target"
 real_session_target="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-session.target"
+resident_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-resident.service"
 real_gamescope_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope.service"
 fake_gamescope_unit="${root}/tests/session-authority-systemd/pocketforge-gamescope.service"
 fake_gamescope="${root}/tests/session-authority-systemd/fake-gamescope"
@@ -107,6 +108,23 @@ verify_session_producer_fixture() {
         && grep -Fq 'probe["POCKETFORGE_SESSION"] == "/run/pocketforge/session"' "${driver}" \
         && grep -Fq '"wayland_socket": stat.S_ISSOCK(' \
             "${root}/tests/session-authority-systemd/fixture"
+}
+
+verify_resident_fixture() {
+    local unit=$1
+    local test_harness=$2
+    local test_recipe=$3
+
+    grep -Fqx 'BindsTo=pocketforge-gamescope-session.target' "${unit}" \
+        && grep -Fqx 'After=pocketforge-gamescope-session.target' "${unit}" \
+        && grep -Fqx 'Type=oneshot' "${unit}" \
+        && grep -Fqx 'RemainAfterExit=yes' "${unit}" \
+        && ! grep -q '^\[Install\]$' "${unit}" \
+        && grep -Fq 'resident_unit=' "${test_harness}" \
+        && grep -Fq 'pocketforge-gamescope-resident.service' "${test_harness}" \
+        && grep -Fq \
+            'COPY pocketforge-gamescope-resident.service /etc/systemd/system/pocketforge-gamescope-resident.service' \
+            "${test_recipe}"
 }
 
 verify_app_policy_inventory_fixture() {
@@ -243,6 +261,16 @@ fi
 gamescope_self_test="$(python3 "${fake_gamescope}" --self-test)"
 grep -Fqx 'fake-gamescope self-test: PASS filesystem_sockets=2 abstract_sockets=0' \
     <<<"${gamescope_self_test}" || exit 1
+verify_resident_fixture "${resident_unit}" "${harness}" "${recipe}" || {
+    echo 'session-authority systemd-safety: FAIL: resident hold is absent from the live fixture' >&2
+    exit 1
+}
+sed '/^BindsTo=pocketforge-gamescope-session.target$/d' \
+    "${resident_unit}" >"${tmp}/resident-without-bind.service"
+if verify_resident_fixture "${tmp}/resident-without-bind.service" "${harness}" "${recipe}"; then
+    echo 'session-authority systemd-safety: FAIL: unbound resident hold passed' >&2
+    exit 1
+fi
 
 # Runtime d6ae4fa1 loads the image-owned resource inventory before compiling
 # launch policy. Exercise the same g1 inventory as the image and reject a
@@ -1264,7 +1292,8 @@ if verify_orientation_descriptor_fixture \
     exit 1
 fi
 for b4_input in fake-input-broker fake-prefsd pf-prefsd.service fake-shell capabilities.toml \
-    10-app-session.conf 10-input-broker.conf pocketforge-gamescope-session.target; do
+    10-app-session.conf 10-input-broker.conf pocketforge-gamescope-session.target \
+    pocketforge-gamescope-resident.service; do
     grep -Fq "${b4_input}" "${harness}" || exit 1
 done
 # The harness runs a FIXTURE shell; the real unit's edges toward harness units

@@ -156,10 +156,17 @@ The A133 descriptor remains an expectation until G1 replaces
 ### Opt-in image producer
 
 `PF_GAMESCOPE_MODE=g1` images install the disabled
-`pocketforge-gamescope-session.target` graph. Starting that target runs the
-pinned Gamescope as the display owner and atomically publishes an immutable
-generation at `/run/pocketforge/session`; this installation does not enable or
-select the target. `Restart=no` and a boot-long one-start limit prevent a
+`pocketforge-gamescope-session.target` graph. The only resident opt-in is
+`systemctl start pocketforge-gamescope-resident.service`; its active oneshot
+holds the `StopWhenUnneeded` target through a `BindsTo=` reverse pin and drops
+whenever that target stops. Starting the target directly is not a resident
+opt-in: with no app or hold unit pinning it, systemd stops it as unneeded after
+the start transaction. Neither unit has an `[Install]` section, and this
+installation does not enable or select a default session.
+
+The held target runs the pinned Gamescope as the display owner and atomically
+publishes an immutable generation at `/run/pocketforge/session`.
+`Restart=no` and a boot-long one-start limit prevent a
 second Gamescope session after exit. The re-armable
 `pocketforge-gamescope-fallback.service` restores `pf-shell-selected.service`
 after every supervisor exit; it does not remain active and suppress later
