@@ -12,6 +12,7 @@ fixtures="${root}/tests/session-authority-systemd"
 app_unit="${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
 app_dropin_verifier="${root}/tests/verify-session-authority-app-dropins.py"
 app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"
+platform_renderer="${root}/scripts/render-platform-capabilities.py"
 owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf"
 broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
@@ -622,6 +623,15 @@ git -C "${runtime}" checkout --quiet --detach "${runtime_sha}"
 sample_disk runtime_clone
 
 mkdir -p "${context}/runtime"
+PF_APP_RUNTIME_FAMILY=pocketforge/a133-powervr \
+PF_APP_RUNTIME_ABI=1 \
+PF_APP_PLATFORM_VERSION=20 \
+PF_APP_CAPABILITIES='audio entropy input settings' \
+    "${platform_renderer}" --soc sun50iw10p1 --gpu-model open \
+    --gamescope-mode g1 \
+    --runtime-source "${runtime}" \
+    --descriptor "${fixtures}/capabilities.toml" \
+    --output "${context}/platform-capabilities.toml"
 python3 - "${runtime}" "${context}/runtime" <<'PY'
 from pathlib import Path
 import shutil
@@ -684,8 +694,6 @@ install -m 0644 "${fixtures}/app.toml" "${context}/app.toml"
 install -m 0755 "${fixtures}/fixture" "${context}/fixture"
 install -m 0644 "${app_policy_inventory}" \
     "${context}/app-policy.resources.json"
-install -m 0644 "${fixtures}/platform-capabilities.toml" \
-    "${context}/platform-capabilities.toml"
 install -m 0755 "${fixtures}/drive.py" "${context}/drive.py"
 install -m 0755 "${fixtures}/remount-cgroup-systemd" \
     "${context}/remount-cgroup-systemd"
