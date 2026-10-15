@@ -21,6 +21,16 @@ awk '
 [[ -s "$tmp/functions.sh" ]] || fail 'production self-flash v2 function block missing'
 grep -Fq 'pocketforge-selfflash-v2' "$builder" \
     || fail 'versioned self-flash capability marker missing from initrd builder'
+
+recover="$(sed -n '/^selfflash_recover() {/,/^}/p' "$init")"
+post_write="$(sed -n '/^[[:space:]]*if ! sf_v2_write_verify/,/^[[:space:]]*# Success:/p' \
+    <<<"$recover")"
+[[ "$(grep -Fc 'sf_v2_terminal_recovery' <<<"$post_write")" -eq 5 ]] \
+    || fail 'every post-write error must enter terminal FEL recovery'
+if grep -Fq 'return 1' <<<"$post_write"; then
+    fail 'post-write error can return to normal boot'
+fi
+
 # shellcheck source=/dev/null
 . "$tmp/functions.sh"
 for function in sf_v2_validate_and_resolve sf_v2_stage_ram sf_v2_write_verify \
