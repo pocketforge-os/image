@@ -40,6 +40,31 @@ test -z "$(find "${unit_root}" -path '*.wants/*' -print -quit)" \
     || fail "Gamescope session was enabled by the installer"
 
 owner="${unit_root}/pocketforge-gamescope.service"
+drm_systemd_rule="${root}/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
+check_drm_readiness_contract() {
+    local unit=$1
+    local rule=$2
+
+    grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_NETLINK' "${unit}" >/dev/null \
+        || return 1
+    grep -Fx 'SUBSYSTEM=="drm", KERNEL=="card*", TAG+="systemd"' "${rule}" >/dev/null \
+        || return 1
+}
+
+# Gamescope's libseat/udev session needs netlink, and the card0 dependency is
+# meaningful only when udev exposes DRM primary nodes as systemd device units.
+check_drm_readiness_contract "${owner}" "${drm_systemd_rule}" \
+    || fail "Gamescope DRM readiness contract is incomplete"
+cp "${owner}" "${scratch}/owner-missing-netlink.service"
+sed -i 's/ AF_NETLINK//' "${scratch}/owner-missing-netlink.service"
+if check_drm_readiness_contract "${scratch}/owner-missing-netlink.service" "${drm_systemd_rule}"; then
+    fail "DRM readiness check accepted a unit without AF_NETLINK"
+fi
+cp "${drm_systemd_rule}" "${scratch}/rule-missing-card-tag.rules"
+sed -i '/KERNEL=="card\*"/d' "${scratch}/rule-missing-card-tag.rules"
+if check_drm_readiness_contract "${owner}" "${scratch}/rule-missing-card-tag.rules"; then
+    fail "DRM readiness check accepted an untagged card0 dependency"
+fi
 grep -Fx 'Restart=no' "${owner}" >/dev/null
 grep -Fx 'StartLimitBurst=1' "${owner}" >/dev/null
 grep -Fx 'StartLimitIntervalSec=infinity' "${owner}" >/dev/null
