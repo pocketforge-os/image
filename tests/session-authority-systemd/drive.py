@@ -554,15 +554,43 @@ def assert_resident_session_stays_up() -> str:
     require(unit_is_active(RESIDENT_UNIT), "resident hold stopped after app exit")
     require(not unit_is_active(OWNER_UNIT), "fb0 owner replaced resident Gamescope after app exit")
 
+    # A terminal resident outcome must release the authority launch slot while
+    # retaining compositor ownership for the next app in the same held session.
+    before_second_invocations = invocation_count()
+    second_scope = launch()
+    require(second_scope.session_id != scope.session_id, "resident relaunch reused its session id")
+    wait_for(
+        lambda: invocation_count() == before_second_invocations + 1,
+        "second resident app invocation",
+    )
+    wait_for(lambda: property_value(APP_UNIT, "ActiveState") == "inactive", "second resident app exit")
+    wait_for(lambda: not unit_is_active(BROKER_UNIT), "second resident broker stop")
+    wait_for(lambda: authority_state()["phase"] == "Idle", "second resident session_idle completion")
+    second_entry = history_entry(second_scope.session_id)
+    require(second_entry["receipt"] == "Returned", f"second resident receipt: {second_entry}")
+    require(
+        second_entry.get("post_app_owner") == {
+            "owner_tier": "gamescope",
+            "post_app_owner": "session_idle",
+        },
+        f"second resident post-app owner: {second_entry}",
+    )
+    require(unit_is_active(SESSION_TARGET), "resident target stopped after second app exit")
+    require(unit_is_active(RESIDENT_UNIT), "resident hold stopped after second app exit")
+    require(not unit_is_active(OWNER_UNIT), "fb0 owner replaced resident Gamescope after second app exit")
+
     command("systemctl", "stop", RESIDENT_UNIT)
     wait_for(lambda: not unit_is_active(SESSION_TARGET), "target release after resident stop")
+    require(not unit_is_active(TARGET_UNIT), "foreground target active while resident hold was released")
     wait_for(lambda: unit_is_active(OWNER_UNIT), "owner restore after resident stop")
     wait_for_owner_grab("resident-stop")
     evidence(
         f"resident_session session={scope.session_id} app_receipt=Returned "
-        "post_app_owner=session_idle target_after_app=active resident_after_app=active"
+        f"resident_second_session={second_scope.session_id} second_receipt=Returned "
+        "post_app_owner=session_idle target_after_apps=active resident_after_apps=active "
+        "foreground_before_restore=inactive"
     )
-    return scope.session_id
+    return f"{scope.session_id},{second_scope.session_id}"
 
 
 def assert_gamescope_failure_drops_resident() -> str:

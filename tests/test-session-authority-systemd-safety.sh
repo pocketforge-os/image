@@ -135,6 +135,16 @@ verify_residency_scenario_isolation() {
         && [ "$(grep -Fc 'reset_owner_start_limit()' "${test_driver}")" -eq 4 ]
 }
 
+verify_resident_relaunch_fixture() {
+    local test_driver=$1
+
+    grep -Fq 'second_scope = launch()' "${test_driver}" \
+        && grep -Fq 'second resident app invocation' "${test_driver}" \
+        && grep -Fq 'second resident session_idle completion' "${test_driver}" \
+        && grep -Fq 'second_scope.session_id != scope.session_id' "${test_driver}" \
+        && grep -Fq 'resident_second_session=' "${test_driver}"
+}
+
 verify_app_policy_inventory_fixture() {
     local test_inventory="$1"
 
@@ -289,8 +299,18 @@ if verify_residency_scenario_isolation "${tmp}/resident-without-owner-reset.py";
     echo 'session-authority systemd-safety: FAIL: wrong-unit scenario reset passed' >&2
     exit 1
 fi
+verify_resident_relaunch_fixture "${driver}" || {
+    echo 'session-authority systemd-safety: FAIL: resident session does not prove the next launch slot is free' >&2
+    exit 1
+}
+sed 's/second_scope = launch()/second_scope = scope/' \
+    "${driver}" >"${tmp}/resident-without-relaunch.py"
+if verify_resident_relaunch_fixture "${tmp}/resident-without-relaunch.py"; then
+    echo 'session-authority systemd-safety: FAIL: resident relaunch mutation passed' >&2
+    exit 1
+fi
 
-# Runtime d6ae4fa1 loads the image-owned resource inventory before compiling
+# The pinned live runtime loads the image-owned resource inventory before compiling
 # launch policy. Exercise the same g1 inventory as the image and reject a
 # fixture whose compositor route is incomplete.
 verify_app_policy_inventory_fixture "${app_policy_inventory}" || {
