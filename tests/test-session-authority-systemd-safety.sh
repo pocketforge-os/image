@@ -6,6 +6,10 @@ harness="${root}/tests/test-session-authority-systemd.sh"
 driver="${root}/tests/session-authority-systemd/drive.py"
 driver_unit="${root}/tests/session-authority-systemd/session-authority-driver.service"
 authority_peer_dropin="${root}/tests/session-authority-systemd/10-test-driver-peer.conf"
+session_target="${root}/tests/session-authority-systemd/pocketforge-gamescope-session.target"
+real_session_target="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-session.target"
+fake_gamescope_unit="${root}/tests/session-authority-systemd/pocketforge-gamescope.service"
+fake_gamescope="${root}/tests/session-authority-systemd/fake-gamescope"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
@@ -64,6 +68,37 @@ sed 's/--shell-unit session-authority-driver.service/--shell-unit wrong-driver.s
     "${authority_peer_dropin}" >"${tmp}/mismatched-driver-peer.conf"
 if verify_driver_peer_fixture "${driver_unit}" "${tmp}/mismatched-driver-peer.conf" "${harness}"; then
     echo 'session-authority systemd-safety: FAIL: mismatched driver peer unit passed' >&2
+    exit 1
+fi
+
+verify_session_producer_fixture() {
+    local test_target="$1"
+
+    cmp -s "${test_target}" "${real_session_target}" \
+        && grep -Fq 'Requires=pocketforge-gamescope.service pocketforge-session-publisher.service' \
+            "${test_target}" \
+        && grep -Fqx 'After=pocketforge-session-publisher.service' "${test_target}" \
+        && grep -Fqx 'Type=notify' "${fake_gamescope_unit}" \
+        && grep -Fqx 'ExecStart=/usr/local/libexec/fake-gamescope' "${fake_gamescope_unit}" \
+        && grep -Fq 'WAYLAND = Path("/run/pocketforge/gamescope/gamescope-0")' \
+            "${fake_gamescope}" \
+        && grep -Fq 'X11 = Path("/tmp/.X11-unix/X0")' "${fake_gamescope}" \
+        && grep -Fq 'for group_name in gamer audio input video pf-session; do' "${recipe}" \
+        && grep -Fq 'COPY pocketforge-session-publisher.service' "${recipe}" \
+        && grep -Fq 'COPY pf-session-publish /usr/lib/pocketforge/pf-session-publish' "${recipe}"
+}
+
+# pf-app@ now consumes the compositor session environment and socket. Exercise
+# the real target + publisher bytes around a fake socket-owning Gamescope, and
+# prove that dropping the publisher readiness edge is rejected.
+verify_session_producer_fixture "${session_target}" || {
+    echo 'session-authority systemd-safety: FAIL: Gamescope session producer fixture is incomplete' >&2
+    exit 1
+}
+sed '/^After=pocketforge-session-publisher.service$/d' \
+    "${session_target}" >"${tmp}/unordered-session.target"
+if verify_session_producer_fixture "${tmp}/unordered-session.target"; then
+    echo 'session-authority systemd-safety: FAIL: unordered session publisher passed' >&2
     exit 1
 fi
 
