@@ -22,6 +22,7 @@ precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditi
 shell_fixture_verifier="${root}/tests/verify-session-authority-shell-fixture.py"
 app_fixture_verifier="${root}/tests/verify-session-authority-app-fixture.py"
 app_dropin_verifier="${root}/tests/verify-session-authority-app-dropins.py"
+app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
 fake_root="${tmp}/host"
 fake_bin="${fake_root}/.test-bin"
@@ -91,6 +92,30 @@ verify_session_producer_fixture() {
             "${root}/tests/session-authority-systemd/fixture"
 }
 
+verify_app_policy_inventory_fixture() {
+    local test_inventory="$1"
+
+    python3 - "${test_inventory}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+inventory = json.loads(Path(sys.argv[1]).read_text())
+resources = inventory.get("resources", {})
+assert inventory.get("platform_runtime") == "/usr"
+assert resources.get("display-sockets") == ["/run/pocketforge/session/wayland-0"]
+assert resources.get("session-environment") == ["/run/pocketforge/session/environment"]
+assert resources.get("render-devices") == ["/dev/dri/renderD128"]
+PY
+    grep -Fq 'app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"' \
+        "${harness}" \
+        && grep -Fq '"${context}/app-policy.resources.json"' "${harness}" \
+        && grep -Fq '/usr/share/pocketforge/app-policy' "${recipe}" \
+        && grep -Fq \
+            'COPY app-policy.resources.json /usr/share/pocketforge/app-policy/org.pocketforge.fixture.resources.json' \
+            "${recipe}"
+}
+
 # pf-app@ now consumes the compositor session environment and socket. Exercise
 # the real target + publisher bytes around a fake socket-owning Gamescope, and
 # prove that dropping the publisher readiness edge is rejected.
@@ -107,6 +132,27 @@ fi
 gamescope_self_test="$(python3 "${fake_gamescope}" --self-test)"
 grep -Fqx 'fake-gamescope self-test: PASS filesystem_sockets=2 abstract_sockets=0' \
     <<<"${gamescope_self_test}" || exit 1
+
+# Runtime 31eaa601 loads the image-owned resource inventory before compiling
+# launch policy. Exercise the same g1 inventory as the image and reject a
+# fixture whose compositor route is incomplete.
+verify_app_policy_inventory_fixture "${app_policy_inventory}" || {
+    echo 'session-authority systemd-safety: FAIL: app resource inventory is not installed' >&2
+    exit 1
+}
+python3 - "${app_policy_inventory}" "${tmp}/incomplete-resources.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+inventory = json.loads(Path(sys.argv[1]).read_text())
+inventory["resources"].pop("session-environment")
+Path(sys.argv[2]).write_text(json.dumps(inventory))
+PY
+if verify_app_policy_inventory_fixture "${tmp}/incomplete-resources.json"; then
+    echo 'session-authority systemd-safety: FAIL: incomplete compositor inventory passed' >&2
+    exit 1
+fi
 
 mkdir -p \
     "${fake_bin}" \
