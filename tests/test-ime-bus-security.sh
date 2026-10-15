@@ -22,6 +22,10 @@ fail() {
 command -v docker >/dev/null 2>&1 || fail "docker is required for the real IME bus security harness"
 [ "${snapshot}" = 20260601T000000Z ] \
     || fail "snapshot-date.txt drifted: expected 20260601T000000Z, got ${snapshot:-empty}"
+runner_identity=$("${container_dir}/validate-runner-identity.sh" "$(id -u)" "$(id -g)") \
+    || fail "runner identity is unsafe for the IME security harness"
+runner_uid=${runner_identity%%:*}
+runner_gid=${runner_identity#*:}
 
 cleanup() {
     status=$?
@@ -57,8 +61,8 @@ view_root=$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-ime-view.XXXXXX")
 
 docker build \
     --build-arg "APT_SNAPSHOT_DATE=${snapshot}" \
-    --build-arg "PF_IME_UID=$(id -u)" \
-    --build-arg "PF_IME_GID=$(id -g)" \
+    --build-arg "PF_IME_UID=${runner_uid}" \
+    --build-arg "PF_IME_GID=${runner_gid}" \
     --label pf.bead=tsp-ihne1.5 \
     --label "${run_label}" \
     --tag "${image_ref}" \
@@ -70,7 +74,7 @@ image_built=1
 docker run --rm \
     --label pf.bead=tsp-ihne1.5 \
     --label "${run_label}" \
-    --user "$(id -u):$(id -g)" \
+    --user "${runner_identity}" \
     --env HOME=/tmp \
     --env RUNNER_TEMP=/tmp \
     --network none \
@@ -93,7 +97,7 @@ touch "${view_root}/run/pf-ime-door/app-a/own-door"
 docker run --rm \
     --label pf.bead=tsp-ihne1.5 \
     --label "${run_label}" \
-    --user "$(id -u):$(id -g)" \
+    --user "${runner_identity}" \
     --env HOME=/tmp \
     --network none \
     --read-only \

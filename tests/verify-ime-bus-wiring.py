@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed static checks for the private PocketForge IME bus."""
 
+import subprocess
 from pathlib import Path
 
 
@@ -17,7 +18,39 @@ def require(text: str, needle: str, where: str) -> None:
     assert needle in text, f"{where}: missing {needle!r}"
 
 
+def verify_runner_identity_guard() -> None:
+    guard = ROOT / "tests/ime-bus-security/validate-runner-identity.sh"
+    assert guard.is_file(), f"missing {guard.relative_to(ROOT)}"
+    positive = subprocess.run(
+        [guard, "1000", "1000"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert positive.returncode == 0, positive.stderr
+    assert positive.stdout == "1000:1000\n"
+
+    for uid, gid in (
+        ("0", "1000"),
+        ("1000", "0"),
+        ("999", "1000"),
+        ("1000", "999"),
+        ("65534", "1000"),
+        ("1000", "65534"),
+        ("not-a-uid", "1000"),
+    ):
+        negative = subprocess.run(
+            [guard, uid, gid],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert negative.returncode != 0, f"guard accepted unsafe identity {uid}:{gid}"
+        assert "FAIL:" in negative.stderr, negative.stderr
+
+
 def main() -> None:
+    verify_runner_identity_guard()
     packages = read("rootfs-packages.txt").splitlines()
     package_names = {
         line.strip()
@@ -198,9 +231,10 @@ def main() -> None:
     for needle in (
         "command -v docker",
         "--label pf.bead=tsp-ihne1.5",
-        '--user "$(id -u):$(id -g)"',
-        '--build-arg "PF_IME_UID=$(id -u)"',
-        '--build-arg "PF_IME_GID=$(id -g)"',
+        'validate-runner-identity.sh" "$(id -u)" "$(id -g)"',
+        '--user "${runner_identity}"',
+        '--build-arg "PF_IME_UID=${runner_uid}"',
+        '--build-arg "PF_IME_GID=${runner_gid}"',
         "HOME=/tmp",
         "RUNNER_TEMP=/tmp",
         "readonly",
@@ -227,6 +261,7 @@ def main() -> None:
         assert forbidden not in harness, f"IME harness wrapper uses forbidden Docker option: {forbidden}"
     for failure in (
         'fail "docker is required for the real IME bus security harness"',
+        'fail "runner identity is unsafe for the IME security harness"',
         'fail "IME harness image build failed"',
         'fail "containerized IME bus security harness failed"',
     ):
