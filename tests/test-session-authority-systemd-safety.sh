@@ -127,6 +127,14 @@ verify_resident_fixture() {
             "${test_recipe}"
 }
 
+verify_residency_scenario_isolation() {
+    local test_driver=$1
+
+    grep -Fq 'def reset_owner_start_limit() -> None:' "${test_driver}" \
+        && grep -Fq 'command("systemctl", "reset-failed", OWNER_UNIT)' "${test_driver}" \
+        && [ "$(grep -Fc 'reset_owner_start_limit()' "${test_driver}")" -eq 4 ]
+}
+
 verify_app_policy_inventory_fixture() {
     local test_inventory="$1"
 
@@ -269,6 +277,16 @@ sed '/^BindsTo=pocketforge-gamescope-session.target$/d' \
     "${resident_unit}" >"${tmp}/resident-without-bind.service"
 if verify_resident_fixture "${tmp}/resident-without-bind.service" "${harness}" "${recipe}"; then
     echo 'session-authority systemd-safety: FAIL: unbound resident hold passed' >&2
+    exit 1
+fi
+verify_residency_scenario_isolation "${driver}" || {
+    echo 'session-authority systemd-safety: FAIL: residency scenarios share the shell start-rate counter' >&2
+    exit 1
+}
+sed 's/command("systemctl", "reset-failed", OWNER_UNIT)/command("systemctl", "reset-failed", GAMESCOPE_UNIT)/' \
+    "${driver}" >"${tmp}/resident-without-owner-reset.py"
+if verify_residency_scenario_isolation "${tmp}/resident-without-owner-reset.py"; then
+    echo 'session-authority systemd-safety: FAIL: wrong-unit scenario reset passed' >&2
     exit 1
 fi
 

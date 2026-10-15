@@ -508,8 +508,14 @@ def assert_broker_dormant_at_boot() -> str:
     return enabled
 
 
+def reset_owner_start_limit() -> None:
+    """Give each synthetic residency scenario an independent shell start budget."""
+    command("systemctl", "reset-failed", OWNER_UNIT)
+
+
 def assert_bare_target_is_unneeded() -> str:
     """A direct target start is transient; only the resident unit is an opt-in hold."""
+    reset_owner_start_limit()
     started = command("systemctl", "start", SESSION_TARGET, check=False)
     require(started.returncode == 0, f"bare target start failed: {started.stderr.strip()}")
     wait_for(lambda: not unit_is_active(SESSION_TARGET), "bare Gamescope target to stop as unneeded")
@@ -522,6 +528,7 @@ def assert_bare_target_is_unneeded() -> str:
 
 def assert_resident_session_stays_up() -> str:
     """The explicit hold survives an app exit and selects Gamescope session_idle."""
+    reset_owner_start_limit()
     command("systemctl", "start", RESIDENT_UNIT)
     wait_for(lambda: unit_is_active(RESIDENT_UNIT), "resident hold")
     wait_for(lambda: unit_is_active(SESSION_TARGET), "resident Gamescope target")
@@ -560,6 +567,7 @@ def assert_resident_session_stays_up() -> str:
 
 def assert_gamescope_failure_drops_resident() -> str:
     """BindsTo makes a compositor failure release both the target and its hold."""
+    reset_owner_start_limit()
     command("systemctl", "start", RESIDENT_UNIT)
     wait_for(lambda: unit_is_active(RESIDENT_UNIT), "resident hold before compositor failure")
     wait_for(lambda: unit_is_active(GAMESCOPE_UNIT), "Gamescope before failure")
