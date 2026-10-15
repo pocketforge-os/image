@@ -61,18 +61,35 @@ SF_MOUNTINFO_FILE="$mountinfo"
 export SF_SYS_CLASS_BLOCK SF_DEV_ROOT SF_RAM_ROOT SF_MOUNTINFO_FILE
 
 make_card() {
-    local class_name=$1 controller=$2 removable=$3 serial=$4 sectors=$5
-    local physical="$tmp/sys/devices/platform/soc/${controller}.mmc/mmc_host/mmc9/mmc9:0001"
+    local class_name=$1 controller=$2 type=$3 serial=$4 sectors=$5
+    local physical="$tmp/sys/devices/platform/soc/${controller}.mmc/mmc_host/$class_name/${class_name}:0001"
     local block="$physical/block/$class_name"
     local class="$sys/$class_name"
     mkdir -p "$block"
     ln -s "$block" "$class"
     ln -s "$physical" "$block/device"
-    printf '%s\n' "$removable" >"$class/removable"
+    # Linux MMC gendisks report removable=0 even for hot-pluggable SD cards.
+    printf '0\n' >"$class/removable"
     printf '%s\n' "$sectors" >"$class/size"
     printf '179:0\n' >"$class/dev"
+    printf '%s\n' "$type" >"$physical/type"
     printf '%s\n' "$serial" >"$physical/serial"
     : >"$dev/$class_name"
+}
+
+make_emmc_extra_disks() {
+    local parent_name=$1 parent_real extra index=1
+    parent_real="$(readlink -f "$sys/$parent_name")"
+    for extra in boot0 boot1 rpmb; do
+        mkdir -p "$parent_real/${parent_name}${extra}"
+        ln -s "$parent_real/${parent_name}${extra}" "$sys/${parent_name}${extra}"
+        ln -s "$parent_real" "$sys/${parent_name}${extra}/device"
+        printf '0\n' >"$sys/${parent_name}${extra}/removable"
+        printf '8192\n' >"$sys/${parent_name}${extra}/size"
+        printf '179:%s\n' "$index" >"$sys/${parent_name}${extra}/dev"
+        : >"$dev/${parent_name}${extra}"
+        index=$((index + 1))
+    done
 }
 
 raw="$tmp/raw.img"
@@ -112,17 +129,23 @@ tries=0
 EOF
 }
 
-# Positive control: the SD card may have any block name. The controller path,
-# removable bit, serial, and size are the identity.
-make_card arbitrary-card 4020000 1 0x1234abcd 256
+# Positive control mirrors the real kernel: even a hot-pluggable SD gendisk has
+# removable=0. Controller path, MMC card type, serial, and size are the identity.
+make_card arbitrary-card 4020000 SD 0x1234abcd 256
 truncate -s $((256 * 512)) "$dev/arbitrary-card"
 printf 'TAIL-SENTINEL' | dd of="$dev/arbitrary-card" bs=1 seek="$img_bytes" conv=notrunc status=none
 sf_v2_validate_and_resolve "$(flag)" || fail 'valid SD identity refused'
 [[ "$SF_SD" == "$dev/arbitrary-card" ]] || fail "resolved wrong device: $SF_SD"
+if grep -Fq '$sf_v2_entry/removable' "$tmp/functions.sh"; then
+    fail 'gate still assumes the MMC gendisk removable attribute'
+fi
 card_real="$(readlink -f "$SF_SD_SYS")"
 mkdir -p "$card_real/arbitrary-cardp5"
 printf '179:5\n' >"$card_real/arbitrary-cardp5/dev"
+printf '0\n' >"$card_real/arbitrary-cardp5/removable"
 ln -s "$card_real/arbitrary-cardp5" "$sys/arbitrary-cardp5"
+[[ ! -e "$sys/arbitrary-cardp5/device" ]] \
+    || fail 'partition fixture unexpectedly has a device link'
 sf_v2_partition_on_selected_card "$dev/arbitrary-cardp5" \
     || fail 'partition on selected physical card was refused'
 printf '25 1 179:5 / /root rw - ext4 /dev/anything rw\n' >"$mountinfo"
@@ -144,10 +167,12 @@ done
 grep -Fqx "RawSHA256=$img_sha" "$fat/pocketforge-selfflash-receipt" \
     || fail 'durable receipt lacks verified raw SHA'
 
-# Negative control required by the owner: mmcblk0 is eMMC. Its name must not
-# persuade the gate to write it, and refusal happens before the sentinel changes.
+# Negative control required by the owner: mmcblk0 is eMMC with the expected
+# serial and a realistic boot0/boot1/rpmb fanout. Its name and matching card
+# fields must not persuade the gate to write it.
 find "$sys" -mindepth 1 -delete
-make_card mmcblk0 4022000 0 0x1234abcd 256
+make_card mmcblk0 4022000 MMC 0x1234abcd 256
+make_emmc_extra_disks mmcblk0
 truncate -s $((256 * 512)) "$dev/mmcblk0"
 printf 'EMMC-DO-NOT-WRITE' | dd of="$dev/mmcblk0" bs=1 conv=notrunc status=none
 before="$(sha256sum "$dev/mmcblk0" | cut -d' ' -f1)"
@@ -158,6 +183,21 @@ fi
 after="$(sha256sum "$dev/mmcblk0" | cut -d' ' -f1)"
 [[ "$before" == "$after" ]] || fail 'eMMC changed before refusal'
 
+# Even under the SD controller, an MMC-type card object is not the target.
+find "$sys" -mindepth 1 -delete
+make_card wrong-type 4020000 MMC 0x1234abcd 256
+if sf_v2_validate_and_resolve "$(flag)"; then
+    fail 'MMC type on SD controller was accepted'
+fi
+
+# More than one exact SD-type match is ambiguous and must fail closed.
+find "$sys" -mindepth 1 -delete
+make_card sd-match-a 4020000 SD 0x1234abcd 256
+make_card sd-match-b 4020000 SD 0x1234abcd 256
+if sf_v2_validate_and_resolve "$(flag)"; then
+    fail 'two exact SD matches were accepted'
+fi
+
 # Legacy flags do not carry a controller/card identity and therefore cannot arm
 # this gate. They remain a host-side FEL recovery case.
 legacy_flag="$(flag | sed 's/^ver=2$/ver=1/')"
@@ -165,15 +205,14 @@ if sf_v2_validate_and_resolve "$legacy_flag"; then
     fail 'identity-less v1 flag was accepted'
 fi
 
-# Same SD controller but a non-removable card, changed serial, or changed size
-# must refuse before the write helper can be reached.
-for case_name in nonremovable serial size; do
+# Same SD controller and SD type with changed serial or size must refuse before
+# the write helper can be reached.
+for case_name in serial size; do
     find "$sys" -mindepth 1 -delete
-    removable=1; serial=0x1234abcd; sectors=256
-    [[ "$case_name" == nonremovable ]] && removable=0
+    serial=0x1234abcd; sectors=256
     [[ "$case_name" == serial ]] && serial=0xfeedbeef
     [[ "$case_name" == size ]] && sectors=512
-    make_card "$case_name" 4020000 "$removable" "$serial" "$sectors"
+    make_card "$case_name" 4020000 SD "$serial" "$sectors"
     if sf_v2_validate_and_resolve "$(flag)"; then
         fail "$case_name identity mismatch was accepted"
     fi
@@ -182,7 +221,7 @@ done
 # Payload corruption is not a negative result: it is a hard refusal and cannot
 # proceed to the destructive helper.
 find "$sys" -mindepth 1 -delete
-make_card sd-again 4020000 1 0x1234abcd 256
+make_card sd-again 4020000 SD 0x1234abcd 256
 truncate -s $((256 * 512)) "$dev/sd-again"
 sf_v2_validate_and_resolve "$(flag)" || fail 'second valid SD identity refused'
 printf 'corrupt\n' >>"$mnt/var/tmp/pf-selfflash-seed/user-data"
