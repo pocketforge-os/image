@@ -11,7 +11,45 @@ from pathlib import Path
 
 
 ARM64_DESTINATION = "/etc/apt/sources.list.d/ubuntu-arm64.sources"
-PINNED_GPU_UM_SHA = "3f045e0ae9ac2855df143060200b18922e155fa1"
+PINNED_GPU_UM_SHA = "1ae75772e7f42251062cf660fc13577b8fd60664"
+
+INSTALLED_REPRO_CONTRACT = {
+    "first-pass install": (
+        'DESTDIR=/instroot-first SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" '
+        'meson install -C "${build_dir}" --no-rebuild --skip-subprojects'
+    ),
+    "second-pass install": (
+        'DESTDIR=/instroot SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" '
+        'meson install -C "${build_dir}" --no-rebuild --skip-subprojects'
+    ),
+    "first installed Gallium capture": (
+        "cp /instroot-first/usr/local/lib/libgallium_dri.so "
+        "/first-installed-gallium.so"
+    ),
+    "first installed Vulkan capture": (
+        "cp /instroot-first/usr/local/lib/libvulkan_powervr_mesa.so "
+        "/first-installed-vulkan.so"
+    ),
+    "installed Vulkan comparison": (
+        "cmp /first-installed-vulkan.so "
+        "/instroot/usr/local/lib/libvulkan_powervr_mesa.so"
+    ),
+    "installed Gallium comparison": (
+        "cmp /first-installed-gallium.so "
+        "/instroot/usr/local/lib/libgallium_dri.so"
+    ),
+    "installed output digest": (
+        "sha256sum /first-installed-vulkan.so "
+        "/instroot/usr/local/lib/libvulkan_powervr_mesa.so "
+        "/first-installed-gallium.so "
+        "/instroot/usr/local/lib/libgallium_dri.so "
+        ">/src/installed-cross-build-sha256.txt"
+    ),
+    "installed output evidence export": (
+        "COPY --from=gpu-um-build /src/installed-cross-build-sha256.txt "
+        "/installed-cross-build-sha256.txt"
+    ),
+}
 
 
 def stage(text: str, alias: str) -> str:
@@ -124,6 +162,10 @@ def fail(name: str, expected: object, actual: object) -> None:
     print(f"FAIL: {name}: expected {expected!r}, got {actual!r}", file=sys.stderr)
 
 
+def normalized_commands(text: str) -> str:
+    return " ".join(text.replace("\\\n", " ").split())
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser()
@@ -131,7 +173,7 @@ def main() -> int:
     parser.add_argument(
         "--fixture",
         type=Path,
-        default=root / "build/tests/fixtures/gpu-um-toolchain-3f045e0a.Dockerfile",
+        default=root / "build/tests/fixtures/gpu-um-toolchain-1ae75772.Dockerfile",
     )
     parser.add_argument("--source-sha", default=PINNED_GPU_UM_SHA)
     args = parser.parse_args()
@@ -154,6 +196,7 @@ def main() -> int:
         ]
         expected_env = mesa_env(expected)
         actual_env = mesa_env(actual)
+        normalized_dockerfile = normalized_commands(dockerfile_text)
     except (OSError, ValueError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
@@ -169,6 +212,11 @@ def main() -> int:
         got = actual_env.get(name, "<missing>")
         if wanted != got:
             fail(f"ENV {name}", wanted, got)
+            failed = True
+
+    for name, command in INSTALLED_REPRO_CONTRACT.items():
+        if command not in normalized_dockerfile:
+            fail(name, "present", "missing")
             failed = True
 
     expected_stanza = arm64_stanza(expected)
