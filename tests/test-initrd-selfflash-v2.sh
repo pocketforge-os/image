@@ -3,6 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 init="$root/boards/tsp/initrd/init"
+builder="$root/boards/tsp/initrd/build-initrd.sh"
 tmp="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-selfflash-v2.XXXXXX")"
 cleanup() {
     find "$tmp" -mindepth 1 -delete
@@ -18,6 +19,8 @@ awk '
     copy { print }
 ' "$init" >"$tmp/functions.sh"
 [[ -s "$tmp/functions.sh" ]] || fail 'production self-flash v2 function block missing'
+grep -Fq 'pocketforge-selfflash-v2' "$builder" \
+    || fail 'versioned self-flash capability marker missing from initrd builder'
 # shellcheck source=/dev/null
 . "$tmp/functions.sh"
 for function in sf_v2_validate_and_resolve sf_v2_stage_ram sf_v2_write_verify \
@@ -30,20 +33,26 @@ dev="$tmp/dev"
 mnt="$tmp/root"
 ram="$tmp/ram"
 fat="$tmp/fat"
+mountinfo="$tmp/mountinfo"
 mkdir -p "$sys" "$dev" "$mnt/var/tmp/pf-selfflash-seed" "$ram" "$fat"
+: >"$mountinfo"
 SF_SYS_CLASS_BLOCK="$sys"
 SF_DEV_ROOT="$dev"
 SF_RAM_ROOT="$ram"
-export SF_SYS_CLASS_BLOCK SF_DEV_ROOT SF_RAM_ROOT
+SF_MOUNTINFO_FILE="$mountinfo"
+export SF_SYS_CLASS_BLOCK SF_DEV_ROOT SF_RAM_ROOT SF_MOUNTINFO_FILE
 
 make_card() {
     local class_name=$1 controller=$2 removable=$3 serial=$4 sectors=$5
     local physical="$tmp/sys/devices/platform/soc/${controller}.mmc/mmc_host/mmc9/mmc9:0001"
+    local block="$physical/block/$class_name"
     local class="$sys/$class_name"
-    mkdir -p "$physical" "$class"
-    ln -s "$physical" "$class/device"
+    mkdir -p "$block"
+    ln -s "$block" "$class"
+    ln -s "$physical" "$block/device"
     printf '%s\n' "$removable" >"$class/removable"
     printf '%s\n' "$sectors" >"$class/size"
+    printf '179:0\n' >"$class/dev"
     printf '%s\n' "$serial" >"$physical/serial"
     : >"$dev/$class_name"
 }
@@ -92,6 +101,18 @@ truncate -s $((256 * 512)) "$dev/arbitrary-card"
 printf 'TAIL-SENTINEL' | dd of="$dev/arbitrary-card" bs=1 seek="$img_bytes" conv=notrunc status=none
 sf_v2_validate_and_resolve "$(flag)" || fail 'valid SD identity refused'
 [[ "$SF_SD" == "$dev/arbitrary-card" ]] || fail "resolved wrong device: $SF_SD"
+card_real="$(readlink -f "$SF_SD_SYS")"
+mkdir -p "$card_real/arbitrary-cardp5"
+printf '179:5\n' >"$card_real/arbitrary-cardp5/dev"
+ln -s "$card_real/arbitrary-cardp5" "$sys/arbitrary-cardp5"
+sf_v2_partition_on_selected_card "$dev/arbitrary-cardp5" \
+    || fail 'partition on selected physical card was refused'
+printf '25 1 179:5 / /root rw - ext4 /dev/anything rw\n' >"$mountinfo"
+if sf_v2_selected_card_unmounted; then
+    fail 'mounted selected-card partition was reported unmounted'
+fi
+: >"$mountinfo"
+sf_v2_selected_card_unmounted || fail 'unmounted selected card was reported mounted'
 sf_v2_stage_ram "$mnt" || fail 'valid payload refused'
 sf_v2_write_verify || fail 'valid whole-image write/verify refused'
 cmp -n "$img_bytes" "$raw" "$dev/arbitrary-card" || fail 'raw image range differs'
@@ -118,6 +139,13 @@ if sf_v2_validate_and_resolve "$(flag)"; then
 fi
 after="$(sha256sum "$dev/mmcblk0" | cut -d' ' -f1)"
 [[ "$before" == "$after" ]] || fail 'eMMC changed before refusal'
+
+# Legacy flags do not carry a controller/card identity and therefore cannot arm
+# this gate. They remain a host-side FEL recovery case.
+legacy_flag="$(flag | sed 's/^ver=2$/ver=1/')"
+if sf_v2_validate_and_resolve "$legacy_flag"; then
+    fail 'identity-less v1 flag was accepted'
+fi
 
 # Same SD controller but a non-removable card, changed serial, or changed size
 # must refuse before the write helper can be reached.
@@ -149,6 +177,10 @@ printf '#cloud-config\n' >"$mnt/var/tmp/pf-selfflash-seed/user-data"
 sf_v2_stage_ram "$mnt" || fail 'restored payload refused'
 SF_V2_TEST_CORRUPT_AFTER_WRITE=1
 export SF_V2_TEST_CORRUPT_AFTER_WRITE
+sf_v2_after_write() {
+    [[ "${SF_V2_TEST_CORRUPT_AFTER_WRITE:-0}" == 1 ]] || return 0
+    printf X | dd of="$SF_SD" bs=1 seek=17 conv=notrunc status=none
+}
 if sf_v2_write_verify; then
     fail 'post-write raw corruption was accepted'
 fi

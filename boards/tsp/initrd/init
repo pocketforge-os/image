@@ -482,7 +482,252 @@ pf_first_frame_start
 # conv=fsync (uncertain in busybox dd) — durability via explicit `sync`.
 # =============================================================================
 SF_BS=4194304          # 4 MiB transfer block
-SF_ALIGN_SECT=8192     # 4 MiB in 512-byte sectors (stage_lba alignment)
+
+# BEGIN POCKETFORGE SELF-FLASH V2 FUNCTIONS
+# This block is executed directly by tests/test-initrd-selfflash-v2.sh. Keep it
+# POSIX/BusyBox-ash compatible and free of boot-time side effects at definition.
+#
+# DT identity, not Linux enumeration identity: boards/tsp/trimui-smart-pro.dts
+# defines the removable SD host as sdmmc@04020000 (reg 0x04020000, alias mmc0)
+# and the non-removable eMMC host as sdmmc@04022000.  A block name such as
+# mmcblk0 is never evidence that a device is the SD card.
+SF_SD_CONTROLLER=04020000
+SF_SYS_CLASS_BLOCK="${SF_SYS_CLASS_BLOCK:-/sys/class/block}"
+SF_DEV_ROOT="${SF_DEV_ROOT:-/dev}"
+SF_RAM_ROOT="${SF_RAM_ROOT:-}"
+SF_UPTIME_FILE="${SF_UPTIME_FILE:-/proc/uptime}"
+SF_MOUNTINFO_FILE="${SF_MOUNTINFO_FILE:-/proc/self/mountinfo}"
+SF_BS="${SF_BS:-4194304}"
+
+sf_v2_get() {
+    printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1
+}
+
+sf_v2_sha() {
+    [ "${#1}" -eq 64 ] || return 1
+    case "$1" in *[!0-9a-f]*) return 1;; esac
+}
+
+sf_v2_uint() {
+    case "$1" in ''|*[!0-9]*) return 1;; esac
+    [ "$1" -gt 0 ] 2>/dev/null
+}
+
+sf_v2_controller_path() {
+    case "$1" in
+        *'/4020000.mmc/'*|*'/04020000.mmc/'*|*'/sdmmc@04020000/'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+sf_v2_validate_and_resolve() {
+    sf_v2_flag="$1"
+    SF_FLAG_MAGIC="$(sf_v2_get "$sf_v2_flag" PF_FLAG)"
+    SF_VERSION="$(sf_v2_get "$sf_v2_flag" ver)"
+    SF_STATE="$(sf_v2_get "$sf_v2_flag" state)"
+    SF_GENERATION="$(sf_v2_get "$sf_v2_flag" generation)"
+    SF_DESCRIPTOR_SHA="$(sf_v2_get "$sf_v2_flag" descriptor_sha256)"
+    SF_XZ_FILE="$(sf_v2_get "$sf_v2_flag" xz_file)"
+    SF_XZ_BYTES="$(sf_v2_get "$sf_v2_flag" xz_bytes)"
+    SF_XZ_SHA="$(sf_v2_get "$sf_v2_flag" xz_sha256)"
+    SF_IMG_BYTES="$(sf_v2_get "$sf_v2_flag" img_bytes)"
+    SF_IMG_SHA="$(sf_v2_get "$sf_v2_flag" img_sha256)"
+    SF_FLAG_CONTROLLER="$(sf_v2_get "$sf_v2_flag" sd_controller)"
+    SF_EXPECTED_SERIAL="$(sf_v2_get "$sf_v2_flag" sd_serial)"
+    SF_EXPECTED_SECTORS="$(sf_v2_get "$sf_v2_flag" card_sectors)"
+    SF_SEED_DIR="$(sf_v2_get "$sf_v2_flag" seed_dir)"
+    SF_SEED_META_SHA="$(sf_v2_get "$sf_v2_flag" seed_meta_sha256)"
+    SF_SEED_NETWORK_SHA="$(sf_v2_get "$sf_v2_flag" seed_network_sha256)"
+    SF_SEED_USER_SHA="$(sf_v2_get "$sf_v2_flag" seed_user_sha256)"
+    SF_TRIES="$(sf_v2_get "$sf_v2_flag" tries)"
+
+    [ "$SF_FLAG_MAGIC" = 1 ] && [ "$SF_VERSION" = 2 ] \
+        && [ "$SF_STATE" = armed ] || return 1
+    [ "${#SF_GENERATION}" -eq 32 ] || return 1
+    case "$SF_GENERATION" in *[!0-9a-f]*) return 1;; esac
+    sf_v2_sha "$SF_DESCRIPTOR_SHA" && sf_v2_sha "$SF_XZ_SHA" \
+        && sf_v2_sha "$SF_IMG_SHA" && sf_v2_sha "$SF_SEED_META_SHA" \
+        && sf_v2_sha "$SF_SEED_NETWORK_SHA" && sf_v2_sha "$SF_SEED_USER_SHA" \
+        || return 1
+    sf_v2_uint "$SF_XZ_BYTES" && sf_v2_uint "$SF_IMG_BYTES" \
+        && sf_v2_uint "$SF_EXPECTED_SECTORS" || return 1
+    case "$SF_TRIES" in ''|*[!0-9]*) return 1;; esac
+    [ "$SF_FLAG_CONTROLLER" = "$SF_SD_CONTROLLER" ] || return 1
+    [ "$SF_XZ_FILE" = /var/tmp/pf-selfflash-stage.img.xz ] || return 1
+    [ "$SF_SEED_DIR" = /var/tmp/pf-selfflash-seed ] || return 1
+    [ "${#SF_EXPECTED_SERIAL}" -eq 10 ] || return 1
+    case "$SF_EXPECTED_SERIAL" in 0x*) ;; *) return 1;; esac
+    sf_v2_serial_hex="${SF_EXPECTED_SERIAL#0x}"
+    case "$sf_v2_serial_hex" in *[!0-9a-fA-F]*) return 1;; esac
+    [ "$SF_IMG_BYTES" -le $((SF_EXPECTED_SECTORS * 512)) ] || return 1
+
+    sf_v2_count=0
+    SF_SD=""
+    SF_SD_SYS=""
+    for sf_v2_entry in "$SF_SYS_CLASS_BLOCK"/*; do
+        [ -e "$sf_v2_entry" ] || continue
+        [ -e "$sf_v2_entry/device" ] || continue
+        sf_v2_physical="$(readlink -f "$sf_v2_entry/device" 2>/dev/null)"
+        sf_v2_controller_path "$sf_v2_physical" || continue
+        [ "$(cat "$sf_v2_entry/removable" 2>/dev/null)" = 1 ] || continue
+        sf_v2_serial="$(cat "$sf_v2_entry/device/serial" 2>/dev/null)"
+        sf_v2_sectors="$(cat "$sf_v2_entry/size" 2>/dev/null)"
+        [ "$sf_v2_serial" = "$SF_EXPECTED_SERIAL" ] || continue
+        [ "$sf_v2_sectors" = "$SF_EXPECTED_SECTORS" ] || continue
+        sf_v2_device="$SF_DEV_ROOT/${sf_v2_entry##*/}"
+        if [ "$SF_DEV_ROOT" = /dev ]; then
+            [ -b "$sf_v2_device" ] || continue
+        else
+            [ -f "$sf_v2_device" ] || continue
+        fi
+        sf_v2_count=$((sf_v2_count + 1))
+        SF_SD="$sf_v2_device"
+        SF_SD_SYS="$sf_v2_entry"
+    done
+    [ "$sf_v2_count" -eq 1 ] || { SF_SD=""; SF_SD_SYS=""; return 1; }
+}
+
+sf_v2_phase() {
+    sf_v2_when="$(cut -d' ' -f1 "$SF_UPTIME_FILE" 2>/dev/null)"
+    [ -n "$sf_v2_when" ] || sf_v2_when=unknown
+    printf 'phase=%s uptime=%s\n' "$1" "$sf_v2_when" >>"$SF_RAM_ROOT/sf-phase.log"
+}
+
+sf_v2_stage_ram() {
+    sf_v2_mnt="$1"
+    SF_STAGED_XZ="$SF_RAM_ROOT/sf-staged.xz"
+    SF_SEED_RAM="$SF_RAM_ROOT/sf-seed"
+    rm -f "$SF_STAGED_XZ" "$SF_RAM_ROOT/sf-phase.log"
+    [ ! -d "$SF_SEED_RAM" ] || { find "$SF_SEED_RAM" -mindepth 1 -delete; rmdir "$SF_SEED_RAM"; }
+    mkdir -p "$SF_SEED_RAM" || return 1
+    sf_v2_phase ram_copy_start
+    sf_v2_src_xz="$sf_v2_mnt$SF_XZ_FILE"
+    [ -f "$sf_v2_src_xz" ] && [ ! -L "$sf_v2_src_xz" ] || return 1
+    [ "$(stat -c %s "$sf_v2_src_xz" 2>/dev/null)" = "$SF_XZ_BYTES" ] || return 1
+    [ "$(sha256sum "$sf_v2_src_xz" 2>/dev/null | cut -d' ' -f1)" = "$SF_XZ_SHA" ] \
+        || return 1
+    cp "$sf_v2_src_xz" "$SF_STAGED_XZ" || return 1
+    [ "$(sha256sum "$SF_STAGED_XZ" 2>/dev/null | cut -d' ' -f1)" = "$SF_XZ_SHA" ] \
+        || return 1
+
+    sf_v2_src_seed="$sf_v2_mnt$SF_SEED_DIR"
+    sf_v2_seen=""
+    for sf_v2_name in meta-data network-config user-data; do
+        sf_v2_src="$sf_v2_src_seed/$sf_v2_name"
+        [ -f "$sf_v2_src" ] && [ ! -L "$sf_v2_src" ] || return 1
+        cp "$sf_v2_src" "$SF_SEED_RAM/$sf_v2_name" || return 1
+        sf_v2_seen="$sf_v2_seen $sf_v2_name"
+    done
+    sf_v2_count=0
+    for sf_v2_item in "$sf_v2_src_seed"/*; do
+        [ -e "$sf_v2_item" ] || continue
+        case " $sf_v2_seen " in *" ${sf_v2_item##*/} "*) ;; *) return 1;; esac
+        sf_v2_count=$((sf_v2_count + 1))
+    done
+    [ "$sf_v2_count" -eq 3 ] || return 1
+    [ "$(sha256sum "$SF_SEED_RAM/meta-data" | cut -d' ' -f1)" = "$SF_SEED_META_SHA" ] \
+        && [ "$(sha256sum "$SF_SEED_RAM/network-config" | cut -d' ' -f1)" = "$SF_SEED_NETWORK_SHA" ] \
+        && [ "$(sha256sum "$SF_SEED_RAM/user-data" | cut -d' ' -f1)" = "$SF_SEED_USER_SHA" ] \
+        || return 1
+    sf_v2_phase ram_copy_complete
+}
+
+# Test seam: the production definition is a no-op. Hermetic tests override it
+# to corrupt the fake device between write and readback.
+sf_v2_after_write() { :; }
+
+sf_v2_write_verify() {
+    [ -n "$SF_SD" ] && [ -f "$SF_STAGED_XZ" ] || return 1
+    sf_v2_phase write_start
+    if ! unxz <"$SF_STAGED_XZ" | head -c "$SF_IMG_BYTES" \
+            | dd of="$SF_SD" bs="$SF_BS" conv=notrunc 2>/dev/null; then
+        return 1
+    fi
+    sync
+    sf_v2_phase write_complete
+    sf_v2_after_write
+    sf_v2_phase verify_start
+    sf_v2_got="$(dd if="$SF_SD" bs="$SF_BS" 2>/dev/null \
+        | head -c "$SF_IMG_BYTES" | sha256sum | cut -d' ' -f1)"
+    [ "$sf_v2_got" = "$SF_IMG_SHA" ] || return 1
+    SF_VERIFIED_RAW_SHA="$sf_v2_got"
+    sf_v2_phase verify_complete
+}
+
+sf_v2_install_seed() {
+    sf_v2_fat="$1"
+    [ "$SF_VERIFIED_RAW_SHA" = "$SF_IMG_SHA" ] || return 1
+    [ -d "$sf_v2_fat" ] || return 1
+    sf_v2_phase seed_install_start
+    for sf_v2_name in meta-data network-config user-data; do
+        cp "$SF_SEED_RAM/$sf_v2_name" \
+            "$sf_v2_fat/.pf-seed-$SF_GENERATION-$sf_v2_name.tmp" || return 1
+    done
+    [ "$(sha256sum "$sf_v2_fat/.pf-seed-$SF_GENERATION-meta-data.tmp" | cut -d' ' -f1)" = "$SF_SEED_META_SHA" ] \
+        && [ "$(sha256sum "$sf_v2_fat/.pf-seed-$SF_GENERATION-network-config.tmp" | cut -d' ' -f1)" = "$SF_SEED_NETWORK_SHA" ] \
+        && [ "$(sha256sum "$sf_v2_fat/.pf-seed-$SF_GENERATION-user-data.tmp" | cut -d' ' -f1)" = "$SF_SEED_USER_SHA" ] \
+        || return 1
+    for sf_v2_name in meta-data network-config user-data; do
+        mv -f "$sf_v2_fat/.pf-seed-$SF_GENERATION-$sf_v2_name.tmp" \
+            "$sf_v2_fat/$sf_v2_name" || return 1
+    done
+    sync
+    [ "$(sha256sum "$sf_v2_fat/meta-data" | cut -d' ' -f1)" = "$SF_SEED_META_SHA" ] \
+        && [ "$(sha256sum "$sf_v2_fat/network-config" | cut -d' ' -f1)" = "$SF_SEED_NETWORK_SHA" ] \
+        && [ "$(sha256sum "$sf_v2_fat/user-data" | cut -d' ' -f1)" = "$SF_SEED_USER_SHA" ] \
+        || return 1
+    sf_v2_phase seed_install_complete
+    {
+        printf 'Schema=pocketforge.self-flash/v2\n'
+        printf 'Generation=%s\n' "$SF_GENERATION"
+        printf 'DescriptorSHA256=%s\n' "$SF_DESCRIPTOR_SHA"
+        printf 'Controller=%s\n' "$SF_FLAG_CONTROLLER"
+        printf 'CardSerial=%s\n' "$SF_EXPECTED_SERIAL"
+        printf 'CardSectors=%s\n' "$SF_EXPECTED_SECTORS"
+        printf 'WrittenRangeBytes=%s\n' "$SF_IMG_BYTES"
+        printf 'RawSHA256=%s\n' "$SF_VERIFIED_RAW_SHA"
+        printf 'SeedMetaSHA256=%s\n' "$SF_SEED_META_SHA"
+        printf 'SeedNetworkSHA256=%s\n' "$SF_SEED_NETWORK_SHA"
+        printf 'SeedUserSHA256=%s\n' "$SF_SEED_USER_SHA"
+        cat "$SF_RAM_ROOT/sf-phase.log"
+    } >"$sf_v2_fat/.pocketforge-selfflash-receipt.tmp" || return 1
+    printf '%s\n' "$SF_VERIFIED_RAW_SHA" >"$sf_v2_fat/.pocketforge-flashed-sha.tmp" \
+        || return 1
+    sync
+    mv -f "$sf_v2_fat/.pocketforge-selfflash-receipt.tmp" \
+        "$sf_v2_fat/pocketforge-selfflash-receipt" || return 1
+    mv -f "$sf_v2_fat/.pocketforge-flashed-sha.tmp" \
+        "$sf_v2_fat/pocketforge-flashed-sha" || return 1
+    sync
+    [ "$(cat "$sf_v2_fat/pocketforge-flashed-sha" 2>/dev/null)" = "$SF_IMG_SHA" ] \
+        || return 1
+}
+
+sf_v2_partition_on_selected_card() {
+    sf_v2_partition="$1"
+    sf_v2_partition_sys="$SF_SYS_CLASS_BLOCK/${sf_v2_partition##*/}"
+    [ -e "$sf_v2_partition_sys" ] || return 1
+    sf_v2_whole_real="$(readlink -f "$SF_SD_SYS" 2>/dev/null)"
+    sf_v2_partition_real="$(readlink -f "$sf_v2_partition_sys" 2>/dev/null)"
+    case "$sf_v2_partition_real" in "$sf_v2_whole_real"/*) return 0;; esac
+    return 1
+}
+
+sf_v2_selected_card_unmounted() {
+    sf_v2_whole_real="$(readlink -f "$SF_SD_SYS" 2>/dev/null)"
+    [ -n "$sf_v2_whole_real" ] || return 1
+    for sf_v2_dev_file in "$sf_v2_whole_real/dev" "$sf_v2_whole_real"/*/dev; do
+        [ -f "$sf_v2_dev_file" ] || continue
+        sf_v2_major_minor="$(cat "$sf_v2_dev_file" 2>/dev/null)"
+        [ -n "$sf_v2_major_minor" ] || return 1
+        if awk -v dev="$sf_v2_major_minor" '$3 == dev { found=1 } END { exit !found }' \
+                "$SF_MOUNTINFO_FILE"; then
+            return 1
+        fi
+    done
+    return 0
+}
+# END POCKETFORGE SELF-FLASH V2 FUNCTIONS
 
 # Cache-bypass for high-sector reads (tsp-bcx.17 Option-1). The early initramfs
 # was reading sectors ABOVE the partitioned region as all-zeros while the full OS
@@ -492,51 +737,23 @@ SF_ALIGN_SECT=8192     # 4 MiB in 512-byte sectors (stage_lba alignment)
 # fresh fetch from the device. Cheap and harmless if it was never the cause.
 sf_drop_cache() { sync 2>/dev/null; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; }
 
-# Reconstruct + write the 512-byte flag record (NUL-padded full sector).
-# args: state tries stage_lba xz_bytes xz_sha img_bytes img_sha card SD FLAG_LBA
-selfflash_write_flag() {
-    sf_st="$1"; sf_tr="$2"; sf_sl="$3"; sf_xb="$4"; sf_xs="$5"
-    sf_ib="$6"; sf_is="$7"; sf_cs="$8"; sf_sd="$9"; sf_fl="${10}"
-    {
-        printf 'PF_FLAG=1\n'
-        printf 'ver=1\n'
-        printf 'state=%s\n'        "$sf_st"
-        printf 'stage_lba=%s\n'    "$sf_sl"
-        printf 'xz_bytes=%s\n'     "$sf_xb"
-        printf 'xz_sha256=%s\n'    "$sf_xs"
-        printf 'img_bytes=%s\n'    "$sf_ib"
-        printf 'img_sha256=%s\n'   "$sf_is"
-        printf 'tries=%s\n'        "$sf_tr"
-        printf 'card_sectors=%s\n' "$sf_cs"
-    } > /sf-flag.txt
-    dd if=/dev/zero of=/sf-flag.bin bs=512 count=1 2>/dev/null
-    dd if=/sf-flag.txt of=/sf-flag.bin conv=notrunc 2>/dev/null
-    dd if=/sf-flag.bin of="$sf_sd" bs=512 seek="$sf_fl" count=1 2>/dev/null
-    sync
-}
-
 # Perform recovery. FILE-BASED (tsp-bcx.17): the flag + staged .img.xz are FILES on
 # the rootfs partition (p5), which the initramfs PROVABLY mounts every boot — so we
 # never depend on the unreliable early-boot RAW high-sector read that defeated the
 # raw-flag design. Copy the .xz into RAM, unmount the SD, then flash [0,img).
-# args: SD  P5_MOUNT  FLAGTXT
+# args: P5_MOUNT FLAGTXT. The write target is resolved independently from the
+# DT controller/card identity in the v2 flag; it is never derived from mmcblkN.
 # Returns non-zero to fall through to normal boot; reboots (no return) on success.
 selfflash_recover() {
-    SD="$1"; MNT="$2"; FLAGTXT="$3"
-    fget() { printf '%s\n' "$FLAGTXT" | sed -n "s/^$1=//p" | head -1; }
-    state="$(fget state)";        xz_file="$(fget xz_file)"
-    xz_bytes="$(fget xz_bytes)";  xz_sha="$(fget xz_sha256)"
-    img_bytes="$(fget img_bytes)"; img_sha="$(fget img_sha256)"
-    wifi_file="$(fget wifi_file)"     # D1 (tsp-bcx.22): staged WiFi creds to restore
-    tries="$(fget tries)";        [ -n "$tries" ] || tries=0
-
-    [ "$state" = "armed" ] || { log "selfflash: state=$state (not armed) — normal boot"; return 1; }
-    for v in "$xz_bytes" "$img_bytes"; do
-        case "$v" in ''|*[!0-9]*) log "selfflash: bad numeric field — normal boot"; return 1;; esac
-    done
-    case "$xz_file" in /*) ;; *) log "selfflash: bad xz_file=$xz_file — normal boot"; return 1;; esac
-    SRC="$MNT$xz_file"
-    log "selfflash: ARMED xz=$xz_file ($xz_bytes B) img=$img_bytes tries=$tries"
+    MNT="$1"; FLAGTXT="$2"
+    if ! sf_v2_validate_and_resolve "$FLAGTXT"; then
+        log "selfflash: v2 identity/descriptor guard refused — normal boot"
+        return 1
+    fi
+    SD="$SF_SD"; xz_file="$SF_XZ_FILE"; xz_bytes="$SF_XZ_BYTES"
+    img_bytes="$SF_IMG_BYTES"
+    tries="$SF_TRIES"; SRC="$MNT$xz_file"
+    log "selfflash: ARMED v2 controller=$SF_FLAG_CONTROLLER serial=$SF_EXPECTED_SERIAL sectors=$SF_EXPECTED_SECTORS xz=$xz_file ($xz_bytes B) img=$img_bytes tries=$tries"
     [ -f "$SRC" ] || { log "selfflash: staged .xz missing ($SRC) — normal boot"; return 1; }
 
     if [ "$tries" -ge 3 ]; then
@@ -546,131 +763,80 @@ selfflash_recover() {
         # cleanup pass or removes it and makes the next boot take the no-flag path.
         watchdog_ping
         mount -o remount,rw "$MNT" 2>/dev/null
-        rm -f "$MNT/var/tmp/pf-selfflash.flag" "$SRC"; sync
+        rm -f "$MNT/var/tmp/pf-selfflash.flag" "$SRC"
+        find "$MNT$SF_SEED_DIR" -mindepth 1 -delete 2>/dev/null
+        rmdir "$MNT$SF_SEED_DIR" 2>/dev/null
+        sync
         watchdog_ping
         return 1
     fi
 
-    # Copy the staged .xz into RAM (ramfs) so the SD can be FULLY unmounted before
-    # the destructive flash. 93 MB .xz + streaming unxz fits in the A133's 1 GB.
-    log "selfflash: copying staged .xz into RAM..."
+    # Copy the compressed image and exact per-generation NoCloud seed into RAM so
+    # every SD filesystem can be unmounted before the destructive whole-image write.
+    log "selfflash: copying and verifying staged v2 payloads into RAM..."
     watchdog_ping
-    cp "$SRC" /sf-staged.xz 2>/dev/null || { log "selfflash: cp staged .xz failed — normal boot"; rm -f /sf-staged.xz; return 1; }
-    watchdog_ping
-    got_xz="$(sha256sum /sf-staged.xz 2>/dev/null | cut -d' ' -f1)"
-    watchdog_ping
-    if [ "$got_xz" != "$xz_sha" ]; then
-        log "selfflash: RAM .xz SHA mismatch (got $got_xz want $xz_sha) — normal boot"
-        rm -f /sf-staged.xz; return 1
+    if ! sf_v2_stage_ram "$MNT"; then
+        log "selfflash: staged v2 payload verification failed — normal boot"
+        return 1
     fi
-    log "selfflash: RAM .xz verified OK"
-
-    # --- D1 (tsp-bcx.22): preserve WiFi creds across the credential-less reflash --
-    # The whole-image dd below rewrites the boot-resource FAT that holds
-    # /boot/wifi.txt. Reproducible images carry NO wifi.txt (gitignored secret), so
-    # without this the reflashed device never rejoins WiFi. Copy the creds into RAM
-    # NOW, while the SD is still mounted; the post-flash block restores them into the
-    # freshly-written FAT. Prefer the orchestrator-staged copy on p5 (it also carries
-    # the pf-secret re-seed fallback); else the live boot-resource FAT (at /pflog).
-    # Best-effort: any failure here NEVER blocks the flash or the boot.
-    rm -f /sf-wifi.txt
-    if [ -n "$wifi_file" ] && [ -f "$MNT$wifi_file" ]; then
-        cp "$MNT$wifi_file" /sf-wifi.txt 2>/dev/null \
-            && log "selfflash: captured staged wifi.txt ($wifi_file) for restore"
-    fi
-    if [ ! -f /sf-wifi.txt ] && [ -n "$PFLOG" ] && [ -f /pflog/wifi.txt ]; then
-        cp /pflog/wifi.txt /sf-wifi.txt 2>/dev/null \
-            && log "selfflash: captured live boot-resource wifi.txt for restore"
-    fi
-    [ -f /sf-wifi.txt ] || log "selfflash: no wifi.txt to preserve (device may boot WiFi-less)"
+    log "selfflash: RAM image and seed verified OK"
     watchdog_ping
 
     # Cap crash-loops: bump tries in the on-SD flag FILE BEFORE the destructive dd.
     # This rw remount is the first persistent mutation on a validated flash path.
     watchdog_disarm_for_selfflash
-    mount -o remount,rw "$MNT" 2>/dev/null
-    printf '%s\n' "$FLAGTXT" | sed "s/^tries=.*/tries=$((tries+1))/" > "$MNT/var/tmp/pf-selfflash.flag" 2>/dev/null
+    if ! mount -o remount,rw "$MNT" 2>/dev/null; then
+        log "selfflash: cannot arm retry record — normal boot"
+        return 1
+    fi
+    if ! printf '%s\n' "$FLAGTXT" | sed "s/^tries=.*/tries=$((tries+1))/" \
+            > "$MNT/var/tmp/.pf-selfflash.flag.tmp" 2>/dev/null \
+            || ! mv -f "$MNT/var/tmp/.pf-selfflash.flag.tmp" \
+                "$MNT/var/tmp/pf-selfflash.flag" 2>/dev/null; then
+        log "selfflash: retry record update failed — normal boot"
+        return 1
+    fi
     sync
 
     # release the SD — NOTHING from the SD may be mounted during the dd
     if [ -n "$PFLOG" ]; then sync; umount /pflog 2>/dev/null; PFLOG=""; fi
-    umount "$MNT" 2>/dev/null
-    if mount | grep -q mmcblk; then
-        log "selfflash: FATAL — mmcblk still mounted, refusing to flash:"
-        mount | grep mmcblk | while read -r l; do log "  $l"; done
+    if ! umount "$MNT" 2>/dev/null || ! sf_v2_selected_card_unmounted; then
+        log "selfflash: selected controller/card still mounted — refusing to flash"
         fail "selfflash: SD still mounted before dd"
     fi
-    log "selfflash: SD unmounted; flashing — unxz /sf-staged.xz | dd of=$SD ..."
-    if ! unxz < /sf-staged.xz | dd of="$SD" bs="$SF_BS" 2>/dev/null; then
-        log "selfflash: flash pipeline returned error — retry next boot"
-        rm -f /sf-staged.xz; return 1
-    fi
-    rm -f /sf-staged.xz
-    sync
-    log "selfflash: write complete; read-back verifying image sha256..."
-    got_img="$(dd if="$SD" bs="$SF_BS" 2>/dev/null | head -c "$img_bytes" | sha256sum | cut -d' ' -f1)"
-    if [ "$got_img" != "$img_sha" ]; then
-        log "selfflash: image read-back SHA MISMATCH (got $got_img want $img_sha) — retry next boot"
+    log "selfflash: SD unmounted; writing and fully verifying RawBytes on controller 0x$SF_FLAG_CONTROLLER ($SD)"
+    if ! sf_v2_write_verify; then
+        log "selfflash: whole-image write/readback verification failed — FEL recovery required"
         return 1
     fi
-    # --- D1 (tsp-bcx.22): restore preserved WiFi creds into the freshly-written FAT
-    # The dd just rewrote the boot-resource FAT (same offsets — reproducible layout),
-    # so re-resolve it by LABEL (drop caches first: the old FAT superblock was cached
-    # while mounted at /pflog) and drop the WiFi creds back in at the FAT root
-    # (/wifi.txt == /boot/wifi.txt). Best-effort: a failure only means the device
-    # boots WiFi-less (same as pre-fix), never a hang — so it stays out of the flash
-    # success path and never returns non-zero.
-    if [ -f /sf-wifi.txt ]; then
-        sf_drop_cache
-        NEWFAT="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
-        [ -n "$NEWFAT" ] || NEWFAT="$LOGDEV"
-        if [ -n "$NEWFAT" ]; then
-            mkdir -p /sf-newfat
-            if mount -t vfat -o rw "$NEWFAT" /sf-newfat 2>/dev/null; then
-                if cp /sf-wifi.txt /sf-newfat/wifi.txt 2>/dev/null; then
-                    sync
-                    log "selfflash: restored wifi.txt into new boot-resource ($NEWFAT)"
-                else
-                    log "selfflash: WARN could not write wifi.txt to new FAT — WiFi may be unconfigured"
-                fi
-                umount /sf-newfat 2>/dev/null
-            else
-                log "selfflash: WARN could not mount new FAT ($NEWFAT) to restore wifi.txt"
-            fi
-        else
-            log "selfflash: WARN new boot-resource FAT not found — wifi.txt not restored"
-        fi
-        rm -f /sf-wifi.txt
-    fi
+    rm -f "$SF_STAGED_XZ"
 
-    # --- tsp-147u.20: per-build corroboration stamp (FAIL-SAFE, DATA ONLY) ------
-    # Stamp the just-applied image sha into the freshly-written boot-resource FAT so
-    # the orchestrator's reup-confirm can prove the DUT booted THIS build, not a
-    # stale same-variant card (companion to tsp-147u.19's /etc/pocketforge-build-id
-    # presence check, which only proves it booted A PocketForge image). The booted
-    # system mounts this FAT at /boot, so reup-confirm reads /boot/pocketforge-flashed-sha.
-    # STRICTLY ADDITIVE + BEST-EFFORT: every step is guarded and a failure here NEVER
-    # aborts or wedges the flash/boot — it only means the corroboration reads 'absent'
-    # and the HOST-SIDE check decides (an absent stamp is non-fatal; NO gating lives
-    # in /init). Own mountpoint so it can't disturb the wifi-restore mount above.
-    if [ -n "$img_sha" ]; then
-        sf_drop_cache
-        STAMPFAT="$(findfs LABEL=POCKETFORGE 2>/dev/null)"; [ -n "$STAMPFAT" ] || STAMPFAT="$LOGDEV"
-        if [ -n "$STAMPFAT" ] && mkdir -p /sf-stampfat 2>/dev/null \
-                && mount -t vfat -o rw "$STAMPFAT" /sf-stampfat 2>/dev/null; then
-            if printf '%s\n' "$img_sha" > /sf-stampfat/pocketforge-flashed-sha 2>/dev/null; then
-                sync; log "selfflash: stamped pocketforge-flashed-sha=$img_sha"
-            else
-                log "selfflash: WARN could not stamp flashed-sha (corroboration reads absent — non-fatal)"
-            fi
-            umount /sf-stampfat 2>/dev/null
-        else
-            log "selfflash: WARN stamp FAT not mounted — flashed-sha not written (non-fatal)"
-        fi
+    # Re-resolve the freshly written FAT, then prove that partition belongs to
+    # the already selected physical SD before mounting it. Seed injection and
+    # its readback are part of verified success, never best-effort.
+    sf_drop_cache
+    NEWFAT="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
+    if [ -z "$NEWFAT" ] || ! sf_v2_partition_on_selected_card "$NEWFAT"; then
+        log "selfflash: new boot FAT is absent or not on selected SD — FEL recovery required"
+        return 1
     fi
+    mkdir -p /sf-newfat
+    if ! mount -t vfat -o rw "$NEWFAT" /sf-newfat 2>/dev/null; then
+        log "selfflash: new boot FAT mount failed — FEL recovery required"
+        return 1
+    fi
+    if ! sf_v2_install_seed /sf-newfat; then
+        log "selfflash: seed injection/readback failed — FEL recovery required"
+        umount /sf-newfat 2>/dev/null
+        return 1
+    fi
+    umount /sf-newfat 2>/dev/null || {
+        log "selfflash: new boot FAT unmount failed — FEL recovery required"
+        return 1
+    }
 
     # Success: the reflash overwrote p5, so the flag file is gone -> next boot normal.
-    log "selfflash: image verified OK — rebooting into the new image"
+    log "selfflash: image, seed, and receipt verified OK — rebooting into the new image"
     sync
     reboot -f
     return 0   # not reached
@@ -692,7 +858,6 @@ if [ "$PF_ROOT_MODE" != volatile ] && [ -f /etc/pocketforge-selfflash ]; then
     if sf_wait_for_root; then
         log "STAGE: self-flash gate — SD ready after ${SF_WAIT}s ($SF_ROOTPART)"
         watchdog_ping
-        SF_SD="$(echo "$SF_ROOTPART" | sed 's/p[0-9]*$//')"   # /dev/mmcblk0p5 -> /dev/mmcblk0
         # FILE-BASED flag (tsp-bcx.17): mount the rootfs (p5) READ-ONLY and look for
         # the flag FILE. The initramfs provably mounts p5 every boot, so this never
         # depends on the unreliable early-boot RAW high-sector read (which missed an
@@ -709,7 +874,7 @@ if [ "$PF_ROOT_MODE" != volatile ] && [ -f /etc/pocketforge-selfflash ]; then
                 log "STAGE: self-flash flag FILE present on ${SF_ROOTPART}"
                 watchdog_ping
                 pf_first_frame_reap   # self-flash mode runs with no helper (tsp-3rd3.7)
-                selfflash_recover "$SF_SD" "/sfp5" "$SF_FLAGTXT" \
+                selfflash_recover "/sfp5" "$SF_FLAGTXT" \
                     && log "selfflash: recovery returned without reboot — continuing normal boot" \
                     || log "selfflash: not flashing — continuing normal boot"
             else

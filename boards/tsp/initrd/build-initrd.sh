@@ -415,8 +415,11 @@ fi
 if [ "$VARIANT" = "dev" ]; then
     printf 'self-flash recovery enabled (dev image) — bd tsp-bcx.17\n' \
         > "${STAGING}/etc/pocketforge-selfflash"
+    printf 'schema=2\nsd_controller=04020000\n' \
+        > "${STAGING}/etc/pocketforge-selfflash-v2"
     chmod 0644 "${STAGING}/etc/pocketforge-selfflash"
-    echo "  staged /etc/pocketforge-selfflash (dev gate)"
+    chmod 0644 "${STAGING}/etc/pocketforge-selfflash-v2"
+    echo "  staged /etc/pocketforge-selfflash{,-v2} (dev gate)"
 fi
 
 # ---- clamp mtimes for reproducibility ---------------------------------------
