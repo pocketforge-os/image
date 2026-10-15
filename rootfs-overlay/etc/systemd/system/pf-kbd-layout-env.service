@@ -8,6 +8,8 @@
 # pf-fcitx5, tsp-ihne1.18) order After= this unit and load the env file, so a
 # seeded German layout drives USB/Bluetooth keyboards through gamescope from
 # first boot without any German OSK existing yet.
+# Invalid input is reported by a failed unit, but the generator first publishes
+# a marked US fallback so preference damage cannot make the display unavailable.
 #
 # Runs after pf-prefsd's state dir is on disk but does not require the daemon:
 # the generator reads the store file directly (same precedence pf-prefsd

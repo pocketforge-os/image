@@ -1,8 +1,7 @@
 [Unit]
 Description=PocketForge Gamescope display owner
-Requires=pf-kbd-layout-env.service
 After=dev-dri-card0.device dev-dri-renderD128.device pf-kbd-layout-env.service pf-open-gpu-gate.service pocketforge-boot-animator.service pf-shell-selected.service
-Wants=dev-dri-card0.device dev-dri-renderD128.device
+Wants=dev-dri-card0.device dev-dri-renderD128.device pf-kbd-layout-env.service
 PartOf=pocketforge-gamescope-session.target
 Conflicts=pf-shell-selected.service pocketforge-foreground.target
 OnFailure=pocketforge-gamescope-fallback.service
@@ -17,7 +16,7 @@ Group=pf-gamescope
 SupplementaryGroups=video render pf-compositor-input
 RuntimeDirectory=pocketforge/gamescope
 RuntimeDirectoryMode=0750
-EnvironmentFile=/run/pocketforge/kbd-layout.env
+EnvironmentFile=-/run/pocketforge/kbd-layout.env
 Environment=XDG_RUNTIME_DIR=/run/pocketforge/gamescope
 ExecStartPre=+/usr/bin/systemctl stop pocketforge-boot-animator.service pf-shell-selected.service
 ExecStart=/usr/bin/gamescope --backend drm --expose-wayland --xwayland-count 1
