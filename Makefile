@@ -37,6 +37,7 @@ test-dockerfile-pf-transforms:
 	@tests/test-a133-cma-bootargs.sh
 	@tests/test-dockerfile-pf-transforms.sh
 	@tests/test-initrd-selfflash-watchdog.sh
+	@tests/test-initrd-selfflash-v2.sh
 	@tests/test-poolsuite-variant-stage.sh
 	@python3 -B tests/test-poolsuite-source-digest.py
 	@tests/test-poolsuite-rootfs-install.sh

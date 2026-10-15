@@ -124,6 +124,7 @@ jobs:
             tests/test-gamescope-session-supervisor.sh
             tests/test-hwprobe-variant-stage.sh
             tests/test-initrd-selfflash-watchdog.sh
+            tests/test-initrd-selfflash-v2.sh
             tests/test-initrd-volatile-root.sh
             tests/test-kbd-layout-env.sh
             tests/test-input-harness-selftest.sh
