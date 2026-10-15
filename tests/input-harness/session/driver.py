@@ -219,16 +219,17 @@ class KernelInput:
             if info.get("kind") != kind or not info.get("event_node"):
                 raise RuntimeError(
                     f"fake-input {kind} reported bad device line: {line}")
+            self.node = info["event_node"]
+            sw.emit("device_created", kind=kind, name=info["name"],
+                    event_node=self.node, event_source="guest-kernel-uinput")
+            log(f"guest kernel {kind} ready at {self.node}")
         except BaseException:
             # Popen has already created a real guest uinput producer. It is not
             # yet reachable from main's inputs list, so constructor failure
-            # must synchronously remove it before propagating the error.
+            # anywhere in validation or reporting must synchronously remove it
+            # before propagating the error.
             self.destroy()
             raise
-        self.node = info["event_node"]
-        sw.emit("device_created", kind=kind, name=info["name"],
-                event_node=self.node, event_source="guest-kernel-uinput")
-        log(f"guest kernel {kind} ready at {self.node}")
 
     def cmd(self, line: str) -> None:
         self.proc.stdin.write(line + "\n")
