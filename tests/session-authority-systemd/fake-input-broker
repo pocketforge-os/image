@@ -106,7 +106,8 @@ def main() -> int:
         "umask": oct(os.umask(0o007)),
         "PF_PREFSD_SOCK": os.environ.get("PF_PREFSD_SOCK"),
         "shell": unit_state("pf-shell-selected.service"),
-        "target": unit_state("pocketforge-foreground.target"),
+        "foreground_target": unit_state("pocketforge-foreground.target"),
+        "session_target": unit_state("pocketforge-gamescope-session.target"),
     }
     os.umask(int(record["umask"], 8))
     for flag, value in EXPECTED.items():

@@ -12,6 +12,7 @@ from pathlib import Path
 CONDITION = re.compile(
     r"^\s*(ConditionPathExists|ConditionPathIsDirectory|AssertPathExists)\s*=\s*(.*?)\s*$"
 )
+EXEC_PATH_TEST = re.compile(r"^\s*ExecStartPre=/usr/bin/test\s+-e\s+(\S+)\s*$")
 DIRECTORY_TYPES = {"d", "D", "v", "q", "Q"}
 SAFE_PROVIDER_TYPES = DIRECTORY_TYPES | {"f", "F", "L", "L+", "p", "p+"}
 
@@ -108,9 +109,13 @@ def main() -> None:
     for unit in args.unit:
         for line_number, line in enumerate(unit.read_text().splitlines(), start=1):
             match = CONDITION.match(line)
-            if match is None:
-                continue
-            directive, value = match.groups()
+            if match is not None:
+                directive, value = match.groups()
+            else:
+                exec_match = EXEC_PATH_TEST.match(line)
+                if exec_match is None:
+                    continue
+                directive, value = "ExecStartPre test -e", exec_match.group(1)
             conditioned_path = positive_condition_path(value)
             if conditioned_path is None:
                 continue

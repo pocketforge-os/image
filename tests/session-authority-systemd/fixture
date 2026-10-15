@@ -102,6 +102,11 @@ def main() -> int:
         authority_mode = errno.errorcode.get(error.errno or 0, "error")
     probe = {
         "mode": mode,
+        "POCKETFORGE_SESSION": os.environ.get("POCKETFORGE_SESSION"),
+        "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY"),
+        "wayland_socket": stat.S_ISSOCK(
+            os.stat("/run/pocketforge/session/wayland-0").st_mode
+        ),
         "PF_DESCRIPTOR": descriptor,
         "descriptor_readable": bool(descriptor) and os.access(descriptor, os.R_OK),
         "PF_BROKER_SOCK": broker,

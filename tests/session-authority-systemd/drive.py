@@ -24,6 +24,9 @@ APP_UNIT = f"pf-app@{APP_ID}.service"
 AUTHORITY_UNIT = "pf-session-authorityd.service"
 OWNER_UNIT = "pf-shell-selected.service"
 TARGET_UNIT = "pocketforge-foreground.target"
+SESSION_TARGET = "pocketforge-gamescope-session.target"
+RESIDENT_UNIT = "pocketforge-gamescope-resident.service"
+GAMESCOPE_UNIT = "pocketforge-gamescope.service"
 BROKER_UNIT = "pf-input-broker.service"
 SOCKET = Path("/run/pocketforge/session-authority.sock")
 BROKER_SOCKET = Path("/run/pocketforge/input-broker.sock")
@@ -505,6 +508,116 @@ def assert_broker_dormant_at_boot() -> str:
     return enabled
 
 
+def reset_owner_start_limit() -> None:
+    """Give each synthetic residency scenario an independent shell start budget."""
+    command("systemctl", "reset-failed", OWNER_UNIT)
+
+
+def assert_bare_target_is_unneeded() -> str:
+    """A direct target start is transient; only the resident unit is an opt-in hold."""
+    reset_owner_start_limit()
+    started = command("systemctl", "start", SESSION_TARGET, check=False)
+    require(started.returncode == 0, f"bare target start failed: {started.stderr.strip()}")
+    wait_for(lambda: not unit_is_active(SESSION_TARGET), "bare Gamescope target to stop as unneeded")
+    wait_for(lambda: unit_is_active(OWNER_UNIT), "owner restore after bare target start")
+    wait_for_owner_grab("bare-target")
+    require(not unit_is_active(RESIDENT_UNIT), "bare target start activated the resident hold")
+    evidence("bare_target stop_when_unneeded=stopped resident=inactive owner=active")
+    return "stopped"
+
+
+def assert_resident_session_stays_up() -> str:
+    """The explicit hold survives an app exit and selects Gamescope session_idle."""
+    reset_owner_start_limit()
+    command("systemctl", "start", RESIDENT_UNIT)
+    wait_for(lambda: unit_is_active(RESIDENT_UNIT), "resident hold")
+    wait_for(lambda: unit_is_active(SESSION_TARGET), "resident Gamescope target")
+    require(not unit_is_active(OWNER_UNIT), "fb0 owner stayed active during resident Gamescope")
+
+    MODE.write_text("0\n")
+    before_invocations = invocation_count()
+    scope = launch()
+    wait_for(lambda: invocation_count() == before_invocations + 1, "resident app invocation")
+    wait_for(lambda: property_value(APP_UNIT, "ActiveState") == "inactive", "resident app exit")
+    wait_for(lambda: not unit_is_active(BROKER_UNIT), "resident broker stop")
+    wait_for(lambda: authority_state()["phase"] == "Idle", "resident session_idle completion")
+    entry = history_entry(scope.session_id)
+    require(entry["receipt"] == "Returned", f"resident receipt: {entry}")
+    require(
+        entry.get("post_app_owner") == {
+            "owner_tier": "gamescope",
+            "post_app_owner": "session_idle",
+        },
+        f"resident post-app owner: {entry}",
+    )
+    require(unit_is_active(SESSION_TARGET), "resident target stopped after app exit")
+    require(unit_is_active(RESIDENT_UNIT), "resident hold stopped after app exit")
+    require(not unit_is_active(OWNER_UNIT), "fb0 owner replaced resident Gamescope after app exit")
+
+    # A terminal resident outcome must release the authority launch slot while
+    # retaining compositor ownership for the next app in the same held session.
+    before_second_invocations = invocation_count()
+    second_scope = launch()
+    require(second_scope.session_id != scope.session_id, "resident relaunch reused its session id")
+    wait_for(
+        lambda: invocation_count() == before_second_invocations + 1,
+        "second resident app invocation",
+    )
+    wait_for(lambda: property_value(APP_UNIT, "ActiveState") == "inactive", "second resident app exit")
+    wait_for(lambda: not unit_is_active(BROKER_UNIT), "second resident broker stop")
+    wait_for(lambda: authority_state()["phase"] == "Idle", "second resident session_idle completion")
+    second_entry = history_entry(second_scope.session_id)
+    require(second_entry["receipt"] == "Returned", f"second resident receipt: {second_entry}")
+    require(
+        second_entry.get("post_app_owner") == {
+            "owner_tier": "gamescope",
+            "post_app_owner": "session_idle",
+        },
+        f"second resident post-app owner: {second_entry}",
+    )
+    require(unit_is_active(SESSION_TARGET), "resident target stopped after second app exit")
+    require(unit_is_active(RESIDENT_UNIT), "resident hold stopped after second app exit")
+    require(not unit_is_active(OWNER_UNIT), "fb0 owner replaced resident Gamescope after second app exit")
+
+    command("systemctl", "stop", RESIDENT_UNIT)
+    wait_for(lambda: not unit_is_active(SESSION_TARGET), "target release after resident stop")
+    require(not unit_is_active(TARGET_UNIT), "foreground target active while resident hold was released")
+    wait_for(lambda: unit_is_active(OWNER_UNIT), "owner restore after resident stop")
+    wait_for_owner_grab("resident-stop")
+    evidence(
+        f"resident_session session={scope.session_id} app_receipt=Returned "
+        f"resident_second_session={second_scope.session_id} second_receipt=Returned "
+        "post_app_owner=session_idle target_after_apps=active resident_after_apps=active "
+        "foreground_before_restore=inactive"
+    )
+    return f"{scope.session_id},{second_scope.session_id}"
+
+
+def assert_gamescope_failure_drops_resident() -> str:
+    """BindsTo makes a compositor failure release both the target and its hold."""
+    reset_owner_start_limit()
+    command("systemctl", "start", RESIDENT_UNIT)
+    wait_for(lambda: unit_is_active(RESIDENT_UNIT), "resident hold before compositor failure")
+    wait_for(lambda: unit_is_active(GAMESCOPE_UNIT), "Gamescope before failure")
+    killed = command("systemctl", "kill", "--signal=KILL", GAMESCOPE_UNIT, check=False)
+    require(killed.returncode == 0, f"Gamescope kill failed: {killed.stderr.strip()}")
+    wait_for(lambda: not unit_is_active(SESSION_TARGET), "target stop after Gamescope failure")
+    wait_for(lambda: not unit_is_active(RESIDENT_UNIT), "resident drop after Gamescope failure")
+    wait_for(lambda: unit_is_active(OWNER_UNIT), "owner restore after Gamescope failure")
+    wait_for_owner_grab("gamescope-failure")
+    evidence("gamescope_failure target=inactive resident=inactive owner=active")
+    command("systemctl", "reset-failed", GAMESCOPE_UNIT, SESSION_TARGET, RESIDENT_UNIT, check=False)
+    return "dropped"
+
+
+def reset_grab_evidence_after_residency_checks() -> None:
+    """Residency preflights are outside the app-session grab-order measurement."""
+    (GRAB / "timeline").write_text("")
+    (GRAB / "violations").unlink(missing_ok=True)
+    command("systemctl", "restart", OWNER_UNIT)
+    wait_for_owner_grab("post-residency-baseline")
+
+
 def broker_control(request: bytes) -> bytes:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(2)
@@ -543,6 +656,12 @@ def launch_held(mode: str) -> SessionEventScope:
 def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     """What the real pf-app@ sandbox and the real broker drop-in give each side."""
     probe = json.loads(PROBE.read_text())
+    require(
+        probe["POCKETFORGE_SESSION"] == "/run/pocketforge/session"
+        and probe["WAYLAND_DISPLAY"] == "wayland-0"
+        and probe["wayland_socket"] is True,
+        f"app did not receive the published compositor session: {probe}",
+    )
     require(probe["PF_DESCRIPTOR"] == DESCRIPTOR, f"PF_DESCRIPTOR: {probe}")
     require(probe["descriptor_readable"] is True, f"descriptor unreadable in app sandbox: {probe}")
     require(probe["PF_BROKER_SOCK"] == str(BROKER_SOCKET), f"PF_BROKER_SOCK: {probe}")
@@ -606,8 +725,10 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     require(start["umask"] == "0o7", f"broker UMask: {start}")
     require(start["PF_PREFSD_SOCK"] == "/run/pocketforge/prefsd.sock", f"broker env: {start}")
     require(
-        start["shell"] == "inactive" and start["target"] == "active",
-        f"broker started before the shell stopped or the target started: {start}",
+        start["shell"] == "inactive"
+        and start["foreground_target"] == "inactive"
+        and start["session_target"] == "active",
+        f"broker started outside the Gamescope session handoff: {start}",
     )
     require(grab_lock_is_held(), "negative control: the broker does not hold the pad grab model")
     menu_socket = os.stat(SYSTEM_MENU_SOCKET)
@@ -713,7 +834,7 @@ def probe_systemctl_stop_after_sigkill(order: GrabOrder) -> dict[str, Any]:
 
 
 def assert_system_menu_fallback_after_sigkill(order: GrabOrder, r4: dict[str, Any]) -> str:
-    """R4 GATE: providerless SystemMenu fallback through SafeReturn must end Returned."""
+    """R4 GATE: the 1500 ms authority grace must escalate before the 2 s unit backstop."""
     scope = launch_held("ignore-term")
     before_timeouts = app_timeout_log_count()
     pressed = press_system_menu_without_provider()
@@ -755,17 +876,23 @@ def assert_system_menu_fallback_after_sigkill(order: GrabOrder, r4: dict[str, An
     require(
         phase_name == "Restoring"
         and payload.get("rung") == "PresentationAcknowledged"
-        and pending == "Returned",
+        and pending == "ForcedClose",
         f"R4 GATE FAILED: authority phase after SIGKILL at TimeoutStopSec=2s is {phase} "
         f"(systemctl stop exit {r4['stop_exit']}, systemctl kill exit {r4['kill_exit']})",
     )
     observed = rpc({"method": "observe", "observation": {"kind": "presentation_acknowledged"}})
     require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
     final_events = events()
-    require(len(session_events(final_events, scope, "returned")) == 1, "R4: Returned not published once")
-    for other in ("crash", "forced_close", "recovery_required"):
+    require(
+        len(session_events(final_events, scope, "forced_close")) == 1,
+        "R4: ForcedClose not published once",
+    )
+    for other in ("returned", "crash", "recovery_required"):
         require(not session_events(final_events, scope, other), f"R4 session published {other}")
-    require(history_entry(scope.session_id)["receipt"] == "Returned", "R4 receipt not durable")
+    require(
+        history_entry(scope.session_id)["receipt"] == "ForcedClose",
+        "R4 ForcedClose receipt not durable",
+    )
     order.checkpoint(scope.session_id)
     return scope.session_id
 
@@ -782,7 +909,7 @@ def assert_broker_failure_never_traps() -> str:
         scope = launch()
     finally:
         UINPUT.touch(mode=0o600)
-    assert_result = property_value(BROKER_UNIT, "AssertResult")
+    broker_result = property_value(BROKER_UNIT, "Result")
     released = True
     try:
         wait_for(lambda: not unit_is_active(TARGET_UNIT), f"target release after broker failure in {scope.session_id}")
@@ -795,12 +922,12 @@ def assert_broker_failure_never_traps() -> str:
     events()
     phase = authority_state()["phase"]
     evidence(
-        f"broker_start_failure session={scope.session_id} broker_assert_result={assert_result} "
+        f"broker_start_failure session={scope.session_id} broker_result={broker_result} "
         f"app_invocations={invocation_count() - before_invocations} target={target_state} "
         f"owner={owner_state} panel_returned={'yes' if released else 'no'} "
         f"authority_phase={json.dumps(phase, separators=(',', ':'))}"
     )
-    require(assert_result == "no", f"broker AssertPathExists=/dev/uinput did not fail: {assert_result!r}")
+    require(broker_result == "exit-code", f"broker uinput pre-start did not fail: {broker_result!r}")
     require(invocation_count() == before_invocations, "app started although its broker failed")
     require(broker_grab_count() == before_broker_grabs, "failed broker grabbed the pad")
     require(released, f"user trapped: broker start failure left target={target_state} owner={owner_state}")
@@ -1575,6 +1702,10 @@ def main() -> None:
     wait_for(lambda: unit_is_active(OWNER_UNIT), "initial selected owner")
     wait_for_owner_grab("boot")
     broker_boot = assert_broker_dormant_at_boot()
+    bare_target = assert_bare_target_is_unneeded()
+    resident_session = assert_resident_session_stays_up()
+    resident_failure = assert_gamescope_failure_drops_resident()
+    reset_grab_evidence_after_residency_checks()
     order = GrabOrder()
 
     assert_refusals_never_reach_systemd()
@@ -1599,7 +1730,9 @@ def main() -> None:
         f"clean_invocations={clean_invocations} crash_invocations={crash_invocations} "
         "fb0=empty-regular-file "
         "session_scoping_negative_control=ok refused_systemctl_starts=0 owner_restore=ok "
-        f"broker_at_boot=inactive,{broker_boot} grab_lock_negative_control=held-by-shell",
+        f"broker_at_boot=inactive,{broker_boot} grab_lock_negative_control=held-by-shell "
+        f"bare_target={bare_target} resident_session={resident_session} "
+        f"resident_failure={resident_failure}",
         flush=True,
     )
     graceful_session = assert_system_menu_fallback_graceful(order)
@@ -1616,7 +1749,7 @@ def main() -> None:
         f"{exit_mid_session} "
         f"broker_failure_session={broker_failure_session} "
         f"broker_exit_before_ready_session={exit_before_ready_session} "
-        f"R4=Returned systemctl_stop_exit_after_sigkill={r4['stop_exit']}"
+        f"R4=ForcedClose systemctl_stop_exit_after_sigkill={r4['stop_exit']}"
     )
     control_restart_on_failure_reproduces_trap()
 

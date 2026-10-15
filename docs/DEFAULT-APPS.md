@@ -344,24 +344,25 @@ The image-owned template is:
 ```ini
 [Unit]
 Description=PocketForge default application %i
-Requires=pocketforge-foreground.target
+Requires=pocketforge-gamescope-session.target
 BindsTo=pf-input-broker.service pf-prefsd.service
-After=local-fs.target pocketforge-foreground.target pf-input-broker.service pf-prefsd.service
+After=local-fs.target pocketforge-gamescope-session.target pf-input-broker.service pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
-ConditionPathExists=/dev/fb0
 
 [Service]
 Type=simple
 User=gamer
 Group=gamer
-SupplementaryGroups=
+SupplementaryGroups=pf-session
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
+EnvironmentFile=/run/pocketforge/session/environment
+ExecStartPre=/usr/bin/test -S /run/pocketforge/session/wayland-0
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
@@ -400,10 +401,12 @@ template. Its two `Environment=` directives set `XCURSOR_THEME=pocketforge-light
 `XCURSOR_SIZE=48`, so systemd supplies the defaults directly to every app unit without relying on
 PAM interpretation of `/etc/environment`.
 
-The app template deliberately carries no supplementary group. Only
+The app template carries only `pf-session`, which opens the canonical 0660
+Wayland endpoint; the shared environment record supplies `WAYLAND_DISPLAY` but
+never `DISPLAY`. Only
 `pf-shell-selected.service` and `pf-foreground@.service` receive the dedicated
 `pf-pref-writer` group. Generated runtime-root service fragments first reset
-`SupplementaryGroups=`, then compiler-generated app policy directives populate the exact
+`SupplementaryGroups=pf-session`, then compiler-generated app policy directives populate the exact
 capability-derived groups for each app. Image-shipped Poolsuite appends those directives to a
 complete `pf-app@org.pocketforge.poolsuite.service` exact-instance unit; it does not put security
 policy in a drop-in. Every installed `pf-app@*.service.d` file is therefore environment-only. The
@@ -418,12 +421,12 @@ mid-session, so the app would keep the panel with no Menu intake. See
 [Input delivery](#input-delivery) and
 [Protected System Menu and return fallback during app sessions](#protected-system-menu-and-return-fallback-during-app-sessions).
 
-The template is installed but never enabled. It joins the existing foreground target exactly
-as display apps do, and the target's image-selected drop-in restores the launcher. The current
-Poolsuite service already demonstrates the required unprivileged user, supplementary groups,
-app working directory, target join, state directory, stop timeout, and no-restart posture.
-[image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
-`rootfs-overlay/etc/systemd/system/pocketforge-poolsuite.service:1-26`]
+The template is installed but never enabled. An explicit app launch pulls in
+the opt-in Gamescope session and starts only after its publisher made the
+canonical Wayland socket and environment visible. The direct fb0 foreground
+target remains a separate bench/diagnostic path documented in
+`docs/FB0-CONTRACT.md`; `pf-app@` neither requires `/dev/fb0` nor enters that
+conflicting target.
 
 `Wants=network-online.target` is deliberately absent from the generic template: it cannot be
 conditioned by descriptor data, and ruling 4 makes `needs_network` non-blocking metadata. The
@@ -849,19 +852,16 @@ covers the same edge.
 launch: the authority runs `systemctl start pf-app@<id>.service` (one transaction)
   1. pf-shell-selected stop     Conflicts= from the target drop-in and from the broker
                                 drop-in; pf-shell exits and the kernel drops its EVIOCGRAB
-  2. foreground target start    After=pf-shell-selected (a stop runs before a start)
-  3. pf-input-broker start      After=target; EVIOCGRAB pf-gamepad, create the re-emit
+  2. Gamescope session start    compositor publishes the canonical Wayland session
+  3. pf-input-broker start      After=session target; EVIOCGRAB pf-gamepad, create the re-emit
                                 device, bind the acquire socket, then READY=1 (Type=notify)
   4. pf-app@<id> start          After=broker; the app acquires the re-emit fd
 return: Menu (below), the app exits by itself, or the broker fails (BindsTo= stops the app)
-  5. pf-app@<id> inactive       StopWhenUnneeded= queues stop jobs for broker and target
-  6. pf-input-broker stop       ordered before the target's stop (it is After= the target);
+  5. pf-app@<id> inactive       StopWhenUnneeded= queues a stop for the broker
+  6. pf-input-broker stop       ordered behind the session start (it is After= the target);
                                 its exit drops the grab and removes the re-emit device
-  7. foreground target stop     OnSuccess=pf-shell-selected.service
-  8. pf-shell-selected start    After=pf-input-broker (drop-in), so it starts after step 6;
-                                pf-shell EVIOCGRABs pf-gamepad again
-  9. authority restoration      TargetReleased -> start the owner (idempotent) ->
-                                OwnerActive -> presentation ack -> terminal receipt
+  7. session lifetime           an independently opted-in target remains active; if this
+                                transaction was its only pin, its one-shot fallback owns exit
 ```
 
 The real-systemd harness checks this ordering in every session with two independent
@@ -909,16 +909,17 @@ the list would otherwise overflow.
 
 The authority honours the shared SafeReturn intake in `Starting`/`Running`:
 
-1. It runs the blocking `systemctl stop pf-app@<id>.service`: SIGTERM, then SIGKILL at
-   `TimeoutStopSec=2s`.
-2. It enters `StoppingGracefully`.
-3. It maps the inactive unit, whether its result was `success` or `timeout`, to `UnitInactive`,
-   and so to a `Returned` receipt.
-4. The receipt is published after the restored shell acknowledges presentation.
+1. It runs `systemctl stop --no-block pf-app@<id>.service` and enters
+   `StoppingGracefully`.
+2. An inactive unit observed inside the 1500 ms grace window produces `Returned`.
+3. If the app is still active when that window expires, the authority samples the hang and
+   sends the forced-stop command before the unit's `TimeoutStopSec=2s` backstop. That path
+   produces `ForcedClose`, including when systemd ultimately records `Result=timeout`.
+4. Either receipt is published only after the restored owner acknowledges presentation.
 
-The authority's SafeReturn state machine is unchanged. Runtime#108 and launcher#154 supply
-the SystemMenu router and its matching vendored input contract; this image pins their merged
-heads as one compatible pair.
+This is runtime's v2 close-progress contract: `StoppingGracefully`, then (when needed)
+`ForceStopping{reason: stop_timeout}`, followed by the terminal receipt. The 1500 ms authority
+budget intentionally precedes the image unit's 2 s last-resort backstop.
 
 **Who else can request it.** The broker's fail-safe and an authenticated provider's `return`
 request both enter the broker-owned intake. `pf-app@` gets
@@ -932,28 +933,16 @@ membership would otherwise allow it, an app cannot create a controller that rese
 built-in pad. The real-systemd harness makes its fake node mode 0666 and proves both sides in one
 run: `gamer` outside the unit can open it, while the same uid inside `pf-app@` cannot.
 
-**R3/R4.** R3 treats a SIGKILL at the 2 s timeout as `Returned`, not `ForcedClose`. The concern
-behind R4 was `pf-session-authority` `lib.rs:995-1004`: a non-zero `systemctl stop` would be
-followed by `systemctl kill` and then `ForcedClose` or `RecoveryRequired`. The ephemeral
-real-systemd harness pins the outcome:
+**R3/R4.** Runtime's v2 progress contract supersedes the earlier runtime `d75beedf` evidence
+that classified the unit backstop as `Returned`. The real-systemd harness now pins both paths:
 
-Evidence: image#143 CI run 36528282419, live job 109276248107 on a `pf-builder-vm` ephemeral
-runner. The run used runtime `d75beedf`, the real authority and `pf-app-launch`, the runtime's
-verbatim `pf-input-broker.service` plus this drop-in, and systemd `252.39-1~deb12u2`.
-
-- **Direct probe of the authority's exact stop command.** The app ignores SIGTERM. `systemctl stop
-  pf-app@<id>.service` returned after 2.17 s with the unit `failed`/`Result=timeout`, and it
-  **exited 0**. `systemctl kill --kill-who=all` on the failed unit also exits 0, so even the
-  non-zero branch would not have reached `RecoveryRequired`.
-- **Providerless System Menu fallback with the app ignoring SIGTERM** (session-4). Guide to `failed`/`timeout` took
-  2.09 s. The authority was left at `Restoring{receipt: Returned, rung: PresentationAcknowledged}`
-  and published exactly one `Returned` after the presentation acknowledgement. There was no
-  `ForcedClose`, `Crash`, or `RecoveryRequired`.
-- **Graceful providerless fallback** (session-3). Guide to inactive took 0.08 s, with `Result=success` and
-  receipt `Returned`.
-
-**R4 holds: `Returned`, not `RecoveryRequired`.** The device bench (B6) repeats it on the target
-systemd.
+- **Graceful providerless fallback.** An app which accepts SIGTERM becomes inactive inside the
+  authority grace window and produces exactly one `Returned` after presentation acknowledgement.
+- **Escalated providerless fallback.** An app which ignores SIGTERM is still active at 1500 ms,
+  so the authority publishes `ForceStopping{reason: stop_timeout}`, invokes the forced stop,
+  and owes exactly one `ForcedClose` after presentation acknowledgement. The unit may then show
+  `Result=timeout` at its 2 s backstop; that does not rewrite the already escalated close as a
+  clean return. Neither path may end in `RecoveryRequired`.
 
 ### Updated units
 
@@ -965,13 +954,14 @@ the comments are omitted here and the directives are verbatim:
 ```ini
 [Unit]
 StopWhenUnneeded=yes
-Wants=pocketforge-foreground.target
-After=pocketforge-foreground.target pf-input-decode.service pf-prefsd.service
+OnFailure=pocketforge-gamescope-fallback.service
+Wants=pocketforge-gamescope-session.target
+After=pocketforge-gamescope-session.target pf-input-decode.service pf-prefsd.service
 Conflicts=pf-shell-selected.service
 ConditionPathExists=
-AssertPathExists=/dev/uinput
 
 [Service]
+ExecStartPre=/usr/bin/test -e /dev/uinput
 Group=gamer
 UMask=0007
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
@@ -980,16 +970,19 @@ ExecStart=
 ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/device/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/system-menu.sock
 ```
 
-`ConditionPathExists=` followed by `AssertPathExists=/dev/uinput` is a B4 addition to the
-ruling's list. The runtime unit's `ConditionPathExists=/dev/uinput` would turn a missing uinput
-node into a *skipped* start. A skipped start is a success for `Requires=`, so the app would start
-with no input and no Menu intake: a trapped user. The empty assignment resets the inherited
-condition, and the assertion fails the broker job, which fails the dependent app job.
-`BindsTo=` with `After=` would not keep the app active beside a skipped broker either. The
-assertion makes it a start failure, so the app is never invoked (harness
+`ConditionPathExists=` followed by `ExecStartPre=/usr/bin/test -e /dev/uinput` is a B4
+addition to the ruling's list. The runtime unit's `ConditionPathExists=/dev/uinput` would turn
+a missing uinput node into a *skipped* start. A skipped start is a success for `Requires=`, so
+the app would start with no input and no Menu intake: a trapped user. The empty assignment
+resets the inherited condition, and the pre-start command fails the broker job, which fails the
+dependent app job and activates the broker's `OnFailure=` fallback. `BindsTo=` with `After=`
+would not keep the app active beside a skipped broker either. The pre-start command makes it a
+failure, so the app is never invoked (harness
 `broker_start_failure`).
 
-`Restart=no` and `Wants=pocketforge-foreground.target` are `tsp-f3fm.202.1.6` fixes for a
+`Restart=no`, `OnFailure=pocketforge-gamescope-fallback.service`, and
+`Wants=pocketforge-gamescope-session.target` retain the
+`tsp-f3fm.202.1.6` fail-once semantics for a
 broker that starts and then exits. On the .215 bench, the broker refused its source and exited 1
 right after start:
 
@@ -1002,8 +995,14 @@ right after start:
   changes state. A broker that exits before READY fails the app's start job, but the app unit
   itself never changes state. Without this line, the foreground target stayed active, its
   `OnSuccess=` never fired, and the authority waited at rung `TargetReleased` with no shell.
-  This was measured by the harness with `Restart=no` alone. With `Wants=`, the broker's own
-  failed transition queues the target, and the target stops once no app job pins it.
+  With `Wants=`, the broker's own failed transition rechecks the compositor
+  target, which stops only when no independent opt-in or app job pins it.
+- **`OnFailure=`.** A failed `/dev/uinput` pre-start can leave the compositor
+  target active even though the app never became a live pin. The broker never entered active,
+  so there is no later broker inactive transition to recheck `StopWhenUnneeded=`. The failure
+  unit starts the reusable fallback; its shell start conflicts with and stops the transient
+  session target, after which runtime can observe `TargetReleased`. It does not run for a clean
+  broker stop.
 
 The shell drop-in is `/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf`:
 
@@ -1017,10 +1016,10 @@ After=pf-input-broker.service
 | Failure mode | Behaviour | Test |
 |---|---|---|
 | Broker enabled at boot | It would stop the shell at boot through `Conflicts=` and grab the pad | Image: the installer removes and then refuses any `*.wants/pf-input-broker.service`. Harness: `is-enabled` is `disabled` and the broker is inactive at boot |
-| Broker cannot start (no `/dev/uinput`) | The assertion fails the broker job, the app job fails as a dependency, the authority records `Crash` (`systemd_start_failed`), and the panel must return | Harness `broker_start_failure`: no app invocation, no broker grab, owner re-activated, `Crash` receipt |
-| Broker exits before READY (bad source or descriptor; the .215 trap) | It fails once (`Restart=no`) and the app is never invoked. `Wants=` releases the target, and `OnSuccess=` restores the shell, which stays up. The receipt is `Crash` (`systemd_start_failed`). Before the fix, the runtime unit's `Restart=on-failure` restarted the broker every 2 s, and each start stopped the shell again through `Conflicts=` | Harness `broker_exit_before_ready`: NRestarts 0, one start attempt, shell back within 10 s, one shell PID and zero broker activity over 30 s, no grab conflicts. Negative control `control_restart_on_failure`: the same broker with `Restart=on-failure` restored must restart |
+| Broker cannot start (no `/dev/uinput`) | The pre-start check fails the broker job, the app job fails as a dependency, and broker `OnFailure=` runs the reusable shell fallback. Starting the shell conflicts with and stops the orphaned transient session target; the authority records `Crash` (`systemd_start_failed`) and the panel returns | Harness `broker_start_failure`: no app invocation, no broker grab, broker result `exit-code`, target inactive, owner re-activated, `Crash` receipt |
+| Broker exits before READY (bad source or descriptor; the .215 trap) | It fails once (`Restart=no`) and the app is never invoked. Broker `OnFailure=` starts the fallback, which releases the target and restores the shell; it stays up. The receipt is `Crash` (`systemd_start_failed`). Before the fix, the runtime unit's `Restart=on-failure` restarted the broker every 2 s, and each start stopped the shell again through `Conflicts=` | Harness `broker_exit_before_ready`: NRestarts 0, one start attempt, shell back within 10 s, one shell PID and zero broker activity over 30 s, no grab conflicts. Negative control `control_restart_on_failure`: the same broker with `Restart=on-failure` restored must restart |
 | Broker exits mid-session, after READY | It fails once (`Restart=no`). `BindsTo=` stops the app (SIGTERM, `Result=success`), the target is released, and the shell returns. The authority treats it as the app exiting, so the receipt is `Returned`. Under `Requires=` alone, the app kept running with no broker, no shell and no Menu intake | Harness `broker_exit_mid_session`, with grab order checked; B6 `kill -9` fault case on the target systemd |
-| App ignores SIGTERM | SIGKILL at `TimeoutStopSec=2s`; receipt `Returned` (R3) | Harness `r4_sigkill`, plus the direct `systemctl stop` exit probe |
+| App ignores SIGTERM | Authority escalates after 1500 ms; SIGKILL is bounded by `TimeoutStopSec=2s`; receipt `ForcedClose` | Harness `r4_sigkill`, plus the direct `systemctl stop` exit probe |
 | App SIGSTOPped, then Menu | systemd sends SIGCONT with SIGTERM, then SIGKILL at 2 s; the receipt is as above | B6 fault case |
 | Shell and broker hold the pad at once | Prevented by `Conflicts=` plus ordering | Harness grab model plus timestamp checkpoints in every session |
 | App reaches the authority socket | Prevented by `InaccessiblePaths=` | Harness sandbox probe, with a positive control outside the unit |
@@ -1046,7 +1045,7 @@ After=pf-input-broker.service
 6. **B6 bench** (inside `.215`):
    - the broker is inactive at boot;
    - the pad drives the player;
-   - Menu returns in under 2 s with a `Returned` receipt;
+   - a cooperative app returns with `Returned`; an app still active at the 1500 ms authority deadline returns with `ForcedClose` after bounded escalation;
    - 10 cycles with no `RecoveryRequired`;
    - fault cases: `kill -9` the broker; SIGSTOP the app, then Menu.
 
@@ -1059,8 +1058,8 @@ After=pf-input-broker.service
 - Replacing today's manifest-scoped raw input grant with mediated input. The one capability
   compiler currently maps `input` to the `input` group and selected device paths; the input
   mediation follow-up changes that mapping in place rather than adding another policy list.
-- Distinguishing `ForcedClose` from `Returned` for a SIGKILLed app (R3); that would change a
-  launcher-vendored crate.
+- Changing runtime's v2 distinction between `ForcedClose` and `Returned`; the image consumes
+  that launcher-vendored contract and tests both outcomes.
 - Any of this on A133 vendor/default or A523. The broker, library and descriptor are
   A133-open-only, like the rest of the default-app mechanism.
 

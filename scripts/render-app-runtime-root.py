@@ -88,6 +88,8 @@ RESOURCE_PREFIXES = {
     "render-devices": ("/dev/dri/renderD",),
     "session-environment": ("/run/pocketforge/session/environment",),
     "video-decode-devices": ("/dev/video",),
+    "x11-environment": ("/run/pocketforge/session/capabilities/x11/environment",),
+    "x11-socket": ("/run/pocketforge/session/capabilities/x11/X0",),
 }
 
 REFUSAL_EXIT = {
@@ -620,7 +622,10 @@ def render(
         "PrivateUsers=yes",
         "PrivateDevices=yes",
         "DevicePolicy=closed",
-        "SupplementaryGroups=",
+        # Reset image/template groups, retaining only access to the canonical
+        # compositor session. The policy fragment below adds capability-derived
+        # audio/input/video groups; X11 is a separate manifest-gated projection.
+        "SupplementaryGroups=pf-session",
         "NoNewPrivileges=yes",
         "PrivateTmp=yes",
         "InaccessiblePaths=/run/pocketforge/prefsd.sock",

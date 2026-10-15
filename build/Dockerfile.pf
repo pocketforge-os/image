@@ -1278,6 +1278,7 @@ FROM pf-build-base AS runtime
 ARG PF_SOC
 ARG PF_RUNTIME_SHA
 ARG PF_GPU_MODEL
+ARG PF_GAMESCOPE_MODE=not-shipped
 ARG PF_APP_RUNTIME_FAMILY=
 ARG PF_APP_RUNTIME_ABI=
 ARG PF_APP_PLATFORM_VERSION=
@@ -1296,7 +1297,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "679eb323a7eddb27b6af3273fa77ce63c33c42cd" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "31eaa601b57464349e04fcbcb235f5537bf1fcca" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # files exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml plus the byte-identical device-neutral
@@ -1324,6 +1325,7 @@ install -D -m 0644 target/aarch64-unknown-linux-gnu/release/libpocketforge.a /ou
 render-platform-capabilities \
   --soc "${PF_SOC}" \
   --gpu-model "${PF_GPU_MODEL:-ddk}" \
+  --gamescope-mode "${PF_GAMESCOPE_MODE}" \
   --runtime-source /work/runtime \
   --descriptor "${DESCRIPTOR}" \
   --output /out/share/platform-capabilities.toml
@@ -2032,7 +2034,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "77c0f054558b1dac8ff2d2795576577963f60760" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "55acd7fc0afe338899b283ac774023ad89662d15" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fourteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.

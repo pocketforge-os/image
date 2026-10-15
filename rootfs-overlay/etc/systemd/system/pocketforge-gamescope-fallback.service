@@ -4,5 +4,10 @@ After=pocketforge-gamescope.service
 
 [Service]
 Type=oneshot
+# Intentional Gamescope handoffs count toward systemd's service start limit even
+# when the selected shell never crashed. Clear that stale handoff history here;
+# the shell keeps Restart=on-failure and its rate limit for autonomous crashes.
+ExecStart=/usr/bin/systemctl reset-failed pf-shell-selected.service
 ExecStart=/usr/bin/systemctl start --no-block pf-shell-selected.service
-RemainAfterExit=yes
+# Deliberately no RemainAfterExit: every later supervisor exit must be able to
+# activate this unit and return ownership to the selected shell again.

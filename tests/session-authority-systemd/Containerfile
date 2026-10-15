@@ -25,7 +25,7 @@ RUN apt-get update -qq \
         systemd \
         systemd-sysv \
     && rm -rf /var/lib/apt/lists/* \
-    && for group_name in gamer audio input video; do \
+    && for group_name in gamer audio input video pf-session; do \
         getent group "${group_name}" >/dev/null || groupadd --system "${group_name}"; \
     done \
     && { getent passwd gamer >/dev/null \
@@ -34,9 +34,13 @@ RUN apt-get update -qq \
 
 RUN install -d -m 0755 \
         /etc/systemd/system/pocketforge-foreground.target.d \
+        /etc/systemd/system/pf-app@.service.d \
         /etc/systemd/system/pf-input-broker.service.d \
+        /etc/systemd/system/pf-session-authorityd.service.d \
         /etc/systemd/system/pf-shell-selected.service.d \
         /usr/share/pocketforge/device \
+        /usr/share/pocketforge/devices/a133 \
+        /usr/share/pocketforge/app-policy \
         /opt/pocketforge/apps/org.pocketforge.fixture \
         /usr/lib/tmpfiles.d \
         /usr/local/libexec \
@@ -50,10 +54,18 @@ RUN install -d -m 0755 \
 COPY --from=runtime-builder /out/pf-session-authorityd /usr/bin/pf-session-authorityd
 COPY --from=runtime-builder /out/pf-app-launch /usr/bin/pf-app-launch
 COPY runtime/systemd/pf-session-authorityd.service /etc/systemd/system/pf-session-authorityd.service
+COPY 10-test-driver-peer.conf /etc/systemd/system/pf-session-authorityd.service.d/10-test-driver-peer.conf
 COPY runtime/systemd/pocketforge.conf /usr/lib/tmpfiles.d/pocketforge.conf
 COPY session-authority-test-tmpfiles.conf /usr/lib/tmpfiles.d/session-authority-test.conf
 COPY pf-app@.service /etc/systemd/system/pf-app@.service
+COPY 10-test-landlock-unavailable.conf /etc/systemd/system/pf-app@.service.d/10-test-landlock-unavailable.conf
 COPY pocketforge-foreground.target /etc/systemd/system/pocketforge-foreground.target
+COPY pocketforge-gamescope-session.target /etc/systemd/system/pocketforge-gamescope-session.target
+COPY pocketforge-gamescope-resident.service /etc/systemd/system/pocketforge-gamescope-resident.service
+COPY pocketforge-gamescope.service /etc/systemd/system/pocketforge-gamescope.service
+COPY pocketforge-session-publisher.service /etc/systemd/system/pocketforge-session-publisher.service
+COPY pocketforge-gamescope-fallback.service /etc/systemd/system/pocketforge-gamescope-fallback.service
+COPY pf-session-publish /usr/lib/pocketforge/pf-session-publish
 COPY 10-owner-shell.conf /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf
 COPY pf-shell-selected.service /etc/systemd/system/pf-shell-selected.service
 COPY pf-prefsd.service /etc/systemd/system/pf-prefsd.service
@@ -63,10 +75,14 @@ COPY 10-input-broker.conf /etc/systemd/system/pf-shell-selected.service.d/10-inp
 COPY fake-input-broker /usr/bin/pf-input-broker
 COPY fake-prefsd /usr/local/libexec/fake-prefsd
 COPY fake-shell /usr/local/libexec/fake-shell
+COPY fake-gamescope /usr/local/libexec/fake-gamescope
 COPY capabilities.toml /usr/share/pocketforge/device/capabilities.toml
+COPY capabilities.toml /usr/share/pocketforge/devices/a133/capabilities.toml
 COPY session-authority-test.target /etc/systemd/system/session-authority-test.target
+COPY session-authority-driver.service /etc/systemd/system/session-authority-driver.service
 COPY app.toml /opt/pocketforge/apps/org.pocketforge.fixture/app.toml
 COPY fixture /opt/pocketforge/apps/org.pocketforge.fixture/fixture
+COPY app-policy.resources.json /usr/share/pocketforge/app-policy/org.pocketforge.fixture.resources.json
 COPY platform-capabilities.toml /usr/share/pocketforge/platform-capabilities.toml
 COPY drive.py /usr/local/libexec/drive.py
 COPY remount-cgroup-systemd /usr/local/libexec/remount-cgroup-systemd
@@ -77,13 +93,22 @@ RUN chmod 0755 \
         /usr/bin/pf-input-broker \
         /usr/local/libexec/fake-prefsd \
         /usr/local/libexec/fake-shell \
+        /usr/local/libexec/fake-gamescope \
+        /usr/lib/pocketforge/pf-session-publish \
         /opt/pocketforge/apps/org.pocketforge.fixture/fixture \
         /usr/local/libexec/drive.py \
         /usr/local/libexec/remount-cgroup-systemd \
     && chmod 0644 \
         /etc/systemd/system/pf-session-authorityd.service \
+        /etc/systemd/system/pf-session-authorityd.service.d/10-test-driver-peer.conf \
         /etc/systemd/system/pf-app@.service \
+        /etc/systemd/system/pf-app@.service.d/10-test-landlock-unavailable.conf \
         /etc/systemd/system/pocketforge-foreground.target \
+        /etc/systemd/system/pocketforge-gamescope-session.target \
+        /etc/systemd/system/pocketforge-gamescope-resident.service \
+        /etc/systemd/system/pocketforge-gamescope.service \
+        /etc/systemd/system/pocketforge-session-publisher.service \
+        /etc/systemd/system/pocketforge-gamescope-fallback.service \
         /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf \
         /etc/systemd/system/pf-shell-selected.service \
         /etc/systemd/system/pf-prefsd.service \
@@ -91,12 +116,24 @@ RUN chmod 0755 \
         /etc/systemd/system/pf-input-broker.service.d/10-app-session.conf \
         /etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf \
         /usr/share/pocketforge/device/capabilities.toml \
+        /usr/share/pocketforge/devices/a133/capabilities.toml \
         /etc/systemd/system/session-authority-test.target \
+        /etc/systemd/system/session-authority-driver.service \
         /usr/lib/tmpfiles.d/pocketforge.conf \
         /usr/lib/tmpfiles.d/session-authority-test.conf \
         /usr/share/pocketforge/platform-capabilities.toml \
+        /usr/share/pocketforge/app-policy/org.pocketforge.fixture.resources.json \
         /opt/pocketforge/apps/org.pocketforge.fixture/app.toml \
     && ln -sf session-authority-test.target /etc/systemd/system/default.target \
+    && systemd-analyze verify \
+        /etc/systemd/system/pf-session-authorityd.service \
+        /etc/systemd/system/pf-app@.service \
+        /etc/systemd/system/session-authority-driver.service \
+        /etc/systemd/system/pocketforge-gamescope-session.target \
+        /etc/systemd/system/pocketforge-gamescope-resident.service \
+        /etc/systemd/system/pocketforge-gamescope.service \
+        /etc/systemd/system/pocketforge-session-publisher.service \
+        /etc/systemd/system/pocketforge-gamescope-fallback.service \
     && ! find /etc/systemd/system -path '*.wants/*' -name pf-input-broker.service | grep -q .
 
 STOPSIGNAL SIGRTMIN+3

@@ -11,24 +11,27 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixtures="${root}/tests/session-authority-systemd"
 app_unit="${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
 app_dropin_verifier="${root}/tests/verify-session-authority-app-dropins.py"
+app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"
+platform_renderer="${root}/scripts/render-platform-capabilities.py"
+nonproduction_platform_renderer="${root}/tests/session-authority-systemd/make-nonproduction-platform.py"
 owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf"
+resident_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-resident.service"
 broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
 containerfile="${fixtures}/Containerfile"
 ephemeral_marker=/etc/pocketforge/ephemeral-runner.conf
 run_label_key=org.pocketforge.session-authority-run
 
-runtime_sha=1dd87ecc2952584a7ef1473c5dcb872662b7c0cb
+runtime_sha=511109df552a97b5a5c28e5564eba71d3f8999e2
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=4ab57976a5f4c00614b277cfaf8c0f65d860844ac160b015fbe5a71d549c6f05
+app_unit_sha256=dc0931940164e368766ea9d6d5d1333354691f08390d7ea34678b6c6e9f8d5e3
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
 # is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
-# crates/pf-input-broker/systemd/pf-input-broker.service is byte-identical at
-# d75beedf, 2ad0ca76, 0955d8a8, 7536aa1f and 1dd87ecc (runtime#101 touched only pf-framehost;
-# runtime#102 changed broker source and tests but no unit; runtime#103 touched only
-# crates/pf-session-authority; runtime#104 did too), so the broker unit digest is unchanged.
+# The input-broker unit is unchanged through 511109df (runtime#141); the later
+# runtime changes are confined to the session authority, so the broker unit
+# digest is unchanged.
 broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=4a85fa5674b199a7dea17253349c828f7925511ccaa4d8bc00a9ab53eb47728c
+broker_dropin_sha256=50ea0bb37187860b71dd24d619fe3c3bcb6c2248d0b45eae6574193b21e77e1b
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
@@ -622,6 +625,18 @@ git -C "${runtime}" checkout --quiet --detach "${runtime_sha}"
 sample_disk runtime_clone
 
 mkdir -p "${context}/runtime"
+PF_APP_RUNTIME_FAMILY=pocketforge/a133-powervr \
+PF_APP_RUNTIME_ABI=1 \
+PF_APP_PLATFORM_VERSION=20 \
+PF_APP_CAPABILITIES='audio entropy input settings' \
+    "${platform_renderer}" --soc sun50iw10p1 --gpu-model open \
+    --gamescope-mode g1 \
+    --runtime-source "${runtime}" \
+    --descriptor "${fixtures}/capabilities.toml" \
+    --output "${context}/platform-capabilities.production.toml"
+"${nonproduction_platform_renderer}" \
+    "${context}/platform-capabilities.production.toml" \
+    "${context}/platform-capabilities.toml"
 python3 - "${runtime}" "${context}/runtime" <<'PY'
 from pathlib import Path
 import shutil
@@ -646,9 +661,27 @@ actual_broker_unit_sha256="$(sha256sum \
     || fail "UNIT_DRIFT: runtime pf-input-broker.service expected ${broker_unit_sha256}, got ${actual_broker_unit_sha256}"
 
 install -m 0644 "${containerfile}" "${context}/Containerfile"
+install -m 0644 "${fixtures}/10-test-driver-peer.conf" \
+    "${context}/10-test-driver-peer.conf"
 install -m 0644 "${app_unit}" "${context}/pf-app@.service"
+install -m 0644 "${fixtures}/10-test-landlock-unavailable.conf" \
+    "${context}/10-test-landlock-unavailable.conf"
 install -m 0644 "${fixtures}/pocketforge-foreground.target" \
     "${context}/pocketforge-foreground.target"
+install -m 0644 "${fixtures}/pocketforge-gamescope-session.target" \
+    "${context}/pocketforge-gamescope-session.target"
+install -m 0644 "${resident_unit}" \
+    "${context}/pocketforge-gamescope-resident.service"
+install -m 0644 "${fixtures}/pocketforge-gamescope.service" \
+    "${context}/pocketforge-gamescope.service"
+install -m 0644 \
+    "${root}/rootfs-overlay/etc/systemd/system/pocketforge-session-publisher.service" \
+    "${context}/pocketforge-session-publisher.service"
+install -m 0644 \
+    "${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-fallback.service" \
+    "${context}/pocketforge-gamescope-fallback.service"
+install -m 0755 "${root}/rootfs-overlay/usr/lib/pocketforge/pf-session-publish" \
+    "${context}/pf-session-publish"
 install -m 0644 "${owner_dropin}" "${context}/10-owner-shell.conf"
 install -m 0644 "${fixtures}/pf-shell-selected.service" \
     "${context}/pf-shell-selected.service"
@@ -658,15 +691,18 @@ install -m 0644 "${shell_dropin}" "${context}/10-input-broker.conf"
 install -m 0755 "${fixtures}/fake-input-broker" "${context}/fake-input-broker"
 install -m 0755 "${fixtures}/fake-prefsd" "${context}/fake-prefsd"
 install -m 0755 "${fixtures}/fake-shell" "${context}/fake-shell"
+install -m 0755 "${fixtures}/fake-gamescope" "${context}/fake-gamescope"
 install -m 0644 "${fixtures}/capabilities.toml" "${context}/capabilities.toml"
 install -m 0644 "${fixtures}/session-authority-test.target" \
     "${context}/session-authority-test.target"
+install -m 0644 "${fixtures}/session-authority-driver.service" \
+    "${context}/session-authority-driver.service"
 install -m 0644 "${fixtures}/session-authority-test-tmpfiles.conf" \
     "${context}/session-authority-test-tmpfiles.conf"
 install -m 0644 "${fixtures}/app.toml" "${context}/app.toml"
 install -m 0755 "${fixtures}/fixture" "${context}/fixture"
-install -m 0644 "${fixtures}/platform-capabilities.toml" \
-    "${context}/platform-capabilities.toml"
+install -m 0644 "${app_policy_inventory}" \
+    "${context}/app-policy.resources.json"
 install -m 0755 "${fixtures}/drive.py" "${context}/drive.py"
 install -m 0755 "${fixtures}/remount-cgroup-systemd" \
     "${context}/remount-cgroup-systemd"
@@ -800,9 +836,13 @@ if missing:
     raise SystemExit(f"missing tmpfs mounts: {sorted(missing)}")
 ' <<<"${tmpfs_json}" || fail 'CONTAINER_TMPFS_DRIFT'
 
-if ! test_output="$(
-    docker_checked exec "${systemd_container}" /usr/local/libexec/drive.py 2>&1
-)"; then
+if ! docker_checked exec "${systemd_container}" \
+    systemctl start session-authority-driver.service >/dev/null; then
+    if ! test_output="$(docker_checked exec "${systemd_container}" \
+        journalctl --no-pager --output cat --unit session-authority-driver.service \
+        2>&1)"; then
+        test_output="driver journal unavailable: ${test_output}"
+    fi
     [ ! -s "${run_scope}/failure-reason" ] || fail_recorded_or 'DISK_FLOOR_ABORT'
     echo "${test_output}" >&2
     docker_checked exec "${systemd_container}" \
@@ -810,15 +850,24 @@ if ! test_output="$(
         --unit pf-session-authorityd.service \
         --unit pf-app@org.pocketforge.fixture.service \
         --unit pf-input-broker.service \
+        --unit pocketforge-gamescope.service \
+        --unit pocketforge-gamescope-fallback.service \
+        --unit pocketforge-gamescope-resident.service \
+        --unit pocketforge-session-publisher.service \
+        --unit pocketforge-gamescope-session.target \
         --unit pocketforge-foreground.target \
-        --unit pf-shell-selected.service >&2 || true
+        --unit pf-shell-selected.service \
+        --unit session-authority-driver.service >&2 || true
     docker_checked exec "${systemd_container}" /bin/sh -c \
         'for f in /run/pf-grab/timeline /run/pf-grab/violations /run/pf-grab/safe-return.log; do
             [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done; echo "== authority.json";
             cat /var/lib/pocketforge/session-authority/authority.json' >&2 || true
     fail 'INTEGRATION_ASSERTION_FAILED'
 fi
+test_output="$(docker_checked exec "${systemd_container}" \
+    journalctl --no-pager --output cat --unit session-authority-driver.service)" \
+    || fail_recorded_or 'INTEGRATION_DRIVER_JOURNAL_FAILED'
 echo "${test_output}"
 sample_disk integration_complete
-pass_fields="runtime_sha=${runtime_sha} broker_units=${broker_unit_sha256:0:12},${broker_dropin_sha256:0:12},${shell_dropin_sha256:0:12} shell_fixture_parity=pass container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true adopted=e owner_exception=ephemeral-only cap_add=SYS_ADMIN apparmor=unconfined cgroup_remount=rw"
+pass_fields="runtime_sha=${runtime_sha} broker_units=${broker_unit_sha256:0:12},${broker_dropin_sha256:0:12},${shell_dropin_sha256:0:12} shell_fixture_parity=pass authority_peer=session-authority-driver.service container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true adopted=e owner_exception=ephemeral-only cap_add=SYS_ADMIN apparmor=unconfined cgroup_remount=rw"
 run_completed=1

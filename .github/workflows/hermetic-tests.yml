@@ -142,6 +142,7 @@ jobs:
             tests/test-open-module-contract.sh
             tests/test-poolsuite-rootfs-install.sh
             tests/test-poolsuite-variant-stage.sh
+            tests/test-pf-app-session-graph.sh
             tests/test-recovery-entry.sh
             tests/test-runtime-path-producers.sh
             tests/test-rootfs-abi-check.sh

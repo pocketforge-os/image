@@ -1,0 +1,17 @@
+[Unit]
+Description=Fixture Gamescope filesystem-socket owner
+Before=pocketforge-session-publisher.service
+PartOf=pocketforge-gamescope-session.target
+Conflicts=pf-shell-selected.service pocketforge-foreground.target
+OnFailure=pocketforge-gamescope-fallback.service
+OnSuccess=pocketforge-gamescope-fallback.service
+
+[Service]
+Type=notify
+User=root
+Group=pf-session
+RuntimeDirectory=pocketforge/gamescope
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/libexec/fake-gamescope
+Restart=no
+TimeoutStopSec=2s

@@ -16,24 +16,25 @@ from pathlib import Path
 
 expected = """[Unit]
 Description=PocketForge default application %i
-Requires=pocketforge-foreground.target
+Requires=pocketforge-gamescope-session.target
 BindsTo=pf-input-broker.service pf-prefsd.service
-After=local-fs.target pocketforge-foreground.target pf-input-broker.service pf-prefsd.service
+After=local-fs.target pocketforge-gamescope-session.target pf-input-broker.service pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
-ConditionPathExists=/dev/fb0
 
 [Service]
 Type=simple
 User=gamer
 Group=gamer
-SupplementaryGroups=
+SupplementaryGroups=pf-session
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
+EnvironmentFile=/run/pocketforge/session/environment
+ExecStartPre=/usr/bin/test -S /run/pocketforge/session/wayland-0
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
@@ -273,7 +274,7 @@ none_body="$(sed -n '/^FROM ${PF_CONTAINER} AS launcher-none$/,/^# launcher-open
 test "$(grep -c '^COPY --from=launcher-src ' "${dockerfile}")" -eq 1
 
 # No app bundle may declare a cgroup uinput grant (incident tsp-ihne1.56, PR6).
-# uinput is broker-owned (pf-input-broker AssertPathExists=/dev/uinput) and the
+# uinput is broker-owned (pf-input-broker ExecStartPre checks /dev/uinput) and the
 # generic pf-app@.service already hides it (InaccessiblePaths=-/dev/uinput), so a
 # slice.conf DeviceAllow=/dev/uinput is both over-broad and redundant: an app reads
 # input through the broker, it never creates input devices. hello-pocketforge used

@@ -1,12 +1,14 @@
 # fb0 contract for app authors
 
-What a display app must do to appear on the panel, and nothing more. This is a
+What a direct-to-panel diagnostic must do to appear on the panel, and nothing more. This is a
 **pointer to an existing mechanism**, not a new specification — the seam it
 describes shipped in `tsp-ikk0.11`.
 
-There are **two separate contracts**. Conflating them is the most common error
-here, so they are kept apart below: **ownership** (which process may write fb0)
-and **presentation** (how pixels reach the panel once you own it).
+Shipping `pf-app@` applications do **not** use this contract: they are Wayland
+or manifest-authorized Xwayland clients of `pocketforge-gamescope-session.target`.
+The compositor owns physical-to-logical rotation for those clients. There are
+two separate direct-path contracts below: **ownership** (which diagnostic may
+write fb0) and **presentation** (how pixels reach the panel once it owns it).
 
 §1–2 are the contract and are stable. §3–4 are **current platform status**, and
 every claim there is attributed and dated because it moves — twice on
@@ -15,7 +17,7 @@ wrong on silicon. Check with the lane named before relying on it.
 
 ---
 
-## 1. Ownership — join `pocketforge-foreground.target`
+## 1. Direct-path ownership — join `pocketforge-foreground.target`
 
 fb0 has **exactly one writer at all times**. The boot animator owns it from
 early boot and loops until a successor takes over. You do not negotiate this
@@ -51,7 +53,7 @@ writes alongside it. Never add a `Conflicts=` on the animator to a unit enabled
 at boot. `tests/test-panel-owner-boot-handoff.py` proves all of this on the real
 boot transaction (`systemd --test`) and in a live systemd run.
 
-**If your app is a systemd unit**, declare:
+**If your bench or diagnostic is a systemd unit**, declare:
 
 ```ini
 [Unit]
@@ -59,7 +61,7 @@ Requires=pocketforge-foreground.target
 After=pocketforge-foreground.target
 ```
 
-**If it is not**, use the sanctioned wrapper (needs root; HIL/test callers use
+**If it is not**, use the sanctioned direct-path wrapper (needs root; HIL/test callers use
 `sudo -n`). The SDL video driver depends on the image's GPU profile:
 
 ```sh
@@ -92,6 +94,12 @@ through fb0. As of 2026-09-29 that path is not yet verified on device (GBM
 scanout from Mesa into sun4i-drm, rotated present, fb0 restore after exit).
 The checks are `tsp-mc9m.41.924.16.12` (testgles2 on kmsdrm) and the
 `tsp-f3fm.215` Poolsuite run.
+
+This path owns its physical presentation and therefore rotates its own pixels.
+It is not evidence for the shipping compositor path. In particular,
+`launch-first-light.sh` historically used `env -i`; that also removed
+`SDL3_DYNAMIC_API` (`scripts/build-rootfs.sh:1070-1074` in the cited seed), so
+the resulting Qt/linuxfb frame did not exercise the image's rotated SDL3.
 
 What happens: activating the target **stops the current owner first**, `After=`
 orders you behind that stop, and when you exit the target deactivates

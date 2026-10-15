@@ -4,6 +4,15 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 harness="${root}/tests/test-session-authority-systemd.sh"
 driver="${root}/tests/session-authority-systemd/drive.py"
+driver_unit="${root}/tests/session-authority-systemd/session-authority-driver.service"
+authority_peer_dropin="${root}/tests/session-authority-systemd/10-test-driver-peer.conf"
+session_target="${root}/tests/session-authority-systemd/pocketforge-gamescope-session.target"
+real_session_target="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-session.target"
+resident_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-resident.service"
+real_gamescope_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope.service"
+fake_gamescope_unit="${root}/tests/session-authority-systemd/pocketforge-gamescope.service"
+fake_gamescope="${root}/tests/session-authority-systemd/fake-gamescope"
+fake_broker="${root}/tests/session-authority-systemd/fake-input-broker"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
@@ -16,6 +25,13 @@ precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditi
 shell_fixture_verifier="${root}/tests/verify-session-authority-shell-fixture.py"
 app_fixture_verifier="${root}/tests/verify-session-authority-app-fixture.py"
 app_dropin_verifier="${root}/tests/verify-session-authority-app-dropins.py"
+app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"
+platform_renderer="${root}/scripts/render-platform-capabilities.py"
+nonproduction_platform_renderer="${root}/tests/session-authority-systemd/make-nonproduction-platform.py"
+platform_descriptor="${root}/tests/session-authority-systemd/capabilities.toml"
+handwritten_platform="${root}/tests/session-authority-systemd/platform-capabilities.toml"
+app_manifest="${root}/tests/session-authority-systemd/app.toml"
+landlock_unavailable_dropin="${root}/tests/session-authority-systemd/10-test-landlock-unavailable.conf"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
 fake_root="${tmp}/host"
 fake_bin="${fake_root}/.test-bin"
@@ -32,6 +48,400 @@ cleanup() {
     rmdir "${tmp}"
 }
 trap cleanup EXIT
+
+verify_driver_peer_fixture() {
+    local test_unit="$1"
+    local test_dropin="$2"
+    local test_harness="$3"
+
+    grep -Fqx 'User=root' "${test_unit}" \
+        && grep -Fqx 'ExecStart=/usr/local/libexec/drive.py' "${test_unit}" \
+        && ! grep -Eq '^(Requires|BindsTo)=pf-session-authorityd\.service$' "${test_unit}" \
+        && grep -Fq -- '--shell-user root --shell-unit session-authority-driver.service' \
+            "${test_dropin}" \
+        && grep -Fq 'session-authority-driver.service' "${test_harness}" \
+        && grep -Fq 'session-authority-driver.service' "${recipe}" \
+        && grep -Fq '10-test-driver-peer.conf' "${recipe}" \
+        && grep -Fq 'systemd-analyze verify' "${recipe}" \
+        && ! grep -Fq '/usr/local/libexec/drive.py 2>&1' "${test_harness}"
+}
+
+# Runtime authenticates the process which opens its shell socket. Run the root
+# orchestration driver as an explicitly configured test-only service: it must stay
+# alive while pf-shell-selected is stopped during an app session. Positive control
+# plus a mutation proving that a mismatched peer unit is rejected by this guard.
+verify_driver_peer_fixture "${driver_unit}" "${authority_peer_dropin}" "${harness}" || {
+    echo 'session-authority systemd-safety: FAIL: driver lacks a matched service peer identity' >&2
+    exit 1
+}
+sed 's/--shell-unit session-authority-driver.service/--shell-unit wrong-driver.service/' \
+    "${authority_peer_dropin}" >"${tmp}/mismatched-driver-peer.conf"
+if verify_driver_peer_fixture "${driver_unit}" "${tmp}/mismatched-driver-peer.conf" "${harness}"; then
+    echo 'session-authority systemd-safety: FAIL: mismatched driver peer unit passed' >&2
+    exit 1
+fi
+
+verify_session_producer_fixture() {
+    local test_target="$1"
+    local test_gamescope="$2"
+    local directive
+
+    cmp -s "${test_target}" "${real_session_target}" || return 1
+    for directive in \
+        'PartOf=pocketforge-gamescope-session.target' \
+        'Conflicts=pf-shell-selected.service pocketforge-foreground.target' \
+        'OnFailure=pocketforge-gamescope-fallback.service' \
+        'OnSuccess=pocketforge-gamescope-fallback.service'; do
+        grep -Fqx "${directive}" "${real_gamescope_unit}" || return 1
+        grep -Fqx "${directive}" "${test_gamescope}" || return 1
+    done
+    grep -Fq 'Requires=pocketforge-gamescope.service pocketforge-session-publisher.service' \
+            "${test_target}" \
+        && grep -Fqx 'After=pocketforge-session-publisher.service' "${test_target}" \
+        && grep -Fqx 'Type=notify' "${test_gamescope}" \
+        && grep -Fqx 'ExecStart=/usr/local/libexec/fake-gamescope' "${test_gamescope}" \
+        && grep -Fq 'WAYLAND = Path("/run/pocketforge/gamescope/gamescope-0")' \
+            "${fake_gamescope}" \
+        && grep -Fq 'X11 = Path("/tmp/.X11-unix/X0")' "${fake_gamescope}" \
+        && grep -Fq 'for group_name in gamer audio input video pf-session; do' "${recipe}" \
+        && grep -Fq 'COPY pocketforge-session-publisher.service' "${recipe}" \
+        && grep -Fq 'COPY pf-session-publish /usr/lib/pocketforge/pf-session-publish' "${recipe}" \
+        && grep -Fq 'probe["POCKETFORGE_SESSION"] == "/run/pocketforge/session"' "${driver}" \
+        && grep -Fq '"wayland_socket": stat.S_ISSOCK(' \
+            "${root}/tests/session-authority-systemd/fixture"
+}
+
+verify_resident_fixture() {
+    local unit=$1
+    local test_harness=$2
+    local test_recipe=$3
+
+    grep -Fqx 'BindsTo=pocketforge-gamescope-session.target' "${unit}" \
+        && grep -Fqx 'After=pocketforge-gamescope-session.target' "${unit}" \
+        && grep -Fqx 'Type=oneshot' "${unit}" \
+        && grep -Fqx 'RemainAfterExit=yes' "${unit}" \
+        && ! grep -q '^\[Install\]$' "${unit}" \
+        && grep -Fq 'resident_unit=' "${test_harness}" \
+        && grep -Fq 'pocketforge-gamescope-resident.service' "${test_harness}" \
+        && grep -Fq \
+            'COPY pocketforge-gamescope-resident.service /etc/systemd/system/pocketforge-gamescope-resident.service' \
+            "${test_recipe}"
+}
+
+verify_residency_scenario_isolation() {
+    local test_driver=$1
+
+    grep -Fq 'def reset_owner_start_limit() -> None:' "${test_driver}" \
+        && grep -Fq 'command("systemctl", "reset-failed", OWNER_UNIT)' "${test_driver}" \
+        && [ "$(grep -Fc 'reset_owner_start_limit()' "${test_driver}")" -eq 4 ]
+}
+
+verify_resident_relaunch_fixture() {
+    local test_driver=$1
+
+    grep -Fq 'second_scope = launch()' "${test_driver}" \
+        && grep -Fq 'second resident app invocation' "${test_driver}" \
+        && grep -Fq 'second resident session_idle completion' "${test_driver}" \
+        && grep -Fq 'second_scope.session_id != scope.session_id' "${test_driver}" \
+        && grep -Fq 'resident_second_session=' "${test_driver}"
+}
+
+verify_broker_session_state_fixture() {
+    local test_broker=$1
+    local test_driver=$2
+
+    grep -Fq '"foreground_target": unit_state("pocketforge-foreground.target")' \
+        "${test_broker}" \
+        && grep -Fq '"session_target": unit_state("pocketforge-gamescope-session.target")' \
+            "${test_broker}" \
+        && grep -Fq 'start["foreground_target"] == "inactive"' "${test_driver}" \
+        && grep -Fq 'start["session_target"] == "active"' "${test_driver}"
+}
+
+# A Gamescope session conflicts with the fb0 foreground target. The broker may
+# grab only after that owner is inactive and the Gamescope session target has
+# reached active. Keep the two target identities explicit, then prove a probe
+# which aliases the session state to the foreground target is rejected.
+verify_broker_session_state_fixture "${fake_broker}" "${driver}" || {
+    echo 'session-authority systemd-safety: FAIL: broker session-state probe is incomplete' >&2
+    exit 1
+}
+sed 's/unit_state("pocketforge-gamescope-session.target")/unit_state("pocketforge-foreground.target")/' \
+    "${fake_broker}" >"${tmp}/broker-with-aliased-targets"
+if verify_broker_session_state_fixture "${tmp}/broker-with-aliased-targets" "${driver}"; then
+    echo 'session-authority systemd-safety: FAIL: broker probe with aliased targets passed' >&2
+    exit 1
+fi
+
+verify_r4_forced_close_fixture() {
+    local test_driver=$1
+
+    grep -Fq 'pending == "ForcedClose"' "${test_driver}" \
+        && grep -Fq 'session_events(final_events, scope, "forced_close")' "${test_driver}" \
+        && grep -Fq 'history_entry(scope.session_id)["receipt"] == "ForcedClose"' "${test_driver}" \
+        && grep -Fq 'R4=ForcedClose systemctl_stop_exit_after_sigkill=' "${test_driver}"
+}
+
+# Runtime's v2 close contract escalates at 1500 ms, before the image unit's 2 s
+# SIGKILL backstop. Pin the resulting ForcedClose receipt and prove that the old
+# Returned expectation cannot satisfy this integration guard.
+verify_r4_forced_close_fixture "${driver}" || {
+    echo 'session-authority systemd-safety: FAIL: R4 does not require ForcedClose' >&2
+    exit 1
+}
+sed 's/ForcedClose/Returned/g' "${driver}" >"${tmp}/returned-r4-drive.py"
+if verify_r4_forced_close_fixture "${tmp}/returned-r4-drive.py"; then
+    echo 'session-authority systemd-safety: FAIL: old Returned R4 contract passed' >&2
+    exit 1
+fi
+
+verify_app_policy_inventory_fixture() {
+    local test_inventory="$1"
+
+    if ! python3 - "${test_inventory}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+inventory = json.loads(Path(sys.argv[1]).read_text())
+resources = inventory.get("resources", {})
+valid = (
+    inventory.get("platform_runtime") == "/usr"
+    and resources.get("display-sockets") == ["/run/pocketforge/session/wayland-0"]
+    and resources.get("session-environment") == ["/run/pocketforge/session/environment"]
+    and resources.get("render-devices") == ["/dev/dri/renderD128"]
+)
+raise SystemExit(0 if valid else 1)
+PY
+    then
+        return 1
+    fi
+    grep -Fq 'app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"' \
+        "${harness}" \
+        && grep -Fq '"${context}/app-policy.resources.json"' "${harness}" \
+        && grep -Fq '/usr/share/pocketforge/app-policy' "${recipe}" \
+        && grep -Fq \
+            'COPY app-policy.resources.json /usr/share/pocketforge/app-policy/org.pocketforge.fixture.resources.json' \
+            "${recipe}"
+}
+
+verify_platform_policy_producer_fixture() {
+    local test_harness="$1"
+
+    [ ! -e "${handwritten_platform}" ] \
+        && grep -Fq 'platform_renderer="${root}/scripts/render-platform-capabilities.py"' \
+            "${test_harness}" \
+        && grep -Fq 'PF_APP_RUNTIME_FAMILY=pocketforge/a133-powervr' "${test_harness}" \
+        && grep -Fq 'PF_APP_CAPABILITIES=' "${test_harness}" \
+        && grep -Fq '"${platform_renderer}" --soc sun50iw10p1 --gpu-model open' \
+            "${test_harness}" \
+        && grep -Fq -- '--gamescope-mode g1' "${test_harness}" \
+        && grep -Fq -- '--runtime-source "${runtime}"' "${test_harness}" \
+        && grep -Fq -- '--descriptor "${fixtures}/capabilities.toml"' "${test_harness}" \
+        && grep -Fq -- '--output "${context}/platform-capabilities.production.toml"' "${test_harness}" \
+        && grep -Fq '"${nonproduction_platform_renderer}"' "${test_harness}" \
+        && grep -Fq '"${context}/platform-capabilities.production.toml"' "${test_harness}" \
+        && grep -Fq '"${context}/platform-capabilities.toml"' "${test_harness}" \
+        && ! grep -Fq '"${fixtures}/platform-capabilities.toml"' "${test_harness}" \
+        && python3 - "${platform_descriptor}" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+descriptor = tomllib.loads(Path(sys.argv[1]).read_text())
+primary = [screen for screen in descriptor.get("screens", []) if screen.get("role") == "primary"]
+valid = (
+    descriptor.get("schema_version") in (2, 3)
+    and set(descriptor.get("memory", {})) >= {"physical_mib", "app_budget_mib"}
+    and len(primary) == 1
+    and set(primary[0].get("render_canvas", {})) == {"w", "h"}
+    and bool(descriptor.get("inputs"))
+)
+raise SystemExit(0 if valid else 1)
+PY
+}
+
+verify_ci_landlock_fixture() {
+    local test_manifest="$1"
+    local production_contract="$2"
+    local live_contract="$3"
+    local test_dropin="$4"
+
+    if ! python3 - "${test_manifest}" "${production_contract}" "${live_contract}" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+manifest = tomllib.loads(Path(sys.argv[1]).read_text())
+production = tomllib.loads(Path(sys.argv[2]).read_text())
+live = tomllib.loads(Path(sys.argv[3]).read_text())
+expected_live = dict(production)
+expected_live["production"] = False
+expected_live["landlock_mode"] = "best_effort"
+raise SystemExit(
+    0 if (
+        manifest.get("app", {}).get("use") == []
+        and production.get("production") is True
+        and production.get("landlock_mode") == "required"
+        and production.get("landlock_full_min_abi") == 10
+        and production.get("landlock_browser_min_abi") == 6
+        and live == expected_live
+    ) else 1
+)
+PY
+    then
+        return 1
+    fi
+    grep -Fq "PF_APP_CAPABILITIES='audio entropy input settings'" \
+        "${harness}" \
+        && grep -Fqx '        "landlock_full_min_abi": 10,' "${platform_renderer}" \
+        && grep -Fqx '        "landlock_browser_min_abi": 6,' "${platform_renderer}" \
+        && ! grep -Eq 'sed .*landlock|landlock_(full|browser)_min_abi=' "${harness}" \
+        && grep -Fqx 'SystemCallErrorNumber=EPERM' "${test_dropin}" \
+        && grep -Fqx \
+            'SystemCallFilter=~landlock_create_ruleset landlock_add_rule landlock_restrict_self' \
+            "${test_dropin}" \
+        && grep -Fq 'COPY 10-test-landlock-unavailable.conf /etc/systemd/system/pf-app@.service.d/10-test-landlock-unavailable.conf' \
+            "${recipe}" \
+        && grep -Fq '/etc/systemd/system/pf-app@.service' "${recipe}" \
+        && ! grep -Fq 'SystemCallFilter=' "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
+}
+
+# pf-app@ now consumes the compositor session environment and socket. Exercise
+# the real target + publisher bytes around a fake socket-owning Gamescope, and
+# prove that dropping the publisher readiness edge is rejected.
+verify_session_producer_fixture "${session_target}" "${fake_gamescope_unit}" || {
+    echo 'session-authority systemd-safety: FAIL: Gamescope session producer fixture is incomplete' >&2
+    exit 1
+}
+sed '/^After=pocketforge-session-publisher.service$/d' \
+    "${session_target}" >"${tmp}/unordered-session.target"
+if verify_session_producer_fixture "${tmp}/unordered-session.target" "${fake_gamescope_unit}"; then
+    echo 'session-authority systemd-safety: FAIL: unordered session publisher passed' >&2
+    exit 1
+fi
+sed '/^OnSuccess=pocketforge-gamescope-fallback.service$/d' \
+    "${fake_gamescope_unit}" >"${tmp}/incomplete-gamescope.service"
+if verify_session_producer_fixture "${session_target}" "${tmp}/incomplete-gamescope.service"; then
+    echo 'session-authority systemd-safety: FAIL: compositor without clean-exit fallback passed' >&2
+    exit 1
+fi
+gamescope_self_test="$(python3 "${fake_gamescope}" --self-test)"
+grep -Fqx 'fake-gamescope self-test: PASS filesystem_sockets=2 abstract_sockets=0' \
+    <<<"${gamescope_self_test}" || exit 1
+verify_resident_fixture "${resident_unit}" "${harness}" "${recipe}" || {
+    echo 'session-authority systemd-safety: FAIL: resident hold is absent from the live fixture' >&2
+    exit 1
+}
+sed '/^BindsTo=pocketforge-gamescope-session.target$/d' \
+    "${resident_unit}" >"${tmp}/resident-without-bind.service"
+if verify_resident_fixture "${tmp}/resident-without-bind.service" "${harness}" "${recipe}"; then
+    echo 'session-authority systemd-safety: FAIL: unbound resident hold passed' >&2
+    exit 1
+fi
+verify_residency_scenario_isolation "${driver}" || {
+    echo 'session-authority systemd-safety: FAIL: residency scenarios share the shell start-rate counter' >&2
+    exit 1
+}
+sed 's/command("systemctl", "reset-failed", OWNER_UNIT)/command("systemctl", "reset-failed", GAMESCOPE_UNIT)/' \
+    "${driver}" >"${tmp}/resident-without-owner-reset.py"
+if verify_residency_scenario_isolation "${tmp}/resident-without-owner-reset.py"; then
+    echo 'session-authority systemd-safety: FAIL: wrong-unit scenario reset passed' >&2
+    exit 1
+fi
+verify_resident_relaunch_fixture "${driver}" || {
+    echo 'session-authority systemd-safety: FAIL: resident session does not prove the next launch slot is free' >&2
+    exit 1
+}
+sed 's/second_scope = launch()/second_scope = scope/' \
+    "${driver}" >"${tmp}/resident-without-relaunch.py"
+if verify_resident_relaunch_fixture "${tmp}/resident-without-relaunch.py"; then
+    echo 'session-authority systemd-safety: FAIL: resident relaunch mutation passed' >&2
+    exit 1
+fi
+
+# The pinned live runtime loads the image-owned resource inventory before compiling
+# launch policy. Exercise the same g1 inventory as the image and reject a
+# fixture whose compositor route is incomplete.
+verify_app_policy_inventory_fixture "${app_policy_inventory}" || {
+    echo 'session-authority systemd-safety: FAIL: app resource inventory is not installed' >&2
+    exit 1
+}
+python3 - "${app_policy_inventory}" "${tmp}/incomplete-resources.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+inventory = json.loads(Path(sys.argv[1]).read_text())
+inventory["resources"].pop("session-environment")
+Path(sys.argv[2]).write_text(json.dumps(inventory))
+PY
+if verify_app_policy_inventory_fixture "${tmp}/incomplete-resources.json"; then
+    echo 'session-authority systemd-safety: FAIL: incomplete compositor inventory passed' >&2
+    exit 1
+fi
+
+# The systemd integration fixture must consume the same image-owned platform
+# contract producer as real apps. A hand-written schema-1 contract can drift
+# past required policy fields such as the production Landlock declaration.
+verify_platform_policy_producer_fixture "${harness}" || {
+    echo 'session-authority systemd-safety: FAIL: platform policy bypasses the image producer' >&2
+    exit 1
+}
+sed 's/--gamescope-mode g1/--gamescope-mode not-shipped/' \
+    "${harness}" >"${tmp}/wrong-session-platform-harness"
+if verify_platform_policy_producer_fixture "${tmp}/wrong-session-platform-harness"; then
+    echo 'session-authority systemd-safety: FAIL: non-g1 platform producer passed' >&2
+    exit 1
+fi
+
+
+# Keep the real producer's production policy byte path intact, then derive the
+# live VM's explicitly non-production contract. The CI kernel may predate the
+# production ABI minimum; this lifecycle test must not weaken image policy.
+cat >"${tmp}/production-platform.toml" <<'EOF'
+schema_version = 2
+runtime_family = "pocketforge/a133-powervr"
+runtime_abi = "1"
+platform_version = "20"
+supported_capabilities = ["audio", "entropy", "input", "settings", "x11"]
+physical_memory_mib = 970
+app_memory_budget_mib = 600
+production = true
+landlock_mode = "required"
+landlock_full_min_abi = 10
+landlock_browser_min_abi = 6
+gles_max = "3.0"
+inputs = ["buttons"]
+display = { width = 1280, height = 720 }
+EOF
+python3 "${nonproduction_platform_renderer}" \
+    "${tmp}/production-platform.toml" "${tmp}/live-platform.toml"
+verify_ci_landlock_fixture \
+    "${app_manifest}" "${tmp}/production-platform.toml" "${tmp}/live-platform.toml" \
+    "${landlock_unavailable_dropin}" || {
+    echo 'session-authority systemd-safety: FAIL: CI fixture Landlock contract is not isolated' >&2
+    exit 1
+}
+sed 's/landlock_mode = "required"/landlock_mode = "best_effort"/' \
+    "${tmp}/production-platform.toml" >"${tmp}/invalid-production-platform.toml"
+if python3 "${nonproduction_platform_renderer}" \
+    "${tmp}/invalid-production-platform.toml" "${tmp}/invalid-live-platform.toml"; then
+    echo 'session-authority systemd-safety: FAIL: non-production source contract passed' >&2
+    exit 1
+fi
+if [ -e "${tmp}/invalid-live-platform.toml" ]; then
+    echo 'session-authority systemd-safety: FAIL: refused contract left output' >&2
+    exit 1
+fi
+sed '/^SystemCallFilter=/d' "${landlock_unavailable_dropin}" \
+    >"${tmp}/unguarded-landlock.conf"
+if verify_ci_landlock_fixture \
+    "${app_manifest}" "${tmp}/production-platform.toml" "${tmp}/live-platform.toml" \
+    "${tmp}/unguarded-landlock.conf"; then
+    echo 'session-authority systemd-safety: FAIL: unguarded Docker Landlock fixture passed' >&2
+    exit 1
+fi
 
 mkdir -p \
     "${fake_bin}" \
@@ -876,11 +1286,15 @@ grep -Fqx 'COPY 10-input-broker.conf /etc/systemd/system/pf-shell-selected.servi
 grep -Fqx 'COPY fake-input-broker /usr/bin/pf-input-broker' "${recipe}" || exit 1
 grep -Fqx 'COPY pf-prefsd.service /etc/systemd/system/pf-prefsd.service' "${recipe}" || exit 1
 grep -Fqx 'COPY fake-prefsd /usr/local/libexec/fake-prefsd' "${recipe}" || exit 1
+prefsd_self_test="$(python3 "${root}/tests/session-authority-systemd/fake-prefsd" --self-test)"
+grep -Fqx 'fake-prefsd self-test: PASS defaults=2 unknown=refused' \
+    <<<"${prefsd_self_test}" || exit 1
 grep -Fq 'pf-input-broker.service | grep -q .' "${recipe}" || exit 1
 for b4_check in 'R4 GATE FAILED' 'def assert_grab_timeline' 'def assert_broker_failure_never_traps' \
     'grab_lock_is_held()' 'systemctl_stop_exit_after_sigkill=' '"--reuid=gamer"' \
     'def assert_broker_exit_before_ready_never_traps' 'def assert_broker_exit_mid_session_never_traps' \
     'def control_restart_on_failure_reproduces_trap' 'watch_units(30.0)' \
+    'broker_result == "exit-code"' 'broker uinput pre-start did not fail' \
     'probe["prefsd_connect"] != "ok"' 'prefsd_outside_sandbox=ok'; do
     grep -Fq -- "${b4_check}" "${driver}" || {
         echo "session-authority systemd-safety: FAIL: driver lost B4 check ${b4_check}" >&2
@@ -939,8 +1353,36 @@ if python3 "${tmp}/no-rlimit-as-drive.py" --self-test >"${stdout_log}" 2>"${stde
     exit 1
 fi
 grep -Fq 'self-test: a report with RLIMIT_AS absent passed the core bound' "${stderr_log}" || exit 1
+
+verify_orientation_descriptor_fixture() {
+    local descriptor="$1"
+    local container_recipe="$2"
+    grep -Fq '[[screens]]' "${descriptor}" \
+        && grep -Fq 'role = "primary"' "${descriptor}" \
+        && grep -Fq \
+            'COPY capabilities.toml /usr/share/pocketforge/devices/a133/capabilities.toml' \
+            "${container_recipe}"
+}
+descriptor_fixture="${root}/tests/session-authority-systemd/capabilities.toml"
+verify_orientation_descriptor_fixture "${descriptor_fixture}" "${recipe}" || {
+    echo 'session-authority systemd-safety: FAIL: live orientation descriptor fixture is incomplete' >&2
+    exit 1
+}
+sed '/^\[\[screens\]\]/,$d' "${descriptor_fixture}" >"${tmp}/descriptor-without-screen.toml"
+if verify_orientation_descriptor_fixture "${tmp}/descriptor-without-screen.toml" "${recipe}"; then
+    echo 'session-authority systemd-safety: FAIL: descriptor without a screen passed' >&2
+    exit 1
+fi
+sed '\|COPY capabilities.toml /usr/share/pocketforge/devices/a133/capabilities.toml|d' \
+    "${recipe}" >"${tmp}/recipe-without-installed-descriptor"
+if verify_orientation_descriptor_fixture \
+    "${descriptor_fixture}" "${tmp}/recipe-without-installed-descriptor"; then
+    echo 'session-authority systemd-safety: FAIL: recipe without installed descriptor passed' >&2
+    exit 1
+fi
 for b4_input in fake-input-broker fake-prefsd pf-prefsd.service fake-shell capabilities.toml \
-    10-app-session.conf 10-input-broker.conf; do
+    10-app-session.conf 10-input-broker.conf pocketforge-gamescope-session.target \
+    pocketforge-gamescope-resident.service; do
     grep -Fq "${b4_input}" "${harness}" || exit 1
 done
 # The harness runs a FIXTURE shell; the real unit's edges toward harness units
@@ -1004,7 +1446,7 @@ grep -Fqx '        run: python3 tests/verify-input-broker-wiring.py' "${workflow
 grep -Fq 'exit-before-ready' "${root}/tests/session-authority-systemd/fake-input-broker" || exit 1
 precondition_output="$(python3 "${precondition_verifier}")"
 grep -Fqx \
-    'session-authority path-preconditions: PASS conditions=2 providers=6 fb0=regular units=7' \
+    'session-authority path-preconditions: PASS conditions=1 providers=6 fb0=regular units=7' \
     <<<"${precondition_output}" || exit 1
 unprovided_unit="${tmp}/unprovided.service"
 printf '[Unit]\nConditionPathExists=/unprovided-test-path\n' >"${unprovided_unit}"
@@ -1014,6 +1456,13 @@ if python3 "${precondition_verifier}" --unit "${unprovided_unit}" \
     exit 1
 fi
 grep -Fq 'unprovided ConditionPathExists=/unprovided-test-path' "${stderr_log}" || exit 1
+printf '[Service]\nExecStartPre=/usr/bin/test -e /unprovided-test-path\n' >"${unprovided_unit}"
+if python3 "${precondition_verifier}" --unit "${unprovided_unit}" \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: unprovided pre-start path passed audit' >&2
+    exit 1
+fi
+grep -Fq 'unprovided ExecStartPre test -e=/unprovided-test-path' "${stderr_log}" || exit 1
 ! grep -Fq 'Path("/dev/fb0").touch()' "${driver}" || exit 1
 grep -Fq 'framebuffer.is_file() and framebuffer.stat().st_size == 0' "${driver}" || exit 1
 for invocation_field in clean_invocations crash_invocations; do

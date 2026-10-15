@@ -159,6 +159,10 @@ def inventory(platform_version: str = PLATFORM_VERSION) -> dict[str, object]:
             "render-devices": ["/dev/dri/renderD128"],
             "session-environment": ["/run/pocketforge/session/environment"],
             "video-decode-devices": ["/dev/video10"],
+            "x11-environment": [
+                "/run/pocketforge/session/capabilities/x11/environment"
+            ],
+            "x11-socket": ["/run/pocketforge/session/capabilities/x11/X0"],
         },
     }
 
@@ -202,7 +206,7 @@ class RendererTest(unittest.TestCase):
                 runtime_family = "pocketforge/a133-powervr"
                 runtime_abi = "1"
                 platform_version = "20"
-                supported_capabilities = ["accelerometer", "audio", "bluetooth", "entropy", "gnss", "gyroscope", "imu", "input", "leds", "location", "magnetometer", "rumble", "settings", "vibration", "video-decode"]
+                supported_capabilities = ["accelerometer", "audio", "bluetooth", "entropy", "gnss", "gyroscope", "imu", "input", "leds", "location", "magnetometer", "rumble", "settings", "vibration", "video-decode", "x11"]
                 production = true
                 landlock_mode = "required"
                 landlock_full_min_abi = 10
@@ -461,6 +465,37 @@ class RendererTest(unittest.TestCase):
         self.assertIn("DeviceAllow=/dev/input/event0 r", unit)
         self.assertIn("BindReadOnlyPaths=/dev/input/event0", unit)
         self.assertNotIn("DeviceAllow=/dev/input/event0 rw", unit)
+
+    def test_x11_projection_is_manifest_scoped_and_canonical(self) -> None:
+        self.render(manifest(capabilities=("x11",)))
+        unit = self.output.read_text(encoding="utf-8")
+        self.assertIn(
+            "BindPaths=/run/pocketforge/session/capabilities/x11/X0:/tmp/.X11-unix/X0",
+            unit,
+        )
+        policy = json.loads(self.policy_output.read_text(encoding="utf-8"))
+        self.assertNotIn("environment", policy)
+        self.assertEqual(
+            policy["resources"]["x11-environment"],
+            ["/run/pocketforge/session/capabilities/x11/environment"],
+        )
+        self.assertEqual(
+            policy["resources"]["x11-socket"],
+            ["/run/pocketforge/session/capabilities/x11/X0"],
+        )
+
+        self.render(manifest())
+        plain = self.output.read_text(encoding="utf-8")
+        self.assertNotIn("capabilities/x11", plain)
+        self.assertNotIn("/tmp/.X11-unix/X0", plain)
+
+        data = inventory()
+        del data["resources"]["x11-socket"]  # type: ignore[index]
+        self.inventory.write_text(json.dumps(data), encoding="utf-8")
+        result = self.render(manifest(capabilities=("x11",)), expect=65)
+        self.assertIn("reason=policy_render_failed", result.stderr)
+        self.assertIn("required x11 resource x11-socket is missing", result.stderr)
+        self.assertFalse(self.output.exists())
 
     def test_current_optional_and_modifier_syntax_is_normalized(self) -> None:
         self.render(
