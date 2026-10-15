@@ -1,7 +1,7 @@
 [Unit]
 Description=PocketForge Gamescope display owner
-After=dev-dri-card0.device dev-dri-renderD128.device pf-kbd-layout-env.service pf-open-gpu-gate.service pocketforge-boot-animator.service pf-shell-selected.service
-Wants=dev-dri-card0.device dev-dri-renderD128.device pf-kbd-layout-env.service
+After=dev-dri-renderD128.device pf-kbd-layout-env.service pf-open-gpu-gate.service pocketforge-boot-animator.service pf-shell-selected.service
+Wants=dev-dri-renderD128.device pf-kbd-layout-env.service
 PartOf=pocketforge-gamescope-session.target
 Conflicts=pf-shell-selected.service pocketforge-foreground.target
 OnFailure=pocketforge-gamescope-fallback.service
@@ -17,9 +17,11 @@ SupplementaryGroups=video render pf-compositor-input
 RuntimeDirectory=pocketforge/gamescope
 RuntimeDirectoryMode=0750
 EnvironmentFile=-/run/pocketforge/kbd-layout.env
+EnvironmentFile=-/run/pocketforge/gamescope/kms.env
 Environment=XDG_RUNTIME_DIR=/run/pocketforge/gamescope
+ExecStartPre=/usr/lib/pocketforge/pf-gamescope-kms-select
 ExecStartPre=+/usr/bin/systemctl stop pocketforge-boot-animator.service pf-shell-selected.service
-ExecStart=/usr/bin/gamescope --backend drm --expose-wayland --xwayland-count 1
+ExecStart=/usr/bin/gamescope --backend drm --prefer-drm ${PF_GAMESCOPE_KMS_NODE} --expose-wayland --xwayland-count 1
 Restart=no
 NoNewPrivileges=yes
 PrivateDevices=no
@@ -30,7 +32,6 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
 DevicePolicy=closed
-DeviceAllow=/dev/dri/card0 rw
-DeviceAllow=/dev/dri/renderD128 rw
+DeviceAllow=char-drm rw
 DeviceAllow=char-input rw
 TimeoutStopSec=5s

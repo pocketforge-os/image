@@ -48,12 +48,15 @@ check_drm_readiness_contract() {
 
     grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_NETLINK' "${unit}" >/dev/null \
         || return 1
+    ! grep -v '^[[:space:]]*#' "${unit}" \
+        | grep -F 'systemd-udev-settle.service' >/dev/null \
+        || return 1
     grep -Fx 'SUBSYSTEM=="drm", KERNEL=="card*", TAG+="systemd"' "${rule}" >/dev/null \
         || return 1
 }
 
-# Gamescope's libseat/udev session needs netlink, and the card0 dependency is
-# meaningful only when udev exposes DRM primary nodes as systemd device units.
+# Gamescope's libseat/udev session needs netlink and tagged DRM primary nodes.
+# The session must not pull in the global udev-settle boot barrier.
 check_drm_readiness_contract "${owner}" "${drm_systemd_rule}" \
     || fail "Gamescope DRM readiness contract is incomplete"
 cp "${owner}" "${scratch}/owner-missing-netlink.service"
@@ -64,7 +67,7 @@ fi
 cp "${drm_systemd_rule}" "${scratch}/rule-missing-card-tag.rules"
 sed -i '/KERNEL=="card\*"/d' "${scratch}/rule-missing-card-tag.rules"
 if check_drm_readiness_contract "${owner}" "${scratch}/rule-missing-card-tag.rules"; then
-    fail "DRM readiness check accepted an untagged card0 dependency"
+    fail "DRM readiness check accepted untagged primary nodes"
 fi
 grep -Fx 'Restart=no' "${owner}" >/dev/null
 grep -Fx 'StartLimitBurst=1' "${owner}" >/dev/null

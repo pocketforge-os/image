@@ -1,0 +1,73 @@
+#!/bin/sh
+set -eu
+
+# Resolve the A133 display node by its modesetting driver and live connector,
+# never by card number. Test-only root overrides keep the hardware policy
+# hermetic; the production unit supplies none of them.
+dev_root=${PF_DRM_DEV_ROOT:-/dev/dri}
+sys_root=${PF_DRM_SYS_ROOT:-/sys}
+env_file=${PF_GAMESCOPE_KMS_ENV:-/run/pocketforge/gamescope/kms.env}
+expected_driver=${PF_GAMESCOPE_KMS_DRIVER:-sun4i-drm}
+
+clear_environment() {
+    if test -e "${env_file}" || test -L "${env_file}"; then
+        /usr/bin/unlink "${env_file}"
+    fi
+}
+
+refuse() {
+    clear_environment
+    printf 'PF_GAMESCOPE_KMS_SELECT state=REFUSED reason=%s\n' "$1" >&2
+    exit 1
+}
+
+candidate=
+count=0
+for class_node in "${sys_root}"/class/drm/card*; do
+    test -d "${class_node}" || continue
+    card=${class_node##*/}
+    suffix=${card#card}
+    case "${suffix}" in
+        ''|*[!0-9]*) continue ;;
+    esac
+    node="${dev_root}/${card}"
+    test -e "${node}" || continue
+    driver_link="${class_node}/device/driver"
+    test -L "${driver_link}" || continue
+    driver_target=$(/usr/bin/readlink -f "${driver_link}") || continue
+    driver=${driver_target##*/}
+    test "${driver}" = "${expected_driver}" || continue
+
+    # DRM connector objects are sibling class devices named cardN-CONNECTOR.
+    # A connected connector proves display capability; its enabled state only
+    # reflects whether another display owner currently has a CRTC driving it.
+    # Render-only PowerVR nodes have no connector objects at all.
+    connected=no
+    for status_file in "${sys_root}"/class/drm/"${card}"-*/status; do
+        test -f "${status_file}" || continue
+        IFS= read -r status <"${status_file}" || status=
+        if test "${status}" = connected; then
+            connected=yes
+            break
+        fi
+    done
+    test "${connected}" = yes || continue
+
+    candidate=${node}
+    count=$((count + 1))
+done
+
+case "${count}" in
+    0) refuse no_kms_node ;;
+    1) ;;
+    *) refuse "ambiguous_kms_nodes count=${count}" ;;
+esac
+
+tmp="${env_file}.tmp.$$"
+trap 'test ! -e "${tmp}" || /usr/bin/unlink "${tmp}"' EXIT HUP INT TERM
+/usr/bin/printf 'PF_GAMESCOPE_KMS_NODE=%s\n' "${candidate}" >"${tmp}"
+/usr/bin/chmod 0644 "${tmp}"
+/usr/bin/mv -f "${tmp}" "${env_file}"
+trap - EXIT HUP INT TERM
+printf 'PF_GAMESCOPE_KMS_SELECT state=PASS driver=%s node=%s\n' \
+    "${expected_driver}" "${candidate}"
