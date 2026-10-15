@@ -4,6 +4,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 guard="${repo_root}/scripts/check-launcher-runtime-contract.sh"
 dockerfile="${repo_root}/build/Dockerfile.pf"
+pair_workflow="${repo_root}/.github/workflows/app-policy-pair.yml"
 crates="pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme pf-input-map pf-prefs pf-prefs-port pf-session-client pf-session-authority pf-wire"
 
 guard_call=$(sed -n \
@@ -37,6 +38,15 @@ runtime_guard=$(sed -n 's/^\[ "${PF_RUNTIME_SHA}" = "\([0-9a-f]\{40\}\)" \].*/\1
 launcher_guard=$(sed -n 's/^\[ "${PF_LAUNCHER_SHA}" = "\([0-9a-f]\{40\}\)" \].*/\1/p' "$dockerfile")
 test "$runtime_guard" = "$expected_runtime"
 test "$launcher_guard" = "$expected_launcher"
+
+# The CI pair job must exercise the exact production source pair twice: once
+# for checkout and once for the detached-HEAD identity assertion.  A preceding
+# generation in either position would let a green pair job prove artifacts the
+# image does not ship.
+test "$(grep -Fc "$expected_runtime" "$pair_workflow")" -eq 2
+test "$(grep -Fc "$expected_launcher" "$pair_workflow")" -eq 2
+test "$(grep -Fc "$prior_runtime" "$pair_workflow")" -eq 0
+test "$(grep -Fc "$prior_launcher" "$pair_workflow")" -eq 0
 
 new_guard_accepts() {
     test "$1" = "$runtime_guard" && test "$2" = "$launcher_guard"
