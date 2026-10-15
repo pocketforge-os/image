@@ -1,9 +1,10 @@
 name: IME bus security
 
 # The real-binary security harness deliberately uses Docker and snapshot network
-# access to bring its specialty tools to the ephemeral pf-builder-vm. Its image
-# base is digest-pinned and its APT sources use snapshot-date.txt. Keep this out
-# of hermetic-tests.yml, whose runner contract is daemonless and networkless.
+# access to bring its specialty tools to the ephemeral public CI VM. Its image
+# base is digest-pinned and its APT sources use snapshot-date.txt. The public
+# class exposes public egress only and no persistent cache. Keep this out of
+# hermetic-tests.yml, whose runner contract is daemonless and networkless.
 
 on:
   pull_request:
@@ -13,6 +14,8 @@ on:
       - tests/ime-bus-security-inner.sh
       - tests/ime-bus-contract.py
       - tests/verify-ime-bus-wiring.py
+      - tests/test-public-ci-workflows.sh
+      - tests/prove-public-ci-fit.sh
       - tests/ime-bus-security/**
       - rootfs-packages*.txt
       - rootfs-overlay/etc/systemd/system/pf-app@.service
@@ -35,15 +38,19 @@ concurrency:
 
 jobs:
   ime-bus-security:
-    # Never execute same-repository Docker privileges for fork/public PR code.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, pf-builder-vm]
+    runs-on: [self-hosted, pf-public-ci]
     timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Verify public runner contract
+        run: tests/test-public-ci-workflows.sh
+
+      - name: Prove workload fits the public runner envelope
+        run: tests/prove-public-ci-fit.sh
 
       - name: Run real private-bus and per-app-door security harness
         run: |
