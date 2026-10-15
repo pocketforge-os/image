@@ -12,6 +12,7 @@ resident_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-r
 real_gamescope_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope.service"
 fake_gamescope_unit="${root}/tests/session-authority-systemd/pocketforge-gamescope.service"
 fake_gamescope="${root}/tests/session-authority-systemd/fake-gamescope"
+fake_broker="${root}/tests/session-authority-systemd/fake-input-broker"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
@@ -144,6 +145,33 @@ verify_resident_relaunch_fixture() {
         && grep -Fq 'second_scope.session_id != scope.session_id' "${test_driver}" \
         && grep -Fq 'resident_second_session=' "${test_driver}"
 }
+
+verify_broker_session_state_fixture() {
+    local test_broker=$1
+    local test_driver=$2
+
+    grep -Fq '"foreground_target": unit_state("pocketforge-foreground.target")' \
+        "${test_broker}" \
+        && grep -Fq '"session_target": unit_state("pocketforge-gamescope-session.target")' \
+            "${test_broker}" \
+        && grep -Fq 'start["foreground_target"] == "inactive"' "${test_driver}" \
+        && grep -Fq 'start["session_target"] == "active"' "${test_driver}"
+}
+
+# A Gamescope session conflicts with the fb0 foreground target. The broker may
+# grab only after that owner is inactive and the Gamescope session target has
+# reached active. Keep the two target identities explicit, then prove a probe
+# which aliases the session state to the foreground target is rejected.
+verify_broker_session_state_fixture "${fake_broker}" "${driver}" || {
+    echo 'session-authority systemd-safety: FAIL: broker session-state probe is incomplete' >&2
+    exit 1
+}
+sed 's/unit_state("pocketforge-gamescope-session.target")/unit_state("pocketforge-foreground.target")/' \
+    "${fake_broker}" >"${tmp}/broker-with-aliased-targets"
+if verify_broker_session_state_fixture "${tmp}/broker-with-aliased-targets" "${driver}"; then
+    echo 'session-authority systemd-safety: FAIL: broker probe with aliased targets passed' >&2
+    exit 1
+fi
 
 verify_app_policy_inventory_fixture() {
     local test_inventory="$1"

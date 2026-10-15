@@ -725,8 +725,10 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     require(start["umask"] == "0o7", f"broker UMask: {start}")
     require(start["PF_PREFSD_SOCK"] == "/run/pocketforge/prefsd.sock", f"broker env: {start}")
     require(
-        start["shell"] == "inactive" and start["target"] == "active",
-        f"broker started before the shell stopped or the target started: {start}",
+        start["shell"] == "inactive"
+        and start["foreground_target"] == "inactive"
+        and start["session_target"] == "active",
+        f"broker started outside the Gamescope session handoff: {start}",
     )
     require(grab_lock_is_held(), "negative control: the broker does not hold the pad grab model")
     menu_socket = os.stat(SYSTEM_MENU_SOCKET)
