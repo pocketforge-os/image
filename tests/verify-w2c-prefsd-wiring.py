@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
-RUNTIME_SHA = "0b36a9e880d7294677e899b2f6db03262cdc7774"
-LAUNCHER_SHA = "6de0ad32af207ea208ccb29a42b3f3ae4e8d2777"
+RUNTIME_SHA = "7375a11ab1a45b85ad086f1ba5bb1679bc5fc1c4"
+LAUNCHER_SHA = "e536781107e3fac9c98877e861b6e38a1397f9d9"
 
 
 def text(path: Path) -> str:
@@ -95,6 +95,8 @@ assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
 assert "systemd/pf-prefsd.service /out/systemd/pf-prefsd.service" in dockerfile
 assert "systemd/pf-session-authorityd.service /out/systemd/pf-session-authorityd.service" in dockerfile
+assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-hang-sampler --bin pf-hang-sampler" in dockerfile
+assert "install -D -m 0755 \"${HANG_SAMPLER_BIN}\" /out/bin/pf-hang-sampler" in dockerfile
 assert "systemd/pocketforge.conf /out/tmpfiles.d/pocketforge.conf" in dockerfile
 # B4 (tsp-f3fm.202.1.4): the app-session input broker, the facade cdylib and the one
 # staged device descriptor join the open-only runtime-bin set.
@@ -112,6 +114,7 @@ for crate in (
     "pf-render",
     "pf-framehost",
     "pf-framehost-wayland",
+    "pf-hang-trigger",
     "pf-theme",
     "pf-input-map",
     "pf-prefs",

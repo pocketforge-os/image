@@ -102,8 +102,10 @@ mkdir -p "$tmpdir/open-none/rootfs" \
     "$tmpdir/open-none/recovery/bin"
 cp /bin/true "$tmpdir/open-none/launcher/bin/pf-shell"
 cp /bin/true "$tmpdir/open-none/runtime/bin/pf-session-authorityd"
+cp /bin/true "$tmpdir/open-none/runtime/bin/pf-hang-sampler"
 for binary in "$tmpdir/open-none/launcher/bin/pf-shell" \
-    "$tmpdir/open-none/runtime/bin/pf-session-authorityd"; do
+    "$tmpdir/open-none/runtime/bin/pf-session-authorityd" \
+    "$tmpdir/open-none/runtime/bin/pf-hang-sampler"; do
     printf '\267\000' | dd of="$binary" bs=1 seek=18 conv=notrunc status=none
 done
 : >"$tmpdir/open-none/runtime/systemd/pf-session-authorityd.service"
@@ -122,13 +124,27 @@ ROOTFS="$tmpdir/open-none/rootfs" \
     PF_GPU_MODEL=open PF_DISPLAY_PIPELINE=none PF_HAS_DISPLAY=0 \
     sh -eu "$tmpdir/open-none/hook-sections.sh" >/dev/null
 test -x "$tmpdir/open-none/rootfs/usr/bin/pf-session-authorityd"
+test -x "$tmpdir/open-none/rootfs/usr/bin/pf-hang-sampler"
 test -L "$tmpdir/open-none/rootfs/etc/systemd/system/multi-user.target.wants/pf-session-authorityd.service"
+test -L "$tmpdir/open-none/rootfs/etc/systemd/system/sockets.target.wants/pf-hang-sampler.socket"
+test "$(readlink "$tmpdir/open-none/rootfs/etc/systemd/system/sockets.target.wants/pf-hang-sampler.socket")" \
+    = /etc/systemd/system/pf-hang-sampler.socket
+test ! -e "$tmpdir/open-none/rootfs/etc/systemd/system/multi-user.target.wants/pf-hang-sampler.service"
+for sampler_policy in \
+    usr/lib/sysusers.d/pf-hang-sampler.conf \
+    usr/lib/tmpfiles.d/pf-hang-sampler.conf \
+    etc/systemd/system/pf-hang-sampler.socket \
+    etc/systemd/system/pf-hang-sampler.service \
+    etc/systemd/system/pf-session-authorityd.service.d/20-hang-sampler.conf; do
+    test -f "$tmpdir/open-none/rootfs/$sampler_policy"
+    test "$(stat -c %a "$tmpdir/open-none/rootfs/$sampler_policy")" = 644
+done
 test ! -e "$tmpdir/open-none/rootfs/usr/bin/pf-shell"
 test ! -e "$tmpdir/open-none/rootfs/etc/systemd/system/pf-shell-selected.service"
 test ! -e "$tmpdir/open-none/rootfs/opt/pocketforge/bin/pocketforge-recovery-entry"
 test ! -e "$tmpdir/open-none/rootfs/etc/systemd/system/pocketforge-recovery.path"
 PF_GPU_MODEL=open PF_DISPLAY_PIPELINE=none "$verifier" "$tmpdir/open-none/rootfs" test-fixture >/dev/null
-echo 'PASS: open + none customize hook rejects staged framebuffer shell and recovery while retaining headless authority'
+echo 'PASS: open + none customize hook rejects staged framebuffer shell and recovery while retaining headless authority and its boot-enabled sampler socket'
 
 mkdir -p "$tmpdir/clean/lib/modules/7.2.0/kernel/drivers/mmc" \
     "$tmpdir/clean/usr/lib/aarch64-linux-gnu" \

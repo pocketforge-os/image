@@ -21,6 +21,14 @@ on:
       - 'tests/test-poolsuite-rootfs-install.sh'
       - 'tests/test-poolsuite-variant-stage.sh'
       - 'tests/test-runtime-path-producers.sh'
+      - 'tests/test-hang-sampler-image.sh'
+      - 'scripts/check-hang-sampler-image.py'
+      - 'scripts/build-rootfs.sh'
+      - 'rootfs-overlay/usr/lib/sysusers.d/pf-hang-sampler.conf'
+      - 'rootfs-overlay/usr/lib/tmpfiles.d/pf-hang-sampler.conf'
+      - 'rootfs-overlay/etc/systemd/system/pf-hang-sampler.service'
+      - 'rootfs-overlay/etc/systemd/system/pf-hang-sampler.socket'
+      - 'rootfs-overlay/etc/systemd/system/pf-session-authorityd.service.d/20-hang-sampler.conf'
       - 'tests/fixtures/app-policy/platform-capabilities-a133-open.toml'
 
 permissions:
@@ -41,21 +49,22 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/runtime
-          ref: 0b36a9e880d7294677e899b2f6db03262cdc7774
+          ref: 7375a11ab1a45b85ad086f1ba5bb1679bc5fc1c4
           path: runtime-pair
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/launcher
-          ref: 6de0ad32af207ea208ccb29a42b3f3ae4e8d2777
+          ref: e536781107e3fac9c98877e861b6e38a1397f9d9
           path: launcher-pair
       - name: Prove exact runtime, launcher, and image candidates together
         run: |
-          test "$(git -C runtime-pair rev-parse HEAD)" = 0b36a9e880d7294677e899b2f6db03262cdc7774
-          test "$(git -C launcher-pair rev-parse HEAD)" = 6de0ad32af207ea208ccb29a42b3f3ae4e8d2777
+          test "$(git -C runtime-pair rev-parse HEAD)" = 7375a11ab1a45b85ad086f1ba5bb1679bc5fc1c4
+          test "$(git -C launcher-pair rev-parse HEAD)" = e536781107e3fac9c98877e861b6e38a1397f9d9
           scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
             pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
-            pf-framehost-wayland pf-theme pf-input-map pf-prefs pf-prefs-port \
+            pf-framehost-wayland pf-hang-trigger pf-theme pf-input-map pf-prefs pf-prefs-port \
             pf-session-client pf-session-authority pf-wire
+          PF_HANG_RUNTIME_ROOT=runtime-pair tests/test-hang-sampler-image.sh
           (cd runtime-pair && cargo build --locked \
             --manifest-path Cargo.toml \
             -p pf-app-launch --bin pf-app-policy-render \

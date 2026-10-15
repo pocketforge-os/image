@@ -5,7 +5,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 guard="${repo_root}/scripts/check-launcher-runtime-contract.sh"
 dockerfile="${repo_root}/build/Dockerfile.pf"
 pair_workflow="${repo_root}/.github/workflows/app-policy-pair.yml"
-crates="pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-theme pf-input-map pf-prefs pf-prefs-port pf-session-client pf-session-authority pf-wire"
+crates="pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost pf-framehost-wayland pf-hang-trigger pf-theme pf-input-map pf-prefs pf-prefs-port pf-session-client pf-session-authority pf-wire"
 
 guard_call=$(sed -n \
     '/^check-launcher-runtime-contract \/work\/launcher \/work\/runtime-contract/,/pf-session-authority pf-wire$/p' \
@@ -16,14 +16,14 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# The paired runtime fixes the resident-monitor presentation deadline contract;
-# the paired launcher vendors that exact generation. The image guard rejects
-# any crossed or preceding source generation.
-expected_runtime=0b36a9e880d7294677e899b2f6db03262cdc7774
-expected_launcher=6de0ad32af207ea208ccb29a42b3f3ae4e8d2777
-prior_runtime=31eaa601b57464349e04fcbcb235f5537bf1fcca
-prior_launcher=55acd7fc0afe338899b283ac774023ad89662d15
-older_runtime=de890215bd97eb0b5b63287a51e8b9a2e18d1125
+# The paired runtime adds the hang-sampler trigger contract without coupling
+# authority consumers to the ptrace implementation; the paired launcher vendors
+# that exact generation. Reject every older or crossed source generation.
+expected_runtime=7375a11ab1a45b85ad086f1ba5bb1679bc5fc1c4
+expected_launcher=e536781107e3fac9c98877e861b6e38a1397f9d9
+prior_runtime=0b36a9e880d7294677e899b2f6db03262cdc7774
+prior_launcher=6de0ad32af207ea208ccb29a42b3f3ae4e8d2777
+older_runtime=31eaa601b57464349e04fcbcb235f5537bf1fcca
 older_launcher=95302865bc584ce5e1c96e09df387aa5f58455f6
 old_launcher=73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5
 pre149_launcher=ca22de0ed3cec46c73f2de44aa6e570e109695d8
