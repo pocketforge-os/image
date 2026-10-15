@@ -26,6 +26,7 @@ app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"
 platform_renderer="${root}/scripts/render-platform-capabilities.py"
 platform_descriptor="${root}/tests/session-authority-systemd/capabilities.toml"
 handwritten_platform="${root}/tests/session-authority-systemd/platform-capabilities.toml"
+app_manifest="${root}/tests/session-authority-systemd/app.toml"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
 fake_root="${tmp}/host"
 fake_bin="${fake_root}/.test-bin"
@@ -158,6 +159,29 @@ raise SystemExit(0 if valid else 1)
 PY
 }
 
+verify_ci_landlock_fixture() {
+    local test_manifest="$1"
+
+    if ! python3 - "${test_manifest}" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+manifest = tomllib.loads(Path(sys.argv[1]).read_text())
+raise SystemExit(
+    0 if manifest.get("app", {}).get("use") == ["sandbox.nested_userns"] else 1
+)
+PY
+    then
+        return 1
+    fi
+    grep -Fq "PF_APP_CAPABILITIES='audio entropy input sandbox.nested_userns settings'" \
+        "${harness}" \
+        && grep -Fqx '        "landlock_full_min_abi": 10,' "${platform_renderer}" \
+        && grep -Fqx '        "landlock_browser_min_abi": 6,' "${platform_renderer}" \
+        && ! grep -Eq 'sed .*landlock|landlock_(full|browser)_min_abi=' "${harness}"
+}
+
 # pf-app@ now consumes the compositor session environment and socket. Exercise
 # the real target + publisher bytes around a fake socket-owning Gamescope, and
 # prove that dropping the publisher readiness edge is rejected.
@@ -207,6 +231,22 @@ sed 's/--gamescope-mode g1/--gamescope-mode not-shipped/' \
     "${harness}" >"${tmp}/wrong-session-platform-harness"
 if verify_platform_policy_producer_fixture "${tmp}/wrong-session-platform-harness"; then
     echo 'session-authority systemd-safety: FAIL: non-g1 platform producer passed' >&2
+    exit 1
+fi
+
+
+# The production contract remains full-app ABI 10 / nested-userns ABI 6. The
+# lifecycle VM deliberately declares its fixture as the existing nested class
+# so it exercises real enforcement on the CI kernel without weakening either
+# minimum or post-processing the generated platform contract.
+verify_ci_landlock_fixture "${app_manifest}" || {
+    echo 'session-authority systemd-safety: FAIL: CI fixture does not use the contracted ABI-6 app class' >&2
+    exit 1
+}
+sed 's/use = \["sandbox.nested_userns"\]/use = []/' \
+    "${app_manifest}" >"${tmp}/full-app.toml"
+if verify_ci_landlock_fixture "${tmp}/full-app.toml"; then
+    echo 'session-authority systemd-safety: FAIL: full-app fixture passed the CI ABI guard' >&2
     exit 1
 fi
 
