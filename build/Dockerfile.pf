@@ -55,6 +55,8 @@
 # The owned, digest-pinned build container (image/container.pin). Overridable so a dev
 # can point at a locally-built tag; CI/`pf build` pass the pinned digest.
 ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
+ARG PF_CURSOR_TOOLS_IMAGE=10.0.32.86:5555/pocketforge/ci-tools@sha256:2ff536627228c90e5c32b7d6345b21600a38a17481c075b41683db47ead3e862
+ARG PF_CURSOR_TOOLS_RECIPE_SHA=ec5b2621f636261978d3bb4fd9843ae22a59c320
 
 # Declared before the first FROM (global pre-FROM scope) SOLELY so the gpu-um-mesa
 # selector stage below can interpolate it into a `FROM gpu-um-mesa-${PF_GPU_MODEL}`
@@ -77,6 +79,14 @@ ARG PF_VARIANT=dev
 # NOT-SHIPPED alias so targeted builds that omit PF_SOC remain source-free.
 ARG PF_SOC=not-shipped
 
+# Every RUN is executed under an explicit build-input allowlist. BuildKit adds
+# OpenTelemetry propagation variables (including a fresh TRACEPARENT) to exec
+# vertices even when the client starts with an empty environment; those values
+# are observability metadata, not source inputs, and made FFmpeg output depend
+# on the CI run. Stages derived from this base inherit the sanitized shell.
+FROM ${PF_CONTAINER} AS pf-build-base
+SHELL ["/bin/sh", "-c", "for pf_env_name in $(env | sed 's/=.*//'); do case \"$pf_env_name\" in HOME|PATH|PWD|SHLVL|PF_*|SOURCE_DATE_EPOCH|APT_SNAPSHOT_DATE|CARGO_*|RUSTUP_*|RUST_VERSION|RUSTUP_VERSION|RUSTUP_INIT_SHA256|MESA_UBUNTU_SNAPSHOT|CCACHE_*|LLVM_CONFIG|DEBIAN_FRONTEND) ;; *) unset \"$pf_env_name\" ;; esac; done; exec /bin/sh -c \"$0\""]
+
 # =============================================================================
 # fetch — vendor blobs (irreducibly-closed originals), by CID (B3 / tsp-1dl.3).
 # DECIDED mechanism: HERMETIC KUBO-IN-BUILD (owner + research, 2026-07-02). kubo (pinned
@@ -93,7 +103,7 @@ ARG PF_SOC=not-shipped
 # PF_FETCH_MODE=fallback keeps the git-clone-blobs path (binaries still in git on blobs
 # tsp-1dl.3 reorg-only) reachable for merge-1; hermetic is the reproducible-from-committed target.
 # =============================================================================
-FROM ${PF_CONTAINER} AS fetch
+FROM pf-build-base AS fetch
 ARG PF_BLOB_GROUPS             # space-separated device profile groups (pf emits them sorted)
 ARG PF_VENDOR_MANIFEST_SHA     # pinned in platform.lock — provenance marker here
 ARG PF_CAR_SHA256              # pinned in platform.lock [car] — the SPECIFIC .car copy this build consumes
@@ -135,7 +145,7 @@ RUN --mount=type=bind,from=vendor-manifest-src,source=.,target=/work/vm,ro \
 # a stamped LOCALVERSION, no submodules, pinned KBUILD_BUILD_{TIMESTAMP,USER,HOST} +
 # SOURCE_DATE_EPOCH. Emits Image + DTBs + /lib/modules + Module.symvers.
 # =============================================================================
-FROM ${PF_CONTAINER} AS kernel
+FROM pf-build-base AS kernel
 ARG PF_ARCH
 ARG PF_KERNEL_REPO
 ARG PF_KERNEL_SHA
@@ -283,7 +293,7 @@ KERNEL
 # COPY --from=kernel the build tree so vermagic matches (silent-load-failure gate).
 # Per-IP: a133 gpu-km-tsp (pvrsrvkm.ko+dc_sunxi.ko); a523 gpu-km-tsp-a523 (mali_kbase.ko).
 # =============================================================================
-FROM ${PF_CONTAINER} AS gpu-km-build
+FROM pf-build-base AS gpu-km-build
 ARG PF_GPU_REPO
 ARG PF_GPU_MODEL
 ARG PF_GPU_KM_MODEL
@@ -446,7 +456,7 @@ GPUKM
 
 FROM gpu-km-build AS gpu-km-ddk
 FROM gpu-km-build AS gpu-km-open
-FROM ${PF_CONTAINER} AS gpu-km-none
+FROM pf-build-base AS gpu-km-none
 RUN mkdir -p /out/modules && \
     printf 'gpu-km NOT-SHIPPED (gpu_model=none; graphics deliberately absent)\n' \
       > /out/modules/.pf-gpu-provenance
@@ -457,7 +467,7 @@ FROM gpu-km-${PF_GPU_MODEL} AS gpu-km
 # from vendor-manifest's public tree. LICENSE.powervr permits redistribution
 # without modification, so the instrumented CW04 bench transform is excluded.
 # =============================================================================
-FROM ${PF_CONTAINER} AS gpu-fw-open
+FROM pf-build-base AS gpu-fw-open
 ARG PF_GPU_MODEL
 ARG PF_VENDOR_MANIFEST_SHA
 COPY --from=fetch /out /work/blobs
@@ -486,9 +496,9 @@ cp "$license" /out/LICENSE.powervr
 cat /out/.pf-gpu-fw-provenance
 GPUFW
 
-FROM ${PF_CONTAINER} AS gpu-fw-ddk
+FROM pf-build-base AS gpu-fw-ddk
 RUN mkdir -p /out && printf 'gpu-fw NOT-SHIPPED (gpu_model=ddk)\n' > /out/.pf-gpu-fw-provenance
-FROM ${PF_CONTAINER} AS gpu-fw-none
+FROM pf-build-base AS gpu-fw-none
 RUN mkdir -p /out && printf 'gpu-fw NOT-SHIPPED (gpu_model=none; graphics deliberately absent)\n' > /out/.pf-gpu-fw-provenance
 FROM gpu-fw-${PF_GPU_MODEL} AS gpu-fw
 
@@ -521,7 +531,7 @@ FROM gpu-fw-${PF_GPU_MODEL} AS gpu-fw
 # DEFERRED marker pattern used throughout this file.
 # =============================================================================
 
-FROM ${PF_CONTAINER} AS gpu-um-mesa-ddk
+FROM pf-build-base AS gpu-um-mesa-ddk
 RUN <<'GPUUMDDK'
 set -eux
 mkdir -p /out
@@ -530,7 +540,7 @@ printf 'gpu-um-mesa NOT SHIPPED (gpu_model=ddk; closed DDK userspace comes from 
 cat /out/.pf-gpu-um-provenance
 GPUUMDDK
 
-FROM ${PF_CONTAINER} AS gpu-um-mesa-none
+FROM pf-build-base AS gpu-um-mesa-none
 RUN <<'GPUUMNONE'
 set -eux
 mkdir -p /out
@@ -541,11 +551,12 @@ GPUUMNONE
 
 # --- 1/5 toolchain: Ubuntu 24.04 (native x86_64) + the arm64 cross toolchain + LLVM 20 ---
 # Keep the load-bearing toolchain settings aligned with gpu-um-tsp's
-# docker/Dockerfile.ge8300-mesa-cross at e2c29ab8a84f57ae500f4ad6c6aea86ac0bbe01f. Do NOT add
+# docker/Dockerfile.ge8300-mesa-cross at 3f045e0ae9ac2855df143060200b18922e155fa1. Do NOT add
 # --platform=linux/arm64 anywhere in this subgraph: every program this recipe executes is
 # x86_64 (the "native precompilers" stage below is the whole reason a cross build needs a
 # native pass at all — mesa_clc/pco_clc/vtn_bindgen2 run at BUILD time, not on-device).
 FROM ubuntu:24.04@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb AS gpu-um-toolchain
+SHELL ["/bin/sh", "-c", "for pf_env_name in $(env | sed 's/=.*//'); do case \"$pf_env_name\" in HOME|PATH|PWD|SHLVL|PF_*|SOURCE_DATE_EPOCH|APT_SNAPSHOT_DATE|CARGO_*|RUSTUP_*|RUST_VERSION|RUSTUP_VERSION|RUSTUP_INIT_SHA256|MESA_UBUNTU_SNAPSHOT|CCACHE_*|LLVM_CONFIG|DEBIAN_FRONTEND) ;; *) unset \"$pf_env_name\" ;; esac; done; exec /bin/sh -c \"$0\""]
 COPY --from=gpu-um-src scripts/install-mesa-buildenv.sh /usr/local/src/install-mesa-buildenv.sh
 # snapshot.ubuntu.com requires Ubuntu Pro for /ubuntu-ports/, so using a
 # snapshot for amd64 while arm64 comes from the live archive breaks Multi-Arch packages.
@@ -666,7 +677,7 @@ GPUUMNATIVE
 # Bookworm container used to assemble the rootfs.  The Noble stage above only
 # supplies host-native Mesa generators and their isolated runtime; it supplies
 # no compiler, linker, target header, startfile, or target library.
-FROM ${PF_CONTAINER} AS gpu-um-build
+FROM pf-build-base AS gpu-um-build
 WORKDIR /src
 ARG PF_GPU_UM_SOURCE_DATE_EPOCH
 ARG PF_GPU_UM_SHA
@@ -691,7 +702,8 @@ export SOURCE_DATE_EPOCH="${PF_GPU_UM_SOURCE_DATE_EPOCH:?}"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ccache g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev:arm64 \
-  libdrm-dev:arm64 libexpat1-dev:arm64 libglvnd-dev:arm64 libvulkan-dev:arm64 libwayland-dev:arm64 \
+  libdrm-dev:arm64 libexpat1-dev:arm64 libgbm-dev:arm64 libglvnd-dev:arm64 libvulkan-dev:arm64 \
+  libwayland-dev:arm64 \
   libwayland-egl-backend-dev:arm64 \
   libx11-dev:arm64 libx11-xcb-dev:arm64 libxext-dev:arm64 \
   libxrandr-dev:arm64 libxcb-dri3-dev:arm64 libxcb-glx0-dev:arm64 \
@@ -760,7 +772,7 @@ for pass in 1 2; do
     --cross-file /usr/local/share/mesa-cross/ge8300-aarch64.ini \
     --native-file /usr/local/share/mesa-cross/ge8300-native.ini \
     --wrap-mode=nodownload \
-    -Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=disabled \
+    -Dvulkan-drivers=imagination,virtio -Dimagination-srv=false -Dllvm=disabled \
     -Dmesa-clc=system \
     -Dprecomp-compiler=system -Dgallium-drivers=zink -Dplatforms=x11,wayland \
     -Dglx=dri -Degl=enabled -Dgbm=enabled \
@@ -788,7 +800,8 @@ install -D -m 0644 /tmp/10-pocketforge-zink.conf \
   /instroot/usr/local/share/drirc.d/10-pocketforge-zink.conf
 meson introspect --buildoptions build-cross >/instroot/.pf-gpu-um-build-options.json
 aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
-  /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe -lvulkan
+  /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe \
+  -lvulkan -lEGL -lGLESv2 -lgbm
 readelf -h /tmp/open-gpu-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
 install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
 /tmp/run-gamescope-pvr-cache.sh \
@@ -854,7 +867,7 @@ FROM gpu-um-mesa-${PF_GPU_MODEL} AS gpu-um-mesa
 # so bl31.bin is staged INTO the U-Boot tree and referenced by an in-tree path
 # (an absolute path into the TF-A tree fails "[Errno 2] No such file", tsp-7uy).
 # =============================================================================
-FROM ${PF_CONTAINER} AS bootchain
+FROM pf-build-base AS bootchain
 ARG PF_BOOTCHAIN_MODEL
 ARG PF_UBOOT_REPO
 ARG PF_UBOOT_SHA
@@ -963,7 +976,7 @@ BOOTCHAIN
 # sdl — libSDL3-pocketforge.so from the committed libsdl3-sunxifb ref (tsp-1dl.4.4).
 # Links the closed PowerVR UM from the fetch stage (blob group), not a host LOCAL_BLOBS.
 # =============================================================================
-FROM ${PF_CONTAINER} AS sdl
+FROM pf-build-base AS sdl
 ARG PF_SOC
 ARG PF_GPU_MODEL
 ARG PF_LIBSDL3_SHA
@@ -1017,6 +1030,7 @@ export SOURCE_DATE_EPOCH="${PF_LIBSDL3_SOURCE_DATE_EPOCH:?}"
 # cmake change was needed to point it at Mesa instead of the DDK).
 PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
 SUNXIFB_MESA_ROOT=/work/gpu-um-mesa/usr/local \
+LDFLAGS="-Wl,--build-id=sha1" \
 OUT=/work/out bash /work/src/build/build-libsdl3.sh
 # Emit the shared-object set (real lib + soname/dev symlinks) for the a133 rootfs/assemble stage.
 cp -a /work/out/libSDL3-pocketforge.so* /out/lib/
@@ -1053,7 +1067,7 @@ SDL
 # deterministic resolution) — stage-local so the pinned base container needs no
 # rebuild (they are an a133-only need).
 # =============================================================================
-FROM ${PF_CONTAINER} AS wpa
+FROM pf-build-base AS wpa
 ARG PF_SOC
 ARG PF_WPA_SHA
 ARG PF_TOOLCHAIN_GCC_VERSION
@@ -1113,7 +1127,7 @@ make -j"$(nproc)" wpa_supplicant \
   CC=aarch64-none-linux-gnu-gcc \
   LIBNL_INC=/usr/include/libnl3 \
   EXTRA_CFLAGS="-idirafter /usr/include -idirafter /usr/include/aarch64-linux-gnu -Wno-deprecated-declarations" \
-  LDFLAGS="-B/usr/lib/aarch64-linux-gnu -L/usr/lib/aarch64-linux-gnu"
+  LDFLAGS="-Wl,--build-id=sha1 -B/usr/lib/aarch64-linux-gnu -L/usr/lib/aarch64-linux-gnu"
 # ^ -Wno-deprecated-declarations: wpa_supplicant 2.10 predates the OpenSSL 3.0
 #   API migration, so its crypto_openssl.c emits ~134 deprecation warnings
 #   (ENGINE_*/EC_KEY_* — upstream builds identically); left on, they would
@@ -1156,7 +1170,7 @@ WPA
 # fixture runs the source's strict validation/install path before packaging:
 # one accepted Wi-Fi + SSH-key seed and two fail-before-write controls.
 # =============================================================================
-FROM ${PF_CONTAINER} AS cloud-init
+FROM pf-build-base AS cloud-init
 ARG PF_CLOUD_INIT_SHA
 ARG PF_CLOUD_INIT_SOURCE_DATE_EPOCH
 COPY --from=cloud-init-src . /work/src
@@ -1235,27 +1249,32 @@ CLOUD_INIT
 
 # =============================================================================
 # platform-inputs — the ONE staged platform device descriptor (bd: tsp-f3fm.202.1
-# R1 / B3 platform#217 / B4). Platform stages devices/<ID>/capabilities.toml into
-# the `platform-inputs-src` named context ONLY for the A133-open app-runtime
-# profiles (the same profiles that emit PF_APP_*). Mirrors the launcher/recovery
-# pattern: only the open stage names the open-only context, and the selector
-# below prunes it from every other build, so ddk/none never reference a context
-# that is not staged for them. Both branches export /out; the runtime stage
-# verifies the ID/SHA-256 contract and parses the file before anything ships.
+# R1 / B3 platform#217 / B4). Platform stages the descriptor into the
+# `platform-inputs-src` named context ONLY for the A133-open app-runtime
+# profiles (the same profiles that emit PF_APP_*). Since platform#341
+# (tsp-mc9m.41.1026.4) the context holds the same bytes twice: the per-SoC
+# devices/<ID>/capabilities.toml and the device-neutral
+# device/capabilities.toml that the runtime consumers install from. Mirrors the
+# launcher/recovery pattern: only the open stage names the open-only context,
+# and the selector below prunes it from every other build, so ddk/none never
+# reference a context that is not staged for them. Both branches export /out;
+# the runtime stage verifies the ID/SHA-256 contract and the exact two-copy
+# tree (a missing or divergent device-neutral copy is a named FATAL, with no
+# fallback to the per-SoC path) and parses the file before anything ships.
 # =============================================================================
-FROM ${PF_CONTAINER} AS platform-inputs-ddk
+FROM pf-build-base AS platform-inputs-ddk
 RUN mkdir -p /out
-FROM ${PF_CONTAINER} AS platform-inputs-none
+FROM pf-build-base AS platform-inputs-none
 RUN mkdir -p /out
-FROM ${PF_CONTAINER} AS platform-inputs-open
-COPY --from=platform-inputs-src devices /out/devices
+FROM pf-build-base AS platform-inputs-open
+COPY --from=platform-inputs-src . /out
 FROM platform-inputs-${PF_GPU_MODEL} AS platform-inputs
 
 # =============================================================================
 # runtime — runtime-layer binaries and the C SDK, built offline from the exact
 # platform.lock-selected source archive inside the owned build container.
 # =============================================================================
-FROM ${PF_CONTAINER} AS runtime
+FROM pf-build-base AS runtime
 ARG PF_SOC
 ARG PF_RUNTIME_SHA
 ARG PF_GPU_MODEL
@@ -1277,10 +1296,12 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "4b71a503909090219c3a01c1718e9e772e0d488b" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "679eb323a7eddb27b6af3273fa77ce63c33c42cd" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
-# file exist for A133-open only. Non-open: all three must be empty (prints nothing).
-# Open: exactly devices/a133/capabilities.toml with the pinned digest (prints its path).
+# files exist for A133-open only. Non-open: all three must be empty (prints nothing).
+# Open: exactly devices/a133/capabilities.toml plus the byte-identical device-neutral
+# device/capabilities.toml (platform#341), both at the pinned digest (prints the
+# per-SoC path; a missing/divergent neutral copy is a named FATAL, no fallback).
 DESCRIPTOR="$(check-device-descriptor "${PF_GPU_MODEL:-ddk}" /work/platform-inputs \
   "${PF_DEVICE_DESCRIPTOR_ID}" "${PF_DEVICE_DESCRIPTOR_SHA256}")"
 export SOURCE_DATE_EPOCH="${PF_RUNTIME_SOURCE_DATE_EPOCH:?}"
@@ -1288,7 +1309,7 @@ cd /work/runtime
 # Build the SDK for every device: hwprobe is a separate build-graph input even
 # where runtime daemons are not shipped in that device's rootfs.
 CARGO_NET_OFFLINE=true CARGO_NET_LOCKED=1 \
-RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=-Wl,--build-id=sha1" \
 cargo build --offline --locked --release --target aarch64-unknown-linux-gnu -p libpocketforge
 install -D -m 0644 include/pocketforge.h /out/sdk/include/pocketforge.h
 install -D -m 0644 target/aarch64-unknown-linux-gnu/release/libpocketforge.a /out/sdk/lib/libpocketforge.a
@@ -1326,7 +1347,7 @@ fi
 # a133 variant (closed + open). The F13/F07 userspace stack (pf-session-authorityd + pf-prefsd)
 # is OPEN-ONLY (tsp-mc9m.41.924.4 / top-coord RULING B-extended) — see the gated block below.
 CARGO_NET_LOCKED=1 \
-RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
 cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-decode
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-decode"
 [ -f "${BIN}" ] || { echo "FATAL: pf-input-decode not built at ${BIN}"; exit 1; }
@@ -1350,13 +1371,13 @@ install -D -m 0644 crates/pf-input-decode/systemd/pf-input-decode.service /out/s
 # both open-gated, closed a133/a523 land on neither and the pairing block simply never fires.
 if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   CARGO_NET_LOCKED=1 \
-  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-session-authority --bin pf-session-authorityd
   CARGO_NET_LOCKED=1 \
-  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-prefsd --bin pf-prefsd
   CARGO_NET_LOCKED=1 \
-  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-app-launch --bin pf-app-launch
   AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
   PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
@@ -1387,6 +1408,13 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   cargo build --offline --locked --release -p pf-app-manifest --example pf-app-validate
   install -D -m 0755 target/release/examples/pf-app-validate \
     /out/build-tools/pf-app-validate
+  # Image app service fragments delegate manifest capability policy to the same runtime compiler
+  # used at launch. This host-native helper is build-only and never enters the target rootfs.
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  cargo build --offline --locked --release -p pf-app-launch --bin pf-app-policy-render
+  install -D -m 0755 target/release/pf-app-policy-render \
+    /out/build-tools/pf-app-policy-render
   # --- Default-app input delivery (bd: tsp-f3fm.202.1 ruling (i), B4) --------------
   # (1) The one staged device descriptor, already contract-checked above
   #     (check-device-descriptor). Parse it with the SAME runtime loaders its
@@ -1399,10 +1427,18 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   cargo build --offline --locked --release -p pf-input-broker --example pf-descriptor-validate
   target/release/examples/pf-descriptor-validate "${DESCRIPTOR}" "${PF_DEVICE_DESCRIPTOR_ID}"
   install -D -m 0644 "${DESCRIPTOR}" "/out/share/devices/${PF_DEVICE_DESCRIPTOR_ID}/capabilities.toml"
+  # Device-neutral copy (tsp-mc9m.41.1026.4, platform#341): the bytes every
+  # runtime consumer (PF_DESCRIPTOR, broker --descriptor) loads, installed as
+  # share/device/capabilities.toml. check-device-descriptor already proved it
+  # exists and hashes to the pinned digest; this guard keeps the named error at
+  # the install site too. No fallback to the per-SoC path.
+  NEUTRAL_DESCRIPTOR="/work/platform-inputs/device/capabilities.toml"
+  [ -f "${NEUTRAL_DESCRIPTOR}" ] || { echo "FATAL: device-neutral descriptor missing: ${NEUTRAL_DESCRIPTOR}"; exit 1; }
+  install -D -m 0644 "${NEUTRAL_DESCRIPTOR}" /out/share/device/capabilities.toml
   # (2) pf-input-broker, static musl like every other runtime daemon. Its runtime
   #     unit ships verbatim; the image's drop-in scopes it to app sessions.
   CARGO_NET_LOCKED=1 \
-  RUSTFLAGS="--remap-path-prefix=/work/runtime=." \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-broker --bin pf-input-broker
   BROKER_BIN="target/${PF_RUNTIME_TARGET}/release/pf-input-broker"
   [ -f "${BROKER_BIN}" ] || { echo "FATAL: pf-input-broker not built at ${BROKER_BIN}"; exit 1; }
@@ -1467,10 +1503,10 @@ RUNTIME
 # exact kernel archive as the kernel build, and build.sh rejects any UAPI receipt
 # other than the independently locked kernel-7.2 SHA.
 # =============================================================================
-FROM ${PF_CONTAINER} AS platform-runtime-steamlink-ffmpeg59-not-shipped
+FROM pf-build-base AS platform-runtime-steamlink-ffmpeg59-not-shipped
 RUN mkdir -p /out && printf '%s\n' 'mode=not-shipped' > /out/NOT-SHIPPED
 
-FROM ${PF_CONTAINER} AS platform-runtime-steamlink-ffmpeg59-v1
+FROM pf-build-base AS platform-runtime-steamlink-ffmpeg59-v1
 ARG PF_FFMPEG_DEBIAN_VERSION
 ARG PF_FFMPEG_DSC_SHA256
 ARG PF_FFMPEG_ORIG_SHA256
@@ -1521,10 +1557,10 @@ COPY --from=platform-runtime-steamlink-ffmpeg59 /out /
 # content-addressed SHA and then by its embedded receipt/file manifest. All
 # release and unrelated profiles select the byte-empty NOT-SHIPPED producer.
 # =============================================================================
-FROM ${PF_CONTAINER} AS cts-bundle-not-shipped
+FROM pf-build-base AS cts-bundle-not-shipped
 RUN install -d /out && printf '%s\n' 'mode=not-shipped' > /out/NOT-SHIPPED
 
-FROM ${PF_CONTAINER} AS cts-bundle-v1
+FROM pf-build-base AS cts-bundle-v1
 ARG PF_CTS_BUNDLE_URL
 ARG PF_CTS_BUNDLE_SHA256
 ARG PF_CTS_SOURCE_TAG
@@ -1562,7 +1598,7 @@ FROM cts-bundle-${PF_CTS_BUNDLE_MODE} AS cts-bundle
 # sim owns the static configuration/toolchain. The already staged, lock-pinned
 # libsdl3-sunxifb archive supplies SDL source so this stage never clones/fetches.
 # =============================================================================
-FROM ${PF_CONTAINER} AS sdl-static
+FROM pf-build-base AS sdl-static
 ARG PF_SIM_SHA
 ARG PF_LIBSDL3_SHA
 ARG PF_SDL_STATIC_SOURCE_DATE_EPOCH
@@ -1595,7 +1631,7 @@ SDLSTATIC
 # =============================================================================
 # hwprobe — fully static AArch64 diagnostic executable plus input provenance.
 # =============================================================================
-FROM ${PF_CONTAINER} AS hwprobe-dev
+FROM pf-build-base AS hwprobe-dev
 ARG PF_HWPROBE_SHA
 ARG PF_RUNTIME_SHA
 ARG PF_SIM_SHA
@@ -1608,6 +1644,8 @@ RUN <<'HWPROBE'
 set -eux
 : "${PF_HWPROBE_SHA:?}" "${PF_RUNTIME_SHA:?}" "${PF_SIM_SHA:?}" "${PF_LIBSDL3_SHA:?}"
 export SOURCE_DATE_EPOCH="${PF_HWPROBE_SOURCE_DATE_EPOCH:?}"
+# Command-line make variables replace `?=` defaults, so retain the
+# pf-hwprobe Makefile's required static-link flag while adding the build ID.
 make -C /work/hwprobe \
   CC=aarch64-none-linux-gnu-gcc \
   STRIP=aarch64-none-linux-gnu-strip \
@@ -1615,6 +1653,7 @@ make -C /work/hwprobe \
   SDL3_STATIC=/work/sdl-static/lib/libSDL3.a \
   PF_INCLUDE=/work/runtime-sdk/include \
   PF_STATIC=/work/runtime-sdk/lib/libpocketforge.a \
+  LDFLAGS="-static -Wl,--build-id=sha1" \
   OUT_DIR=/out/bin
 test "$(od -An -tx1 -j18 -N2 /out/bin/pf-hwprobe | tr -d ' ')" = b700
 ! aarch64-none-linux-gnu-readelf -l /out/bin/pf-hwprobe | grep -q 'Requesting program interpreter'
@@ -1622,6 +1661,7 @@ if aarch64-none-linux-gnu-readelf -d /out/bin/pf-hwprobe | grep -q NEEDED; then
   echo 'FATAL: pf-hwprobe has a DT_NEEDED entry' >&2
   exit 1
 fi
+aarch64-none-linux-gnu-readelf -n /out/bin/pf-hwprobe | grep -q 'Build ID:'
 {
   printf 'pf-hwprobe@%s\n' "${PF_HWPROBE_SHA}"
   printf 'runtime@%s\n' "${PF_RUNTIME_SHA}"
@@ -1631,7 +1671,7 @@ fi
 } > /out/.pf-hwprobe-provenance
 HWPROBE
 
-FROM ${PF_CONTAINER} AS hwprobe-release
+FROM pf-build-base AS hwprobe-release
 RUN mkdir -p /out
 
 FROM hwprobe-${PF_VARIANT} AS hwprobe
@@ -1646,6 +1686,7 @@ FROM hwprobe-${PF_VARIANT} AS hwprobe
 # --offline --frozen under RUN --network=none.
 # =============================================================================
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS poolsuite-toolchain
+SHELL ["/bin/sh", "-c", "for pf_env_name in $(env | sed 's/=.*//'); do case \"$pf_env_name\" in HOME|PATH|PWD|SHLVL|PF_*|SOURCE_DATE_EPOCH|APT_SNAPSHOT_DATE|CARGO_*|RUSTUP_*|RUST_VERSION|RUSTUP_VERSION|RUSTUP_INIT_SHA256|MESA_UBUNTU_SNAPSHOT|CCACHE_*|LLVM_CONFIG|DEBIAN_FRONTEND) ;; *) unset \"$pf_env_name\" ;; esac; done; exec /bin/sh -c \"$0\""]
 ARG RUST_VERSION=1.91.0
 ARG RUSTUP_VERSION=1.28.2
 ARG RUSTUP_INIT_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
@@ -1716,12 +1757,17 @@ POOLSUITEFETCH
 FROM poolsuite-toolchain AS poolsuite-dev
 ARG PF_POOLSUITE_SHA
 ARG PF_POOLSUITE_SOURCE_DATE_EPOCH
+ARG PF_GAMESCOPE_MODE=not-shipped
 ENV CARGO_HOME=/opt/poolsuite-cargo-home \
     CARGO_INCREMENTAL=0
 COPY --from=poolsuite-src . /work/poolsuite
 COPY --from=poolsuite-fetch /poolsuite-fetched-source.sha256 /poolsuite-fetched-source.sha256
 COPY --from=runtime /out/build-tools/pf-app-validate /usr/local/bin/pf-app-validate
+COPY --from=runtime /out/build-tools/pf-app-policy-render /usr/local/bin/pf-app-policy-render
 COPY --from=runtime /out/share/platform-capabilities.toml /work/platform-capabilities.toml
+COPY --from=image-src build/app-policy-a133-open-v1.json /work/app-policy-a133-open-v1.json
+COPY --from=image-src build/app-policy-a133-open-g1-v1.json /work/app-policy-a133-open-g1-v1.json
+COPY --from=image-src rootfs-overlay/etc/systemd/system/pf-app@.service /work/pf-app@.service
 WORKDIR /work/poolsuite
 RUN --network=none \
     --mount=type=bind,from=poolsuite-fetch,source=/opt/poolsuite-cargo-home,target=/opt/poolsuite-cargo-home,rw \
@@ -1733,7 +1779,7 @@ set -eux
   exit 1
 }
 export SOURCE_DATE_EPOCH="${PF_POOLSUITE_SOURCE_DATE_EPOCH:?}"
-./ci/device-build.sh --offline
+RUSTFLAGS="-C link-arg=-Wl,--build-id=sha1" ./ci/device-build.sh --offline
 APP=target/aarch64-unknown-linux-gnu/release/ps-app
 test -f "${APP}"
 E_MACHINE="$(od -An -tx1 -j18 -N2 "${APP}" | tr -d ' ')"
@@ -1779,6 +1825,41 @@ install -d /tmp/default-app-root
 mv /out/app /tmp/default-app-root/org.pocketforge.poolsuite
 pf-app-validate /tmp/default-app-root /work/platform-capabilities.toml org.pocketforge.poolsuite
 mv /tmp/default-app-root/org.pocketforge.poolsuite /out/app
+# Compile the exact staged manifest through runtime's one capability-policy
+# surface. The inventory is image-owned and installed beside the generated
+# exact-instance unit so launch-time compilation consumes the same signed decision inputs.
+case "${PF_GAMESCOPE_MODE}" in
+  not-shipped) POLICY=/work/app-policy-a133-open-v1.json ;;
+  g1) POLICY=/work/app-policy-a133-open-g1-v1.json ;;
+  *) echo "FATAL: invalid PF_GAMESCOPE_MODE=${PF_GAMESCOPE_MODE}" >&2; exit 2 ;;
+esac
+install -D -m 0644 "${POLICY}" \
+  /out/app-policy/org.pocketforge.poolsuite.resources.json
+pf-app-policy-render \
+  --manifest /out/app/app.toml \
+  --platform-contract /work/platform-capabilities.toml \
+  --resource-inventory /out/app-policy/org.pocketforge.poolsuite.resources.json \
+  --app-dir /opt/pocketforge/apps/org.pocketforge.poolsuite \
+  --platform-runtime /usr \
+  --xdg-config /var/lib/pocketforge/apps/org.pocketforge.poolsuite/config \
+  --xdg-state /var/lib/pocketforge/apps/org.pocketforge.poolsuite/state \
+  --xdg-cache /var/cache/pocketforge/apps/org.pocketforge.poolsuite \
+  --format systemd-dropin \
+  > /tmp/app-policy.service-fragment
+install -D -m 0644 /work/pf-app@.service \
+  /out/systemd/pf-app@org.pocketforge.poolsuite.service
+cat /tmp/app-policy.service-fragment \
+  >> /out/systemd/pf-app@org.pocketforge.poolsuite.service
+grep -Fx 'SupplementaryGroups=audio input video' /tmp/app-policy.service-fragment
+grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' /tmp/app-policy.service-fragment
+grep -Fx 'PrivateNetwork=no' /tmp/app-policy.service-fragment
+grep -Fx '# egress tcp * 80' /tmp/app-policy.service-fragment
+grep -Fx '# egress tcp * 443' /tmp/app-policy.service-fragment
+grep -Fx '# derived dns tcp udp 53' /tmp/app-policy.service-fragment
+if grep -F '# egress udp ' /tmp/app-policy.service-fragment; then
+  echo 'FATAL: Poolsuite manifest unexpectedly grants UDP application egress' >&2
+  exit 1
+fi
 {
   printf 'poolsuite@%s\n' "${PF_POOLSUITE_SHA}"
   printf 'cargo_lock_sha256=%s\n' "${LOCK_SHA256}"
@@ -1793,7 +1874,7 @@ POOLSUITEDEV
 
 # Generic source-free NOT-SHIPPED producer. BuildKit prunes poolsuite-toolchain,
 # poolsuite-fetch, poolsuite-dev and poolsuite-src whenever this stage is selected.
-FROM ${PF_CONTAINER} AS poolsuite-not-shipped
+FROM pf-build-base AS poolsuite-not-shipped
 RUN mkdir -p /out
 
 # The only real producer is A133 + open + dev. Every release, A523, and
@@ -1834,7 +1915,7 @@ FROM poolsuite-${PF_SOC}-${PF_GPU_MODEL}-${PF_VARIANT} AS poolsuite
 #
 # recovery-ddk — the NOT-SHIPPED closed-model stub (mirrors launcher-ddk / gpu-um-mesa-ddk). Runs
 # on the owned build container since it compiles nothing.
-FROM ${PF_CONTAINER} AS recovery-ddk
+FROM pf-build-base AS recovery-ddk
 RUN <<'RECOVERYDDK'
 set -eux
 mkdir -p /out
@@ -1843,7 +1924,7 @@ printf 'recovery NOT SHIPPED (gpu_model=ddk; the recovery entry is source-built 
 cat /out/.pf-recovery-provenance
 RECOVERYDDK
 
-FROM ${PF_CONTAINER} AS recovery-none
+FROM pf-build-base AS recovery-none
 RUN <<'RECOVERYNONE'
 set -eux
 mkdir -p /out
@@ -1863,7 +1944,7 @@ RECOVERYNONE
 # the launcher-open stage; the recovery repository does not configure a musl linker itself.
 # recovery-open is OPEN-ONLY (closed a133/a523 land on the recovery-ddk stub), so nothing in
 # this stage can affect the closed/a523 byte-identical output.
-FROM ${PF_CONTAINER} AS recovery-open
+FROM pf-build-base AS recovery-open
 ARG PF_RECOVERY_SHA=443a84e47c96d83de967948844d8e5eaa41d7413
 ARG PF_RECOVERY_SOURCE_DATE_EPOCH
 ENV CARGO_NET_OFFLINE=true CARGO_NET_LOCKED=1
@@ -1890,6 +1971,7 @@ directory = "/work/image/recovery/vendor"
 offline = true
 CARGOCFG
 cd /work/image/apps/pocketforge-recovery-entry
+RUSTFLAGS="-C link-arg=--build-id=sha1" \
 cargo build --offline --locked --release --target aarch64-unknown-linux-musl
 install -D -m0755 target/aarch64-unknown-linux-musl/release/pocketforge-recovery-entry \
   /out/bin/pocketforge-recovery-entry
@@ -1916,7 +1998,7 @@ FROM recovery-${PF_GPU_MODEL} AS recovery
 # launcher-ddk — the NOT-SHIPPED closed-model stub (mirrors gpu-um-mesa-ddk / gpu-km / sdl).
 # No COPY --from=launcher-src, no pf-shell: just a provenance marker. Runs on the owned build
 # container (not the Rust image) since it compiles nothing.
-FROM ${PF_CONTAINER} AS launcher-ddk
+FROM pf-build-base AS launcher-ddk
 RUN <<'LAUNCHERDDK'
 set -eux
 mkdir -p /out
@@ -1925,7 +2007,7 @@ printf 'launcher NOT SHIPPED (gpu_model=ddk; pf-shell is source-built for the op
 cat /out/.pf-launcher-provenance
 LAUNCHERDDK
 
-FROM ${PF_CONTAINER} AS launcher-none
+FROM pf-build-base AS launcher-none
 RUN <<'LAUNCHERNONE'
 set -eux
 mkdir -p /out
@@ -1938,7 +2020,7 @@ LAUNCHERNONE
 # the `FROM launcher-${PF_GPU_MODEL}` selector below, so BuildKit prunes it (and its launcher-src
 # reference) for every ddk build. The digest-pinned Rust toolchain + committed Cargo.lock +
 # --locked make the source/tool/dependency selection deterministic.
-FROM ${PF_CONTAINER} AS launcher-open
+FROM pf-build-base AS launcher-open
 ARG PF_LAUNCHER_SHA
 ARG PF_RUNTIME_SHA
 ARG PF_LAUNCHER_SOURCE_DATE_EPOCH
@@ -1950,7 +2032,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "d46dbb48e610e10cc4d01562fedcdf7cdfae0f7d" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "77c0f054558b1dac8ff2d2795576577963f60760" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fourteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
@@ -1966,7 +2048,7 @@ export SOURCE_DATE_EPOCH="${PF_LAUNCHER_SOURCE_DATE_EPOCH:?}"
 # the toolchain (no cross-gcc install).
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
 cd /work/launcher
-RUSTFLAGS="--remap-path-prefix=/work/launcher=." \
+RUSTFLAGS="--remap-path-prefix=/work/launcher=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" \
     --no-default-features -p pf-shell
 BIN="target/${PF_RUNTIME_TARGET}/release/pf-shell"
@@ -1993,10 +2075,10 @@ FROM launcher-${PF_GPU_MODEL} AS launcher
 # validation runs before Meson; setup is always offline/no-download and retains
 # the source revision's upstream feature and test defaults.
 # =============================================================================
-FROM ${PF_CONTAINER} AS gamescope-not-shipped
+FROM pf-build-base AS gamescope-not-shipped
 RUN install -d /out
 
-FROM ${PF_CONTAINER} AS gamescope-g1
+FROM pf-build-base AS gamescope-g1
 ARG PF_GAMESCOPE_UPSTREAM_BASE
 ARG PF_GAMESCOPE_SHA
 ARG PF_GAMESCOPE_PRESENT_HEAD
@@ -2052,6 +2134,36 @@ GAMESCOPE
 
 FROM gamescope-${PF_GAMESCOPE_MODE} AS gamescope
 
+# Cursor assets are source-built in the allowlisted, digest-pinned ci-tools
+# producer. The build vertex has no network and consumes only the lock-staged
+# source context. A second build is compared before either output can ship.
+FROM ${PF_CURSOR_TOOLS_IMAGE} AS cursor-theme
+ARG PF_CURSOR_TOOLS_IMAGE
+ARG PF_CURSOR_TOOLS_RECIPE_SHA
+ARG PF_CURSOR_THEME_SHA
+COPY --from=cursor-theme-src . /work/cursor-theme
+COPY --chmod=0444 --from=image-src scripts/verify-cursor-theme.py /work/verify-cursor-theme.py
+COPY --chmod=0444 --from=image-src scripts/verify-cursor-tools-recipe.py /work/verify-cursor-tools-recipe.py
+RUN --network=none <<'CURSOR_THEME'
+set -eux
+python3 -B /work/verify-cursor-tools-recipe.py \
+  "${PF_CURSOR_TOOLS_IMAGE}" "${PF_CURSOR_TOOLS_RECIPE_SHA}"
+test "$(cat /work/cursor-theme/.pf-source-revision)" = "${PF_CURSOR_THEME_SHA}"
+python3 /work/cursor-theme/build_cursors.py --out /tmp/build-a
+python3 /work/cursor-theme/build_cursors.py --out /tmp/build-b
+diff -r /tmp/build-a /tmp/build-b
+mkdir -p /tmp/out/usr/share/icons /tmp/out/usr/share/licenses/pocketforge-cursor-theme /tmp/out/usr/share/pocketforge
+cp -a /tmp/build-a/pocketforge-light /tmp/build-a/pocketforge-dark /tmp/out/usr/share/icons/
+install -m 0444 /work/cursor-theme/LICENSE /tmp/out/usr/share/licenses/pocketforge-cursor-theme/LICENSE
+install -m 0444 /work/cursor-theme/ATTRIBUTION.md /tmp/out/usr/share/licenses/pocketforge-cursor-theme/ATTRIBUTION.md
+printf 'source_sha=%s\ntools_image=%s\ntools_recipe_sha=%s\n' \
+  "${PF_CURSOR_THEME_SHA}" "${PF_CURSOR_TOOLS_IMAGE}" "${PF_CURSOR_TOOLS_RECIPE_SHA}" \
+  > /tmp/out/usr/share/pocketforge/cursor-theme.provenance
+find /tmp/out -type f -exec chmod 0444 {} +
+find /tmp/out -type d -exec chmod 0555 {} +
+python3 -B /work/verify-cursor-theme.py /tmp/out
+CURSOR_THEME
+
 # Byte-repro test boundaries. These source-free scratch aliases are pruned from
 # normal `--target export` builds. Ephemeral CI selects one with `--target
 # component-test-<name> --output type=local` to hash exactly the producer's
@@ -2089,13 +2201,15 @@ FROM scratch AS component-test-launcher
 COPY --from=launcher /out /
 FROM scratch AS component-test-gamescope
 COPY --from=gamescope /out /
+FROM scratch AS component-test-cursor-theme
+COPY --from=cursor-theme /tmp/out /
 
 # =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
 # rootfs-packages-<id>.txt (tsp-1dl.4.5 unifies the two forked build-rootfs scripts).
 # Composes the kernel modules + GPU .ko + libSDL3 + owned wpa_supplicant + fetched firmware.
 # =============================================================================
-FROM ${PF_CONTAINER} AS rootfs
+FROM pf-build-base AS rootfs
 ARG PF_DEVICE_ID
 ARG PF_ARCH
 ARG PF_SOC
@@ -2129,6 +2243,9 @@ ARG PF_GAMESCOPE_MODE=not-shipped
 ARG PF_CTS_BUNDLE_MODE=not-shipped
 ARG PF_CTS_BUNDLE_URL=
 ARG PF_CTS_BUNDLE_SHA256=
+ARG PF_CURSOR_THEME_SHA
+ARG PF_CURSOR_TOOLS_IMAGE
+ARG PF_CURSOR_TOOLS_RECIPE_SHA
 ARG PF_ODYSSEY_CAPTURE=
 ARG APT_SNAPSHOT_DATE
 ARG SOURCE_DATE_EPOCH
@@ -2160,6 +2277,7 @@ COPY --from=launcher /out           /work/launcher
 COPY --from=platform-runtime-steamlink-ffmpeg59 /out /work/platform-runtime
 COPY --from=gamescope /out /work/gamescope-package
 COPY --from=cts-bundle /out /work/cts-bundle
+COPY --chown=0:0 --from=cursor-theme /tmp/out /work/cursor-theme
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -2182,6 +2300,7 @@ case "${PF_SOC}" in
       PLATFORM_RUNTIME_DIR=/work/platform-runtime \
       GAMESCOPE_DIR=/work/gamescope-package \
       CTS_BUNDLE_DIR=/work/cts-bundle \
+      CURSOR_THEME_DIR=/work/cursor-theme \
       PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE}" \
       PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE}" \
       PF_CTS_BUNDLE_MODE="${PF_CTS_BUNDLE_MODE}" \
@@ -2230,7 +2349,7 @@ case "${PF_SOC}" in
     # Call the OWNED a523 rootfs builder unchanged (mirrors sdl/a133-rootfs: run the recipe
     # living with the source, don't re-inline it). SOURCE_DATE_EPOCH is honoured transparently;
     # PF_APT_PROXY plumbing is a133-only today (tsp-1dl.14 unify carries it to a523).
-    SRC_DIR=/work/src OUT_DIR=/out \
+    SRC_DIR=/work/src OUT_DIR=/out CURSOR_THEME_DIR=/work/cursor-theme \
       PF_GPU_SHA="${PF_GPU_SHA:-}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA:-}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-rootfs-a523.sh --variant "${PF_VARIANT}"
@@ -2414,7 +2533,7 @@ ASM
 # entry round-trips through a real debuginfod server+client here, so a store
 # the server cannot resolve fails the build. Sandboxed (no privilege).
 # =============================================================================
-FROM ${PF_CONTAINER} AS debuginfo
+FROM pf-build-base AS debuginfo
 ARG PF_DEVICE_ID
 ARG PF_VARIANT=dev
 ARG PF_IMAGE_SHA

@@ -4,8 +4,10 @@
 # The atomic A133-open set: pf-app-launch, the dormant pf-app@.service template,
 # the platform contract, and (bd: tsp-f3fm.202.1 B4) default-app input delivery:
 # pf-input-broker with its runtime unit plus the image's app-session drop-in (never
-# enabled), the pf-shell-selected ordering drop-in, libpocketforge.so.1, and the one
-# staged device descriptor. The drop-ins are read from the directory that holds
+# enabled), the pf-shell-selected ordering drop-in, libpocketforge.so.1, the one
+# staged per-SoC device descriptor, and (tsp-mc9m.41.1026.4, platform#341) its
+# byte-identical device-neutral copy that PF_DESCRIPTOR and the broker
+# --descriptor reference. The drop-ins are read from the directory that holds
 # <unit> (rootfs-overlay/etc/systemd/system).
 set -euo pipefail
 
@@ -31,12 +33,16 @@ broker_unit="${runtime_stage}/systemd/pf-input-broker.service"
 library="${runtime_stage}/lib/libpocketforge.so.1"
 descriptors="${runtime_stage}/share/devices"
 descriptor="${descriptors}/${descriptor_id}/capabilities.toml"
+neutral_descriptors="${runtime_stage}/share/device"
+neutral_descriptor="${neutral_descriptors}/capabilities.toml"
 broker_dropin="${systemd_source}/pf-input-broker.service.d/10-app-session.conf"
 shell_dropin="${systemd_source}/pf-shell-selected.service.d/10-input-broker.conf"
+cursor_dropin="${systemd_source}/pf-app@.service.d/30-cursor-theme.conf"
 
 if [ "${gpu_model}" != open ]; then
     for forbidden in "${helper}" "${authority}" "${platform}" "${shell}" \
-        "${broker}" "${broker_unit}" "${library}" "${descriptors}"; do
+        "${broker}" "${broker_unit}" "${library}" "${descriptors}" \
+        "${neutral_descriptors}"; do
         [ ! -e "${forbidden}" ] || {
             echo "FATAL: default-app artifact staged for non-open profile: ${forbidden}" >&2
             exit 1
@@ -47,7 +53,8 @@ fi
 
 for required in "${helper}" "${authority}" "${platform}" "${shell}" "${unit}" \
     "${broker}" "${broker_unit}" "${library}" "${descriptor}" \
-    "${broker_dropin}" "${shell_dropin}"; do
+    "${neutral_descriptor}" "${broker_dropin}" "${shell_dropin}" \
+    "${cursor_dropin}"; do
     [ -f "${required}" ] || {
         echo "FATAL: A133-open default-app artifact is missing: ${required}" >&2
         exit 1
@@ -57,6 +64,10 @@ done
 staged_descriptors="$(cd "${descriptors}" && find . -mindepth 1 ! -type d -print | LC_ALL=C sort)"
 [ "${staged_descriptors}" = "./${descriptor_id}/capabilities.toml" ] || {
     echo "FATAL: expected exactly devices/${descriptor_id}/capabilities.toml, staged: ${staged_descriptors}" >&2
+    exit 1
+}
+cmp -s "${descriptor}" "${neutral_descriptor}" || {
+    echo "FATAL: device/capabilities.toml differs from devices/${descriptor_id}/capabilities.toml" >&2
     exit 1
 }
 
@@ -84,6 +95,8 @@ install -D -m 0755 "${helper}" "${rootfs}/usr/bin/pf-app-launch"
 install -D -m 0644 "${platform}" \
     "${rootfs}/usr/share/pocketforge/platform-capabilities.toml"
 install -D -m 0644 "${unit}" "${rootfs}/etc/systemd/system/pf-app@.service"
+install -D -m 0644 "${cursor_dropin}" \
+    "${rootfs}/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf"
 
 install -D -m 0755 "${broker}" "${rootfs}/usr/bin/pf-input-broker"
 install -D -m 0644 "${broker_unit}" "${rootfs}/etc/systemd/system/pf-input-broker.service"
@@ -94,6 +107,8 @@ install -D -m 0644 "${shell_dropin}" \
 install -D -m 0644 "${library}" "${rootfs}/usr/lib/aarch64-linux-gnu/libpocketforge.so.1"
 install -D -m 0644 "${descriptor}" \
     "${rootfs}/usr/share/pocketforge/devices/${descriptor_id}/capabilities.toml"
+install -D -m 0644 "${neutral_descriptor}" \
+    "${rootfs}/usr/share/pocketforge/device/capabilities.toml"
 
 if find "${rootfs}/etc/systemd/system" -path '*.wants/*' -name 'pf-app@*.service' -print -quit \
     | grep -q .; then
@@ -112,4 +127,4 @@ if find "${rootfs}/etc/systemd/system" -path '*.wants/*' -name 'pf-input-broker.
     exit 1
 fi
 
-echo "[customize] default-app helper, dormant unit template, platform contract, app-session input broker (not enabled), libpocketforge.so.1, and devices/${descriptor_id} descriptor installed"
+echo "[customize] default-app helper, dormant unit template, platform contract, app-session input broker (not enabled), libpocketforge.so.1, devices/${descriptor_id} descriptor, and its byte-identical device-neutral copy installed"

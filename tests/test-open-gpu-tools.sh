@@ -55,13 +55,18 @@ ln -s libdril_dri.so "$producer/usr/local/lib/dri/ili9225_dri.so"
 ln -s libdril_dri.so "$producer/usr/local/lib/dri/zink_dri.so"
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
     >"$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
-printf '%s\n' 'gpu-um-tsp@e2c29ab8a84f57ae500f4ad6c6aea86ac0bbe01f (open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
+printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_virtio.so"}}' \
+    >"$producer/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.json"
+printf '%s\n' 'gpu-um-tsp@3f045e0ae9ac2855df143060200b18922e155fa1 (open Mesa GLX/GLES/EGL/GBM/Vulkan userspace, GE8300 Zink)' \
     >"$producer/.pf-gpu-um-provenance"
 cp -a "$producer/usr/local/." "$positive/usr/local/"
 find "$positive/usr/local/share/vulkan/icd.d" -mindepth 1 \
-    -maxdepth 1 -name 'powervr_mesa_icd.aarch64.json' -delete
+    -maxdepth 1 \( -name 'powervr_mesa_icd.aarch64.json' \
+    -o -name 'virtio_icd.aarch64.json' \) -delete
 cp "$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
     "$positive/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+cp "$producer/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.json" \
+    "$positive/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
 cp "$producer/.pf-gpu-um-provenance" \
     "$positive/usr/share/pocketforge/gpu-um-mesa-provenance"
 
@@ -316,7 +321,7 @@ negative_provenance_identity="$scratch/negative-provenance-identity"
 negative_producer_identity="$scratch/negative-producer-identity"
 cp -a "$positive" "$negative_provenance_identity"
 cp -a "$producer" "$negative_producer_identity"
-printf '%s\n' 'gpu-um-tsp@e2c29ab8a84f57ae500f4ad6c6aea86ac0bbe01f (unknown stack)' \
+printf '%s\n' 'gpu-um-tsp@3f045e0ae9ac2855df143060200b18922e155fa1 (unknown stack)' \
     >"$negative_producer_identity/.pf-gpu-um-provenance"
 cp "$negative_producer_identity/.pf-gpu-um-provenance" \
     "$negative_provenance_identity/usr/share/pocketforge/gpu-um-mesa-provenance"
@@ -340,6 +345,19 @@ if PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$negative_icd" "$producer" \
     exit 1
 fi
 grep -Fq 'foreign Vulkan ICD manifest:' "$scratch/negative-icd.err"
+
+# The virtual branch's Venus manifest is a required canonical artifact: a
+# rootfs without it must fail closed (tsp-mc9m.41.984.54.18).
+negative_venus="$scratch/negative-venus-icd-rootfs"
+cp -a "$positive" "$negative_venus"
+find "$negative_venus/usr/share/vulkan/icd.d" -mindepth 1 \
+    -maxdepth 1 -name 'virtio_icd.aarch64.json' -delete
+if PF_ROOTFS_LDD="$ldd_stub" "$verifier" "$negative_venus" "$producer" \
+    >"$scratch/negative-venus-icd.out" 2>"$scratch/negative-venus-icd.err"; then
+    echo 'FAIL: missing Venus ICD negative control was accepted' >&2
+    exit 1
+fi
+grep -Fq 'canonical Venus ICD manifest is missing' "$scratch/negative-venus-icd.err"
 
 expect_rejection() {
     label=$1
@@ -422,4 +440,4 @@ rm "$missing_owned_alias/usr/local/lib/dri/ili9225_dri.so"
 expect_rejection missing-owned-alias "$missing_owned_alias" \
     'gpu-um-tsp DRI artifact missing from rootfs: /usr/local/lib/dri/ili9225_dri.so'
 
-echo "open-gpu-tools-test=PASS positive=owned-stack-with-producer-dri-mirror negative=drm-egl-only,drm-gles-only,runtime-owned-witness,runtime-glmark-egl-identity,runtime-glmark-gles-identity,runtime-vulkaninfo-identity,installed-mesa-vulkan-drivers,changed-hash,changed-provenance,missing-rootfs-provenance,missing-producer-provenance,symlinked-provenance,non-zink-provenance,foreign-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries,foreign-zink-alias,changed-zink-target,changed-dri-hash,missing-owned-alias icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"
+echo "open-gpu-tools-test=PASS positive=owned-stack-with-producer-dri-mirror negative=drm-egl-only,drm-gles-only,runtime-owned-witness,runtime-glmark-egl-identity,runtime-glmark-gles-identity,runtime-vulkaninfo-identity,installed-mesa-vulkan-drivers,changed-hash,changed-provenance,missing-rootfs-provenance,missing-producer-provenance,symlinked-provenance,non-zink-provenance,foreign-icd,missing-venus-icd,all-icd-boundaries,symlinked-boundary,all-dri-boundaries,foreign-zink-alias,changed-zink-target,changed-dri-hash,missing-owned-alias icd_boundaries=${boundary_number} dri_boundaries=${dri_boundary_number}"

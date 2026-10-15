@@ -1,0 +1,6 @@
+*
+!snapshot-date.txt
+!tests/input-harness/
+!tests/input-harness/**
+tests/input-harness/**/__pycache__/
+tests/input-harness/**/*.pyc

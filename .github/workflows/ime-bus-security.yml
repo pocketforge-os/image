@@ -1,0 +1,70 @@
+name: IME bus security
+
+# The real-binary security harness deliberately uses Docker and snapshot network
+# access to bring its specialty tools to the ephemeral public CI VM. Its image
+# base is digest-pinned and its APT sources use snapshot-date.txt. The public
+# class exposes public egress only and no persistent cache. Keep this out of
+# hermetic-tests.yml, whose runner contract is daemonless and networkless.
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ime-bus-security.yml
+      - tests/test-ime-bus-security.sh
+      - tests/ime-bus-security-inner.sh
+      - tests/ime-bus-contract.py
+      - tests/verify-ime-bus-wiring.py
+      - tests/test-public-ci-workflows.sh
+      - tests/prove-public-ci-fit.sh
+      - tests/ime-bus-security/**
+      - rootfs-packages*.txt
+      - rootfs-overlay/etc/systemd/system/pf-app@.service
+      - rootfs-overlay/etc/systemd/system/pf-ime-bus.service
+      - rootfs-overlay/etc/systemd/system/pf-ime-door@.service
+      - rootfs-overlay/etc/systemd/system/pf-fcitx5.service.d/**
+      - rootfs-overlay/etc/systemd/system/pf-osk.service.d/**
+      - rootfs-overlay/usr/lib/sysusers.d/pf-ime.conf
+      - rootfs-overlay/usr/lib/tmpfiles.d/pf-ime.conf
+      - rootfs-overlay/usr/share/pocketforge/ime/**
+      - scripts/build-rootfs.sh
+      - snapshot-date.txt
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ime-bus-security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ime-bus-security:
+    runs-on: [self-hosted, pf-public-ci]
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Verify public runner contract
+        run: tests/test-public-ci-workflows.sh
+
+      - name: Prove workload fits the public runner envelope
+        run: tests/prove-public-ci-fit.sh
+
+      - name: Run real private-bus and per-app-door security harness
+        run: |
+          set -o pipefail
+          tests/test-ime-bus-security.sh 2>&1 |
+            tee "$RUNNER_TEMP/ime-bus-security.log"
+
+      - name: Publish security evidence
+        if: always()
+        run: |
+          {
+            echo '## IME bus security evidence'
+            echo '```text'
+            grep -E '^(PASS|FAIL):? ' "$RUNNER_TEMP/ime-bus-security.log" 2>/dev/null ||
+              echo 'IME bus harness produced no receipt'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

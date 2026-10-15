@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the proposed runtime-root extension into a pf-app@ drop-in.
+"""Render the proposed runtime-root extension as a pf-app@ service fragment.
 
 This is an offline, source-owned contract prototype.  It deliberately does
 not install a second launcher or modify the production manifest parser while
@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -22,24 +23,6 @@ from typing import NoReturn
 
 DIGEST_RE = re.compile(r"sha256:([0-9a-f]{64})\Z")
 PLATFORM_RE = re.compile(r"[a-z0-9]+(?:[./-][a-z0-9]+)*\Z")
-
-KNOWN_CAPABILITIES = {
-    "accelerometer",
-    "audio",
-    "entropy",
-    "egress",
-    "gnss",
-    "gyroscope",
-    "imu",
-    "input",
-    "leds",
-    "location",
-    "magnetometer",
-    "rumble",
-    "settings",
-    "vibration",
-    "video-decode",
-}
 
 ROOT_KEYS = {
     "schema",
@@ -98,6 +81,7 @@ RESOURCE_PREFIXES = {
     "audio-devices": ("/dev/snd/",),
     "audio-sockets": ("/run/pocketforge/session/",),
     "broker-sockets": ("/run/pocketforge/",),
+    "display-devices": ("/dev/fb",),
     "display-sockets": ("/run/pocketforge/session/",),
     "input-devices": ("/dev/input/",),
     "media-devices": ("/dev/media",),
@@ -106,29 +90,12 @@ RESOURCE_PREFIXES = {
     "video-decode-devices": ("/dev/video",),
 }
 
-CAPABILITY_OUTCOMES = {
-    "accelerometer": "broker socket only; no raw sensor node",
-    "audio": "audio socket and minimum ALSA nodes",
-    "entropy": "private namespace urandom only",
-    "egress": "declaration only; network policy remains host-owned",
-    "gnss": "broker socket only; no raw serial node",
-    "gyroscope": "broker socket only; no raw sensor node",
-    "imu": "broker socket only; no raw sensor node",
-    "input": "minimum evdev nodes read-only",
-    "leds": "broker socket only; no sysfs bind",
-    "location": "broker socket only; no raw serial node",
-    "magnetometer": "broker socket only; no raw sensor node",
-    "rumble": "minimum evdev nodes read-write",
-    "settings": "per-app XDG state only",
-    "vibration": "minimum evdev nodes read-write",
-    "video-decode": "codec video and media nodes",
-}
-
 REFUSAL_EXIT = {
     "runtime_root_missing": 66,
     "runtime_root_metadata_missing": 66,
     "platform_runtime_missing": 66,
     "required_resource_missing": 66,
+    "policy_render_failed": 65,
     "sandbox_render_failed": 74,
 }
 
@@ -168,36 +135,6 @@ def valid_app_id(value: str) -> bool:
         ):
             return False
     return True
-
-
-def capability_requirements(value: object) -> dict[str, bool]:
-    """Return normalized capability bases mapped to their optional bit."""
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-        refuse("descriptor_invalid", "app.use must be a string array")
-    result: dict[str, bool] = {}
-    for raw in value:
-        token = raw.strip()
-        optional = token.endswith("?")
-        if token.endswith("?"):
-            token = token[:-1]
-        base, separator, modifier = token.partition(":")
-        base = base.strip().lower()
-        modifier = modifier.strip()
-        if not base or base in result:
-            refuse("descriptor_invalid", "app.use has an invalid or duplicate capability")
-        if separator:
-            valid_modifier = (
-                (base == "egress" and bool(modifier))
-                or (base in {"location", "gnss"} and modifier in {"approximate", "precise"})
-            )
-            if not valid_modifier:
-                refuse("descriptor_invalid", f"invalid capability modifier: {raw!r}")
-        elif base == "egress":
-            refuse("descriptor_invalid", "egress requires a non-empty modifier")
-        if base not in KNOWN_CAPABILITIES:
-            refuse("unsupported_capability", f"unsupported capability: {base}")
-        result[base] = optional
-    return result
 
 
 def digest_hex(value: object, name: str, reason: str = "runtime_root_invalid") -> str:
@@ -267,17 +204,6 @@ def load_inventory(path: Path) -> dict[str, object]:
             if not item.startswith(prefixes) or ".." in PurePosixPath(item).parts:
                 refuse("platform_runtime_invalid", f"resource {name} has forbidden path: {item}")
     return value
-
-
-def resource_paths(
-    resources: dict[str, object], name: str, *, optional: bool = False
-) -> list[str]:
-    value = resources.get(name)
-    if not isinstance(value, list) or not value:
-        if optional:
-            return []
-        refuse("required_resource_missing", f"required resource set is absent or empty: {name}")
-    return [str(item) for item in value]
 
 
 def sha256_file(path: Path, missing_reason: str = "runtime_root_missing") -> str:
@@ -510,11 +436,92 @@ def require_artifacts(
         )
 
 
+def compile_policy(
+    *,
+    renderer: Path,
+    manifest: Path,
+    platform_contract: Path,
+    inventory: dict[str, object],
+    app_id: str,
+) -> tuple[dict[str, object], list[str]]:
+    with tempfile.TemporaryDirectory(prefix="pf-app-policy-") as temp:
+        policy_inventory = Path(temp) / "resources.json"
+        policy_inventory.write_text(
+            json.dumps(
+                {
+                    "platform_runtime": "/run/pocketforge/platform-runtime",
+                    "resources": inventory["resources"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        base = [
+            str(renderer),
+            "--manifest",
+            str(manifest),
+            "--platform-contract",
+            str(platform_contract),
+            "--resource-inventory",
+            str(policy_inventory),
+            "--app-dir",
+            f"/opt/pocketforge/apps/{app_id}",
+            "--platform-runtime",
+            "/run/pocketforge/platform-runtime",
+            "--xdg-config",
+            f"/var/lib/pocketforge/apps/{app_id}/config",
+            "--xdg-state",
+            f"/var/lib/pocketforge/apps/{app_id}/state",
+            "--xdg-cache",
+            f"/var/cache/pocketforge/apps/{app_id}",
+        ]
+
+        def run(output_format: str) -> str:
+            try:
+                result = subprocess.run(
+                    [*base, "--format", output_format],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+            except OSError as error:
+                refuse("policy_render_failed", str(error))
+            if result.returncode != 0:
+                detail = result.stderr.strip() or f"renderer exited {result.returncode}"
+                reason = (
+                    "required_resource_missing"
+                    if "required resource " in detail and " is missing" in detail
+                    else "descriptor_invalid"
+                    if "invalid or duplicate capability" in detail
+                    else "policy_render_failed"
+                )
+                refuse(reason, detail)
+            return result.stdout
+
+        try:
+            decision = json.loads(run("json"))
+        except json.JSONDecodeError as error:
+            refuse("policy_render_failed", f"policy JSON is invalid: {error}")
+        if not isinstance(decision, dict) or decision.get("app_id") != app_id:
+            refuse("policy_render_failed", "policy JSON app identity differs")
+        fragment = run("systemd-dropin").splitlines()
+        if not fragment or fragment[0] != "[Service]":
+            refuse("policy_render_failed", "policy service fragment lacks [Service]")
+        return decision, fragment[1:]
+
+
 def render(
     descriptor: dict[str, object],
     inventory: dict[str, object],
     app_root_store: Path,
     platform_runtime_store: Path,
+    *,
+    manifest_path: Path,
+    platform_contract: Path,
+    policy_renderer: Path,
 ) -> str | None:
     app = descriptor.get("app")
     runtime = descriptor.get("runtime")
@@ -577,70 +584,13 @@ def render(
         distribution=distribution,
     )
 
-    requirements = capability_requirements(app.get("use", []))
-    capabilities = set(requirements)
-
-    resources = inventory["resources"]
-    assert isinstance(resources, dict)
-    ro_paths: set[str] = set()
-    rw_paths: set[str] = set()
-    devices: dict[str, str] = {}
-
-    def add_devices(resource: str, mode: str, *, optional: bool = False) -> None:
-        for path in resource_paths(resources, resource, optional=optional):
-            if devices.get(path) == "rw" or mode == "rw":
-                devices[path] = "rw"
-                ro_paths.discard(path)
-                rw_paths.add(path)
-            else:
-                devices[path] = "r"
-                ro_paths.add(path)
-
-    def add_sockets(resource: str, *, optional: bool = False) -> None:
-        rw_paths.update(resource_paths(resources, resource, optional=optional))
-
-    takes_display = launch.get("takes_display", False)
-    if not isinstance(takes_display, bool):
-        refuse("descriptor_invalid", "launch.takes_display must be boolean")
-    if takes_display:
-        add_sockets("display-sockets")
-        ro_paths.update(resource_paths(resources, "session-environment"))
-        add_devices("render-devices", "rw")
-
-    wants_audio = launch.get("audio", False)
-    if not isinstance(wants_audio, bool):
-        refuse("descriptor_invalid", "launch.audio must be boolean")
-    if wants_audio or "audio" in capabilities:
-        optional = not wants_audio and requirements.get("audio", False)
-        add_sockets("audio-sockets", optional=optional)
-        ro_paths.update(resource_paths(resources, "session-environment", optional=optional))
-        add_devices("audio-devices", "rw", optional=optional)
-
-    if "input" in capabilities:
-        add_devices("input-devices", "r", optional=requirements["input"])
-    if "rumble" in capabilities or "vibration" in capabilities:
-        names = set(requirements) & {"rumble", "vibration"}
-        add_devices(
-            "input-devices", "rw", optional=all(requirements[name] for name in names)
-        )
-    if "video-decode" in capabilities:
-        optional = requirements["video-decode"]
-        add_devices("video-decode-devices", "rw", optional=optional)
-        add_devices("media-devices", "rw", optional=optional)
-    brokered = {
-        "accelerometer",
-        "gnss",
-        "gyroscope",
-        "imu",
-        "leds",
-        "location",
-        "magnetometer",
-    }
-    if set(capabilities) & brokered:
-        names = set(requirements) & brokered
-        add_sockets(
-            "broker-sockets", optional=all(requirements[name] for name in names)
-        )
+    policy, policy_lines = compile_policy(
+        renderer=policy_renderer,
+        manifest=manifest_path,
+        platform_contract=platform_contract,
+        inventory=inventory,
+        app_id=app_id,
+    )
 
     platform_dir = platform.replace("/", "-")
     platform_root = (
@@ -678,6 +628,7 @@ def render(
         f"BindReadOnlyPaths={platform_root}:/run/pocketforge/platform-runtime",
         "BindReadOnlyPaths=/usr/bin/pf-app-launch",
         "BindReadOnlyPaths=/usr/share/pocketforge/platform-capabilities.toml",
+        f"BindReadOnlyPaths=/usr/share/pocketforge/app-policy/{app_id}.resources.json",
         f"BindReadOnlyPaths={app_root}/app.toml",
         f'Environment="LD_LIBRARY_PATH={":".join(ld_paths)}"',
     ]
@@ -690,25 +641,8 @@ def render(
                 'Environment="GBM_BACKENDS_PATH=/run/pocketforge/platform-runtime/usr/local/lib/gbm"',
             ]
         )
-    needs_network = launch.get("needs_network", False)
-    if not isinstance(needs_network, bool):
-        refuse("descriptor_invalid", "launch.needs_network must be boolean")
-    if needs_network:
-        lines.append("# declaration needs_network: host network namespace retained")
-    else:
-        lines.append("PrivateNetwork=yes")
-    for capability in sorted(capabilities):
-        lines.append(f"# capability {capability}: {CAPABILITY_OUTCOMES[capability]}")
-    if takes_display:
-        lines.append("# declaration takes_display: display sockets and render node")
-    if wants_audio:
-        lines.append("# declaration audio: audio socket and minimum ALSA nodes")
-    for path in sorted(ro_paths):
-        lines.append(f"BindReadOnlyPaths={path}")
-    for path in sorted(rw_paths):
-        lines.append(f"BindPaths={path}")
-    for path in sorted(devices):
-        lines.append(f"DeviceAllow={path} {devices[path]}")
+    lines.append(f"# policy schema={policy.get('schema_version')} manifest_sha256={policy.get('manifest_sha256')}")
+    lines.extend(policy_lines)
     return "\n".join(lines) + "\n"
 
 
@@ -740,6 +674,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--inventory", required=True, type=Path)
+    parser.add_argument("--platform-contract", required=True, type=Path)
+    parser.add_argument("--policy-renderer", required=True, type=Path)
+    parser.add_argument("--policy-output", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
         "--app-root-store",
@@ -759,6 +696,7 @@ def main() -> int:
         if isinstance(runtime, dict) and runtime.get("root") is None:
             try:
                 remove_output(args.output)
+                remove_output(args.policy_output)
             except OSError as error:
                 refuse("sandbox_render_failed", str(error))
             print("runtime_root=absent action=unchanged")
@@ -769,17 +707,38 @@ def main() -> int:
             inventory,
             args.app_root_store,
             args.platform_runtime_store,
+            manifest_path=args.manifest,
+            platform_contract=args.platform_contract,
+            policy_renderer=args.policy_renderer,
         )
         assert value is not None
         try:
+            resources = json.dumps(
+                {
+                    "platform_runtime": "/run/pocketforge/platform-runtime",
+                    "resources": inventory["resources"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ) + "\n"
+            write_atomic(args.policy_output, resources)
             write_atomic(args.output, value)
         except OSError as error:
+            try:
+                remove_output(args.policy_output)
+                if not args.output.is_dir():
+                    remove_output(args.output)
+            except OSError as cleanup_error:
+                error = cleanup_error
             refuse("sandbox_render_failed", str(error))
-        print(f"runtime_root=present output={args.output}")
+        print(
+            f"runtime_root=present output={args.output} policy={args.policy_output}"
+        )
         return 0
     except Refusal as error:
         try:
             remove_output(args.output)
+            remove_output(args.policy_output)
         except OSError as cleanup_error:
             error = Refusal("sandbox_render_failed", str(cleanup_error))
         print(f"refused reason={error.reason} detail={error.detail}", file=sys.stderr)

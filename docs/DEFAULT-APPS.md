@@ -355,12 +355,12 @@ ConditionPathExists=/dev/fb0
 Type=simple
 User=gamer
 Group=gamer
-SupplementaryGroups=audio input video
+SupplementaryGroups=
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
-Environment=PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml
+Environment=PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
@@ -376,6 +376,17 @@ ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
 InaccessiblePaths=-/dev/uinput
 InaccessiblePaths=/run/pocketforge/prefsd.sock
+# No session bus (bd: tsp-ihne1.5). Wayland apps get text only through
+# gamescope's text-input protocol. The address defeats libdbus/GDBus autolaunch
+# and the $XDG_RUNTIME_DIR/bus lookup. The private input-method bus is
+# invisible, and every X11 input-method door is hidden under an empty tmpfs; an
+# X11 app's door drop-in (/usr/share/pocketforge/ime/pf-app-door.conf) binds
+# back only its own. Input processes run as pf-ime, so an app can neither trace
+# them nor read their memory or environment.
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/pf-no-session-bus
+InaccessiblePaths=-/run/pf-ime
+TemporaryFileSystem=/run/pf-ime-door:ro
+ProtectProc=invisible
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
@@ -384,9 +395,19 @@ MemoryMax=256M
 Nice=-5
 ```
 
-The app template deliberately omits the dedicated `pf-pref-writer` supplementary group. Only
-`pf-shell-selected.service` and `pf-foreground@.service` receive that group, while generated
-runtime-root drop-ins reset `SupplementaryGroups=` entirely. The `pf-input-broker.service`
+The image installs `pf-app@.service.d/30-cursor-theme.conf` alongside this security-pinned
+template. Its two `Environment=` directives set `XCURSOR_THEME=pocketforge-light` and
+`XCURSOR_SIZE=48`, so systemd supplies the defaults directly to every app unit without relying on
+PAM interpretation of `/etc/environment`.
+
+The app template deliberately carries no supplementary group. Only
+`pf-shell-selected.service` and `pf-foreground@.service` receive the dedicated
+`pf-pref-writer` group. Generated runtime-root service fragments first reset
+`SupplementaryGroups=`, then compiler-generated app policy directives populate the exact
+capability-derived groups for each app. Image-shipped Poolsuite appends those directives to a
+complete `pf-app@org.pocketforge.poolsuite.service` exact-instance unit; it does not put security
+policy in a drop-in. Every installed `pf-app@*.service.d` file is therefore environment-only. The
+`pf-input-broker.service`
 dependency, the two `PF_*` variables, and the session-authority
 `InaccessiblePaths=` entry are the `tsp-f3fm.202.1` amendment. The fail-closed prefsd entry keeps
 preference state behind the broker's read-only API; `BindsTo=pf-prefsd.service` also tears down the
@@ -586,7 +607,10 @@ both, and one platform lock PR moves image/runtime/launcher together.
 The design adds **no new staged repository input and no new BuildKit context**. *Amended by
 ruling R1 of `tsp-f3fm.202.1`: exactly one new staged input, the platform device descriptor
 `devices/a133/capabilities.toml` in the A133-open-only `platform-inputs-src` context; see
-[R1: the one staged device descriptor](#r1-the-one-staged-device-descriptor).* The existing
+[R1: the one staged device descriptor](#r1-the-one-staged-device-descriptor). Amended again by
+platform#341 (`tsp-mc9m.41.1026.4`): the same descriptor bytes are additionally staged
+device-neutrally at `device/capabilities.toml` inside that same context — still no new
+context.* The existing
 contexts remain image, kernel, GPU, SDL, WPA, runtime, blobs, vendor manifest, bootchain,
 Poolsuite, and profile-gated sim/hwprobe/open-GPU/launcher/recovery contexts.
 [platform@`c75b33042eb663b6600ec16c91c77c0afaa4ce0a`
@@ -646,7 +670,7 @@ vendor/default release and every A523 profile.
 | launcher change | installed on open profiles | remains absent and no launcher source is staged | remains absent; byte-identical | remains absent and no launcher source is staged; byte-identical |
 | Poolsuite payload | dev only; release absent | **migration: payload removed; `NOT-SHIPPED` stub selected** | absent; byte-identical | absent; byte-identical |
 | dedicated Poolsuite service | removed from the open dev path it formerly served | **migration: service removed** | absent; byte-identical | absent; byte-identical |
-| `pf-input-broker` + unit + app-session drop-in, shell ordering drop-in, `libpocketforge.so.1`, `devices/a133/capabilities.toml` (`tsp-f3fm.202.1`) | installed; broker never enabled | absent | absent; byte-identical | absent; byte-identical |
+| `pf-input-broker` + unit + app-session drop-in, shell ordering drop-in, `libpocketforge.so.1`, `devices/a133/capabilities.toml` (`tsp-f3fm.202.1`) plus its byte-identical device-neutral copy `device/capabilities.toml` (`tsp-mc9m.41.1026.4`) | installed; broker never enabled | absent | absent; byte-identical | absent; byte-identical |
 
 The current image explicitly gates session authority and launcher on `PF_GPU_MODEL=open`, and
 platform emits launcher identity only for open profiles. [image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
@@ -733,7 +757,9 @@ Sources read for this amendment:
 
 The original design ruled "no new staged repository input and no new BuildKit context". That
 line is amended to allow exactly **one** staged input: the platform-owned device descriptor
-`devices/a133/capabilities.toml`.
+`devices/a133/capabilities.toml`. Since platform#341 (`tsp-mc9m.41.1026.4`) the platform
+stages the same bytes a second time, device-neutrally, at `device/capabilities.toml`; runtime
+consumers reference only that neutral copy.
 
 Why:
 
@@ -749,7 +775,9 @@ Why:
 How it is staged and checked:
 
 - Platform emits `PF_DEVICE_DESCRIPTOR_ID=a133` and `PF_DEVICE_DESCRIPTOR_SHA256`, and stages
-  the verbatim bytes into the `platform-inputs-src` context, **only** for the A133-open
+  the verbatim bytes into the `platform-inputs-src` context — the per-SoC
+  `devices/a133/capabilities.toml` plus, since platform#341, the byte-identical device-neutral
+  `device/capabilities.toml` — **only** for the A133-open
   app-runtime profiles (platform#217). Every other profile's build arguments and contexts
   stay byte-identical.
 - The image's `platform-inputs-open` stage is the only one that names that context. The
@@ -759,13 +787,18 @@ How it is staged and checked:
   - an open build with no ID;
   - an ID other than `a133`;
   - a malformed or mismatched SHA-256;
-  - a symlinked or missing file;
+  - a symlinked or missing file — either copy;
+  - a missing or byte-divergent device-neutral `device/capabilities.toml` (named FATAL; no
+    fallback to the per-SoC path);
   - any extra staged entry.
 - `build/pf-descriptor-validate.rs` is a build-only example compiled from the pinned runtime,
   like `pf-app-validate`. It parses the file with `pocketforge::Descriptor::load` and with the
   broker's own `Remap::from_descriptor` and `ExpectedIdentity`, and requires `BTN_MODE`.
-- `install-default-app-support.sh` installs it at
-  `/usr/share/pocketforge/devices/a133/capabilities.toml` (0644).
+- `install-default-app-support.sh` installs both copies: the per-SoC
+  `/usr/share/pocketforge/devices/a133/capabilities.toml` and the device-neutral
+  `/usr/share/pocketforge/device/capabilities.toml` (both 0644, root:root in the rootfs). It
+  refuses a staged neutral copy that diverges from the per-SoC bytes. Runtime consumers
+  (`PF_DESCRIPTOR`, the broker's `--descriptor`) reference only the neutral path.
 
 ### Input delivery
 
@@ -783,7 +816,8 @@ While a default app owns the panel, `pf-input-broker` EVIOCGRABs it instead:
 
 **What the app gets:**
 
-- `PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml`.
+- `PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml` (the device-neutral copy;
+  `tsp-mc9m.41.1026.4`).
 - `PF_BROKER_SOCK=/run/pocketforge/input-broker.sock`. The socket is `root:gamer 0770`
   (broker `Group=gamer`, `UMask=0007`); the app runs as `gamer`.
 - `libpocketforge.so.1` at `/usr/lib/aarch64-linux-gnu/`, the gnu-target cdylib that Poolsuite's
@@ -943,7 +977,7 @@ UMask=0007
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
 Restart=no
 ExecStart=
-ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/devices/a133/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/system-menu.sock
+ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/device/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/system-menu.sock
 ```
 
 `ConditionPathExists=` followed by `AssertPathExists=/dev/uinput` is a B4 addition to the
@@ -1022,8 +1056,9 @@ After=pf-input-broker.service
   fixed and non-rebindable; customization of unrelated bindings remains allowed.
 - Peer authentication (`SO_PEERCRED`) on the authority socket. Protection is path-based
   (`InaccessiblePaths=`) and has the authority-restart limitation above.
-- Taking direct input access away from apps. `pf-app@` keeps `SupplementaryGroups=input`. The
-  broker's grab makes the pad exclusive, but the broker is not an input security boundary.
+- Replacing today's manifest-scoped raw input grant with mediated input. The one capability
+  compiler currently maps `input` to the `input` group and selected device paths; the input
+  mediation follow-up changes that mapping in place rather than adding another policy list.
 - Distinguishing `ForcedClose` from `Returned` for a SIGKILLed app (R3); that would change a
   launcher-vendored crate.
 - Any of this on A133 vendor/default or A523. The broker, library and descriptor are

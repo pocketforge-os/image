@@ -1,0 +1,6 @@
+[Unit]
+Description=PocketForge Gamescope session (explicit opt-in)
+Requires=pocketforge-gamescope.service pocketforge-session-publisher.service
+After=pocketforge-session-publisher.service
+Conflicts=pf-shell-selected.service pocketforge-foreground.target
+StopWhenUnneeded=yes

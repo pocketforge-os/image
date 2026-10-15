@@ -1,6 +1,6 @@
 # PocketForge G0 session display architecture
 
-Status: **design only; implementation blocked**
+Status: **opt-in supervisor implemented; default selection and device admission blocked**
 
 Evidence date: 2026-10-03
 
@@ -124,7 +124,11 @@ protocol do not.
 
 The existing per-device source is
 `platform/devices/<id>/capabilities.toml`, staged verbatim at
-`/usr/share/pocketforge/devices/<id>/capabilities.toml`. Extend each
+`/usr/share/pocketforge/devices/<id>/capabilities.toml`. Since platform#341
+(`tsp-mc9m.41.1026.4`) the building device's bytes are also installed
+device-neutrally at `/usr/share/pocketforge/device/capabilities.toml`, and that
+neutral path is what runtime consumers (`PF_DESCRIPTOR`, the broker's
+`--descriptor`) load. Extend each
 `[[screens]]` row and its schema with these exact fields:
 
 ```toml
@@ -149,34 +153,53 @@ The A133 descriptor remains an expectation until G1 replaces
 
 ## Compositor-agnostic session ABI
 
-The system supervisor owns `/run/pocketforge/session` (`root:pf-session`, mode
-0750) and the generation counter. The selected display owner creates exactly:
+### Opt-in image producer
+
+`PF_GAMESCOPE_MODE=g1` images install the disabled
+`pocketforge-gamescope-session.target` graph. Starting that target runs the
+pinned Gamescope as the display owner and atomically publishes an immutable
+generation at `/run/pocketforge/session`; this installation does not enable or
+select the target. `Restart=no` and a boot-long one-start limit prevent a
+second Gamescope session after exit, while
+`pocketforge-gamescope-fallback.service` restores `pf-shell-selected.service`
+once. The default-session decision remains outside this graph.
+
+Xwayland is capability-scoped. The shared `environment` contains Wayland data
+only. `capabilities/x11` carries `DISPLAY` and the filesystem X socket for a
+compiled `x11` policy projection into an application's private `/tmp`; an app
+without that grant gets neither. Publication refuses an observable abstract X
+listener. The production app vocabulary does not grant `x11` yet, so this
+projection remains fail-closed until the `.440.11` security/policy co-land.
+Gamescope runs without the broad `input` group: udev grants its
+dedicated compositor-input group only keyboard, mouse, touchscreen, and the
+input router's virtual mouse. The broker retains the built-in controller and
+delivers per-app virtual pads.
+
+The system supervisor owns the private generation store
+(`/run/pocketforge/.session-generations`, `root:pf-session`, mode 0750) and the
+generation counter. The public `session` symlink selects a complete 0755
+generation. The selected display owner creates exactly:
 
 - Wayland socket `/run/pocketforge/session/wayland-0`, mode 0660;
 - environment record `/run/pocketforge/session/environment`; and
-- optional `/run/pocketforge/session/Xauthority`, mode 0640, only for an
-  X11-authorized app.
+- optional `/run/pocketforge/session/capabilities/x11`, only for an
+  X11-authorized app projection.
 
 The environment record is data, never shell-evaluated, and contains a strict
 allow-list:
 
 ```text
-PF_SESSION_ABI=1
-PF_SESSION_GENERATION=<unsigned decimal>
-PF_SESSION_COMPOSITOR=gamescope|plane-owner|weston-fallback
-XDG_RUNTIME_DIR=/run/pocketforge/session
+POCKETFORGE_SESSION=/run/pocketforge/session
+POCKETFORGE_SESSION_GENERATION=<unsigned decimal>
 WAYLAND_DISPLAY=wayland-0
 ```
 
-`DISPLAY` and `XAUTHORITY` appear only for an opt-in Xwayland app. The
-supervisor waits for a connectable socket and required Wayland globals, writes
-an environment temporary file, fsyncs it, and renames it into place. It refuses
-an existing socket unless recorded PID, start time, generation, and inode prove
-that its own previous producer is dead; it never unlinks an unknown path. On a
-compositor restart it removes only the matched dead socket, increments the
-generation exactly once, and republishes the same canonical path. Existing
-clients are stopped and relaunched by the authority; they never silently cross
-generations.
+`DISPLAY` appears only in the `x11` capability-local environment fragment. The
+supervisor waits with a bounded deadline for a connectable Wayland socket and a
+filesystem X socket, rejects the abstract X listener, writes and fsyncs the
+complete generation, then atomically replaces the public symlink. Cleanup
+unlinks only a numeric generation below its private store and refuses a foreign
+target. Existing clients never silently cross generations.
 
 There remains one `pf-session-authority`, one
 `pf-app@<id>.service` -> `/usr/bin/pf-app-launch %i` path, and one `app.toml`

@@ -1,0 +1,38 @@
+FROM debian:bookworm-20260623-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
+
+ARG APT_SNAPSHOT_DATE=20260601T000000Z
+ARG PF_IME_UID
+ARG PF_IME_GID
+
+RUN case "${PF_IME_UID}:${PF_IME_GID}" in \
+        *[!0-9:]*|*::*|:*|*:) echo 'PF_IME_UID and PF_IME_GID must be numeric' >&2; exit 1 ;; \
+    esac \
+    && printf 'pf-ime:x:%s:\n' "${PF_IME_GID}" >> /etc/group \
+    && printf 'pf-ime:x:%s:%s:PocketForge input method:/nonexistent:/usr/sbin/nologin\n' \
+        "${PF_IME_UID}" "${PF_IME_GID}" >> /etc/passwd \
+    && awk -F: '$1 == "nobody" && $3 == "65534" { found=1 } END { exit !found }' /etc/passwd \
+    && find /etc/apt/sources.list.d -mindepth 1 -delete \
+    && printf '%s\n' \
+        "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${APT_SNAPSHOT_DATE}/ bookworm main" \
+        "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${APT_SNAPSHOT_DATE}/ bookworm-updates main" \
+        "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${APT_SNAPSHOT_DATE}/ bookworm-backports main" \
+        "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${APT_SNAPSHOT_DATE}/ bookworm-security main" \
+        > /etc/apt/sources.list \
+    && printf '%s\n' \
+        'Acquire::Check-Valid-Until "false";' \
+        'Acquire::Retries "5";' \
+        > /etc/apt/apt.conf.d/99-pocketforge-snapshot \
+    && apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        dbus-bin \
+        dbus-daemon \
+        python3 \
+        python3-dbus \
+        python3-gi \
+        xdg-dbus-proxy \
+    && apt-get clean \
+    && find /var/lib/apt/lists -mindepth 1 -delete \
+    && command -v dbus-daemon \
+    && command -v dbus-send \
+    && command -v xdg-dbus-proxy \
+    && python3 -c 'import dbus, gi'

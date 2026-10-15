@@ -15,18 +15,20 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# Runtime#109 source-owns the preference authority contract that launcher#155 vendors.
-# The guard therefore admits only the exact compatible merged pair and rejects
-# both the preceding pair and either crossed generation.
-expected_runtime=4b71a503909090219c3a01c1718e9e772e0d488b
-expected_launcher=d46dbb48e610e10cc4d01562fedcdf7cdfae0f7d
-prior_runtime=de890215bd97eb0b5b63287a51e8b9a2e18d1125
-prior_launcher=95302865bc584ce5e1c96e09df387aa5f58455f6
+# The paired runtime adds the one app capability-policy compiler; the paired
+# launcher vendors that exact generation. The image guard rejects any crossed
+# or preceding source generation.
+expected_runtime=679eb323a7eddb27b6af3273fa77ce63c33c42cd
+expected_launcher=77c0f054558b1dac8ff2d2795576577963f60760
+prior_runtime=4b71a503909090219c3a01c1718e9e772e0d488b
+prior_launcher=d46dbb48e610e10cc4d01562fedcdf7cdfae0f7d
+older_runtime=de890215bd97eb0b5b63287a51e8b9a2e18d1125
+older_launcher=95302865bc584ce5e1c96e09df387aa5f58455f6
 old_launcher=73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5
 pre149_launcher=ca22de0ed3cec46c73f2de44aa6e570e109695d8
 pre148_launcher=d26dfa1162e601100c3a18956b5ce4a2ddc7427f
 pre147_launcher=7a2b792d0813fc8fb5c2915bdc00ef976b0cc986
-older_runtime=5738f3d5e108b52186b129a5db1c62a878278b19
+oldest_runtime=5738f3d5e108b52186b129a5db1c62a878278b19
 pre146_launcher=96feb08c110b090f85d822c9f69e52b407103ad5
 pre145_launcher=1e5a3d971ec7e8d425deea4bf0d8cbed39ba0c77
 older_launcher=bb8c9bc8c9ea15238d08cfee5376049bf67cf855
@@ -39,21 +41,26 @@ test "$launcher_guard" = "$expected_launcher"
 new_guard_accepts() {
     test "$1" = "$runtime_guard" && test "$2" = "$launcher_guard"
 }
+reject_guard_pair() {
+    if new_guard_accepts "$1" "$2"; then
+        echo "FAIL: stale/crossed guard pair was accepted: runtime=$1 launcher=$2" >&2
+        exit 1
+    fi
+}
 # The production guards accept exactly the compatible target pair. Keeping both
 # preceding identities together is still invalid because their source trees
 # drift at pf-session-authority; crossing either generation is invalid too.
 new_guard_accepts "$expected_runtime" "$expected_launcher"
-! new_guard_accepts "$prior_runtime" "$prior_launcher"
-! new_guard_accepts "$expected_runtime" "$old_launcher"
-! new_guard_accepts "$expected_runtime" "$prior_launcher"
-! new_guard_accepts "$prior_runtime" "$expected_launcher"
-! new_guard_accepts "$older_runtime" "$expected_launcher"
-! new_guard_accepts "$expected_runtime" "$pre149_launcher"
-! new_guard_accepts "$expected_runtime" "$pre148_launcher"
-! new_guard_accepts "$expected_runtime" "$pre147_launcher"
-! new_guard_accepts "$expected_runtime" "$pre146_launcher"
-! new_guard_accepts "$expected_runtime" "$pre145_launcher"
-! new_guard_accepts "$expected_runtime" "$older_launcher"
+reject_guard_pair "$prior_runtime" "$prior_launcher"
+reject_guard_pair "$expected_runtime" "$old_launcher"
+reject_guard_pair "$expected_runtime" "$older_launcher"
+reject_guard_pair "$older_runtime" "$expected_launcher"
+reject_guard_pair "$oldest_runtime" "$expected_launcher"
+reject_guard_pair "$expected_runtime" "$pre149_launcher"
+reject_guard_pair "$expected_runtime" "$pre148_launcher"
+reject_guard_pair "$expected_runtime" "$pre147_launcher"
+reject_guard_pair "$expected_runtime" "$pre146_launcher"
+reject_guard_pair "$expected_runtime" "$pre145_launcher"
 
 grep -F -- '--no-default-features -p pf-shell' "$dockerfile" >/dev/null
 if grep -E 'cargo build .*--features[ =][^#]*(desktop-sim)' "$dockerfile"; then

@@ -1,1 +1,3 @@
 PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
+XCURSOR_THEME=pocketforge-light
+XCURSOR_SIZE=48

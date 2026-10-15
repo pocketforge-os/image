@@ -102,6 +102,18 @@ rootfs_icd_hash=$(sha256sum "$rootfs_icd" | awk '{ print $1 }')
     || fatal "gpu-um-tsp artifact hash mismatch: ${canonical_icd} producer=${producer_icd_hash} rootfs=${rootfs_icd_hash}"
 echo "open-gpu-stack artifact=PASS path=/${canonical_icd} sha256=${rootfs_icd_hash}"
 
+# The virtual GPU branch's Venus manifest is packaged and hash-pinned exactly
+# like the PowerVR one (tsp-mc9m.41.984.54.18).
+canonical_venus_icd=usr/share/vulkan/icd.d/virtio_icd.aarch64.json
+producer_venus_icd="${producer}/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.json"
+rootfs_venus_icd="${rootfs}/${canonical_venus_icd}"
+[ -e "$rootfs_venus_icd" ] || fatal "canonical Venus ICD manifest is missing: /${canonical_venus_icd}"
+producer_venus_icd_hash=$(sha256sum "$producer_venus_icd" | awk '{ print $1 }')
+rootfs_venus_icd_hash=$(sha256sum "$rootfs_venus_icd" | awk '{ print $1 }')
+[ "$producer_venus_icd_hash" = "$rootfs_venus_icd_hash" ] \
+    || fatal "gpu-um-tsp artifact hash mismatch: ${canonical_venus_icd} producer=${producer_venus_icd_hash} rootfs=${rootfs_venus_icd_hash}"
+echo "open-gpu-stack artifact=PASS path=/${canonical_venus_icd} sha256=${rootfs_venus_icd_hash}"
+
 vulkan_icd_boundaries=$($artifact_policy --print-vulkan-icd-boundaries)
 mesa_dri_boundaries="$($artifact_policy --print-mesa-dri-boundaries)
 usr/local/lib/dri"
@@ -136,11 +148,15 @@ for boundary in $vulkan_icd_boundaries; do
     case "$boundary" in
         usr/share/vulkan/icd.d)
             allowed=powervr_mesa_icd.aarch64.json
+            allowed_second=virtio_icd.aarch64.json
             ;;
-        *) allowed=__no_owned_manifest_at_this_boundary__ ;;
+        *)
+            allowed=__no_owned_manifest_at_this_boundary__
+            allowed_second=__no_owned_manifest_at_this_boundary__
+            ;;
     esac
     foreign_icd=$(find "$directory" -mindepth 1 -maxdepth 1 \
-        \( -type f -o -type l \) ! -name "$allowed" -print -quit)
+        \( -type f -o -type l \) ! -name "$allowed" ! -name "$allowed_second" -print -quit)
     [ -z "$foreign_icd" ] \
         || fatal "foreign Vulkan ICD manifest: ${foreign_icd#"${rootfs}"}"
 done

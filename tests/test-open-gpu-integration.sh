@@ -127,7 +127,7 @@ for wsi_runtime_package in libxcb-dri3-0 libxcb-present0 libxshmfence1; do
     }
 done
 # shellcheck disable=SC2016 # Dockerfile variable is intentionally literal.
-grep -F 'FROM ${PF_CONTAINER} AS gpu-um-build' "$dockerfile" >/dev/null
+grep -F 'FROM pf-build-base AS gpu-um-build' "$dockerfile" >/dev/null
 grep -F 'gpu_um_toolchain_probe=ok distro=debian-bookworm' "$dockerfile" >/dev/null
 grep -F 'FATAL gpu_um_toolchain_probe=compile-link' "$dockerfile" >/dev/null
 grep -F 'gpu_um_native_runtime=ok distro=noble isolation=bundled' "$dockerfile" >/dev/null
@@ -425,6 +425,37 @@ if verify_open_gpu_runtime_closure "${closure_root}" >/dev/null 2>&1; then
 fi
 if grep -F 'sun4i-drm_dri.so' "${closure_helpers}" >/dev/null; then
     echo 'open runtime closure incorrectly requires stale sun4i-drm_dri.so' >&2
+    exit 1
+fi
+
+# Virtual GPU branch (tsp-mc9m.41.984.54.18): the cross build carries the
+# Venus ICD beside the physical one, the gate keeps a strict virtual path
+# and the probe keeps both virtual modes.
+grep -F -- '-Dvulkan-drivers=imagination,virtio' "$dockerfile" >/dev/null
+grep -F -- '-Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=enabled' "$dockerfile" >/dev/null
+grep -F 'libgbm-dev:arm64' "$dockerfile" >/dev/null
+grep -F -- '-lvulkan -lEGL -lGLESv2 -lgbm' "$dockerfile" >/dev/null
+grep -F 'virtio_icd.aarch64.json' "$root/build/package-open-gpu-stack.sh" >/dev/null
+grep -F 'virtio_icd.aarch64.json' "$root/scripts/verify-open-gpu-tools.sh" >/dev/null
+grep -F 'virtio_gpu' "$gate" >/dev/null
+grep -F 'branch=virtual backend=virtio_gpu+venus' "$gate" >/dev/null
+grep -F 'driver=venus' "$gate" >/dev/null
+grep -F 'label=virtual' "$gate" >/dev/null
+grep -F -- '--venus-readback' "$gate" >/dev/null
+grep -F -- '--gles32-zink-readback' "$gate" >/dev/null
+grep -F '"--venus-readback"' "$probe" >/dev/null
+grep -F '"--gles32-zink-readback"' "$probe" >/dev/null
+grep -F 'VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs' "$probe" >/dev/null
+grep -F 'VIRTGPU_DRM_CAPSET_VENUS' "$probe" >/dev/null
+grep -F 'capset=venus' "$probe" >/dev/null
+grep -F 'VK_DRIVER_FILES' "$probe" >/dev/null
+grep -F 'MESA_LOADER_DRIVER_OVERRIDE' "$probe" >/dev/null
+grep -F 'gles_version=3.2 renderer=%s draw=readback-ok label=virtual' "$probe" >/dev/null
+# The physical receipt stays byte-identical: the gate keeps the pre-virtual
+# PASS line and never mentions GE8300 in the virtual branch.
+grep -Fx 'echo "PF-OPEN-GPU PASS: km=$km firmware_sha256=$actual mesa_renderer=$renderer"' "$gate" >/dev/null
+if sed -n '/^node_driver=$/,/PF-OPEN-GPU PASS: branch=virtual/p' "$gate" | grep -v '^[[:space:]]*#' | grep -F 'GE8300' >/dev/null; then
+    echo 'virtual branch must never claim GE8300 conformance' >&2
     exit 1
 fi
 

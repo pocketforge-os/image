@@ -15,6 +15,7 @@ workflow="${root}/.github/workflows/session-authority-systemd.yml"
 precondition_verifier="${root}/tests/verify-session-authority-systemd-preconditions.py"
 shell_fixture_verifier="${root}/tests/verify-session-authority-shell-fixture.py"
 app_fixture_verifier="${root}/tests/verify-session-authority-app-fixture.py"
+app_dropin_verifier="${root}/tests/verify-session-authority-app-dropins.py"
 tmp="$(mktemp -d /tmp/tsp-f3fm-211-safety.XXXXXX)"
 fake_root="${tmp}/host"
 fake_bin="${fake_root}/.test-bin"
@@ -961,9 +962,26 @@ grep -Fq 'tests/verify-session-authority-shell-fixture.py' "${harness}" || exit 
 grep -Fq 'SHELL_FIXTURE_DRIFT' "${harness}" || exit 1
 grep -Fq 'tests/verify-session-authority-app-fixture.py' "${harness}" || exit 1
 grep -Fq 'APP_FIXTURE_DRIFT' "${harness}" || exit 1
+app_dropin_output="$(python3 "${app_dropin_verifier}")"
+grep -Eq '^session-authority app-dropins: PASS files=[1-9][0-9]*$' \
+    <<<"${app_dropin_output}" || exit 1
+unsafe_dropins="${tmp}/unsafe-dropins"
+mkdir -p "${unsafe_dropins}/pf-app@hostile.service.d"
+printf '%s\n' '[Service]' 'Environment=SAFE=value' 'InaccessiblePaths=/run/authority.sock' \
+    >"${unsafe_dropins}/pf-app@hostile.service.d/90-hostile.conf"
+if python3 "${app_dropin_verifier}" --systemd-root "${unsafe_dropins}" \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: non-environment app drop-in passed' >&2
+    exit 1
+fi
+grep -Fq 'APP_DROPIN_NOT_ENV_ONLY' "${stderr_log}" || exit 1
+grep -Fq 'InaccessiblePaths=' "${stderr_log}" || exit 1
+grep -Fq 'tests/verify-session-authority-app-dropins.py' "${harness}" || exit 1
+grep -Fq 'APP_DROPIN_NOT_ENV_ONLY' "${harness}" || exit 1
 grep -Fq -- '- rootfs-overlay/etc/systemd/system/pf-shell-selected.service' "${workflow}" || exit 1
 grep -Fq -- '- tests/verify-session-authority-shell-fixture.py' "${workflow}" || exit 1
 grep -Fq -- '- tests/verify-session-authority-app-fixture.py' "${workflow}" || exit 1
+grep -Fq -- '- tests/verify-session-authority-app-dropins.py' "${workflow}" || exit 1
 # Every Requires=/BindsTo= edge on the real app template must resolve inside
 # the real-systemd fixture. Positive run, then remove prefsd from a copied
 # recipe to prove that the checker detects the exact regression from #220.

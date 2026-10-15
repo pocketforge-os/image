@@ -114,7 +114,8 @@ for artifact in \
     libGLX_mesa.so.0.0.0 \
     libgbm.so.1.0.0 \
     libgallium_dri.so \
-    libvulkan_powervr_mesa.so; do
+    libvulkan_powervr_mesa.so \
+    libvulkan_virtio.so; do
     printf 'gpu-um-tsp fixture: %s\n' "$artifact" \
         >"$producer/usr/local/lib/$artifact"
 done
@@ -129,6 +130,8 @@ printf '%s\n' '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_mesa
     >"$producer/usr/local/share/glvnd/egl_vendor.d/50_mesa.json"
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
     >"$producer/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_virtio.so"}}' \
+    >"$producer/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.json"
 test -f "$zink_policy"
 if grep -F 'kernel_driver="sun4i-drm"' "$zink_policy" >/dev/null; then
     echo 'FAIL: source Zink loader policy maps sun4i-drm' >&2
@@ -149,7 +152,7 @@ cat >"$producer/.pf-gpu-um-build-options.json" <<'EOF'
   {"name":"gbm","value":"enabled"},
   {"name":"xmlconfig","value":"enabled"},
   {"name":"gallium-drivers","value":["zink"]},
-  {"name":"vulkan-drivers","value":["imagination"]}
+  {"name":"vulkan-drivers","value":["imagination","virtio"]}
 ]
 EOF
 printf '%s\n' 'fixture Gamescope PVR cache provenance' \
@@ -226,15 +229,28 @@ SOURCE_DATE_EPOCH=1700000000 "$packager" \
     1234567890abcdef1234567890abcdef12345678 g1 "$scratch/provider-b.deb"
 cmp "$scratch/provider-a.deb" "$scratch/provider-b.deb"
 
-# Keep the g1 package byte-for-byte identical to the implementation immediately
-# before the mode guard. Only the new no-Gamescope profile may omit cache files.
+# Keep the g1 package content-identical to the implementation immediately
+# before the mode guard, except the deliberate canonical Venus ICD route
+# (tsp-mc9m.41.984.54.18.4): the baseline packager predates virtio and keeps
+# the producer's /usr/local virtio manifest, while the current packager
+# relocates it to /usr/share/vulkan/icd.d like the PowerVR manifest. Only the
+# new no-Gamescope profile may omit cache files.
 git show 9c1fc33144ad5fcb120b6d88863c2b101275429c:build/package-open-gpu-stack.sh \
     >"$scratch/baseline-packager.sh"
 chmod 0755 "$scratch/baseline-packager.sh"
 SOURCE_DATE_EPOCH=1700000000 "$scratch/baseline-packager.sh" \
     "$producer" "$scratch/open-gpu-probe" "$control" \
     1234567890abcdef1234567890abcdef12345678 "$scratch/provider-baseline.deb"
-cmp "$scratch/provider-baseline.deb" "$scratch/provider-a.deb"
+dpkg-deb -x "$scratch/provider-baseline.deb" "$scratch/baseline-x"
+dpkg-deb -x "$scratch/provider-a.deb" "$scratch/a-x"
+[ -f "$scratch/a-x/usr/share/vulkan/icd.d/virtio_icd.aarch64.json" ] \
+    || { echo 'FAIL: g1 package lost the canonical Venus ICD manifest' >&2; exit 1; }
+rm -f "$scratch/baseline-x/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.json"
+rm -f "$scratch/a-x/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
+if ! diff -r "$scratch/baseline-x" "$scratch/a-x"; then
+    echo 'FAIL: g1 package content drifted from the pre-mode-guard baseline' >&2
+    exit 1
+fi
 
 absent_producer=$scratch/producer-absent
 cp -a "$producer" "$absent_producer"
@@ -346,7 +362,8 @@ for field in Conflicts Replaces; do
 done
 
 dpkg-deb -x "$scratch/provider-a.deb" "$rootfs"
-if [ -e "$rootfs/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" ]; then
+if [ -e "$rootfs/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" ] || \
+    [ -e "$rootfs/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.json" ]; then
     echo 'FAIL: provider package retains duplicate /usr/local Vulkan ICD manifest' >&2
     exit 1
 fi
@@ -409,7 +426,7 @@ dpkg-deb --fsys-tarfile "$scratch/provider-a.deb" | tar -tf - | \
 positive_output=$("$verifier" "$rootfs" "$producer")
 printf '%s\n' "$positive_output"
 printf '%s\n' "$positive_output" | grep -Fx \
-    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr vulkan_manifests=1 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
+    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr+venus vulkan_manifests=2 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
     >/dev/null
 
 # A stripped DSO has no static symbol table. In that case the verifier must
@@ -531,7 +548,7 @@ mkdir -p "$candidate/usr/local/share/vulkan/icd.d"
 cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
     "$candidate/usr/local/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
 expect_rejection red-duplicate-vulkan-icd "$candidate" \
-    'expected exactly one Vulkan ICD manifest, found 2'
+    'expected exactly two Vulkan ICD manifests, found 3'
 
 # The loader does not care about the manifest filename. A differently named
 # alias to the same library also enumerates the physical device twice.
@@ -540,7 +557,7 @@ cp -a "$rootfs" "$candidate"
 cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
     "$candidate/usr/share/vulkan/icd.d/powervr_alias.json"
 expect_rejection red-duplicate-vulkan-alias "$candidate" \
-    'expected exactly one Vulkan ICD manifest, found 2'
+    'expected exactly two Vulkan ICD manifests, found 3'
 
 candidate="$scratch/red-relative-egl-json"
 cp -a "$rootfs" "$candidate"

@@ -1,0 +1,8 @@
+[Unit]
+Description=Restore the PocketForge fb0 shell after Gamescope exits
+After=pocketforge-gamescope.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl start --no-block pf-shell-selected.service
+RemainAfterExit=yes

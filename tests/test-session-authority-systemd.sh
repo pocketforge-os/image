@@ -10,6 +10,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixtures="${root}/tests/session-authority-systemd"
 app_unit="${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
+app_dropin_verifier="${root}/tests/verify-session-authority-app-dropins.py"
 owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf"
 broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
@@ -19,7 +20,7 @@ run_label_key=org.pocketforge.session-authority-run
 
 runtime_sha=1dd87ecc2952584a7ef1473c5dcb872662b7c0cb
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=a1fe0ad9f359e8c349b6d22dcf69b0e516c0590b6dada1313d9c5c8ae5c7118b
+app_unit_sha256=4ab57976a5f4c00614b277cfaf8c0f65d860844ac160b015fbe5a71d549c6f05
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
 # is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
 # crates/pf-input-broker/systemd/pf-input-broker.service is byte-identical at
@@ -27,7 +28,7 @@ app_unit_sha256=a1fe0ad9f359e8c349b6d22dcf69b0e516c0590b6dada1313d9c5c8ae5c7118b
 # runtime#102 changed broker source and tests but no unit; runtime#103 touched only
 # crates/pf-session-authority; runtime#104 did too), so the broker unit digest is unchanged.
 broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=e1e8c331ac2ccd72601c4c1ac3e6a07a67e6d6a4b0247487f06e720373d238f4
+broker_dropin_sha256=4a85fa5674b199a7dea17253349c828f7925511ccaa4d8bc00a9ab53eb47728c
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
@@ -594,6 +595,9 @@ cleanup_docker_resources=1
 actual_unit_sha256="$(sha256sum "${app_unit}" | awk '{print $1}')"
 [ "${actual_unit_sha256}" = "${app_unit_sha256}" ] \
     || fail "APP_UNIT_DRIFT: expected ${app_unit_sha256}, got ${actual_unit_sha256}"
+app_dropin_check="$(python3 "${app_dropin_verifier}" 2>&1)" \
+    || fail "APP_DROPIN_NOT_ENV_ONLY: ${app_dropin_check}"
+echo "${app_dropin_check}"
 for pinned in "broker_dropin:${broker_dropin}:${broker_dropin_sha256}" \
     "shell_dropin:${shell_dropin}:${shell_dropin_sha256}"; do
     IFS=: read -r pinned_name pinned_path pinned_sha256 <<<"${pinned}"

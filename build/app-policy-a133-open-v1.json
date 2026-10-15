@@ -1,0 +1,21 @@
+{
+  "platform_runtime": "/usr",
+  "resources": {
+    "audio-devices": [
+      "/dev/snd/controlC0",
+      "/dev/snd/pcmC0D0p"
+    ],
+    "display-devices": [
+      "/dev/fb0"
+    ],
+    "broker-sockets": [
+      "/run/pocketforge/input-broker.sock"
+    ],
+    "input-devices": [
+      "/dev/input/event0"
+    ],
+    "render-devices": [
+      "/dev/dri/renderD128"
+    ]
+  }
+}

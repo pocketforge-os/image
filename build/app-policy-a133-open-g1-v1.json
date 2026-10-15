@@ -1,0 +1,22 @@
+{
+  "platform_runtime": "/usr",
+  "resources": {
+    "audio-devices": [
+      "/dev/snd/controlC0",
+      "/dev/snd/pcmC0D0p"
+    ],
+    "audio-sockets": [],
+    "display-sockets": [
+      "/run/pocketforge/session/wayland-0"
+    ],
+    "input-devices": [
+      "/dev/input/event0"
+    ],
+    "render-devices": [
+      "/dev/dri/renderD128"
+    ],
+    "session-environment": [
+      "/run/pocketforge/session/environment"
+    ]
+  }
+}

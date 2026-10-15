@@ -122,7 +122,7 @@ audio = true
 
 `runtime.root` is `Option<RuntimeRoot>` with `#[serde(default)]`; omission
 selects the exact existing resolver, helper, working directory, and host-root
-unit with no generated drop-in. This is the compatibility default and is
+unit with no generated service fragment. This is the compatibility default and is
 covered by a byte-independent “action=unchanged” test. Poolsuite therefore
 continues on the verified host root.
 
@@ -250,7 +250,7 @@ there is no second helper or service. The descriptor and static
 so the existing helper re-resolves the same `app.toml` and directly execs the
 same `[launch].exec`.
 
-The deterministic drop-in contains, at minimum:
+The deterministic service fragment contains, at minimum:
 
 ```ini
 [Service]
@@ -524,7 +524,7 @@ ownership, or A133 performance.
   negative control;
 - positive, missing, and Trixie-shadowed loader traces in one ABI matrix;
 - Debian 13 metadata matching and platform-first loader/discovery paths;
-- deterministic root drop-in rendering and fail-closed hardening directives;
+- deterministic root service-fragment rendering and fail-closed hardening directives;
 - every current canonical capability plus proposed `video-decode` having an
   explicit resource or no-direct-device outcome;
 - input read-only versus vibration/rumble read-write escalation;
@@ -571,7 +571,7 @@ pre-existing namespace case remained explicitly skipped there).
    omitted root serializes/resolves exactly as today.
 3. Image adds the fixed-function renderer, trusted resource inventory,
    content-addressed stores, platform-runtime assembly, four XDG paths, and
-   same-unit drop-in integration. Device/ACL behavior waits for serialized
+   exact-instance unit composition. Device/ACL behavior waits for serialized
    physical-device validation.
 4. Launcher advances its single runtime pin after runtime merges. The launch
    port remains `item_id`; it gains no root/executable choice.

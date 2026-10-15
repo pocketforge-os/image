@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
-RUNTIME_SHA = "4b71a503909090219c3a01c1718e9e772e0d488b"
-LAUNCHER_SHA = "d46dbb48e610e10cc4d01562fedcdf7cdfae0f7d"
+RUNTIME_SHA = "679eb323a7eddb27b6af3273fa77ce63c33c42cd"
+LAUNCHER_SHA = "77c0f054558b1dac8ff2d2795576577963f60760"
 
 
 def text(path: Path) -> str:
@@ -41,7 +41,11 @@ assert 'chroot "$ROOTFS" groupadd --system pf-pref-writer' in rootfs_builder
 assert not re.search(r"usermod[^\n]*pf-pref-writer[^\n]*gamer", rootfs_builder)
 assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
 
-assert text(ROOT / "rootfs-overlay/etc/environment").strip() == f"PF_PREFSD_SOCK={SOCKET}"
+assert text(ROOT / "rootfs-overlay/etc/environment").splitlines() == [
+    f"PF_PREFSD_SOCK={SOCKET}",
+    "XCURSOR_THEME=pocketforge-light",
+    "XCURSOR_SIZE=48",
+]
 
 dockerfile = text(ROOT / "build/Dockerfile.pf")
 runtime_guard = re.findall(
@@ -51,7 +55,7 @@ runtime_guard = re.findall(
     flags=re.MULTILINE,
 )
 assert runtime_guard == [RUNTIME_SHA], (
-    "expected exactly one PF_RUNTIME_SHA drift guard pinned to runtime 4b71a503, "
+    "expected exactly one PF_RUNTIME_SHA drift guard pinned to the paired runtime, "
     f"found: {runtime_guard}"
 )
 assert "2478b37755bc9968a49105fb9223be1f55ca7ddd" not in dockerfile
@@ -63,6 +67,7 @@ assert "7536aa1f5af76f0220b582ee68e29e254251fd76" not in dockerfile
 assert "1dd87ecc2952584a7ef1473c5dcb872662b7c0cb" not in dockerfile
 assert "5738f3d5e108b52186b129a5db1c62a878278b19" not in dockerfile
 assert "de890215bd97eb0b5b63287a51e8b9a2e18d1125" not in dockerfile
+assert "4b71a503909090219c3a01c1718e9e772e0d488b" not in dockerfile
 launcher_guard = re.findall(
     r'^\[ "\$\{PF_LAUNCHER_SHA\}" = "([0-9a-f]{40})" \] '
     r'\|\| \{ echo "FATAL: F13 launcher pin drift: \$\{PF_LAUNCHER_SHA\}"; exit 1; \}$',
@@ -70,7 +75,7 @@ launcher_guard = re.findall(
     flags=re.MULTILINE,
 )
 assert launcher_guard == [LAUNCHER_SHA], (
-    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to launcher d46dbb48, "
+    "expected exactly one PF_LAUNCHER_SHA drift guard pinned to the paired launcher, "
     f"found: {launcher_guard}"
 )
 assert "ab9fb7fde36e633add69b94c36bf1213f7cff5d9" not in dockerfile

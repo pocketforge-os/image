@@ -5,10 +5,16 @@
 # Usage: check-device-descriptor.sh <gpu-model> <platform-inputs-dir> <descriptor-id> <descriptor-sha256>
 #
 # Platform emits PF_DEVICE_DESCRIPTOR_ID / PF_DEVICE_DESCRIPTOR_SHA256 and stages
-# devices/<ID>/capabilities.toml ONLY for the A133-open app-runtime profiles.
+# the descriptor ONLY for the A133-open app-runtime profiles. Since platform#341
+# (tsp-mc9m.41.1026.4) it stages the same bytes TWICE: the per-SoC
+# devices/<ID>/capabilities.toml and the device-neutral device/capabilities.toml
+# that every runtime consumer (PF_DESCRIPTOR, broker --descriptor) installs from.
 #   non-open: the ID, the SHA-256 and the staged tree must all be empty; prints nothing.
-#   open:     the ID must be a133, the SHA-256 well formed, the tree exactly one regular
-#             devices/a133/capabilities.toml whose digest matches; prints its path.
+#   open:     the ID must be a133, the SHA-256 well formed, the tree exactly the two
+#             copies (devices/a133/capabilities.toml + device/capabilities.toml), both
+#             regular files whose digests match the pinned SHA-256; prints the per-SoC
+#             path. A missing, symlinked or divergent device-neutral copy is fatal —
+#             there is NO fallback to the per-SoC path.
 # Any other combination is fatal. Parsing the file (Descriptor::load and the
 # broker's remap) is the caller's next step.
 set -euo pipefail
@@ -39,8 +45,12 @@ fi
 printf '%s\n' "${descriptor_sha256}" | grep -Eqx '[0-9a-f]{64}' || fail "malformed PF_DEVICE_DESCRIPTOR_SHA256"
 descriptor="${inputs%/}/devices/${descriptor_id}/capabilities.toml"
 [ -f "${descriptor}" ] && [ ! -L "${descriptor}" ] || fail "staged descriptor missing or not a regular file: ${descriptor}"
-expected_tree="$(printf '%s\n' ./devices "./devices/${descriptor_id}" "./devices/${descriptor_id}/capabilities.toml")"
+neutral="${inputs%/}/device/capabilities.toml"
+[ -f "${neutral}" ] && [ ! -L "${neutral}" ] || fail "device-neutral descriptor missing or not a regular file: ${neutral} (platform must stage platform-inputs/device/capabilities.toml; no devices/${descriptor_id} fallback)"
+expected_tree="$(printf '%s\n' ./device ./device/capabilities.toml ./devices "./devices/${descriptor_id}" "./devices/${descriptor_id}/capabilities.toml")"
 [ "${staged}" = "${expected_tree}" ] || fail "platform-inputs holds more than the one descriptor: $(tr '\n' ' ' <<<"${staged}")"
 actual_sha256="$(sha256sum "${descriptor}" | cut -d' ' -f1)"
 [ "${actual_sha256}" = "${descriptor_sha256}" ] || fail "descriptor sha256 ${actual_sha256} != PF_DEVICE_DESCRIPTOR_SHA256 ${descriptor_sha256}"
+neutral_sha256="$(sha256sum "${neutral}" | cut -d' ' -f1)"
+[ "${neutral_sha256}" = "${descriptor_sha256}" ] || fail "device-neutral descriptor sha256 ${neutral_sha256} != PF_DEVICE_DESCRIPTOR_SHA256 ${descriptor_sha256}"
 printf '%s\n' "${descriptor}"

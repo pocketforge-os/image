@@ -119,6 +119,7 @@ LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 POOLSUITE_DIR="${POOLSUITE_DIR:-/work/poolsuite}"
 PLATFORM_RUNTIME_DIR="${PLATFORM_RUNTIME_DIR:-/work/platform-runtime}"
+CURSOR_THEME_DIR="${CURSOR_THEME_DIR:-/work/cursor-theme}"
 PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE:-not-shipped}"
 GAMESCOPE_DIR="${GAMESCOPE_DIR:-/work/gamescope-package}"
 PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE:-not-shipped}"
@@ -1294,6 +1295,18 @@ else
     echo "[customize] runtime NOT-SHIPPED for this device (no ${RUNTIME_BIN}) — skipping pf-input-decode install"
 fi
 
+# App-policy runtime paths are audited against one image-owned producer
+# inventory. The optional Gamescope installer replaces this base manifest with
+# its g1 union before the audit runs; the not-shipped profile retains this one.
+# Keep session installation outside the kernel-module transaction above: it is
+# an independent rootfs feature and must not become part of module-only probes.
+if [ "${PF_GPU_MODEL:-ddk}" = open ]; then
+    install -D -m 0644 \
+        /work/src/rootfs-overlay/usr/share/pocketforge/runtime-path-producers.json \
+        "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
+fi
+/work/src/scripts/install-gamescope-session.sh "${PF_GAMESCOPE_MODE}" "${ROOTFS}"
+
 # The generic default-app mechanism is an A133-open-only atomic set. Its helper
 # enforces both directions: all five staged inputs must exist for open, while no
 # helper/platform/authority/shell artifact may reach a non-open profile.
@@ -1303,6 +1316,22 @@ fi
     "${RUNTIME_DIR}" \
     "${LAUNCHER_DIR}" \
     /work/src/rootfs-overlay/etc/systemd/system/pf-app@.service
+
+# Private input-method bus and per-app X11 door (bd tsp-ihne1.5). These files
+# stay dormant until the session/manifest work starts pf-fcitx5, pf-osk or an
+# explicitly opted-in X11 app; no unit is enabled at boot here.
+for ime_file in \
+    usr/lib/sysusers.d/pf-ime.conf \
+    usr/lib/tmpfiles.d/pf-ime.conf \
+    usr/share/pocketforge/ime/bus.conf \
+    usr/share/pocketforge/ime/pf-app-door.conf \
+    etc/systemd/system/pf-ime-bus.service \
+    etc/systemd/system/pf-ime-door@.service \
+    etc/systemd/system/pf-fcitx5.service.d/10-pf-ime-sandbox.conf \
+    etc/systemd/system/pf-osk.service.d/10-pf-ime-sandbox.conf; do
+    install -D -m 0644 "/work/src/rootfs-overlay/${ime_file}" "${ROOTFS}/${ime_file}"
+done
+echo "[customize] dormant private IME bus, X11 door and pf-ime identity installed"
 
 # --- F13 shell owner + independent F07 session authority (tsp-op5a.78) -------
 SHELL_BIN="${LAUNCHER_DIR}/bin/pf-shell"
@@ -1377,6 +1406,12 @@ install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
 ln -sf /etc/systemd/system/pf-kbd-layout-env.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-kbd-layout-env.service"
 echo "[customize] pf-kbd-layout-env installed and enabled (keyboardLayout -> XKB_DEFAULT_*)"
+
+if [ "${PF_GPU_MODEL:-ddk}" = open ]; then
+    /work/src/scripts/check-runtime-path-producers.py \
+        --root "${ROOTFS}" \
+        --producers "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
+fi
 
 if [ "${PF_HAS_DISPLAY}" = 1 ]; then
 # pocketforge-boot-animator (bd tsp-3rd3.4: kernel-handoff fb0 boot animator).
@@ -1839,6 +1874,7 @@ ANIMATOR_SRC_DIR="${SRC_DIR}/apps/pocketforge-boot-animator"
 PF_ANIMATOR_BIN="${WORK}/pocketforge-boot-animator"
 CROSS_CC="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-gcc"
 CROSS_STRIP="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-strip"
+BUILD_ID_LDFLAG="-Wl,--build-id=sha1"
 
 # Build the minimal XR829 vendor attach helper from committed GPL source. It
 # links only libc and is installed only in the a133-open-7x rootfs.
@@ -1846,6 +1882,7 @@ if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then
     PF_BT_ATTACH_BIN="${WORK}/xr829-hciattach"
     "${CROSS_CC}" -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
         -std=gnu11 -static-libgcc \
+        "${BUILD_ID_LDFLAG}" \
         -I"${SRC_DIR}/third_party/xradio-hciattach" \
         -o "${PF_BT_ATTACH_BIN}" \
         "${SRC_DIR}/third_party/xradio-hciattach/main.c" \
@@ -1863,6 +1900,7 @@ echo "  Cross-compiling pocketforge-boot-animator (aarch64)..."
 "${CROSS_CC}" \
     -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -static-libgcc \
+    "${BUILD_ID_LDFLAG}" \
     -I"${ANIMATOR_SRC_DIR}/src" \
     -o "${PF_ANIMATOR_BIN}" \
     "${ANIMATOR_SRC_DIR}/src/main.c" \
@@ -1900,6 +1938,7 @@ echo "  Cross-compiling pocketforge-placeholder (aarch64)..."
 "${CROSS_CC}" \
     -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -static-libgcc \
+    "${BUILD_ID_LDFLAG}" \
     -I"${PLACEHOLDER_SRC_DIR}/src" \
     -o "${PF_PLACEHOLDER_BIN}" \
     "${PLACEHOLDER_SRC_DIR}/src/main.c"
@@ -1921,6 +1960,7 @@ echo "  Cross-compiling pocketforge-menu (aarch64)..."
 "${CROSS_CC}" \
     -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -static-libgcc \
+    "${BUILD_ID_LDFLAG}" \
     -I"${MENU_SRC_DIR}/src" \
     -o "${PF_MENU_BIN}" \
     "${MENU_SRC_DIR}/src/main.c"
@@ -2001,6 +2041,9 @@ tar -xf "${ROOTFS_TAR}" -C "${ROOTFS_EXTRACTED}"
     "${PLATFORM_RUNTIME_DIR}" "${ROOTFS_EXTRACTED}" \
     "${PF_STEAMLINK_FFMPEG59_MODE}"
 
+"${SRC_DIR}/scripts/install-cursor-theme.sh" \
+    "${CURSOR_THEME_DIR}" "${ROOTFS_EXTRACTED}"
+
 "${SRC_DIR}/scripts/install-cts-bundle.sh" \
     "${CTS_BUNDLE_DIR}" "${ROOTFS_EXTRACTED}" \
     "${PF_CTS_BUNDLE_MODE}" "${PF_CTS_BUNDLE_SHA256}"
@@ -2035,6 +2078,11 @@ python3 "${SRC_DIR}/scripts/verify-rootfs-usbnet-bench.py" \
 # Fail the build before ext4 assembly if DHCP DNS cannot reach libc. This is a
 # structural image check; lease population itself is verified on tsp-f956's boot.
 "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${ROOTFS_EXTRACTED}"
+
+# fontconfig writes this cache diagnostic while packages are configured. It is
+# build-host/run evidence, not device runtime state. Remove the known producer,
+# then fail closed if any other non-empty build log remains.
+"${SRC_DIR}/build/prepare-rootfs-build-logs.sh" "${ROOTFS_EXTRACTED}"
 
 # Browser platform defaults (bd tsp-be9lx): chassis, DNS-over-TLS, coredump
 # size cap, default browser files, and — on the open-GPU profile that ships

@@ -27,12 +27,12 @@ ConditionPathExists=/dev/fb0
 Type=simple
 User=gamer
 Group=gamer
-SupplementaryGroups=audio input video
+SupplementaryGroups=
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
-Environment=PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml
+Environment=PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
@@ -48,6 +48,17 @@ ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
 InaccessiblePaths=-/dev/uinput
 InaccessiblePaths=/run/pocketforge/prefsd.sock
+# No session bus (bd: tsp-ihne1.5). Wayland apps get text only through
+# gamescope's text-input protocol. The address defeats libdbus/GDBus autolaunch
+# and the $XDG_RUNTIME_DIR/bus lookup. The private input-method bus is
+# invisible, and every X11 input-method door is hidden under an empty tmpfs; an
+# X11 app's door drop-in (/usr/share/pocketforge/ime/pf-app-door.conf) binds
+# back only its own. Input processes run as pf-ime, so an app can neither trace
+# them nor read their memory or environment.
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/pf-no-session-bus
+InaccessiblePaths=-/run/pf-ime
+TemporaryFileSystem=/run/pf-ime-door:ro
+ProtectProc=invisible
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
@@ -82,13 +93,16 @@ aarch64_fixture() {
     dd if=/dev/zero of="$1" bs=64 count=1 status=none
     printf '\267\000' | dd of="$1" bs=1 seek=18 conv=notrunc status=none
 }
-mkdir -p "${runtime}/systemd" "${runtime}/lib" "${runtime}/share/devices/a133"
+mkdir -p "${runtime}/systemd" "${runtime}/lib" "${runtime}/share/devices/a133" \
+    "${runtime}/share/device"
 aarch64_fixture "${runtime}/bin/pf-input-broker"
 chmod 0755 "${runtime}/bin/pf-input-broker"
 aarch64_fixture "${runtime}/lib/libpocketforge.so.1"
 printf '%s\n' '[Unit]' 'Description=runtime broker unit fixture' '[Install]' \
     'WantedBy=multi-user.target' > "${runtime}/systemd/pf-input-broker.service"
 printf '[identity]\nid = "a133"\n' > "${runtime}/share/devices/a133/capabilities.toml"
+cp "${runtime}/share/devices/a133/capabilities.toml" \
+    "${runtime}/share/device/capabilities.toml"
 printf '%s\n' \
     'schema_version = 2' \
     'runtime_family = "pocketforge/a133-powervr"' \
@@ -112,6 +126,8 @@ test -x "${rootfs}/usr/bin/pf-app-launch"
 cmp "${runtime}/share/platform-capabilities.toml" \
     "${rootfs}/usr/share/pocketforge/platform-capabilities.toml"
 cmp "${unit}" "${rootfs}/etc/systemd/system/pf-app@.service"
+cmp "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf" \
+    "${rootfs}/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf"
 if find "${rootfs}/etc/systemd/system" -path '*.wants/*' -name 'pf-app@*.service' | grep -q .; then
     echo 'pf-app@.service was unexpectedly enabled' >&2
     exit 1
@@ -130,6 +146,14 @@ cmp "${runtime}/lib/libpocketforge.so.1" \
 cmp "${runtime}/share/devices/a133/capabilities.toml" \
     "${rootfs}/usr/share/pocketforge/devices/a133/capabilities.toml"
 test "$(stat -c %a "${rootfs}/usr/share/pocketforge/devices/a133/capabilities.toml")" = 644
+# The device-neutral descriptor (tsp-mc9m.41.1026.4, platform#341): installed at
+# /usr/share/pocketforge/device/capabilities.toml, 0644, byte-identical to the
+# building device's per-SoC descriptor.
+cmp "${runtime}/share/device/capabilities.toml" \
+    "${rootfs}/usr/share/pocketforge/device/capabilities.toml"
+cmp "${rootfs}/usr/share/pocketforge/devices/a133/capabilities.toml" \
+    "${rootfs}/usr/share/pocketforge/device/capabilities.toml"
+test "$(stat -c %a "${rootfs}/usr/share/pocketforge/device/capabilities.toml")" = 644
 test "$(stat -c %a "${rootfs}/usr/lib/aarch64-linux-gnu/libpocketforge.so.1")" = 644
 if find "${rootfs}" -path '*.wants/*' -name 'pf-input-broker.service' | grep -q .; then
     echo 'pf-input-broker.service is enabled at boot (would grab the pad under pf-shell)' >&2
@@ -138,7 +162,8 @@ fi
 
 # Every open input-delivery artifact is required: removing any one fails closed.
 for missing in bin/pf-input-broker systemd/pf-input-broker.service \
-    lib/libpocketforge.so.1 share/devices/a133/capabilities.toml; do
+    lib/libpocketforge.so.1 share/devices/a133/capabilities.toml \
+    share/device/capabilities.toml; do
     mv "${runtime}/${missing}" "${tmp}/held"
     if "${installer}" open "${tmp}/scratch-rootfs" "${runtime}" "${launcher}" "${unit}" \
         >"${tmp}/missing.log" 2>&1; then
@@ -159,6 +184,17 @@ if "${installer}" open "${tmp}/scratch-rootfs" "${runtime}" "${launcher}" "${uni
 fi
 grep -F 'FATAL: expected exactly devices/a133/capabilities.toml' "${tmp}/neg.log" >/dev/null
 find "${runtime}/share/devices/a523" -delete
+# A device-neutral copy that diverges from the per-SoC descriptor is refused;
+# the installer never falls back to the per-SoC bytes.
+printf '[identity]\nid = "a523"\n' > "${runtime}/share/device/capabilities.toml"
+if "${installer}" open "${tmp}/scratch-rootfs" "${runtime}" "${launcher}" "${unit}" >"${tmp}/neg.log" 2>&1; then
+    echo 'open install accepted a divergent device-neutral descriptor' >&2
+    exit 1
+fi
+grep -F 'FATAL: device/capabilities.toml differs from devices/a133/capabilities.toml' \
+    "${tmp}/neg.log" >/dev/null
+cp "${runtime}/share/devices/a133/capabilities.toml" \
+    "${runtime}/share/device/capabilities.toml"
 printf 'ld-musl-aarch64.so.1' >> "${runtime}/bin/pf-input-broker"
 if "${installer}" open "${tmp}/scratch-rootfs" "${runtime}" "${launcher}" "${unit}" >"${tmp}/neg.log" 2>&1; then
     echo 'open install accepted a dynamically linked broker' >&2
@@ -188,7 +224,8 @@ for gpu_model in ddk none; do
     cmp "${tmp}/before" "${tmp}/after"
 done
 for leak in bin/pf-app-launch bin/pf-input-broker systemd/pf-input-broker.service \
-    lib/libpocketforge.so.1 share/devices/a133/capabilities.toml; do
+    lib/libpocketforge.so.1 share/devices/a133/capabilities.toml \
+    share/device/capabilities.toml; do
     mkdir -p "$(dirname "${tmp}/closed-runtime/${leak}")"
     printf 'leak\n' > "${tmp}/closed-runtime/${leak}"
     for gpu_model in ddk none; do
@@ -205,6 +242,21 @@ done
 
 test ! -e "${root}/rootfs-overlay/etc/systemd/system/pocketforge-poolsuite.service"
 ! grep -F 'pocketforge-poolsuite.service' "${root}/scripts/install-poolsuite.sh"
+# No shipped unit may hard-code a per-SoC descriptor path (tsp-mc9m.41.1026.4):
+# PF_DESCRIPTOR and the broker --descriptor are the device-neutral path.
+if grep -rn 'devices/a133' "${root}/rootfs-overlay/etc/systemd/system"; then
+    echo 'rootfs-overlay unit hard-codes the a133 descriptor path' >&2
+    exit 1
+fi
+# Negative control: the same grep sees a planted hard-code.
+planted="${tmp}/planted-overlay"
+mkdir -p "${planted}"
+printf 'Environment=PF_DESCRIPTOR=/usr/share/pocketforge/devices/a133/capabilities.toml\n' \
+    > "${planted}/planted.service"
+grep -rq 'devices/a133' "${planted}" || {
+    echo 'negative control: grep missed a planted devices/a133 hard-code' >&2
+    exit 1
+}
 grep -F 'install-default-app-support.sh' "${rootfs_builder}" >/dev/null
 grep -F 'cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-app-launch --bin pf-app-launch' "${dockerfile}" >/dev/null
 grep -F 'pf-app-launch is dynamically linked (expected static musl)' "${dockerfile}" >/dev/null
@@ -220,4 +272,86 @@ none_body="$(sed -n '/^FROM ${PF_CONTAINER} AS launcher-none$/,/^# launcher-open
 ! grep -F 'launcher-src' <<<"${none_body}"
 test "$(grep -c '^COPY --from=launcher-src ' "${dockerfile}")" -eq 1
 
-echo 'default-app rootfs contract: PASS (verbatim dormant unit, open-only install incl. app-session broker never enabled, libpocketforge.so.1 and devices/a133 descriptor; non-open no-op with every leak refused)'
+# No app bundle may declare a cgroup uinput grant (incident tsp-ihne1.56, PR6).
+# uinput is broker-owned (pf-input-broker AssertPathExists=/dev/uinput) and the
+# generic pf-app@.service already hides it (InaccessiblePaths=-/dev/uinput), so a
+# slice.conf DeviceAllow=/dev/uinput is both over-broad and redundant: an app reads
+# input through the broker, it never creates input devices. hello-pocketforge used
+# to ship one; this guard keeps every apps/*/slice.conf free of it.
+#
+# The scanner follows systemd unit-file assignment syntax: whole-line comments
+# (#/;) grant nothing, whitespace on either side of '=' and leading indentation
+# are accepted spellings, and a backslash continues the assignment onto the next
+# line -- so no spelling systemd would parse as a /dev/uinput grant can slip
+# through. Production scan and planted controls both call this one function, so
+# the controls can never drift from the production pattern. A dangling comment
+# continuation over-detects (fail-closed), which is the intended bias.
+uinput_grant_scan() {
+    find "$1" -mindepth 2 -maxdepth 2 -name slice.conf -print0 \
+    | xargs -0 -r awk '
+        function flush() {
+            if (buf ~ /DeviceAllow[[:space:]]*=[[:space:]]*[^[:space:]]*\/dev\/uinput/)
+                printf "%s:%d:%s\n", bufname, bufstart, buf
+            buf = ""
+        }
+        FNR == 1 { flush() }
+        /^[[:space:]]*[#;]/ { next }
+        {
+            if (buf == "") { bufname = FILENAME; bufstart = FNR }
+            if ($0 ~ /\\[[:space:]]*$/) {
+                line = $0
+                sub(/\\[[:space:]]*$/, "", line)
+                buf = buf line
+                next
+            }
+            buf = buf $0
+            flush()
+        }
+        END { flush() }
+    '
+}
+grants="$(uinput_grant_scan "${root}/apps")"
+if [ -n "${grants}" ]; then
+    printf '%s\n' "${grants}" >&2
+    echo 'an app slice.conf declares a /dev/uinput DeviceAllow grant' >&2
+    exit 1
+fi
+# Planted controls: every accepted spelling of the grant must be caught, and a
+# comment-only mention (hello-pocketforge's slice.conf carries one) must not be.
+planted="${tmp}/planted-apps"
+evil_last=0
+while IFS= read -r variant; do
+    evil_last=$((evil_last + 1))
+    mkdir -p "${planted}/evil${evil_last}"
+    printf 'DevicePolicy=strict\n%s\n' "${variant}" > "${planted}/evil${evil_last}/slice.conf"
+done <<'VARIANTS'
+DeviceAllow=/dev/uinput rw
+DeviceAllow =/dev/uinput rw
+DeviceAllow= /dev/uinput rw
+DeviceAllow = /dev/uinput rw
+DeviceAllow	=	/dev/uinput rw
+	DeviceAllow=/dev/uinput rw
+VARIANTS
+evil_last=$((evil_last + 1))
+mkdir -p "${planted}/evil${evil_last}"
+printf 'DevicePolicy=strict\nDeviceAllow=\\\n/dev/uinput rw\n' > "${planted}/evil${evil_last}/slice.conf"
+mkdir -p "${planted}/commented"
+printf '# DeviceAllow=/dev/uinput rw\n;DeviceAllow = /dev/uinput rw\nDeviceAllow=/dev/fb0 rw\n' \
+    > "${planted}/commented/slice.conf"
+grants="$(uinput_grant_scan "${planted}")"
+n=1
+while [ "${n}" -le "${evil_last}" ]; do
+    if ! printf '%s\n' "${grants}" | grep -q "/evil${n}/slice.conf"; then
+        echo "negative control: uinput grant scan missed planted variant evil${n}" >&2
+        printf '%s\n' "${grants}" >&2
+        exit 1
+    fi
+    n=$((n + 1))
+done
+if printf '%s\n' "${grants}" | grep -q '/commented/slice.conf'; then
+    echo 'false-positive control: uinput grant scan flagged a comment-only mention' >&2
+    printf '%s\n' "${grants}" >&2
+    exit 1
+fi
+
+echo 'default-app rootfs contract: PASS (verbatim dormant unit, open-only install incl. app-session broker never enabled, libpocketforge.so.1, devices/a133 and byte-identical device-neutral descriptor, no per-SoC PF_DESCRIPTOR hard-code, no app slice.conf uinput grant; non-open no-op with every leak refused)'

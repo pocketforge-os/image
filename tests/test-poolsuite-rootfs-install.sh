@@ -3,8 +3,8 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 installer="${root}/scripts/install-poolsuite.sh"
-tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
+tmp="$(mktemp -d "${RUNNER_TEMP:-/tmp}/poolsuite-rootfs.XXXXXX")"
+trap 'find "${tmp}" -mindepth 1 -delete; rmdir "${tmp}"' EXIT
 
 rootfs="${tmp}/rootfs"
 stage="${tmp}/stage"
@@ -37,6 +37,18 @@ printf '{"id":"classic"}\n' > "${stage}/app/themes/classic/manifest.json"
 printf '[Slice]\n' > "${stage}/app/oci/slice.conf"
 printf 'poolsuite@fixture\n' > "${stage}/.pf-poolsuite-provenance"
 printf 'cmake\tfixture\n' > "${stage}/toolchain-packages.txt"
+mkdir -p \
+    "${stage}/app-policy" \
+    "${stage}/systemd" \
+    "${rootfs}/etc/systemd/system/pf-app@.service.d"
+printf '{"platform_runtime":"/usr","resources":{}}\n' \
+    > "${stage}/app-policy/org.pocketforge.poolsuite.resources.json"
+cp "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service" \
+    "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service"
+printf '[Service]\nPrivateNetwork=no\n# derived dns tcp udp 53\n' \
+    >> "${stage}/systemd/pf-app@org.pocketforge.poolsuite.service"
+cp "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf" \
+    "${rootfs}/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf"
 chmod 0755 "${stage}/app/ps-app" "${stage}/app/launch"
 
 "${installer}" dev open "${rootfs}" "${stage}"
@@ -48,12 +60,16 @@ test -f "${app}/themes/classic/manifest.json"
 test -f "${app}/oci/slice.conf"
 test -f "${rootfs}/usr/share/pocketforge/poolsuite-provenance"
 test -f "${rootfs}/usr/share/pocketforge/poolsuite-toolchain-packages.txt"
+test -f "${rootfs}/usr/share/pocketforge/app-policy/org.pocketforge.poolsuite.resources.json"
+test -f "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.poolsuite.service"
+test ! -e "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.poolsuite.service.d"
+grep -Fx 'PrivateNetwork=no' \
+    "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.poolsuite.service"
+dropin_result="$(python3 "${root}/tests/verify-session-authority-app-dropins.py" \
+    --systemd-root "${rootfs}/etc/systemd/system")"
+test "${dropin_result}" = 'session-authority app-dropins: PASS files=1'
 test ! -e "${rootfs}/etc/systemd/system/pocketforge-poolsuite.service"
 test ! -e "${root}/rootfs-overlay/etc/systemd/system/pocketforge-poolsuite.service"
-if grep -Eq 'systemd|unit' "${installer}"; then
-    echo 'Poolsuite installer still contains dedicated unit installation logic' >&2
-    exit 1
-fi
 
 if "${installer}" dev open "${tmp}/missing-rootfs" "${tmp}/missing-stage" >/dev/null 2>&1; then
     echo 'expected a missing dev stage to fail closed' >&2
@@ -66,4 +82,4 @@ if "${installer}" dev ddk "${rootfs}" "${tmp}/bad-non-open" >/dev/null 2>&1; the
     exit 1
 fi
 
-echo 'poolsuite rootfs install contract: PASS (migration and release file lists unchanged)'
+echo 'poolsuite rootfs install contract: PASS (exact unit policy; environment-only drop-ins)'

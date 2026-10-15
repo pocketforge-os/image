@@ -181,9 +181,14 @@ cmp "$store/buildid/$split_aa/$split_rest/debuginfo" \
     || { echo "FAIL: split debuginfo is not deterministic" >&2; exit 1; }
 echo "PASS split: canonical store layout, shipped stripped, build-id kept, deterministic"
 
-# --- 8. wrapper: finalize emits the on-device manifest and the build artifacts ---
-# The wrapper hard-fails on a tree containing a build-id-less ELF outside
-# closed paths: the planted one was removed above, so fixtures are clean.
+# --- 8. wrapper: firmware closed-vendor class + final artifacts ---
+# PowerVR firmware is copied byte-for-byte from the vendor-manifest/CAR input;
+# it is not an owned link product. Model an ELF-shaped firmware blob without a
+# build-id under the canonical Debian firmware path. The wrapper's default
+# closed-vendor policy must omit the whole PowerVR firmware directory class.
+mkdir -p "$fixtures/usr/lib/firmware/powervr"
+cp "$work/nobuildid" \
+    "$fixtures/usr/lib/firmware/powervr/rogue-fixture.fw"
 "$finalize" "$fixtures" "$out" >"$work/finalize.log"
 [ -f "$fixtures/usr/share/pocketforge/elf-build-id-manifest.tsv" ] \
     || { echo "FAIL: on-device manifest not installed into rootfs" >&2; exit 1; }
@@ -192,6 +197,10 @@ echo "PASS split: canonical store layout, shipped stripped, build-id kept, deter
 ( cd "$fixtures/usr/share/pocketforge" && sha256sum -c --strict --quiet elf-build-id-manifest.tsv.sha256 )
 [ -f "$out/pf-elf-build-id-manifest.tsv" ] \
     || { echo "FAIL: build manifest not emitted to OUT_DIR" >&2; exit 1; }
+if grep -F '/usr/lib/firmware/powervr/' "$out/pf-elf-build-id-manifest.tsv" >/dev/null; then
+    echo "FAIL: closed-vendor PowerVR firmware leaked into the manifest" >&2
+    exit 1
+fi
 [ -d "$out/pf-debuginfo/buildid" ] \
     || { echo "FAIL: debuginfo store not emitted to OUT_DIR" >&2; exit 1; }
 # negative control: wrapper refuses a build-id-less ELF outside closed paths
@@ -203,7 +212,7 @@ if "$finalize" "$work/badroot3" "$work/bad-out3" >"$work/finalize-bad.log" 2>&1;
 fi
 grep -E 'FAIL|FATAL|no GNU build-id' "$work/finalize-bad.log" >/dev/null
 grep -F '/usr/bin/pf-bad3' "$work/finalize-bad.log" >/dev/null
-echo "PASS finalize: on-device manifest + artifacts emitted; gates a bad ELF (build acceptance test)"
+echo "PASS finalize: PowerVR firmware class excluded; identical no-id ELF outside it rejected"
 
 # --- 9. empty-store positive control: a rootfs with NO DWARF-bearing owned
 # ELF (the a523 matrix row) must still finalize: empty store, manifest intact.

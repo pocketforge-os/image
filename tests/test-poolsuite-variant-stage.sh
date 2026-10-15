@@ -14,7 +14,7 @@ grep -Fx 'ARG PF_SOC=not-shipped' "${dockerfile}" >/dev/null
 grep -Fx 'FROM poolsuite-toolchain AS poolsuite-fetch' "${dockerfile}" >/dev/null
 grep -Fx 'FROM poolsuite-toolchain AS poolsuite-dev' "${dockerfile}" >/dev/null
 # shellcheck disable=SC2016 # Match literal Dockerfile ARG interpolation.
-grep -Fx 'FROM ${PF_CONTAINER} AS poolsuite-not-shipped' "${dockerfile}" >/dev/null
+grep -Fx 'FROM pf-build-base AS poolsuite-not-shipped' "${dockerfile}" >/dev/null
 # Only A133 + open + dev reaches the real producer. Every other normative
 # profile resolves immediately to the source-free NOT-SHIPPED stage.
 grep -Fx 'FROM poolsuite-dev AS poolsuite-sun50iw10p1-open-dev' "${dockerfile}" >/dev/null
@@ -55,7 +55,7 @@ if grep -Eq 'tar .*-cf - \.' <<<"${fetch_body}"; then
 fi
 
 # shellcheck disable=SC2016 # sed matches literal Dockerfile ARG interpolation.
-dev_body="$(sed -n '/^FROM poolsuite-toolchain AS poolsuite-dev$/,/^FROM ${PF_CONTAINER} AS poolsuite-not-shipped$/p' "${dockerfile}")"
+dev_body="$(sed -n '/^FROM poolsuite-toolchain AS poolsuite-dev$/,/^FROM pf-build-base AS poolsuite-not-shipped$/p' "${dockerfile}")"
 grep -F -- '--mount=type=bind,from=poolsuite-fetch,source=/opt/poolsuite-cargo-home,target=/opt/poolsuite-cargo-home,rw' <<<"${dev_body}" >/dev/null
 if grep -F 'COPY --from=poolsuite-fetch /opt/poolsuite-cargo-home' <<<"${dev_body}"; then
     echo 'poolsuite dev stage unexpectedly copies the fetched Cargo closure' >&2
@@ -66,13 +66,27 @@ grep -F './ci/device-build.sh --offline' <<<"${dev_body}" >/dev/null
 grep -F 'NEEDED.*libSDL3' <<<"${dev_body}" >/dev/null
 grep -F 'GLIBC_2.36' <<<"${dev_body}" >/dev/null
 grep -F 'pf-app-validate /tmp/default-app-root /work/platform-capabilities.toml org.pocketforge.poolsuite' <<<"${dev_body}" >/dev/null
+grep -F 'COPY --from=runtime /out/build-tools/pf-app-policy-render /usr/local/bin/pf-app-policy-render' "${dockerfile}" >/dev/null
+grep -F 'COPY --from=image-src build/app-policy-a133-open-v1.json /work/app-policy-a133-open-v1.json' "${dockerfile}" >/dev/null
+grep -F 'COPY --from=image-src rootfs-overlay/etc/systemd/system/pf-app@.service /work/pf-app@.service' "${dockerfile}" >/dev/null
+grep -F -- '--resource-inventory /out/app-policy/org.pocketforge.poolsuite.resources.json' <<<"${dev_body}" >/dev/null
+grep -F -- '--platform-runtime /usr' <<<"${dev_body}" >/dev/null
+grep -F -- '--format systemd-dropin' <<<"${dev_body}" >/dev/null
+grep -F '/out/systemd/pf-app@org.pocketforge.poolsuite.service' <<<"${dev_body}" >/dev/null
+if grep -F 'pf-app@org.pocketforge.poolsuite.service.d' <<<"${dev_body}"; then
+    echo 'Poolsuite policy is still emitted as a non-environment systemd drop-in' >&2
+    exit 1
+fi
+grep -F '# derived dns tcp udp 53' <<<"${dev_body}" >/dev/null
+grep -F '# egress tcp * 80' <<<"${dev_body}" >/dev/null
+grep -F '# egress tcp * 443' <<<"${dev_body}" >/dev/null
 grep -F 'COPY --from=runtime /out/build-tools/pf-app-validate' <<<"${dev_body}" >/dev/null
 for key in poolsuite@ cargo_lock_sha256 fetched_source_sha256 ps_app_sha256; do
     grep -F "${key}" <<<"${dev_body}" >/dev/null
 done
 
 # shellcheck disable=SC2016 # sed matches literal Dockerfile ARG interpolation.
-not_shipped_body="$(sed -n '/^FROM ${PF_CONTAINER} AS poolsuite-not-shipped$/,/^FROM poolsuite-dev AS poolsuite-sun50iw10p1-open-dev$/p' "${dockerfile}")"
+not_shipped_body="$(sed -n '/^FROM pf-build-base AS poolsuite-not-shipped$/,/^FROM poolsuite-dev AS poolsuite-sun50iw10p1-open-dev$/p' "${dockerfile}")"
 if grep -Eq 'poolsuite-src|poolsuite-fetch|PF_POOLSUITE_SHA|device-(fetch|build)' <<<"${not_shipped_body}"; then
     echo 'NOT-SHIPPED stage unexpectedly references the Poolsuite build graph' >&2
     exit 1

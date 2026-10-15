@@ -25,6 +25,7 @@ set -euo pipefail
 
 SRC_DIR="${SRC_DIR:-/work/src}"
 OUT_DIR="${OUT_DIR:-/work/out}"
+CURSOR_THEME_DIR="${CURSOR_THEME_DIR:-/work/cursor-theme}"
 BOARD_DIR="${SRC_DIR}/boards/tsp-s"
 VARIANT="dev"
 OWNER_UID=""; OWNER_GID=""
@@ -92,6 +93,9 @@ echo "=== deterministic ext4 assembly ==="
 EXT="${WORK}/rootfs-extracted"; mkdir -p "${EXT}"
 tar -xf "${ROOTFS_TAR}" -C "${EXT}"
 
+"${SRC_DIR}/scripts/install-cursor-theme.sh" \
+    "${CURSOR_THEME_DIR}" "${EXT}"
+
 # Re-assert user-home ownership in the extracted tree. In this build path the
 # mmdebstrap tar landed /home/<user> as root:root (the A133 build-rootfs.sh path
 # preserves it; this one didn't — tsp-vuo.4), so sshd StrictModes rejected the
@@ -106,6 +110,10 @@ while read -r ug home; do
         echo "    chown -R ${ug} ${home}"
     fi
 done
+
+# Remove the known package-configuration log and fail closed on any other
+# build-run log content before finalization and ext4 assembly.
+"${SRC_DIR}/build/prepare-rootfs-build-logs.sh" "${EXT}"
 
 # --- ELF build-ids, debuginfo split, image build-id manifest (bd tsp-ihne1.33) ---
 # Gate: every ELF in the assembled rootfs outside the closed vendor dirs must

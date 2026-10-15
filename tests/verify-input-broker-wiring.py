@@ -22,7 +22,7 @@ SHELL_DROPIN = SYSTEMD / "pf-shell-selected.service.d/10-input-broker.conf"
 DOC = ROOT / "docs/DEFAULT-APPS.md"
 DOCKERFILE = ROOT / "build/Dockerfile.pf"
 
-DESCRIPTOR = "/usr/share/pocketforge/devices/a133/capabilities.toml"
+DESCRIPTOR = "/usr/share/pocketforge/device/capabilities.toml"
 BROKER_SOCK = "/run/pocketforge/input-broker.sock"
 AUTHORITY_SOCK = "/run/pocketforge/session-authority.sock"
 PREFSD_SOCK = "/run/pocketforge/prefsd.sock"
@@ -92,6 +92,7 @@ assert values(app, "Service", "InaccessiblePaths") == [
     f"-{AUTHORITY_SOCK}",
     "-/dev/uinput",
     PREFSD_SOCK,
+    "-/run/pf-ime",
 ]
 assert PREF_WRITER_GROUP not in values(app, "Service", "SupplementaryGroups")
 for name, trusted in (("selected shell", selected), ("foreground shell", foreground)):
@@ -164,6 +165,15 @@ with tempfile.TemporaryDirectory() as scratch:
 # Never enabled in the overlay (the installer also refuses a *.wants link).
 assert not list(SYSTEMD.glob("*.wants/pf-input-broker.service"))
 
+# No shipped unit hard-codes a per-SoC descriptor path (tsp-mc9m.41.1026.4):
+# runtime consumers mean "this device", i.e. the device-neutral descriptor.
+hardcoded = sorted(
+    str(path.relative_to(SYSTEMD))
+    for path in SYSTEMD.rglob("*")
+    if path.is_file() and "devices/a133" in path.read_text()
+)
+assert not hardcoded, f"units hard-code devices/a133: {hardcoded}"
+
 # Doc/unit drift: the doc shows exactly what ships.
 doc = DOC.read_text()
 for heading in (
@@ -183,15 +193,22 @@ assert directive_text(broker) in ini_blocks, "DEFAULT-APPS.md broker drop-in blo
 assert directive_text(shell) in ini_blocks, "DEFAULT-APPS.md shell drop-in block drifted"
 
 # Dockerfile: the open-only descriptor context and the runtime-stage build/install.
+# platform#341 stages the descriptor twice in the context (devices/<id>/ and the
+# byte-identical device-neutral device/); the open stage copies the whole context
+# and check-device-descriptor enforces the exact tree, so a missing or divergent
+# device/capabilities.toml fails closed with a named error (tsp-mc9m.41.1026.4).
 dockerfile = DOCKERFILE.read_text()
 stages = re.split(r"(?m)^(?=FROM )", dockerfile)
 copies = [stage for stage in stages if "COPY --from=platform-inputs-src" in stage]
-assert len(copies) == 1 and copies[0].startswith("FROM ${PF_CONTAINER} AS platform-inputs-open\n"), copies
+assert len(copies) == 1 and copies[0] == (
+    "FROM pf-build-base AS platform-inputs-open\n"
+    "COPY --from=platform-inputs-src . /out\n"
+), copies
 assert dockerfile.count("COPY --from=platform-inputs-src") == 1
 for stage in ("platform-inputs-ddk", "platform-inputs-none"):
-    assert f"FROM ${{PF_CONTAINER}} AS {stage}\nRUN mkdir -p /out\n" in dockerfile, stage
+    assert f"FROM pf-build-base AS {stage}\nRUN mkdir -p /out\n" in dockerfile, stage
 assert "FROM platform-inputs-${PF_GPU_MODEL} AS platform-inputs\n" in dockerfile
-runtime = next(stage for stage in stages if stage.startswith("FROM ${PF_CONTAINER} AS runtime\n"))
+runtime = next(stage for stage in stages if stage.startswith("FROM pf-build-base AS runtime\n"))
 for line in (
     "ARG PF_DEVICE_DESCRIPTOR_ID=\n",
     "ARG PF_DEVICE_DESCRIPTOR_SHA256=\n",
@@ -210,6 +227,9 @@ for needle in (
     "cargo build --offline --locked --release -p pf-input-broker --example pf-descriptor-validate",
     'target/release/examples/pf-descriptor-validate "${DESCRIPTOR}" "${PF_DEVICE_DESCRIPTOR_ID}"',
     'install -D -m 0644 "${DESCRIPTOR}" "/out/share/devices/${PF_DEVICE_DESCRIPTOR_ID}/capabilities.toml"',
+    'NEUTRAL_DESCRIPTOR="/work/platform-inputs/device/capabilities.toml"',
+    'FATAL: device-neutral descriptor missing: ${NEUTRAL_DESCRIPTOR}',
+    'install -D -m 0644 "${NEUTRAL_DESCRIPTOR}" /out/share/device/capabilities.toml',
     'cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-input-broker --bin pf-input-broker',
     "pf-input-broker is dynamically linked (expected static musl)",
     'install -D -m 0755 "${BROKER_BIN}" /out/bin/pf-input-broker',
@@ -221,6 +241,7 @@ for needle in (
     assert needle in open_block, needle
 # Validation precedes staging: nothing enters /out before its gate passes.
 assert open_block.index("pf-descriptor-validate \"${DESCRIPTOR}\"") < open_block.index("/out/share/devices/")
+assert open_block.index("pf-descriptor-validate \"${DESCRIPTOR}\"") < open_block.index("/out/share/device/")
 assert open_block.index('check-libpocketforge "${CDYLIB}"') < open_block.index("/out/lib/libpocketforge.so.1")
 
 a523 = (ROOT / "scripts/build-rootfs-a523.sh").read_text()

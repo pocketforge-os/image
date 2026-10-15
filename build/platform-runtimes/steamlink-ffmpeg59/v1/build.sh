@@ -81,7 +81,7 @@ common_configure() {
         --cross-prefix=aarch64-none-linux-gnu- --pkg-config=pkg-config \
         --sysroot=/opt/arm-10.3-2021.07/aarch64-none-linux-gnu/libc \
         --extra-cflags="-I${work}/uapi/include -idirafter /usr/include -idirafter /usr/include/aarch64-linux-gnu -ffile-prefix-map=${work}=." \
-        --extra-ldflags='-B/usr/lib/aarch64-linux-gnu -L/usr/lib/aarch64-linux-gnu' \
+        --extra-ldflags='-Wl,--build-id=sha1 -B/usr/lib/aarch64-linux-gnu -L/usr/lib/aarch64-linux-gnu' \
         --enable-shared --disable-static --disable-programs --disable-doc --disable-debug \
         --disable-autodetect --enable-libdrm \
         --disable-avdevice --disable-avfilter --disable-avformat --disable-postproc --disable-swscale \

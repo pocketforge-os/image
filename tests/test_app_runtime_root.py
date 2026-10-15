@@ -16,6 +16,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RENDERER = ROOT / "scripts" / "render-app-runtime-root.py"
+POLICY_RENDERER = Path(os.environ["PF_APP_POLICY_RENDER"])
 ROOT_CONTENT = b"hermetic runtime root fixture\n"
 DIGEST = "sha256:" + hashlib.sha256(ROOT_CONTENT).hexdigest()
 PLATFORM_CONTENT = b"hermetic platform runtime fixture\n"
@@ -93,8 +94,13 @@ def manifest(
     distribution: str | None = None,
     platform_version: str = PLATFORM_VERSION,
     capabilities: tuple[str, ...] = (),
+    needs_network: bool | None = None,
 ) -> str:
     caps = ", ".join(json.dumps(value) for value in capabilities)
+    if needs_network is None:
+        needs_network = any(
+            value.strip().lower().startswith("egress:") for value in capabilities
+        )
     root_table = ""
     if root:
         distribution_line = (
@@ -130,7 +136,7 @@ def manifest(
 
         [launch]
         exec = "bin/shell"
-        needs_network = true
+        needs_network = {str(needs_network).lower()}
         takes_display = true
         audio = true
         """
@@ -164,6 +170,8 @@ class RendererTest(unittest.TestCase):
         self.manifest = self.work / "app.toml"
         self.inventory = self.work / "inventory.json"
         self.output = self.work / "50-runtime-root.conf"
+        self.policy_output = self.work / "org.pocketforge.steamlink.resources.json"
+        self.platform_contract = self.work / "platform-capabilities.toml"
         self.app_root_store = self.work / "app-roots"
         self.platform_store = self.work / "platform-runtimes"
         root_path = (
@@ -187,6 +195,22 @@ class RendererTest(unittest.TestCase):
             PLATFORM_VERSION.removeprefix("sha256:") + "\n", encoding="ascii"
         )
         self.inventory.write_text(json.dumps(inventory()), encoding="utf-8")
+        self.platform_contract.write_text(
+            textwrap.dedent(
+                """
+                schema_version = 1
+                runtime_family = "pocketforge/a133-powervr"
+                runtime_abi = "1"
+                platform_version = "20"
+                supported_capabilities = ["accelerometer", "audio", "bluetooth", "entropy", "gnss", "gyroscope", "imu", "input", "leds", "location", "magnetometer", "rumble", "settings", "vibration", "video-decode"]
+                production = true
+                landlock_mode = "required"
+                landlock_full_min_abi = 10
+                landlock_browser_min_abi = 6
+                """
+            ),
+            encoding="utf-8",
+        )
 
     def write_root_metadata(self, distribution: str) -> None:
         root_path = next(self.app_root_store.rglob("*.raw"))
@@ -237,6 +261,12 @@ class RendererTest(unittest.TestCase):
                 str(self.manifest),
                 "--inventory",
                 str(self.inventory),
+                "--platform-contract",
+                str(self.platform_contract),
+                "--policy-renderer",
+                str(POLICY_RENDERER),
+                "--policy-output",
+                str(self.policy_output),
                 "--output",
                 str(self.output),
                 "--app-root-store",
@@ -253,16 +283,25 @@ class RendererTest(unittest.TestCase):
         return result
 
     def test_omitted_root_is_exact_legacy_default(self) -> None:
-        self.output.write_text("stale generated drop-in\n", encoding="utf-8")
+        self.output.write_text("stale generated service fragment\n", encoding="utf-8")
         result = self.render(manifest(root=False))
         self.assertEqual(result.stdout, "runtime_root=absent action=unchanged\n")
         self.assertFalse(self.output.exists())
+        self.assertFalse(self.policy_output.exists())
 
     def test_default_root_render_is_deterministic_and_fail_closed(self) -> None:
-        self.render(manifest(capabilities=("audio", "input", "vibration")))
+        self.render(
+            manifest(
+                capabilities=("audio", "input", "vibration", "egress:tcp/443@*")
+            )
+        )
         first = self.output.read_bytes()
         self.output.unlink()
-        self.render(manifest(capabilities=("audio", "input", "vibration")))
+        self.render(
+            manifest(
+                capabilities=("audio", "input", "vibration", "egress:tcp/443@*")
+            )
+        )
         self.assertEqual(first, self.output.read_bytes())
 
         unit = first.decode()
@@ -290,6 +329,16 @@ class RendererTest(unittest.TestCase):
         self.assertIn("DeviceAllow=/dev/snd/controlC0 rw", unit)
         self.assertNotIn("/dev/video", unit)
         self.assertNotIn("/dev/media", unit)
+        policy = json.loads(self.policy_output.read_text(encoding="utf-8"))
+        self.assertEqual(
+            policy,
+            {
+                "platform_runtime": "/run/pocketforge/platform-runtime",
+                "resources": inventory()["resources"],
+            },
+        )
+        self.assertIn("SupplementaryGroups=audio input video", unit)
+        self.assertIn("# egress tcp * 443", unit)
 
     def test_debian_13_root_is_selected_and_host_runtime_wins(self) -> None:
         self.write_root_metadata("debian-13")
@@ -404,8 +453,7 @@ class RendererTest(unittest.TestCase):
             "BindReadOnlyPaths=/run/pocketforge/session/environment", unit
         )
         self.assertNotIn("BindPaths=/run/pocketforge/prefsd.sock", unit)
-        for capability in capabilities:
-            self.assertIn(f"# capability {capability}:", unit)
+        self.assertIn("# policy schema=1 manifest_sha256=", unit)
 
     def test_input_without_write_capability_is_read_only(self) -> None:
         self.render(manifest(capabilities=("input",)))
@@ -416,12 +464,16 @@ class RendererTest(unittest.TestCase):
 
     def test_current_optional_and_modifier_syntax_is_normalized(self) -> None:
         self.render(
-            manifest(capabilities=(" IMU?", "gnss:precise", "egress:steam.example"))
+            manifest(
+                capabilities=(
+                    " IMU?",
+                    "gnss:precise",
+                    "egress:tcp/443@steam.example",
+                )
+            )
         )
         unit = self.output.read_text(encoding="utf-8")
-        self.assertIn("# capability imu: broker socket only", unit)
-        self.assertIn("# capability gnss: broker socket only", unit)
-        self.assertIn("# capability egress: declaration only", unit)
+        self.assertIn("# egress tcp steam.example 443", unit)
 
         result = self.render(
             manifest(capabilities=("gnss:precise", "gnss?")), expect=65
@@ -434,13 +486,25 @@ class RendererTest(unittest.TestCase):
         no_display_or_audio = manifest(capabilities=("input?",)).replace(
             "takes_display = true", "takes_display = false"
         ).replace("audio = true", "audio = false")
-        self.render(no_display_or_audio)
-        self.assertNotIn("/dev/input", self.output.read_text(encoding="utf-8"))
-        result = self.render(
-            no_display_or_audio.replace('use = ["input?"]', 'use = ["input"]'),
-            expect=66,
+        self.render(no_display_or_audio.replace('"input?"', '"input"'))
+        broker_only = self.output.read_text(encoding="utf-8")
+        self.assertIn(
+            "BindPaths=/run/pocketforge/input-broker.sock", broker_only
         )
-        self.assertIn("reason=required_resource_missing", result.stderr)
+        self.assertNotIn("/dev/input", broker_only)
+
+        del data["resources"]["broker-sockets"]  # type: ignore[index]
+        self.inventory.write_text(json.dumps(data), encoding="utf-8")
+        self.render(no_display_or_audio)
+        no_input_route = self.output.read_text(encoding="utf-8")
+        self.assertNotIn("/dev/input", no_input_route)
+        self.assertNotIn("/run/pocketforge/input-broker.sock", no_input_route)
+        result = self.render(
+            no_display_or_audio.replace('"input?"', '"input"'),
+            expect=65,
+        )
+        self.assertIn("reason=policy_render_failed", result.stderr)
+        self.assertIn("expected broker-sockets or input-devices", result.stderr)
 
     def test_invalid_metadata_and_missing_resources_refuse_without_output(self) -> None:
         bad_cases = (
@@ -452,7 +516,7 @@ class RendererTest(unittest.TestCase):
                     'platform-runtime-abi = "1"', 'platform-runtime-abi = "9"'
                 ),
             ),
-            ("unsupported_capability", manifest(capabilities=("host-root",))),
+            ("descriptor_invalid", manifest(capabilities=("host-root",))),
             (
                 "runtime_root_invalid_library_path",
                 manifest().replace(
@@ -470,9 +534,26 @@ class RendererTest(unittest.TestCase):
 
         data = inventory()
         del data["resources"]["audio-devices"]  # type: ignore[index]
+        del data["resources"]["audio-sockets"]  # type: ignore[index]
         self.inventory.write_text(json.dumps(data), encoding="utf-8")
-        result = self.render(manifest(capabilities=("audio",)), expect=66)
-        self.assertIn("reason=required_resource_missing", result.stderr)
+        result = self.render(manifest(capabilities=("audio",)), expect=65)
+        self.assertIn("reason=policy_render_failed", result.stderr)
+        self.assertIn("expected audio-devices or audio-sockets", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_display_devices_are_confined_to_framebuffer_nodes(self) -> None:
+        data = inventory()
+        data["resources"]["display-devices"] = ["/dev/fb0"]  # type: ignore[index]
+        self.inventory.write_text(json.dumps(data), encoding="utf-8")
+        self.render(manifest())
+        policy = json.loads(self.policy_output.read_text(encoding="utf-8"))
+        self.assertEqual(policy["resources"]["display-devices"], ["/dev/fb0"])
+
+        data["resources"]["display-devices"] = ["/tmp/fb0"]  # type: ignore[index]
+        self.inventory.write_text(json.dumps(data), encoding="utf-8")
+        result = self.render(manifest(), expect=65)
+        self.assertIn("reason=platform_runtime_invalid", result.stderr)
+        self.assertIn("display-devices has forbidden path", result.stderr)
         self.assertFalse(self.output.exists())
 
     def test_missing_or_changed_artifacts_refuse_without_output(self) -> None:
