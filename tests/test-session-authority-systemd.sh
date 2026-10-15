@@ -20,7 +20,7 @@ run_label_key=org.pocketforge.session-authority-run
 
 runtime_sha=1dd87ecc2952584a7ef1473c5dcb872662b7c0cb
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=4ab57976a5f4c00614b277cfaf8c0f65d860844ac160b015fbe5a71d549c6f05
+app_unit_sha256=dc0931940164e368766ea9d6d5d1333354691f08390d7ea34678b6c6e9f8d5e3
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
 # is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
 # crates/pf-input-broker/systemd/pf-input-broker.service is byte-identical at
@@ -28,7 +28,7 @@ app_unit_sha256=4ab57976a5f4c00614b277cfaf8c0f65d860844ac160b015fbe5a71d549c6f05
 # runtime#102 changed broker source and tests but no unit; runtime#103 touched only
 # crates/pf-session-authority; runtime#104 did too), so the broker unit digest is unchanged.
 broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=4a85fa5674b199a7dea17253349c828f7925511ccaa4d8bc00a9ab53eb47728c
+broker_dropin_sha256=0767ccdd494108f3545a30ac26eb40fee1949b21ca5938e46d326f6bf9966ca9
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
