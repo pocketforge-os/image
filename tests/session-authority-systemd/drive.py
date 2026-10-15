@@ -543,6 +543,12 @@ def launch_held(mode: str) -> SessionEventScope:
 def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     """What the real pf-app@ sandbox and the real broker drop-in give each side."""
     probe = json.loads(PROBE.read_text())
+    require(
+        probe["POCKETFORGE_SESSION"] == "/run/pocketforge/session"
+        and probe["WAYLAND_DISPLAY"] == "wayland-0"
+        and probe["wayland_socket"] is True,
+        f"app did not receive the published compositor session: {probe}",
+    )
     require(probe["PF_DESCRIPTOR"] == DESCRIPTOR, f"PF_DESCRIPTOR: {probe}")
     require(probe["descriptor_readable"] is True, f"descriptor unreadable in app sandbox: {probe}")
     require(probe["PF_BROKER_SOCK"] == str(BROKER_SOCKET), f"PF_BROKER_SOCK: {probe}")

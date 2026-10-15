@@ -25,7 +25,7 @@ RUN apt-get update -qq \
         systemd \
         systemd-sysv \
     && rm -rf /var/lib/apt/lists/* \
-    && for group_name in gamer audio input video; do \
+    && for group_name in gamer audio input video pf-session; do \
         getent group "${group_name}" >/dev/null || groupadd --system "${group_name}"; \
     done \
     && { getent passwd gamer >/dev/null \
@@ -58,6 +58,10 @@ COPY session-authority-test-tmpfiles.conf /usr/lib/tmpfiles.d/session-authority-
 COPY pf-app@.service /etc/systemd/system/pf-app@.service
 COPY pocketforge-foreground.target /etc/systemd/system/pocketforge-foreground.target
 COPY pocketforge-gamescope-session.target /etc/systemd/system/pocketforge-gamescope-session.target
+COPY pocketforge-gamescope.service /etc/systemd/system/pocketforge-gamescope.service
+COPY pocketforge-session-publisher.service /etc/systemd/system/pocketforge-session-publisher.service
+COPY pocketforge-gamescope-fallback.service /etc/systemd/system/pocketforge-gamescope-fallback.service
+COPY pf-session-publish /usr/lib/pocketforge/pf-session-publish
 COPY 10-owner-shell.conf /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf
 COPY pf-shell-selected.service /etc/systemd/system/pf-shell-selected.service
 COPY pf-prefsd.service /etc/systemd/system/pf-prefsd.service
@@ -67,6 +71,7 @@ COPY 10-input-broker.conf /etc/systemd/system/pf-shell-selected.service.d/10-inp
 COPY fake-input-broker /usr/bin/pf-input-broker
 COPY fake-prefsd /usr/local/libexec/fake-prefsd
 COPY fake-shell /usr/local/libexec/fake-shell
+COPY fake-gamescope /usr/local/libexec/fake-gamescope
 COPY capabilities.toml /usr/share/pocketforge/device/capabilities.toml
 COPY capabilities.toml /usr/share/pocketforge/devices/a133/capabilities.toml
 COPY session-authority-test.target /etc/systemd/system/session-authority-test.target
@@ -83,6 +88,8 @@ RUN chmod 0755 \
         /usr/bin/pf-input-broker \
         /usr/local/libexec/fake-prefsd \
         /usr/local/libexec/fake-shell \
+        /usr/local/libexec/fake-gamescope \
+        /usr/lib/pocketforge/pf-session-publish \
         /opt/pocketforge/apps/org.pocketforge.fixture/fixture \
         /usr/local/libexec/drive.py \
         /usr/local/libexec/remount-cgroup-systemd \
@@ -92,6 +99,9 @@ RUN chmod 0755 \
         /etc/systemd/system/pf-app@.service \
         /etc/systemd/system/pocketforge-foreground.target \
         /etc/systemd/system/pocketforge-gamescope-session.target \
+        /etc/systemd/system/pocketforge-gamescope.service \
+        /etc/systemd/system/pocketforge-session-publisher.service \
+        /etc/systemd/system/pocketforge-gamescope-fallback.service \
         /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf \
         /etc/systemd/system/pf-shell-selected.service \
         /etc/systemd/system/pf-prefsd.service \
@@ -110,6 +120,10 @@ RUN chmod 0755 \
     && systemd-analyze verify \
         /etc/systemd/system/pf-session-authorityd.service \
         /etc/systemd/system/session-authority-driver.service \
+        /etc/systemd/system/pocketforge-gamescope-session.target \
+        /etc/systemd/system/pocketforge-gamescope.service \
+        /etc/systemd/system/pocketforge-session-publisher.service \
+        /etc/systemd/system/pocketforge-gamescope-fallback.service \
     && ! find /etc/systemd/system -path '*.wants/*' -name pf-input-broker.service | grep -q .
 
 STOPSIGNAL SIGRTMIN+3

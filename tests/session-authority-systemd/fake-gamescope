@@ -1,0 +1,106 @@
+#!/usr/bin/python3
+"""Filesystem-socket Gamescope stand-in for the real-systemd lifecycle harness."""
+
+from __future__ import annotations
+
+import os
+import select
+import signal
+import socket
+import stat
+import sys
+import tempfile
+import threading
+from pathlib import Path
+
+
+WAYLAND = Path("/run/pocketforge/gamescope/gamescope-0")
+X11 = Path("/tmp/.X11-unix/X0")
+stopping = threading.Event()
+
+
+def stop(*_args: object) -> None:
+    stopping.set()
+
+
+def notify_ready() -> None:
+    address = os.environ.get("NOTIFY_SOCKET", "")
+    if not address:
+        raise SystemExit("fake gamescope: NOTIFY_SOCKET unset")
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+        notify.sendto(b"READY=1", address)
+
+
+def listen(path: Path) -> socket.socket:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.parent == X11.parent:
+        path.parent.chmod(0o1777)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    os.chmod(path, 0o660)
+    listener.listen(8)
+    return listener
+
+
+def self_test() -> None:
+    with tempfile.TemporaryDirectory(prefix="pf-fake-gamescope.") as directory:
+        root = Path(directory)
+        paths = [root / "gamescope-0", root / ".X11-unix" / "X0"]
+        listeners = [listen(path) for path in paths]
+        clients: list[socket.socket] = []
+        try:
+            for path in paths:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client.connect(str(path))
+                clients.append(client)
+            ready, _, _ = select.select(listeners, [], [], 1)
+            if set(ready) != set(listeners):
+                raise AssertionError("both filesystem listeners were not connectable")
+            for listener in listeners:
+                peer, _ = listener.accept()
+                peer.close()
+            for path in paths:
+                if not stat.S_ISSOCK(path.stat().st_mode):
+                    raise AssertionError(f"not a socket: {path}")
+            unix_rows = Path("/proc/net/unix").read_text(encoding="utf-8").splitlines()
+            if any(f"@{path}" in row for row in unix_rows for path in paths):
+                raise AssertionError("fixture opened an abstract socket")
+        finally:
+            for client in clients:
+                client.close()
+            for listener in listeners:
+                listener.close()
+            for path in paths:
+                path.unlink(missing_ok=True)
+    print("fake-gamescope self-test: PASS filesystem_sockets=2 abstract_sockets=0")
+
+
+def main() -> None:
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    listeners = [listen(WAYLAND), listen(X11)]
+    try:
+        notify_ready()
+        while not stopping.is_set():
+            ready, _, _ = select.select(listeners, [], [], 0.1)
+            for listener in ready:
+                peer, _ = listener.accept()
+                peer.close()
+    finally:
+        for listener in listeners:
+            listener.close()
+        WAYLAND.unlink(missing_ok=True)
+        X11.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--self-test"]:
+        self_test()
+    else:
+        main()

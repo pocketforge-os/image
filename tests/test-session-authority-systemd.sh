@@ -652,6 +652,16 @@ install -m 0644 "${fixtures}/pocketforge-foreground.target" \
     "${context}/pocketforge-foreground.target"
 install -m 0644 "${fixtures}/pocketforge-gamescope-session.target" \
     "${context}/pocketforge-gamescope-session.target"
+install -m 0644 "${fixtures}/pocketforge-gamescope.service" \
+    "${context}/pocketforge-gamescope.service"
+install -m 0644 \
+    "${root}/rootfs-overlay/etc/systemd/system/pocketforge-session-publisher.service" \
+    "${context}/pocketforge-session-publisher.service"
+install -m 0644 \
+    "${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-fallback.service" \
+    "${context}/pocketforge-gamescope-fallback.service"
+install -m 0755 "${root}/rootfs-overlay/usr/lib/pocketforge/pf-session-publish" \
+    "${context}/pf-session-publish"
 install -m 0644 "${owner_dropin}" "${context}/10-owner-shell.conf"
 install -m 0644 "${fixtures}/pf-shell-selected.service" \
     "${context}/pf-shell-selected.service"
@@ -661,6 +671,7 @@ install -m 0644 "${shell_dropin}" "${context}/10-input-broker.conf"
 install -m 0755 "${fixtures}/fake-input-broker" "${context}/fake-input-broker"
 install -m 0755 "${fixtures}/fake-prefsd" "${context}/fake-prefsd"
 install -m 0755 "${fixtures}/fake-shell" "${context}/fake-shell"
+install -m 0755 "${fixtures}/fake-gamescope" "${context}/fake-gamescope"
 install -m 0644 "${fixtures}/capabilities.toml" "${context}/capabilities.toml"
 install -m 0644 "${fixtures}/session-authority-test.target" \
     "${context}/session-authority-test.target"
@@ -819,6 +830,9 @@ if ! docker_checked exec "${systemd_container}" \
         --unit pf-session-authorityd.service \
         --unit pf-app@org.pocketforge.fixture.service \
         --unit pf-input-broker.service \
+        --unit pocketforge-gamescope.service \
+        --unit pocketforge-session-publisher.service \
+        --unit pocketforge-gamescope-session.target \
         --unit pocketforge-foreground.target \
         --unit pf-shell-selected.service \
         --unit session-authority-driver.service >&2 || true

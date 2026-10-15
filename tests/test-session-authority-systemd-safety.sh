@@ -85,7 +85,10 @@ verify_session_producer_fixture() {
         && grep -Fq 'X11 = Path("/tmp/.X11-unix/X0")' "${fake_gamescope}" \
         && grep -Fq 'for group_name in gamer audio input video pf-session; do' "${recipe}" \
         && grep -Fq 'COPY pocketforge-session-publisher.service' "${recipe}" \
-        && grep -Fq 'COPY pf-session-publish /usr/lib/pocketforge/pf-session-publish' "${recipe}"
+        && grep -Fq 'COPY pf-session-publish /usr/lib/pocketforge/pf-session-publish' "${recipe}" \
+        && grep -Fq 'probe["POCKETFORGE_SESSION"] == "/run/pocketforge/session"' "${driver}" \
+        && grep -Fq '"wayland_socket": stat.S_ISSOCK(' \
+            "${root}/tests/session-authority-systemd/fixture"
 }
 
 # pf-app@ now consumes the compositor session environment and socket. Exercise
@@ -101,6 +104,9 @@ if verify_session_producer_fixture "${tmp}/unordered-session.target"; then
     echo 'session-authority systemd-safety: FAIL: unordered session publisher passed' >&2
     exit 1
 fi
+gamescope_self_test="$(python3 "${fake_gamescope}" --self-test)"
+grep -Fqx 'fake-gamescope self-test: PASS filesystem_sockets=2 abstract_sockets=0' \
+    <<<"${gamescope_self_test}" || exit 1
 
 mkdir -p \
     "${fake_bin}" \
