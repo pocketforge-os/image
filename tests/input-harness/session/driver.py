@@ -47,6 +47,8 @@ KEYMAP = {
     "6": 7, "7": 8, "8": 9, "9": 10, "0": 11,
 }
 
+LAYOUT_KEYS = {"KEY_Y": 21, "KEY_SEMICOLON": 39}
+
 CLIENTS = [
     # (name, backend, purpose, phrase, gui, preload, env extra)
     ("gtk4-text", "wayland", "email", PHRASE, True, True, {"GDK_BACKEND": "wayland"}),
@@ -325,6 +327,14 @@ def type_phrase(kbd: PrivateInput, phrase: str) -> None:
         time.sleep(0.03)
 
 
+def type_keycodes(kbd: PrivateInput, keycodes) -> None:
+    for code in keycodes:
+        kbd.cmd(f"key {code} 1")
+        time.sleep(0.02)
+        kbd.cmd(f"key {code} 0")
+        time.sleep(0.03)
+
+
 def wait_for_widget_text(tx_path: str, phrase: str, timeout: float,
                          proc: subprocess.Popen) -> bool:
     deadline = time.monotonic() + timeout
@@ -352,7 +362,8 @@ def read_jsonl(path: str):
 
 def run_client(sw: SessionWriter, name: str, backend: str, purpose, phrase,
                gui: bool, preload: bool, extra_env: dict,
-               kbd: PrivateInput, pointer: PrivateInput) -> None:
+               kbd: PrivateInput, pointer: PrivateInput,
+               keycodes=None) -> None:
     tx_path = os.path.join(TX_DIR, f"{name}.jsonl")
     if os.path.lexists(tx_path):
         raise RuntimeError(f"stale transcript exists before {name} launch: {tx_path}")
@@ -392,7 +403,10 @@ def run_client(sw: SessionWriter, name: str, backend: str, purpose, phrase,
         if phrase is not None:
             if not screenshot(sw, name, "before", f"{name}-before"):
                 raise RuntimeError(f"{name} pre-typing screenshot failed")
-            type_phrase(kbd, phrase)
+            if keycodes is None:
+                type_phrase(kbd, phrase)
+            else:
+                type_keycodes(kbd, keycodes)
             if not wait_for_widget_text(tx_path, phrase, 10, proc):
                 raise RuntimeError(
                     f"{name} did not read back expected widget text {phrase!r}")
@@ -493,10 +507,21 @@ def main() -> int:
         kbd.cmd("key 42 0")
         time.sleep(1.0)
 
-        for (name, backend, purpose, phrase, gui, preload,
-             extra_env) in CLIENTS:
-            run_client(sw, name, backend, purpose, phrase, gui, preload, extra_env,
-                       kbd, pointer)
+        layout_scenario = os.environ.get("PF_LAYOUT_SCENARIO", "")
+        if layout_scenario:
+            expected = os.environ.get("PF_LAYOUT_EXPECT", "")
+            if not expected:
+                raise RuntimeError("PF_LAYOUT_EXPECT is required for a layout scenario")
+            run_client(
+                sw, "gtk4-text", "wayland", "email", expected, True, True,
+                {"GDK_BACKEND": "wayland"}, kbd, pointer,
+                (LAYOUT_KEYS["KEY_Y"], LAYOUT_KEYS["KEY_SEMICOLON"]),
+            )
+        else:
+            for (name, backend, purpose, phrase, gui, preload,
+                 extra_env) in CLIENTS:
+                run_client(sw, name, backend, purpose, phrase, gui, preload,
+                           extra_env, kbd, pointer)
 
         rc = 0
     except Exception as exc:  # noqa: BLE001 - driver must always write stop
@@ -517,11 +542,22 @@ def main() -> int:
                 bridge.wait(timeout=5)
         sw.stop(rc)
 
-    report = os.path.join(
+    report_dir = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "report", "report.py")
-    if not os.path.exists(report):
-        report = os.path.join(HARNESS_ROOT, "report", "report.py")
-    rep = subprocess.run([sys.executable, "-B", report, OUT])
+    if os.environ.get("PF_LAYOUT_SCENARIO"):
+        report = os.path.join(os.path.dirname(report_dir), "layout_scenario.py")
+        if not os.path.exists(report):
+            report = os.path.join(HARNESS_ROOT, "report", "layout_scenario.py")
+        rep = subprocess.run([
+            sys.executable, "-B", report,
+            os.path.join(TX_DIR, "gtk4-text.jsonl"),
+            os.environ["PF_LAYOUT_EXPECT"], os.environ["PF_LAYOUT_SCENARIO"],
+        ])
+    else:
+        report = report_dir
+        if not os.path.exists(report):
+            report = os.path.join(HARNESS_ROOT, "report", "report.py")
+        rep = subprocess.run([sys.executable, "-B", report, OUT])
     return rep.returncode
 
 

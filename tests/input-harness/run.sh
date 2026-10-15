@@ -76,7 +76,7 @@ fi
 echo "==> transcripts:"
 find "$OUT" -name '*.jsonl' -print | sort
 echo "==> screenshots:"
-find "$OUT/screenshots" -name '*.png' -print | sort
+find "$OUT" -path '*/screenshots/*.png' -print | sort
 
 echo "==> verdict"
 set +e

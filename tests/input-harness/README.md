@@ -40,6 +40,7 @@ type `screen_buffer` for golden comparison) and `screenshots/manifest.json`.
 | `schema/transcript-schema.md` | transcript JSONL schema (documented, closed) |
 | `validate/validate_transcript.py` | stdlib transcript validator (reason=/hint= lines) |
 | `report/report.py` | run-directory evaluation → `PASS:`/`FAIL:`/`SKIP:` verdict |
+| `report/layout_scenario.py` | exact GTK readback evaluator for keyboard-layout scenarios |
 | `selftest/make_fixtures.py` | fixture generator for the hermetic CI self-test |
 | `session/entry.sh` | container entrypoint; execs headless gamescope + driver |
 | `session/driver.py` | session orchestrator (private streams → EIS bridge → clients → screenshots → report) |
@@ -55,6 +56,20 @@ type `screen_buffer` for golden comparison) and `screenshots/manifest.json`.
 | `tools/transcript.{h,c}` | `libpf-transcript.so` used by every client |
 | `tools/transcript-preload.c` | LD_PRELOAD interposer (cursor names, text-input-v3 availability) |
 | `clients/*.c(pp)` | the test clients, one per design table row |
+
+## Keyboard-layout scenario
+
+The default host-safe run adds two compositor sessions after the client
+matrix. Each session runs the production
+`/usr/lib/pocketforge/kbd-layout-env` generator against an explicit stored
+`keyboardLayout`, sources its rendered environment, and only then starts
+gamescope. The shared driver sends evdev `KEY_Y` and `KEY_SEMICOLON` through
+the same private `SOCK_SEQPACKET` → `eis-bridge` path as every other client.
+The German session requires the GTK widget readback `zö`; the restarted U.S.
+session requires `y;`. A deliberately wrong U.S. expectation against the
+German transcript must exit nonzero with
+`reason=layout_widget_text_mismatch`. Both sessions retain their transcript
+and before/after screenshots under `layout-scenario/{de,us}/`.
 
 Placement decision (bead asked to record it): everything lives in the
 **image repo** under `tests/input-harness/`, next to the existing gamescope

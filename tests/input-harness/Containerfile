@@ -167,10 +167,12 @@ COPY --from=client-builder /opt/harness/ /harness/
 COPY tests/input-harness/session /harness/session
 COPY tests/input-harness/report /harness/report
 COPY tests/input-harness/validate /harness/validate
+COPY rootfs-overlay/usr/lib/pocketforge/kbd-layout-env /usr/lib/pocketforge/kbd-layout-env
 
 RUN set -eux; \
     chmod +x /harness/session/entry.sh /harness/session/driver.py \
-             /harness/session/mangoapp; \
+             /harness/session/mangoapp /harness/report/layout_scenario.py \
+             /usr/lib/pocketforge/kbd-layout-env; \
     ln -sf /harness/session/mangoapp /usr/local/bin/mangoapp; \
     if ldd /usr/local/bin/gamescope | grep -q "not found"; then \
         ldd /usr/local/bin/gamescope; exit 1; \
