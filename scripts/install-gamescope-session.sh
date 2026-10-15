@@ -34,6 +34,8 @@ for file in "${files[@]}"; do
 done
 install -D -m 0755 "${src}/usr/lib/pocketforge/pf-session-publish" \
     "${rootfs}/usr/lib/pocketforge/pf-session-publish"
+install -D -m 0755 "${src}/usr/lib/pocketforge/pf-gamescope-kms-select" \
+    "${rootfs}/usr/lib/pocketforge/pf-gamescope-kms-select"
 install -D -m 0644 \
     "${src}/usr/share/pocketforge/runtime-path-producers-g1.json" \
     "${rootfs}/usr/share/pocketforge/runtime-path-producers.json"

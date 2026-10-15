@@ -217,6 +217,8 @@ for binary in pf-app-launch pf-input-broker gamescope systemctl test true; do
 done
 cp "${root}/rootfs-overlay/usr/lib/pocketforge/pf-session-publish" \
     "${verify}/usr/lib/pocketforge/pf-session-publish"
+cp "${root}/rootfs-overlay/usr/lib/pocketforge/pf-gamescope-kms-select" \
+    "${verify}/usr/lib/pocketforge/pf-gamescope-kms-select"
 
 if ! systemd-analyze verify --man=no --root="${verify}" \
     pf-app@org.pocketforge.fixture.service \
