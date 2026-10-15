@@ -136,7 +136,8 @@ truncate -s $((256 * 512)) "$dev/arbitrary-card"
 printf 'TAIL-SENTINEL' | dd of="$dev/arbitrary-card" bs=1 seek="$img_bytes" conv=notrunc status=none
 sf_v2_validate_and_resolve "$(flag)" || fail 'valid SD identity refused'
 [[ "$SF_SD" == "$dev/arbitrary-card" ]] || fail "resolved wrong device: $SF_SD"
-if grep -Fq '$sf_v2_entry/removable' "$tmp/functions.sh"; then
+removable_lookup="\$sf_v2_entry/removable"
+if grep -Fq "$removable_lookup" "$tmp/functions.sh"; then
     fail 'gate still assumes the MMC gendisk removable attribute'
 fi
 card_real="$(readlink -f "$SF_SD_SYS")"
@@ -166,6 +167,8 @@ for name in meta-data network-config user-data; do
 done
 grep -Fqx "RawSHA256=$img_sha" "$fat/pocketforge-selfflash-receipt" \
     || fail 'durable receipt lacks verified raw SHA'
+grep -Fqx 'CardType=SD' "$fat/pocketforge-selfflash-receipt" \
+    || fail 'durable receipt lacks verified SD card type'
 
 # Negative control required by the owner: mmcblk0 is eMMC with the expected
 # serial and a realistic boot0/boot1/rpmb fanout. Its name and matching card
@@ -173,6 +176,10 @@ grep -Fqx "RawSHA256=$img_sha" "$fat/pocketforge-selfflash-receipt" \
 find "$sys" -mindepth 1 -delete
 make_card mmcblk0 4022000 MMC 0x1234abcd 256
 make_emmc_extra_disks mmcblk0
+for disk in "$sys"/*; do
+    [[ "$(cat "$disk/removable")" == 0 ]] \
+        || fail "MMC fixture does not mirror removable=0: ${disk##*/}"
+done
 truncate -s $((256 * 512)) "$dev/mmcblk0"
 printf 'EMMC-DO-NOT-WRITE' | dd of="$dev/mmcblk0" bs=1 conv=notrunc status=none
 before="$(sha256sum "$dev/mmcblk0" | cut -d' ' -f1)"

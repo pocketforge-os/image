@@ -564,12 +564,17 @@ sf_v2_validate_and_resolve() {
     sf_v2_count=0
     SF_SD=""
     SF_SD_SYS=""
+    SF_CARD_TYPE=""
     for sf_v2_entry in "$SF_SYS_CLASS_BLOCK"/*; do
         [ -e "$sf_v2_entry" ] || continue
         [ -e "$sf_v2_entry/device" ] || continue
         sf_v2_physical="$(readlink -f "$sf_v2_entry/device" 2>/dev/null)"
         sf_v2_controller_path "$sf_v2_physical" || continue
-        [ "$(cat "$sf_v2_entry/removable" 2>/dev/null)" = 1 ] || continue
+        # MMC gendisks intentionally never set GENHD_FL_REMOVABLE, including
+        # hot-pluggable SD media (kernel drivers/mmc/core/block.c:2556-2566).
+        # The parent MMC card object supplies the authoritative SD/MMC type.
+        sf_v2_type="$(cat "$sf_v2_entry/device/type" 2>/dev/null)"
+        [ "$sf_v2_type" = SD ] || continue
         sf_v2_serial="$(cat "$sf_v2_entry/device/serial" 2>/dev/null)"
         sf_v2_sectors="$(cat "$sf_v2_entry/size" 2>/dev/null)"
         [ "$sf_v2_serial" = "$SF_EXPECTED_SERIAL" ] || continue
@@ -583,8 +588,10 @@ sf_v2_validate_and_resolve() {
         sf_v2_count=$((sf_v2_count + 1))
         SF_SD="$sf_v2_device"
         SF_SD_SYS="$sf_v2_entry"
+        SF_CARD_TYPE="$sf_v2_type"
     done
-    [ "$sf_v2_count" -eq 1 ] || { SF_SD=""; SF_SD_SYS=""; return 1; }
+    [ "$sf_v2_count" -eq 1 ] \
+        || { SF_SD=""; SF_SD_SYS=""; SF_CARD_TYPE=""; return 1; }
 }
 
 sf_v2_phase() {
@@ -690,6 +697,7 @@ sf_v2_install_seed() {
         printf 'Generation=%s\n' "$SF_GENERATION"
         printf 'DescriptorSHA256=%s\n' "$SF_DESCRIPTOR_SHA"
         printf 'Controller=%s\n' "$SF_FLAG_CONTROLLER"
+        printf 'CardType=%s\n' "$SF_CARD_TYPE"
         printf 'CardSerial=%s\n' "$SF_EXPECTED_SERIAL"
         printf 'CardSectors=%s\n' "$SF_EXPECTED_SECTORS"
         printf 'WrittenRangeBytes=%s\n' "$SF_IMG_BYTES"
