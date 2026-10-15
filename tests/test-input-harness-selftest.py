@@ -215,6 +215,7 @@ def section_asset_audit(work):
         "selftest/fake_input_guard_test.c",
         "selftest/test-fake-input-guard.sh",
         "selftest/test-negative-control-wrapper.sh",
+        "selftest/test-layout-scenario-shell.sh",
         "selftest/test-guest-agent.py",
         "selftest/test-guest-kernel-cleanup.py",
         "selftest/test-apt-proxy-guard.sh",
