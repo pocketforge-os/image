@@ -4,6 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 harness="${root}/tests/test-session-authority-systemd.sh"
 driver="${root}/tests/session-authority-systemd/drive.py"
+fake_shell="${root}/tests/session-authority-systemd/fake-shell"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
 probe_recipe="${root}/tests/session-authority-systemd/probe/Containerfile"
@@ -32,6 +33,36 @@ cleanup() {
     rmdir "${tmp}"
 }
 trap cleanup EXIT
+
+verify_shell_rpc_identity_fixture() {
+    local test_driver="$1"
+    local test_shell="$2"
+
+    grep -Fq 'SHELL_RPC_SOCKET = GRAB / "shell-rpc.sock"' "${test_driver}" \
+        && grep -Fq 'stream.connect(str(SHELL_RPC_SOCKET))' "${test_driver}" \
+        && ! sed -n '/^def rpc(/,/^$/p' "${test_driver}" | grep -Fq 'stream.connect(str(SOCKET))' \
+        && grep -Fq 'AUTHORITY_SOCKET = Path("/run/pocketforge/session-authority.sock")' "${test_shell}" \
+        && grep -Fq 'proxy_one(client, AUTHORITY_SOCKET)' "${test_shell}"
+}
+
+# Runtime authenticates the process which opens its shell socket. The Docker-exec
+# driver is deliberately outside a service, so every authority RPC must be relayed
+# by the fake shell in pf-shell-selected.service. Positive control plus a mutation
+# proving that a direct driver connection is rejected by this guard.
+verify_shell_rpc_identity_fixture "${driver}" "${fake_shell}" || {
+    echo 'session-authority systemd-safety: FAIL: shell RPCs bypass the service-owned fixture' >&2
+    exit 1
+}
+sed 's/stream.connect(str(SHELL_RPC_SOCKET))/stream.connect(str(SOCKET))/' \
+    "${driver}" >"${tmp}/direct-authority-driver.py"
+if verify_shell_rpc_identity_fixture "${tmp}/direct-authority-driver.py" "${fake_shell}"; then
+    echo 'session-authority systemd-safety: FAIL: direct non-service authority client passed' >&2
+    exit 1
+fi
+shell_proxy_self_test="$(python3 "${fake_shell}" --proxy-self-test)"
+grep -Fqx \
+    'session-authority shell-rpc proxy self-test: PASS relay=accepted malformed_frame=rejected_before_authority' \
+    <<<"${shell_proxy_self_test}" || exit 1
 
 mkdir -p \
     "${fake_bin}" \
