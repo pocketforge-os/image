@@ -269,15 +269,22 @@ repo-wide uinput occurrence inventory with seeded red controls.
    `pf build` resolves this differently,
    from the snapshot-pinned Bookworm backports package in its owned build
    environment; neither path patches gamescope source.
-9. **The laptop harness and device image intentionally use different gamescope
-   pins.** The harness uses `5dd17e1c18e836d8c2be575dbdfead7c4d3b43ba`
-   from gamescope#15–#20: current lavapipe can start headless without
-   `VK_KHR_external_semaphore_fd`, and a headless client commit with no fence is
-   ready immediately and nudges the compositor so the frame is presented.
-   Reused wl_shm buffers refresh their damaged pixels before composition, so
-   toolkit double-buffering cannot retain the first imported frame.
-   Runtime orientation falls back to the fixed mount when the harness has no
-   session-authority socket. The device image remains at
-   `298881e3dff1ade108d57a257e8bf59bf8c6436f`; DRM scanout and explicit-sync
-   still require the extension and wait on a real fence. The harness carries
+9. **The laptop harness and the device provenance pipeline pin the same
+   gamescope commit.** The harness uses
+   `0b03a62e720ae93afbd5e59167c8774f8ad74f0c` (pocketforge-linear tip, matching
+   `build/produce-gamescope-pvr-cache.sh`), carrying gamescope#15–#21:
+   current lavapipe can start headless without
+   `VK_KHR_external_semaphore_fd`; a headless client commit with no fence is
+   ready immediately and nudges the compositor so the frame is presented;
+   reused wl_shm buffers refresh their damaged pixels before composition; and
+   partial damage is tracked across shm buffer pools (gamescope#21), so a
+   pooled double-buffered commit presents its full updated region instead of
+   dropping the newest repaint — the gtk4-text last-glyph miss seen at
+   `5dd17e1c`. The tip also contains the panel-orientation quarter-turn
+   inversion; runtime orientation still falls back to the fixed mount when the
+   harness has no session-authority socket. DRM scanout and explicit-sync
+   still require the extension and wait on a real fence.
+   `guest-payload.pins` keeps its own
+   `298881e3dff1ade108d57a257e8bf59bf8c6436f` pin for the reproducible guest
+   payload — a different path, deliberately untouched. The harness carries
    no private gamescope patch.
