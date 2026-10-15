@@ -25,8 +25,16 @@ grep -Fq 'pocketforge-selfflash-v2' "$builder" \
 recover="$(sed -n '/^selfflash_recover() {/,/^}/p' "$init")"
 post_write="$(sed -n '/^[[:space:]]*if ! sf_v2_write_verify/,/^[[:space:]]*# Success:/p' \
     <<<"$recover")"
-[[ "$(grep -Fc 'sf_v2_terminal_recovery' <<<"$post_write")" -eq 5 ]] \
+post_write_contract() {
+    [[ "$(grep -Fc 'sf_v2_terminal_recovery' <<<"$1")" -eq 5 ]] \
+        && ! grep -Fq 'return 1' <<<"$1"
+}
+post_write_contract "$post_write" \
     || fail 'every post-write error must enter terminal FEL recovery'
+fail_open_mutation="$(sed '0,/sf_v2_terminal_recovery/s//return 1 #/' <<<"$post_write")"
+if post_write_contract "$fail_open_mutation"; then
+    fail 'post-write fail-open negative control was accepted'
+fi
 if grep -Fq 'return 1' <<<"$post_write"; then
     fail 'post-write error can return to normal boot'
 fi

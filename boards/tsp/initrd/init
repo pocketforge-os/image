@@ -636,6 +636,14 @@ sf_v2_stage_ram() {
 # to corrupt the fake device between write and readback.
 sf_v2_after_write() { :; }
 
+sf_v2_terminal_recovery() {
+    log "selfflash: TERMINAL recovery state — $*; host FEL whole-image recovery required"
+    sync 2>/dev/null
+    # PID 1 becomes an initramfs shell. Exiting it ends init instead of resuming
+    # the boot path, so a partially written image can never be mounted as root.
+    exec /bin/sh
+}
+
 sf_v2_write_verify() {
     [ -n "$SF_SD" ] && [ -f "$SF_STAGED_XZ" ] || return 1
     sf_v2_phase write_start
@@ -806,8 +814,7 @@ selfflash_recover() {
     fi
     log "selfflash: SD unmounted; writing and fully verifying RawBytes on controller 0x$SF_FLAG_CONTROLLER ($SD)"
     if ! sf_v2_write_verify; then
-        log "selfflash: whole-image write/readback verification failed — FEL recovery required"
-        return 1
+        sf_v2_terminal_recovery "whole-image write/readback verification failed"
     fi
     rm -f "$SF_STAGED_XZ"
 
@@ -817,22 +824,18 @@ selfflash_recover() {
     sf_drop_cache
     NEWFAT="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
     if [ -z "$NEWFAT" ] || ! sf_v2_partition_on_selected_card "$NEWFAT"; then
-        log "selfflash: new boot FAT is absent or not on selected SD — FEL recovery required"
-        return 1
+        sf_v2_terminal_recovery "new boot FAT is absent or not on selected SD"
     fi
     mkdir -p /sf-newfat
     if ! mount -t vfat -o rw "$NEWFAT" /sf-newfat 2>/dev/null; then
-        log "selfflash: new boot FAT mount failed — FEL recovery required"
-        return 1
+        sf_v2_terminal_recovery "new boot FAT mount failed"
     fi
     if ! sf_v2_install_seed /sf-newfat; then
-        log "selfflash: seed injection/readback failed — FEL recovery required"
         umount /sf-newfat 2>/dev/null
-        return 1
+        sf_v2_terminal_recovery "seed injection/readback failed"
     fi
     umount /sf-newfat 2>/dev/null || {
-        log "selfflash: new boot FAT unmount failed — FEL recovery required"
-        return 1
+        sf_v2_terminal_recovery "new boot FAT unmount failed"
     }
 
     # Success: the reflash overwrote p5, so the flag file is gone -> next boot normal.
