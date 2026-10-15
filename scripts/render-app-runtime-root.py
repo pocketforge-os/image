@@ -81,6 +81,7 @@ RESOURCE_PREFIXES = {
     "audio-devices": ("/dev/snd/",),
     "audio-sockets": ("/run/pocketforge/session/",),
     "broker-sockets": ("/run/pocketforge/",),
+    "display-devices": ("/dev/fb",),
     "display-sockets": ("/run/pocketforge/session/",),
     "input-devices": ("/dev/input/",),
     "media-devices": ("/dev/media",),

@@ -5,20 +5,17 @@
       "/dev/snd/controlC0",
       "/dev/snd/pcmC0D0p"
     ],
-    "audio-sockets": [
-      "/run/pocketforge/session/audio-0"
+    "display-devices": [
+      "/dev/fb0"
     ],
-    "display-sockets": [
-      "/run/pocketforge/session/wayland-0"
+    "broker-sockets": [
+      "/run/pocketforge/input-broker.sock"
     ],
     "input-devices": [
       "/dev/input/event0"
     ],
     "render-devices": [
       "/dev/dri/renderD128"
-    ],
-    "session-environment": [
-      "/run/pocketforge/session/environment"
     ]
   }
 }

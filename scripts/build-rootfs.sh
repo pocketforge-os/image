@@ -1295,6 +1295,15 @@ else
     echo "[customize] runtime NOT-SHIPPED for this device (no ${RUNTIME_BIN}) — skipping pf-input-decode install"
 fi
 
+# App-policy runtime paths are audited against one image-owned producer
+# inventory. Keep this independent rootfs feature outside the kernel-module
+# transaction above so module-only probes do not need app-policy artifacts.
+if [ "${PF_GPU_MODEL:-ddk}" = open ]; then
+    install -D -m 0644 \
+        /work/src/rootfs-overlay/usr/share/pocketforge/runtime-path-producers.json \
+        "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
+fi
+
 # The generic default-app mechanism is an A133-open-only atomic set. Its helper
 # enforces both directions: all five staged inputs must exist for open, while no
 # helper/platform/authority/shell artifact may reach a non-open profile.
@@ -1378,6 +1387,12 @@ if [ -f "${PREFSD_BIN}" ]; then
     ln -sf /etc/systemd/system/pf-prefsd.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-prefsd.service"
     echo "[customize] pf-prefsd installed and enabled as the preference state authority"
+fi
+
+if [ "${PF_GPU_MODEL:-ddk}" = open ]; then
+    /work/src/scripts/check-runtime-path-producers.py \
+        --root "${ROOTFS}" \
+        --producers "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
 fi
 
 if [ "${PF_HAS_DISPLAY}" = 1 ]; then
