@@ -130,6 +130,10 @@ grep -Fx 'EnvironmentFile=-/run/pocketforge/gamescope/kms.env' "${unit}" >/dev/n
 # shellcheck disable=SC2016
 grep -F -- '--prefer-drm ${PF_GAMESCOPE_KMS_NODE}' "${unit}" >/dev/null
 grep -Fx 'DeviceAllow=char-drm rw' "${unit}" >/dev/null
+if grep -v '^[[:space:]]*#' "${unit}" \
+    | grep -F 'systemd-udev-settle.service' >/dev/null; then
+    fail "Gamescope KMS discovery pulls in the global udev-settle barrier"
+fi
 if grep -Eq '/dev/dri/card[0-9]|dev-dri-card[0-9]' "${unit}"; then
     fail "Gamescope unit still pins a DRM card index"
 fi

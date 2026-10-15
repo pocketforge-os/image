@@ -1,7 +1,7 @@
 [Unit]
 Description=PocketForge Gamescope display owner
-After=systemd-udev-settle.service dev-dri-renderD128.device pf-kbd-layout-env.service pf-open-gpu-gate.service pocketforge-boot-animator.service pf-shell-selected.service
-Wants=systemd-udev-settle.service dev-dri-renderD128.device pf-kbd-layout-env.service
+After=dev-dri-renderD128.device pf-kbd-layout-env.service pf-open-gpu-gate.service pocketforge-boot-animator.service pf-shell-selected.service
+Wants=dev-dri-renderD128.device pf-kbd-layout-env.service
 PartOf=pocketforge-gamescope-session.target
 Conflicts=pf-shell-selected.service pocketforge-foreground.target
 OnFailure=pocketforge-gamescope-fallback.service

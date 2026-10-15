@@ -48,16 +48,15 @@ check_drm_readiness_contract() {
 
     grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_NETLINK' "${unit}" >/dev/null \
         || return 1
-    grep -Eq '^After=.*systemd-udev-settle\.service([[:space:]]|$)' "${unit}" \
-        || return 1
-    grep -Eq '^Wants=.*systemd-udev-settle\.service([[:space:]]|$)' "${unit}" \
+    ! grep -v '^[[:space:]]*#' "${unit}" \
+        | grep -F 'systemd-udev-settle.service' >/dev/null \
         || return 1
     grep -Fx 'SUBSYSTEM=="drm", KERNEL=="card*", TAG+="systemd"' "${rule}" >/dev/null \
         || return 1
 }
 
-# Gamescope's libseat/udev session needs netlink. Settle the tagged DRM primary
-# nodes before the capability selector runs; no numbered card is authoritative.
+# Gamescope's libseat/udev session needs netlink and tagged DRM primary nodes.
+# The session must not pull in the global udev-settle boot barrier.
 check_drm_readiness_contract "${owner}" "${drm_systemd_rule}" \
     || fail "Gamescope DRM readiness contract is incomplete"
 cp "${owner}" "${scratch}/owner-missing-netlink.service"
