@@ -125,7 +125,7 @@ assert broker == [
     ("Unit", "After", "pocketforge-gamescope-session.target pf-input-decode.service pf-prefsd.service"),
     ("Unit", "Conflicts", "pf-shell-selected.service"),
     ("Unit", "ConditionPathExists", ""),
-    ("Unit", "AssertPathExists", "/dev/uinput"),
+    ("Service", "ExecStartPre", "/usr/bin/test -e /dev/uinput"),
     ("Service", "Group", "gamer"),
     ("Service", "UMask", "0007"),
     ("Service", "Environment", "PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock"),

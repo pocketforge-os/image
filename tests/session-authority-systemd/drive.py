@@ -909,7 +909,7 @@ def assert_broker_failure_never_traps() -> str:
         scope = launch()
     finally:
         UINPUT.touch(mode=0o600)
-    assert_result = property_value(BROKER_UNIT, "AssertResult")
+    broker_result = property_value(BROKER_UNIT, "Result")
     released = True
     try:
         wait_for(lambda: not unit_is_active(TARGET_UNIT), f"target release after broker failure in {scope.session_id}")
@@ -922,12 +922,12 @@ def assert_broker_failure_never_traps() -> str:
     events()
     phase = authority_state()["phase"]
     evidence(
-        f"broker_start_failure session={scope.session_id} broker_assert_result={assert_result} "
+        f"broker_start_failure session={scope.session_id} broker_result={broker_result} "
         f"app_invocations={invocation_count() - before_invocations} target={target_state} "
         f"owner={owner_state} panel_returned={'yes' if released else 'no'} "
         f"authority_phase={json.dumps(phase, separators=(',', ':'))}"
     )
-    require(assert_result == "no", f"broker AssertPathExists=/dev/uinput did not fail: {assert_result!r}")
+    require(broker_result == "exit-code", f"broker uinput pre-start did not fail: {broker_result!r}")
     require(invocation_count() == before_invocations, "app started although its broker failed")
     require(broker_grab_count() == before_broker_grabs, "failed broker grabbed the pad")
     require(released, f"user trapped: broker start failure left target={target_state} owner={owner_state}")

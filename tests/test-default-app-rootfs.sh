@@ -274,7 +274,7 @@ none_body="$(sed -n '/^FROM ${PF_CONTAINER} AS launcher-none$/,/^# launcher-open
 test "$(grep -c '^COPY --from=launcher-src ' "${dockerfile}")" -eq 1
 
 # No app bundle may declare a cgroup uinput grant (incident tsp-ihne1.56, PR6).
-# uinput is broker-owned (pf-input-broker AssertPathExists=/dev/uinput) and the
+# uinput is broker-owned (pf-input-broker ExecStartPre checks /dev/uinput) and the
 # generic pf-app@.service already hides it (InaccessiblePaths=-/dev/uinput), so a
 # slice.conf DeviceAllow=/dev/uinput is both over-broad and redundant: an app reads
 # input through the broker, it never creates input devices. hello-pocketforge used

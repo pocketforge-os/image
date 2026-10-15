@@ -78,6 +78,10 @@ def validate(app_text: str, broker_text: str) -> None:
     ]
     assert foreground not in words(broker, "Unit", "Wants")
     assert foreground not in words(broker, "Unit", "After")
+    assert ("Unit", "AssertPathExists") not in broker
+    assert broker.get(("Service", "ExecStartPre")) == [
+        "/usr/bin/test -e /dev/uinput"
+    ]
 
 
 app_text = Path(sys.argv[1]).read_text(encoding="utf-8")
@@ -95,6 +99,9 @@ controls = {
     ),
     "broker-missing-failure-fallback": broker_text.replace(
         "OnFailure=pocketforge-gamescope-fallback.service\n", ""
+    ),
+    "broker-missing-uinput-precheck": broker_text.replace(
+        "ExecStartPre=/usr/bin/test -e /dev/uinput\n", ""
     ),
 }
 for name, candidate in controls.items():

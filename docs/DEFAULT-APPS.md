@@ -959,9 +959,9 @@ Wants=pocketforge-gamescope-session.target
 After=pocketforge-gamescope-session.target pf-input-decode.service pf-prefsd.service
 Conflicts=pf-shell-selected.service
 ConditionPathExists=
-AssertPathExists=/dev/uinput
 
 [Service]
+ExecStartPre=/usr/bin/test -e /dev/uinput
 Group=gamer
 UMask=0007
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
@@ -970,13 +970,14 @@ ExecStart=
 ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/device/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/system-menu.sock
 ```
 
-`ConditionPathExists=` followed by `AssertPathExists=/dev/uinput` is a B4 addition to the
-ruling's list. The runtime unit's `ConditionPathExists=/dev/uinput` would turn a missing uinput
-node into a *skipped* start. A skipped start is a success for `Requires=`, so the app would start
-with no input and no Menu intake: a trapped user. The empty assignment resets the inherited
-condition, and the assertion fails the broker job, which fails the dependent app job.
-`BindsTo=` with `After=` would not keep the app active beside a skipped broker either. The
-assertion makes it a start failure, so the app is never invoked (harness
+`ConditionPathExists=` followed by `ExecStartPre=/usr/bin/test -e /dev/uinput` is a B4
+addition to the ruling's list. The runtime unit's `ConditionPathExists=/dev/uinput` would turn
+a missing uinput node into a *skipped* start. A skipped start is a success for `Requires=`, so
+the app would start with no input and no Menu intake: a trapped user. The empty assignment
+resets the inherited condition, and the pre-start command fails the broker job, which fails the
+dependent app job and activates the broker's `OnFailure=` fallback. `BindsTo=` with `After=`
+would not keep the app active beside a skipped broker either. The pre-start command makes it a
+failure, so the app is never invoked (harness
 `broker_start_failure`).
 
 `Restart=no`, `OnFailure=pocketforge-gamescope-fallback.service`, and
@@ -996,7 +997,7 @@ right after start:
   `OnSuccess=` never fired, and the authority waited at rung `TargetReleased` with no shell.
   With `Wants=`, the broker's own failed transition rechecks the compositor
   target, which stops only when no independent opt-in or app job pins it.
-- **`OnFailure=`.** A failed `AssertPathExists=/dev/uinput` start can leave the compositor
+- **`OnFailure=`.** A failed `/dev/uinput` pre-start can leave the compositor
   target active even though the app never became a live pin. The broker never entered active,
   so there is no later broker inactive transition to recheck `StopWhenUnneeded=`. The failure
   unit starts the reusable fallback; its shell start conflicts with and stops the transient
@@ -1015,7 +1016,7 @@ After=pf-input-broker.service
 | Failure mode | Behaviour | Test |
 |---|---|---|
 | Broker enabled at boot | It would stop the shell at boot through `Conflicts=` and grab the pad | Image: the installer removes and then refuses any `*.wants/pf-input-broker.service`. Harness: `is-enabled` is `disabled` and the broker is inactive at boot |
-| Broker cannot start (no `/dev/uinput`) | The assertion fails the broker job, the app job fails as a dependency, and broker `OnFailure=` runs the reusable shell fallback. Starting the shell conflicts with and stops the orphaned transient session target; the authority records `Crash` (`systemd_start_failed`) and the panel returns | Harness `broker_start_failure`: no app invocation, no broker grab, target inactive, owner re-activated, `Crash` receipt |
+| Broker cannot start (no `/dev/uinput`) | The pre-start check fails the broker job, the app job fails as a dependency, and broker `OnFailure=` runs the reusable shell fallback. Starting the shell conflicts with and stops the orphaned transient session target; the authority records `Crash` (`systemd_start_failed`) and the panel returns | Harness `broker_start_failure`: no app invocation, no broker grab, broker result `exit-code`, target inactive, owner re-activated, `Crash` receipt |
 | Broker exits before READY (bad source or descriptor; the .215 trap) | It fails once (`Restart=no`) and the app is never invoked. Broker `OnFailure=` starts the fallback, which releases the target and restores the shell; it stays up. The receipt is `Crash` (`systemd_start_failed`). Before the fix, the runtime unit's `Restart=on-failure` restarted the broker every 2 s, and each start stopped the shell again through `Conflicts=` | Harness `broker_exit_before_ready`: NRestarts 0, one start attempt, shell back within 10 s, one shell PID and zero broker activity over 30 s, no grab conflicts. Negative control `control_restart_on_failure`: the same broker with `Restart=on-failure` restored must restart |
 | Broker exits mid-session, after READY | It fails once (`Restart=no`). `BindsTo=` stops the app (SIGTERM, `Result=success`), the target is released, and the shell returns. The authority treats it as the app exiting, so the receipt is `Returned`. Under `Requires=` alone, the app kept running with no broker, no shell and no Menu intake | Harness `broker_exit_mid_session`, with grab order checked; B6 `kill -9` fault case on the target systemd |
 | App ignores SIGTERM | Authority escalates after 1500 ms; SIGKILL is bounded by `TimeoutStopSec=2s`; receipt `ForcedClose` | Harness `r4_sigkill`, plus the direct `systemctl stop` exit probe |

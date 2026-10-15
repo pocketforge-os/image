@@ -1294,6 +1294,7 @@ for b4_check in 'R4 GATE FAILED' 'def assert_grab_timeline' 'def assert_broker_f
     'grab_lock_is_held()' 'systemctl_stop_exit_after_sigkill=' '"--reuid=gamer"' \
     'def assert_broker_exit_before_ready_never_traps' 'def assert_broker_exit_mid_session_never_traps' \
     'def control_restart_on_failure_reproduces_trap' 'watch_units(30.0)' \
+    'broker_result == "exit-code"' 'broker uinput pre-start did not fail' \
     'probe["prefsd_connect"] != "ok"' 'prefsd_outside_sandbox=ok'; do
     grep -Fq -- "${b4_check}" "${driver}" || {
         echo "session-authority systemd-safety: FAIL: driver lost B4 check ${b4_check}" >&2
@@ -1455,6 +1456,13 @@ if python3 "${precondition_verifier}" --unit "${unprovided_unit}" \
     exit 1
 fi
 grep -Fq 'unprovided ConditionPathExists=/unprovided-test-path' "${stderr_log}" || exit 1
+printf '[Service]\nExecStartPre=/usr/bin/test -e /unprovided-test-path\n' >"${unprovided_unit}"
+if python3 "${precondition_verifier}" --unit "${unprovided_unit}" \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: unprovided pre-start path passed audit' >&2
+    exit 1
+fi
+grep -Fq 'unprovided ExecStartPre test -e=/unprovided-test-path' "${stderr_log}" || exit 1
 ! grep -Fq 'Path("/dev/fb0").touch()' "${driver}" || exit 1
 grep -Fq 'framebuffer.is_file() and framebuffer.stat().st_size == 0' "${driver}" || exit 1
 for invocation_field in clean_invocations crash_invocations; do
