@@ -91,21 +91,20 @@ grep -Fx 'PF_GAMESCOPE_KMS_SELECT state=REFUSED reason=no_kms_node' \
 test ! -e "${tree}/kms.env" \
     || fail "render-only refusal retained a stale EnvironmentFile"
 
-# A connector without an enabled CRTC is not yet a usable display pipeline.
-tree="${scratch}/no-crtc"
+# Connector enablement reflects current display ownership, not KMS capability.
+# A connected panel must remain selectable after the previous owner releases it.
+tree="${scratch}/connected-disabled"
 make_card "${tree}" 0 sun4i-drm no
 mkdir -p "${tree}/sys/class/drm/card0-DSI-1"
 printf 'connected\n' >"${tree}/sys/class/drm/card0-DSI-1/status"
 printf 'disabled\n' >"${tree}/sys/class/drm/card0-DSI-1/enabled"
-if PF_DRM_DEV_ROOT="${tree}/dev/dri" \
+PF_DRM_DEV_ROOT="${tree}/dev/dri" \
     PF_DRM_SYS_ROOT="${tree}/sys" \
     PF_GAMESCOPE_KMS_ENV="${tree}/kms.env" \
-    "${selector}" >"${tree}/stdout" 2>"${tree}/stderr"; then
-    fail "connector without an enabled CRTC was accepted"
-fi
-grep -Fx 'PF_GAMESCOPE_KMS_SELECT state=REFUSED reason=no_kms_node' \
-    "${tree}/stderr" >/dev/null \
-    || fail "no-CRTC refusal did not preserve the typed reason"
+    "${selector}" >"${tree}/stdout"
+grep -Fx "PF_GAMESCOPE_KMS_NODE=${tree}/dev/dri/card0" \
+    "${tree}/kms.env" >/dev/null \
+    || fail "connected disabled panel did not select sun4i-drm card0"
 
 # A second display candidate is ambiguous; selecting the lowest card number
 # would silently reintroduce the probe-order dependency.
