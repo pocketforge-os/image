@@ -72,7 +72,7 @@ for binary in gamescope systemctl; do
     printf '#!/bin/sh\nexit 0\n' > "${verify_root}/usr/bin/${binary}"
     chmod 0755 "${verify_root}/usr/bin/${binary}"
 done
-for service in pf-open-gpu-gate.service pf-prefsd.service pocketforge-boot-animator.service \
+for service in pf-input-broker.service pf-open-gpu-gate.service pf-prefsd.service pocketforge-boot-animator.service \
     pf-shell-selected.service systemd-udev-settle.service; do
     printf '[Unit]\nDescription=fixture\n[Service]\nType=oneshot\nExecStart=/usr/bin/systemctl\n' \
         > "${unit_root}/${service}"
@@ -217,8 +217,12 @@ import sys
 
 base = json.load(open(sys.argv[1], encoding="utf-8"))["producers"]
 g1 = json.load(open(sys.argv[2], encoding="utf-8"))["producers"]
-assert set(base) == {"/run/pocketforge/prefsd.sock"}
+assert set(base) == {
+    "/run/pocketforge/input-broker.sock",
+    "/run/pocketforge/prefsd.sock",
+}
 assert set(g1) == {
+    "/run/pocketforge/input-broker.sock",
     "/run/pocketforge/prefsd.sock",
     "/run/pocketforge/session/environment",
     "/run/pocketforge/session/wayland-0",
