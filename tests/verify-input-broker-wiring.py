@@ -84,7 +84,16 @@ assert values(app, "Unit", "BindsTo") == [
 assert "pf-input-broker.service" not in values(app, "Unit", "Requires"), "broker belongs in BindsTo=, not Requires="
 assert "pf-input-broker.service" in values(app, "Unit", "After"), "pf-app@ must order After the broker"
 assert "pf-prefsd.service" in values(app, "Unit", "After"), "pf-app@ must order After prefsd"
-assert "pocketforge-foreground.target" in values(app, "Unit", "Requires")
+assert values(app, "Unit", "Requires") == ["pocketforge-gamescope-session.target"]
+assert "pocketforge-foreground.target" not in values(app, "Unit", "After")
+assert (
+    "Service",
+    "ExecStartPre",
+    "/usr/bin/test -S /run/pocketforge/session/wayland-0",
+) in app
+assert values(app, "Service", "EnvironmentFile") == [
+    "/run/pocketforge/session/environment"
+]
 environment = values(app, "Service", "Environment")
 assert f"PF_DESCRIPTOR={DESCRIPTOR}" in environment, environment
 assert f"PF_BROKER_SOCK={BROKER_SOCK}" in environment, environment
@@ -94,6 +103,7 @@ assert values(app, "Service", "InaccessiblePaths") == [
     PREFSD_SOCK,
     "-/run/pf-ime",
 ]
+assert values(app, "Service", "SupplementaryGroups") == ["pf-session"]
 assert PREF_WRITER_GROUP not in values(app, "Service", "SupplementaryGroups")
 for name, trusted in (("selected shell", selected), ("foreground shell", foreground)):
     assert PREF_WRITER_GROUP in values(trusted, "Service", "SupplementaryGroups"), (
@@ -110,8 +120,8 @@ assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
 # Broker drop-in: exactly the ruling's directives plus the Condition->Assert fix.
 assert broker == [
     ("Unit", "StopWhenUnneeded", "yes"),
-    ("Unit", "Wants", "pocketforge-foreground.target"),
-    ("Unit", "After", "pocketforge-foreground.target pf-input-decode.service pf-prefsd.service"),
+    ("Unit", "Wants", "pocketforge-gamescope-session.target"),
+    ("Unit", "After", "pocketforge-gamescope-session.target pf-input-decode.service pf-prefsd.service"),
     ("Unit", "Conflicts", "pf-shell-selected.service"),
     ("Unit", "ConditionPathExists", ""),
     ("Unit", "AssertPathExists", "/dev/uinput"),

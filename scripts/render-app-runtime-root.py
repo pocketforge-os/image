@@ -620,7 +620,10 @@ def render(
         "PrivateUsers=yes",
         "PrivateDevices=yes",
         "DevicePolicy=closed",
-        "SupplementaryGroups=",
+        # Reset image/template groups, retaining only access to the canonical
+        # compositor session. The policy fragment below adds capability-derived
+        # audio/input/video groups; X11 is a separate manifest-gated projection.
+        "SupplementaryGroups=pf-session",
         "NoNewPrivileges=yes",
         "PrivateTmp=yes",
         "InaccessiblePaths=/run/pocketforge/prefsd.sock",

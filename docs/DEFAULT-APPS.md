@@ -344,24 +344,25 @@ The image-owned template is:
 ```ini
 [Unit]
 Description=PocketForge default application %i
-Requires=pocketforge-foreground.target
+Requires=pocketforge-gamescope-session.target
 BindsTo=pf-input-broker.service pf-prefsd.service
-After=local-fs.target pocketforge-foreground.target pf-input-broker.service pf-prefsd.service
+After=local-fs.target pocketforge-gamescope-session.target pf-input-broker.service pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
-ConditionPathExists=/dev/fb0
 
 [Service]
 Type=simple
 User=gamer
 Group=gamer
-SupplementaryGroups=
+SupplementaryGroups=pf-session
 WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
+EnvironmentFile=/run/pocketforge/session/environment
+ExecStartPre=/usr/bin/test -S /run/pocketforge/session/wayland-0
 ExecStart=/usr/bin/pf-app-launch %i
 StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
@@ -400,10 +401,12 @@ template. Its two `Environment=` directives set `XCURSOR_THEME=pocketforge-light
 `XCURSOR_SIZE=48`, so systemd supplies the defaults directly to every app unit without relying on
 PAM interpretation of `/etc/environment`.
 
-The app template deliberately carries no supplementary group. Only
+The app template carries only `pf-session`, which opens the canonical 0660
+Wayland endpoint; the shared environment record supplies `WAYLAND_DISPLAY` but
+never `DISPLAY`. Only
 `pf-shell-selected.service` and `pf-foreground@.service` receive the dedicated
 `pf-pref-writer` group. Generated runtime-root service fragments first reset
-`SupplementaryGroups=`, then compiler-generated app policy directives populate the exact
+`SupplementaryGroups=pf-session`, then compiler-generated app policy directives populate the exact
 capability-derived groups for each app. Image-shipped Poolsuite appends those directives to a
 complete `pf-app@org.pocketforge.poolsuite.service` exact-instance unit; it does not put security
 policy in a drop-in. Every installed `pf-app@*.service.d` file is therefore environment-only. The
@@ -418,12 +421,12 @@ mid-session, so the app would keep the panel with no Menu intake. See
 [Input delivery](#input-delivery) and
 [Protected System Menu and return fallback during app sessions](#protected-system-menu-and-return-fallback-during-app-sessions).
 
-The template is installed but never enabled. It joins the existing foreground target exactly
-as display apps do, and the target's image-selected drop-in restores the launcher. The current
-Poolsuite service already demonstrates the required unprivileged user, supplementary groups,
-app working directory, target join, state directory, stop timeout, and no-restart posture.
-[image@`e765ba2cd5d278b977cde1d7c3de4bec83de368e`
-`rootfs-overlay/etc/systemd/system/pocketforge-poolsuite.service:1-26`]
+The template is installed but never enabled. An explicit app launch pulls in
+the opt-in Gamescope session and starts only after its publisher made the
+canonical Wayland socket and environment visible. The direct fb0 foreground
+target remains a separate bench/diagnostic path documented in
+`docs/FB0-CONTRACT.md`; `pf-app@` neither requires `/dev/fb0` nor enters that
+conflicting target.
 
 `Wants=network-online.target` is deliberately absent from the generic template: it cannot be
 conditioned by descriptor data, and ruling 4 makes `needs_network` non-blocking metadata. The
@@ -849,19 +852,16 @@ covers the same edge.
 launch: the authority runs `systemctl start pf-app@<id>.service` (one transaction)
   1. pf-shell-selected stop     Conflicts= from the target drop-in and from the broker
                                 drop-in; pf-shell exits and the kernel drops its EVIOCGRAB
-  2. foreground target start    After=pf-shell-selected (a stop runs before a start)
-  3. pf-input-broker start      After=target; EVIOCGRAB pf-gamepad, create the re-emit
+  2. Gamescope session start    compositor publishes the canonical Wayland session
+  3. pf-input-broker start      After=session target; EVIOCGRAB pf-gamepad, create the re-emit
                                 device, bind the acquire socket, then READY=1 (Type=notify)
   4. pf-app@<id> start          After=broker; the app acquires the re-emit fd
 return: Menu (below), the app exits by itself, or the broker fails (BindsTo= stops the app)
-  5. pf-app@<id> inactive       StopWhenUnneeded= queues stop jobs for broker and target
-  6. pf-input-broker stop       ordered before the target's stop (it is After= the target);
+  5. pf-app@<id> inactive       StopWhenUnneeded= queues a stop for the broker
+  6. pf-input-broker stop       ordered behind the session start (it is After= the target);
                                 its exit drops the grab and removes the re-emit device
-  7. foreground target stop     OnSuccess=pf-shell-selected.service
-  8. pf-shell-selected start    After=pf-input-broker (drop-in), so it starts after step 6;
-                                pf-shell EVIOCGRABs pf-gamepad again
-  9. authority restoration      TargetReleased -> start the owner (idempotent) ->
-                                OwnerActive -> presentation ack -> terminal receipt
+  7. session lifetime           an independently opted-in target remains active; if this
+                                transaction was its only pin, its one-shot fallback owns exit
 ```
 
 The real-systemd harness checks this ordering in every session with two independent
@@ -965,8 +965,8 @@ the comments are omitted here and the directives are verbatim:
 ```ini
 [Unit]
 StopWhenUnneeded=yes
-Wants=pocketforge-foreground.target
-After=pocketforge-foreground.target pf-input-decode.service pf-prefsd.service
+Wants=pocketforge-gamescope-session.target
+After=pocketforge-gamescope-session.target pf-input-decode.service pf-prefsd.service
 Conflicts=pf-shell-selected.service
 ConditionPathExists=
 AssertPathExists=/dev/uinput
@@ -989,7 +989,8 @@ condition, and the assertion fails the broker job, which fails the dependent app
 assertion makes it a start failure, so the app is never invoked (harness
 `broker_start_failure`).
 
-`Restart=no` and `Wants=pocketforge-foreground.target` are `tsp-f3fm.202.1.6` fixes for a
+`Restart=no` and `Wants=pocketforge-gamescope-session.target` retain the
+`tsp-f3fm.202.1.6` fail-once semantics for a
 broker that starts and then exits. On the .215 bench, the broker refused its source and exited 1
 right after start:
 
@@ -1002,8 +1003,8 @@ right after start:
   changes state. A broker that exits before READY fails the app's start job, but the app unit
   itself never changes state. Without this line, the foreground target stayed active, its
   `OnSuccess=` never fired, and the authority waited at rung `TargetReleased` with no shell.
-  This was measured by the harness with `Restart=no` alone. With `Wants=`, the broker's own
-  failed transition queues the target, and the target stops once no app job pins it.
+  With `Wants=`, the broker's own failed transition rechecks the compositor
+  target, which stops only when no independent opt-in or app job pins it.
 
 The shell drop-in is `/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf`:
 
