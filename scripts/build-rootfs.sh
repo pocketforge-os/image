@@ -1392,6 +1392,21 @@ if [ -f "${PREFSD_BIN}" ]; then
     echo "[customize] pf-prefsd installed and enabled as the preference state authority"
 fi
 
+# --- keyboardLayout session env generator (tsp-ihne1.6) ----------------------
+# One keyboard layout preference drives gamescope/Xwayland (XKB_DEFAULT_*),
+# fcitx5 and the OSK. The generator resolves explicit store > cloud-init seed
+# (/etc/pocketforge/prefs.seed.json) > "us" into /run/pocketforge/kbd-layout.env;
+# session units load it as an EnvironmentFile. Image-owned (not gated on the
+# runtime binary): without pf-prefsd it still renders the seed/default.
+install -D -m 0755 "/work/src/rootfs-overlay/usr/lib/pocketforge/kbd-layout-env" \
+    "${ROOTFS}/usr/lib/pocketforge/kbd-layout-env"
+install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-kbd-layout-env.service" \
+    "${ROOTFS}/etc/systemd/system/pf-kbd-layout-env.service"
+install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+ln -sf /etc/systemd/system/pf-kbd-layout-env.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-kbd-layout-env.service"
+echo "[customize] pf-kbd-layout-env installed and enabled (keyboardLayout -> XKB_DEFAULT_*)"
+
 if [ "${PF_GPU_MODEL:-ddk}" = open ]; then
     /work/src/scripts/check-runtime-path-producers.py \
         --root "${ROOTFS}" \
