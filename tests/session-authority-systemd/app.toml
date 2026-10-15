@@ -1,7 +1,7 @@
 [app]
 id = "org.pocketforge.fixture"
 name = "Session authority systemd fixture"
-use = []
+use = ["sandbox.nested_userns"]
 
 [runtime]
 family = "pocketforge/a133-powervr"

@@ -626,7 +626,7 @@ mkdir -p "${context}/runtime"
 PF_APP_RUNTIME_FAMILY=pocketforge/a133-powervr \
 PF_APP_RUNTIME_ABI=1 \
 PF_APP_PLATFORM_VERSION=20 \
-PF_APP_CAPABILITIES='audio entropy input settings' \
+PF_APP_CAPABILITIES='audio entropy input sandbox.nested_userns settings' \
     "${platform_renderer}" --soc sun50iw10p1 --gpu-model open \
     --gamescope-mode g1 \
     --runtime-source "${runtime}" \
