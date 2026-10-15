@@ -39,6 +39,7 @@ RUN install -d -m 0755 \
         /etc/systemd/system/pf-shell-selected.service.d \
         /usr/share/pocketforge/device \
         /usr/share/pocketforge/devices/a133 \
+        /usr/share/pocketforge/app-policy \
         /opt/pocketforge/apps/org.pocketforge.fixture \
         /usr/lib/tmpfiles.d \
         /usr/local/libexec \
@@ -78,6 +79,7 @@ COPY session-authority-test.target /etc/systemd/system/session-authority-test.ta
 COPY session-authority-driver.service /etc/systemd/system/session-authority-driver.service
 COPY app.toml /opt/pocketforge/apps/org.pocketforge.fixture/app.toml
 COPY fixture /opt/pocketforge/apps/org.pocketforge.fixture/fixture
+COPY app-policy.resources.json /usr/share/pocketforge/app-policy/org.pocketforge.fixture.resources.json
 COPY platform-capabilities.toml /usr/share/pocketforge/platform-capabilities.toml
 COPY drive.py /usr/local/libexec/drive.py
 COPY remount-cgroup-systemd /usr/local/libexec/remount-cgroup-systemd
@@ -115,6 +117,7 @@ RUN chmod 0755 \
         /usr/lib/tmpfiles.d/pocketforge.conf \
         /usr/lib/tmpfiles.d/session-authority-test.conf \
         /usr/share/pocketforge/platform-capabilities.toml \
+        /usr/share/pocketforge/app-policy/org.pocketforge.fixture.resources.json \
         /opt/pocketforge/apps/org.pocketforge.fixture/app.toml \
     && ln -sf session-authority-test.target /etc/systemd/system/default.target \
     && systemd-analyze verify \

@@ -95,18 +95,24 @@ verify_session_producer_fixture() {
 verify_app_policy_inventory_fixture() {
     local test_inventory="$1"
 
-    python3 - "${test_inventory}" <<'PY'
+    if ! python3 - "${test_inventory}" <<'PY'
 import json
 from pathlib import Path
 import sys
 
 inventory = json.loads(Path(sys.argv[1]).read_text())
 resources = inventory.get("resources", {})
-assert inventory.get("platform_runtime") == "/usr"
-assert resources.get("display-sockets") == ["/run/pocketforge/session/wayland-0"]
-assert resources.get("session-environment") == ["/run/pocketforge/session/environment"]
-assert resources.get("render-devices") == ["/dev/dri/renderD128"]
+valid = (
+    inventory.get("platform_runtime") == "/usr"
+    and resources.get("display-sockets") == ["/run/pocketforge/session/wayland-0"]
+    and resources.get("session-environment") == ["/run/pocketforge/session/environment"]
+    and resources.get("render-devices") == ["/dev/dri/renderD128"]
+)
+raise SystemExit(0 if valid else 1)
 PY
+    then
+        return 1
+    fi
     grep -Fq 'app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"' \
         "${harness}" \
         && grep -Fq '"${context}/app-policy.resources.json"' "${harness}" \

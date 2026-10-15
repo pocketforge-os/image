@@ -11,6 +11,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixtures="${root}/tests/session-authority-systemd"
 app_unit="${root}/rootfs-overlay/etc/systemd/system/pf-app@.service"
 app_dropin_verifier="${root}/tests/verify-session-authority-app-dropins.py"
+app_policy_inventory="${root}/build/app-policy-a133-open-g1-v1.json"
 owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf"
 broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
@@ -681,6 +682,8 @@ install -m 0644 "${fixtures}/session-authority-test-tmpfiles.conf" \
     "${context}/session-authority-test-tmpfiles.conf"
 install -m 0644 "${fixtures}/app.toml" "${context}/app.toml"
 install -m 0755 "${fixtures}/fixture" "${context}/fixture"
+install -m 0644 "${app_policy_inventory}" \
+    "${context}/app-policy.resources.json"
 install -m 0644 "${fixtures}/platform-capabilities.toml" \
     "${context}/platform-capabilities.toml"
 install -m 0755 "${fixtures}/drive.py" "${context}/drive.py"
