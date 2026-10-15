@@ -940,7 +940,7 @@ if python3 "${tmp}/no-rlimit-as-drive.py" --self-test >"${stdout_log}" 2>"${stde
 fi
 grep -Fq 'self-test: a report with RLIMIT_AS absent passed the core bound' "${stderr_log}" || exit 1
 for b4_input in fake-input-broker fake-prefsd pf-prefsd.service fake-shell capabilities.toml \
-    10-app-session.conf 10-input-broker.conf; do
+    10-app-session.conf 10-input-broker.conf pocketforge-gamescope-session.target; do
     grep -Fq "${b4_input}" "${harness}" || exit 1
 done
 # The harness runs a FIXTURE shell; the real unit's edges toward harness units

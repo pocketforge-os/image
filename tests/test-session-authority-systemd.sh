@@ -648,6 +648,8 @@ install -m 0644 "${containerfile}" "${context}/Containerfile"
 install -m 0644 "${app_unit}" "${context}/pf-app@.service"
 install -m 0644 "${fixtures}/pocketforge-foreground.target" \
     "${context}/pocketforge-foreground.target"
+install -m 0644 "${fixtures}/pocketforge-gamescope-session.target" \
+    "${context}/pocketforge-gamescope-session.target"
 install -m 0644 "${owner_dropin}" "${context}/10-owner-shell.conf"
 install -m 0644 "${fixtures}/pf-shell-selected.service" \
     "${context}/pf-shell-selected.service"

@@ -474,15 +474,14 @@ class RendererTest(unittest.TestCase):
             unit,
         )
         policy = json.loads(self.policy_output.read_text(encoding="utf-8"))
+        self.assertNotIn("environment", policy)
         self.assertEqual(
-            policy["environment"],
-            [
-                {
-                    "source": "/run/pocketforge/session/capabilities/x11/environment",
-                    "name": "DISPLAY",
-                    "expected_value": ":0",
-                }
-            ],
+            policy["resources"]["x11-environment"],
+            ["/run/pocketforge/session/capabilities/x11/environment"],
+        )
+        self.assertEqual(
+            policy["resources"]["x11-socket"],
+            ["/run/pocketforge/session/capabilities/x11/X0"],
         )
 
         self.render(manifest())
