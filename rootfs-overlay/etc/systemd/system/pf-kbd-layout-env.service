@@ -1,0 +1,35 @@
+# =============================================================================
+# pf-kbd-layout-env.service: keyboardLayout preference -> XKB_DEFAULT_* env
+# =============================================================================
+# Oneshot generator (rootfs-overlay/usr/lib/pocketforge/kbd-layout-env) that
+# resolves the one keyboardLayout preference — explicit store wins over the
+# cloud-init first-boot seed wins over the "us" default — into
+# /run/pocketforge/kbd-layout.env. Session units (the gamescope session and
+# pf-fcitx5, tsp-ihne1.18) order After= this unit and load the env file, so a
+# seeded German layout drives USB/Bluetooth keyboards through gamescope from
+# first boot without any German OSK existing yet.
+# Invalid input is reported by a failed unit, but the generator first publishes
+# a marked US fallback so preference damage cannot make the display unavailable.
+#
+# Runs after pf-prefsd's state dir is on disk but does not require the daemon:
+# the generator reads the store file directly (same precedence pf-prefsd
+# serves). Re-runs are cheap; restart it after a settings write to refresh the
+# env for the next session start.
+#
+# tests/test-kbd-layout-env.sh covers the generator; the unit contract is
+# checked there too (ExecStart path, oneshot type, no install-target cycle).
+#
+# bd: tsp-ihne1.6
+# =============================================================================
+[Unit]
+Description=PocketForge: render keyboardLayout preference into XKB_DEFAULT_* env
+After=local-fs.target
+Before=pf-shell-selected.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/pocketforge/kbd-layout-env
+
+[Install]
+WantedBy=multi-user.target

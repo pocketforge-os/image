@@ -183,6 +183,7 @@ def section_asset_audit(work):
         "guest-payload.pins",
         "negative-control.sh",
         "report/report.py",
+        "report/layout_scenario.py",
         "validate/validate_transcript.py",
         "selftest/make_fixtures.py",
         "session/entry.sh",
@@ -214,6 +215,7 @@ def section_asset_audit(work):
         "selftest/fake_input_guard_test.c",
         "selftest/test-fake-input-guard.sh",
         "selftest/test-negative-control-wrapper.sh",
+        "selftest/test-layout-scenario-shell.sh",
         "selftest/test-guest-agent.py",
         "selftest/test-guest-kernel-cleanup.py",
         "selftest/test-apt-proxy-guard.sh",
@@ -815,10 +817,73 @@ def section_asset_audit(work):
             require(phrase in text, f"README.md lost load-bearing phrase: {phrase}")
 
 
+def section_layout_scenario(work):
+    """AC1: shipped layout environment controls the private-fd GTK path."""
+    for retired in (
+        os.path.join(REPO, "tests", "kbd-layout-harness"),
+        os.path.join(REPO, "tests", "test-kbd-layout-gamescope.sh"),
+        os.path.join(REPO, ".github", "workflows", "kbd-layout-gamescope.yml"),
+    ):
+        require(not os.path.exists(retired), f"unsafe legacy layout harness remains: {retired}")
+
+    scenario_path = os.path.join(HARNESS, "report", "layout_scenario.py")
+    require(os.path.exists(scenario_path), "shared harness has no layout scenario evaluator")
+    if not os.path.exists(scenario_path):
+        return
+
+    scenario = load_module("pf_layout_scenario", scenario_path)
+    transcript = os.path.join(work, "layout.jsonl")
+    builder = make_fixtures.Builder("gtk4-text")
+    builder.event(
+        "start", pid=201, argv=["gtk4-text"], backend="wayland", display="gamescope-0"
+    )
+    builder.event("widget_text", text="zö")
+    builder.event("stop", rc=0)
+    builder.write(transcript)
+
+    passed, reason, actual = scenario.evaluate_transcript(transcript, "zö")
+    require(passed and reason == "ok" and actual == "zö", "de layout positive control failed")
+    passed, reason, actual = scenario.evaluate_transcript(transcript, "y;")
+    require(
+        not passed and reason == "layout_widget_text_mismatch" and actual == "zö",
+        "deliberately wrong layout expectation did not fail closed",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-B", scenario_path, transcript, "y;", "de-wrong"],
+        capture_output=True,
+        text=True,
+    )
+    require(
+        proc.returncode != 0 and "reason=layout_widget_text_mismatch" in proc.stdout,
+        f"layout CLI negative control did not print reason=: {proc.stdout}{proc.stderr}",
+    )
+
+    with open(os.path.join(HARNESS, "session", "entry.sh"), encoding="utf-8") as handle:
+        entry = handle.read()
+    with open(os.path.join(HARNESS, "session", "driver.py"), encoding="utf-8") as handle:
+        driver = handle.read()
+    require(
+        "/usr/lib/pocketforge/kbd-layout-env" in entry
+        and "run_layout de 'zö'" in entry
+        and "run_layout us 'y;'" in entry
+        and "keyboardLayout" in entry,
+        "layout sessions do not derive de and us environments through shipped code",
+    )
+    require(
+        '"KEY_Y": 21' in driver and '"KEY_SEMICOLON": 39' in driver,
+        "layout scenario does not send evdev KEY_Y and KEY_SEMICOLON",
+    )
+    require(
+        "SOCK_SEQPACKET" in driver and "PF_LAYOUT_SCENARIO" in driver,
+        "layout scenario is not carried by the shared private-fd driver",
+    )
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="pf-input-harness-selftest.") as work:
         section_validator_and_report(work)
         section_asset_audit(work)
+        section_layout_scenario(work)
     if FAILURES:
         print(f"FAIL: input-harness self-test ({len(FAILURES)} failure(s))")
         return 1
