@@ -3,12 +3,20 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import socket
+import struct
+import sys
 
 
 PATH = "/run/pocketforge/prefsd.sock"
+MAX_FRAME = 64 * 1024
+DEFAULTS = {
+    "auto_rotate": True,
+    "user_rotation": "normal",
+}
 stopping = False
 
 
@@ -25,6 +33,80 @@ def notify_ready() -> None:
         address = "\0" + address[1:]
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
         notify.sendto(b"READY=1", address)
+
+
+def read_exact(stream: socket.socket, length: int) -> bytes | None:
+    chunks: list[bytes] = []
+    remaining = length
+    while remaining:
+        chunk = stream.recv(remaining)
+        if not chunk:
+            return None
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def write_frame(stream: socket.socket, response: dict[str, object]) -> None:
+    body = json.dumps(response, separators=(",", ":")).encode()
+    stream.sendall(struct.pack(">I", len(body)) + body)
+
+
+def serve_client(client: socket.socket) -> None:
+    header = read_exact(client, 4)
+    if header is None:
+        return
+    length = struct.unpack(">I", header)[0]
+    if length > MAX_FRAME:
+        return
+    body = read_exact(client, length)
+    if body is None:
+        return
+    try:
+        request = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        write_frame(client, {"result": "error", "message": "invalid request"})
+        return
+    if not isinstance(request, dict):
+        write_frame(client, {"result": "error", "message": "invalid request"})
+        return
+    key = request.get("key")
+    if request.get("method") == "get" and key in DEFAULTS:
+        write_frame(client, {"result": "value", "value": DEFAULTS[key]})
+    else:
+        write_frame(client, {"result": "error", "message": "unsupported request"})
+
+
+def call_fixture(request: dict[str, object]) -> dict[str, object]:
+    client, server = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        body = json.dumps(request, separators=(",", ":")).encode()
+        client.sendall(struct.pack(">I", len(body)) + body)
+        serve_client(server)
+        header = read_exact(client, 4)
+        if header is None:
+            raise AssertionError("fixture closed without a response")
+        response = read_exact(client, struct.unpack(">I", header)[0])
+        if response is None:
+            raise AssertionError("fixture returned a partial response")
+        return json.loads(response)
+    finally:
+        client.close()
+        server.close()
+
+
+def self_test() -> None:
+    assert call_fixture({"method": "get", "key": "auto_rotate"}) == {
+        "result": "value",
+        "value": True,
+    }
+    assert call_fixture({"method": "get", "key": "user_rotation"}) == {
+        "result": "value",
+        "value": "normal",
+    }
+    refused = call_fixture({"method": "get", "key": "not_a_preference"})
+    assert refused["result"] == "error"
+    print("fake-prefsd self-test: PASS defaults=2 unknown=refused")
 
 
 def main() -> None:
@@ -45,8 +127,16 @@ def main() -> None:
                 client, _ = server.accept()
             except TimeoutError:
                 continue
-            client.close()
+            with client:
+                client.settimeout(3)
+                try:
+                    serve_client(client)
+                except TimeoutError:
+                    pass
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--self-test"]:
+        self_test()
+    else:
+        main()

@@ -876,6 +876,9 @@ grep -Fqx 'COPY 10-input-broker.conf /etc/systemd/system/pf-shell-selected.servi
 grep -Fqx 'COPY fake-input-broker /usr/bin/pf-input-broker' "${recipe}" || exit 1
 grep -Fqx 'COPY pf-prefsd.service /etc/systemd/system/pf-prefsd.service' "${recipe}" || exit 1
 grep -Fqx 'COPY fake-prefsd /usr/local/libexec/fake-prefsd' "${recipe}" || exit 1
+prefsd_self_test="$(python3 "${root}/tests/session-authority-systemd/fake-prefsd" --self-test)"
+grep -Fqx 'fake-prefsd self-test: PASS defaults=2 unknown=refused' \
+    <<<"${prefsd_self_test}" || exit 1
 grep -Fq 'pf-input-broker.service | grep -q .' "${recipe}" || exit 1
 for b4_check in 'R4 GATE FAILED' 'def assert_grab_timeline' 'def assert_broker_failure_never_traps' \
     'grab_lock_is_held()' 'systemctl_stop_exit_after_sigkill=' '"--reuid=gamer"' \
