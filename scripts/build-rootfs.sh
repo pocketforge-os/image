@@ -1336,22 +1336,37 @@ echo "[customize] dormant private IME bus, X11 door and pf-ime identity installe
 # --- F13 shell owner + independent F07 session authority (tsp-op5a.78) -------
 SHELL_BIN="${LAUNCHER_DIR}/bin/pf-shell"
 AUTHORITY_BIN="${RUNTIME_DIR}/bin/pf-session-authorityd"
-if [ -f "${SHELL_BIN}" ] || [ -f "${AUTHORITY_BIN}" ]; then
+HANG_SAMPLER_BIN="${RUNTIME_DIR}/bin/pf-hang-sampler"
+if [ -f "${SHELL_BIN}" ] || [ -f "${AUTHORITY_BIN}" ] || [ -f "${HANG_SAMPLER_BIN}" ]; then
     [ -f "${SHELL_BIN}" ] || { echo "FATAL: pf-session-authorityd staged without pf-shell" >&2; exit 1; }
     [ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-shell staged without pf-session-authorityd" >&2; exit 1; }
-    for binary in "${SHELL_BIN}" "${AUTHORITY_BIN}"; do
+    [ -f "${HANG_SAMPLER_BIN}" ] || { echo "FATAL: pf-session-authorityd staged without pf-hang-sampler" >&2; exit 1; }
+    for binary in "${SHELL_BIN}" "${AUTHORITY_BIN}" "${HANG_SAMPLER_BIN}"; do
         binary_em="$(od -An -tx1 -j18 -N2 "${binary}" | tr -d ' ')"
         [ "${binary_em}" = "b700" ] || { echo "FATAL: ${binary} is not an aarch64 ELF (e_machine=${binary_em}, want b700)" >&2; exit 1; }
     done
     install -D -m 0755 "${AUTHORITY_BIN}" "${ROOTFS}/usr/bin/pf-session-authorityd"
+    install -D -m 0755 "${HANG_SAMPLER_BIN}" "${ROOTFS}/usr/bin/pf-hang-sampler"
     install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-session-authorityd.service" \
         "${ROOTFS}/etc/systemd/system/pf-session-authorityd.service"
     install -D -m 0644 "${RUNTIME_DIR}/tmpfiles.d/pocketforge.conf" \
         "${ROOTFS}/usr/lib/tmpfiles.d/pocketforge.conf"
+    for sampler_file in \
+        usr/lib/sysusers.d/pf-hang-sampler.conf \
+        usr/lib/tmpfiles.d/pf-hang-sampler.conf \
+        etc/systemd/system/pf-hang-sampler.socket \
+        etc/systemd/system/pf-hang-sampler.service \
+        etc/systemd/system/pf-session-authorityd.service.d/20-hang-sampler.conf; do
+        install -D -m 0644 "/work/src/rootfs-overlay/${sampler_file}" \
+            "${ROOTFS}/${sampler_file}"
+    done
+    install -d "${ROOTFS}/etc/systemd/system/sockets.target.wants"
+    ln -sf /etc/systemd/system/pf-hang-sampler.socket \
+        "${ROOTFS}/etc/systemd/system/sockets.target.wants/pf-hang-sampler.socket"
     install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
     ln -sf /etc/systemd/system/pf-session-authorityd.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-session-authorityd.service"
-    echo "[customize] Independent pf-session-authorityd installed and enabled"
+    echo "[customize] Independent pf-session-authorityd enabled; hang-sampler socket enabled and service socket-activated"
     if [ "${PF_HAS_DISPLAY}" = 1 ]; then
         install -D -m 0755 "${SHELL_BIN}" "${ROOTFS}/usr/bin/pf-shell"
         for unit in pf-foreground@.service pf-shell-selected.service; do

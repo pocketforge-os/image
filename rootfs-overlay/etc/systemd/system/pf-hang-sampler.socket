@@ -1,0 +1,15 @@
+[Unit]
+Description=PocketForge hang sampler trigger socket
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenSequentialPacket=/run/pocketforge/hang-sampler/hang-sampler.sock
+SocketUser=root
+SocketGroup=pf-hang-trigger
+SocketMode=0660
+DirectoryMode=0711
+Service=pf-hang-sampler.service
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

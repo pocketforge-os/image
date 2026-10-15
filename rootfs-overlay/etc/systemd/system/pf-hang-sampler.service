@@ -1,0 +1,36 @@
+[Unit]
+Description=PocketForge bounded hang sampler
+Documentation=https://github.com/pocketforge-os/runtime
+Requires=pf-hang-sampler.socket
+After=pf-hang-sampler.socket
+
+[Service]
+Type=simple
+User=pf-hang-sampler
+Group=pf-hang-sampler
+ExecStart=/usr/bin/pf-hang-sampler --systemd-socket
+Restart=on-failure
+RestartSec=1s
+UMask=0077
+LimitCORE=0
+CapabilityBoundingSet=CAP_SYS_PTRACE
+AmbientCapabilities=CAP_SYS_PTRACE
+NoNewPrivileges=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service ptrace process_vm_readv
+SystemCallFilter=~process_vm_writev
+SystemCallErrorNumber=EPERM

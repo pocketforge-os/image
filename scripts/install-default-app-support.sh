@@ -26,6 +26,7 @@ descriptor_id=a133
 
 helper="${runtime_stage}/bin/pf-app-launch"
 authority="${runtime_stage}/bin/pf-session-authorityd"
+sampler="${runtime_stage}/bin/pf-hang-sampler"
 platform="${runtime_stage}/share/platform-capabilities.toml"
 shell="${launcher_stage}/bin/pf-shell"
 broker="${runtime_stage}/bin/pf-input-broker"
@@ -40,7 +41,7 @@ shell_dropin="${systemd_source}/pf-shell-selected.service.d/10-input-broker.conf
 cursor_dropin="${systemd_source}/pf-app@.service.d/30-cursor-theme.conf"
 
 if [ "${gpu_model}" != open ]; then
-    for forbidden in "${helper}" "${authority}" "${platform}" "${shell}" \
+    for forbidden in "${helper}" "${authority}" "${sampler}" "${platform}" "${shell}" \
         "${broker}" "${broker_unit}" "${library}" "${descriptors}" \
         "${neutral_descriptors}"; do
         [ ! -e "${forbidden}" ] || {
@@ -51,7 +52,7 @@ if [ "${gpu_model}" != open ]; then
     exit 0
 fi
 
-for required in "${helper}" "${authority}" "${platform}" "${shell}" "${unit}" \
+for required in "${helper}" "${authority}" "${sampler}" "${platform}" "${shell}" "${unit}" \
     "${broker}" "${broker_unit}" "${library}" "${descriptor}" \
     "${neutral_descriptor}" "${broker_dropin}" "${shell_dropin}" \
     "${cursor_dropin}"; do
@@ -87,6 +88,8 @@ require_static() {
 }
 require_aarch64 "${helper}"
 require_static "${helper}"
+require_aarch64 "${sampler}"
+require_static "${sampler}"
 require_aarch64 "${broker}"
 require_static "${broker}"
 require_aarch64 "${library}"

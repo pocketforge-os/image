@@ -98,6 +98,8 @@ mkdir -p "${runtime}/systemd" "${runtime}/lib" "${runtime}/share/devices/a133" \
     "${runtime}/share/device"
 aarch64_fixture "${runtime}/bin/pf-input-broker"
 chmod 0755 "${runtime}/bin/pf-input-broker"
+aarch64_fixture "${runtime}/bin/pf-hang-sampler"
+chmod 0755 "${runtime}/bin/pf-hang-sampler"
 aarch64_fixture "${runtime}/lib/libpocketforge.so.1"
 printf '%s\n' '[Unit]' 'Description=runtime broker unit fixture' '[Install]' \
     'WantedBy=multi-user.target' > "${runtime}/systemd/pf-input-broker.service"
@@ -162,7 +164,7 @@ if find "${rootfs}" -path '*.wants/*' -name 'pf-input-broker.service' | grep -q 
 fi
 
 # Every open input-delivery artifact is required: removing any one fails closed.
-for missing in bin/pf-input-broker systemd/pf-input-broker.service \
+for missing in bin/pf-input-broker bin/pf-hang-sampler systemd/pf-input-broker.service \
     lib/libpocketforge.so.1 share/devices/a133/capabilities.toml \
     share/device/capabilities.toml; do
     mv "${runtime}/${missing}" "${tmp}/held"
@@ -224,7 +226,7 @@ for gpu_model in ddk none; do
     find "${non_open_rootfs}" -printf '%P %y %m\n' | LC_ALL=C sort > "${tmp}/after"
     cmp "${tmp}/before" "${tmp}/after"
 done
-for leak in bin/pf-app-launch bin/pf-input-broker systemd/pf-input-broker.service \
+for leak in bin/pf-app-launch bin/pf-hang-sampler bin/pf-input-broker systemd/pf-input-broker.service \
     lib/libpocketforge.so.1 share/devices/a133/capabilities.toml \
     share/device/capabilities.toml; do
     mkdir -p "$(dirname "${tmp}/closed-runtime/${leak}")"
@@ -262,7 +264,7 @@ grep -F 'install-default-app-support.sh' "${rootfs_builder}" >/dev/null
 grep -F 'cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-app-launch --bin pf-app-launch' "${dockerfile}" >/dev/null
 grep -F 'pf-app-launch is dynamically linked (expected static musl)' "${dockerfile}" >/dev/null
 grep -F 'pf-app-validate.rs' "${dockerfile}" >/dev/null
-! grep -E 'pf-app-launch|pf-app@\.service|platform-capabilities\.toml|launcher-src|PF_APP_|pf-input-broker|libpocketforge|PF_DEVICE_DESCRIPTOR|platform-inputs' \
+! grep -E 'pf-app-launch|pf-app@\.service|platform-capabilities\.toml|launcher-src|PF_APP_|pf-hang-sampler|pf-input-broker|libpocketforge|PF_DEVICE_DESCRIPTOR|platform-inputs' \
     "${root}/scripts/build-rootfs-a523.sh"
 
 # The non-open launcher stages are source-free, while only launcher-open names

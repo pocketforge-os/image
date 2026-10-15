@@ -66,8 +66,8 @@ def verify(dockerfile: str, rootfs: str, finalizer: str, steamlink_builder: str)
         missing.append("rootfs central C linker flag")
     if dockerfile.count(
         'RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1"'
-    ) != 5:
-        missing.append("all five runtime musl cargo invocations")
+    ) != 6:
+        missing.append("all six runtime musl cargo invocations")
     if missing:
         raise AssertionError("missing explicit build-id policy: " + ", ".join(missing))
 
@@ -95,6 +95,21 @@ except AssertionError as exc:
     assert "SDL CMake stage" in str(exc)
 else:
     raise AssertionError("negative control: missing SDL build-id policy was accepted")
+
+sampler_without_build_id = dockerfile.replace(
+    '  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \\\n'
+    '  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" '
+    '-p pf-hang-sampler --bin pf-hang-sampler',
+    '  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" '
+    '-p pf-hang-sampler --bin pf-hang-sampler',
+    1,
+)
+try:
+    verify(sampler_without_build_id, rootfs, finalizer, steamlink_builder)
+except AssertionError as exc:
+    assert "all six runtime musl cargo invocations" in str(exc)
+else:
+    raise AssertionError("negative control: missing sampler build-id policy was accepted")
 
 # Command-line make variables replace Makefile `?=` defaults. The hwprobe
 # producer must therefore preserve its static-link invariant while adding the
