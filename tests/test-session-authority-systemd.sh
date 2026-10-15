@@ -645,6 +645,8 @@ actual_broker_unit_sha256="$(sha256sum \
     || fail "UNIT_DRIFT: runtime pf-input-broker.service expected ${broker_unit_sha256}, got ${actual_broker_unit_sha256}"
 
 install -m 0644 "${containerfile}" "${context}/Containerfile"
+install -m 0644 "${fixtures}/10-test-driver-peer.conf" \
+    "${context}/10-test-driver-peer.conf"
 install -m 0644 "${app_unit}" "${context}/pf-app@.service"
 install -m 0644 "${fixtures}/pocketforge-foreground.target" \
     "${context}/pocketforge-foreground.target"
@@ -662,6 +664,8 @@ install -m 0755 "${fixtures}/fake-shell" "${context}/fake-shell"
 install -m 0644 "${fixtures}/capabilities.toml" "${context}/capabilities.toml"
 install -m 0644 "${fixtures}/session-authority-test.target" \
     "${context}/session-authority-test.target"
+install -m 0644 "${fixtures}/session-authority-driver.service" \
+    "${context}/session-authority-driver.service"
 install -m 0644 "${fixtures}/session-authority-test-tmpfiles.conf" \
     "${context}/session-authority-test-tmpfiles.conf"
 install -m 0644 "${fixtures}/app.toml" "${context}/app.toml"
@@ -801,9 +805,13 @@ if missing:
     raise SystemExit(f"missing tmpfs mounts: {sorted(missing)}")
 ' <<<"${tmpfs_json}" || fail 'CONTAINER_TMPFS_DRIFT'
 
-if ! test_output="$(
-    docker_checked exec "${systemd_container}" /usr/local/libexec/drive.py 2>&1
-)"; then
+if ! docker_checked exec "${systemd_container}" \
+    systemctl start session-authority-driver.service >/dev/null; then
+    if ! test_output="$(docker_checked exec "${systemd_container}" \
+        journalctl --no-pager --output cat --unit session-authority-driver.service \
+        2>&1)"; then
+        test_output="driver journal unavailable: ${test_output}"
+    fi
     [ ! -s "${run_scope}/failure-reason" ] || fail_recorded_or 'DISK_FLOOR_ABORT'
     echo "${test_output}" >&2
     docker_checked exec "${systemd_container}" \
@@ -812,14 +820,18 @@ if ! test_output="$(
         --unit pf-app@org.pocketforge.fixture.service \
         --unit pf-input-broker.service \
         --unit pocketforge-foreground.target \
-        --unit pf-shell-selected.service >&2 || true
+        --unit pf-shell-selected.service \
+        --unit session-authority-driver.service >&2 || true
     docker_checked exec "${systemd_container}" /bin/sh -c \
         'for f in /run/pf-grab/timeline /run/pf-grab/violations /run/pf-grab/safe-return.log; do
             [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done; echo "== authority.json";
             cat /var/lib/pocketforge/session-authority/authority.json' >&2 || true
     fail 'INTEGRATION_ASSERTION_FAILED'
 fi
+test_output="$(docker_checked exec "${systemd_container}" \
+    journalctl --no-pager --output cat --unit session-authority-driver.service)" \
+    || fail_recorded_or 'INTEGRATION_DRIVER_JOURNAL_FAILED'
 echo "${test_output}"
 sample_disk integration_complete
-pass_fields="runtime_sha=${runtime_sha} broker_units=${broker_unit_sha256:0:12},${broker_dropin_sha256:0:12},${shell_dropin_sha256:0:12} shell_fixture_parity=pass container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true adopted=e owner_exception=ephemeral-only cap_add=SYS_ADMIN apparmor=unconfined cgroup_remount=rw"
+pass_fields="runtime_sha=${runtime_sha} broker_units=${broker_unit_sha256:0:12},${broker_dropin_sha256:0:12},${shell_dropin_sha256:0:12} shell_fixture_parity=pass authority_peer=session-authority-driver.service container_image_digest=${test_image_digest} fail_closed=SYSTEMD_PID1_UNAVAILABLE docker_version=${docker_version} cgroup=${docker_cgroup} cgroup_driver=${docker_cgroup_driver} cgroup_namespace=private cgroup_mount=rw tty=true network=none tmpfs_run=true host_vt_devices=none getty_units_masked=${getty_units_masked} ephemeral_slot=true adopted=e owner_exception=ephemeral-only cap_add=SYS_ADMIN apparmor=unconfined cgroup_remount=rw"
 run_completed=1

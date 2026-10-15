@@ -42,9 +42,13 @@ verify_driver_peer_fixture() {
 
     grep -Fqx 'User=root' "${test_unit}" \
         && grep -Fqx 'ExecStart=/usr/local/libexec/drive.py' "${test_unit}" \
+        && ! grep -Eq '^(Requires|BindsTo)=pf-session-authorityd\.service$' "${test_unit}" \
         && grep -Fq -- '--shell-user root --shell-unit session-authority-driver.service' \
             "${test_dropin}" \
         && grep -Fq 'session-authority-driver.service' "${test_harness}" \
+        && grep -Fq 'session-authority-driver.service' "${recipe}" \
+        && grep -Fq '10-test-driver-peer.conf' "${recipe}" \
+        && grep -Fq 'systemd-analyze verify' "${recipe}" \
         && ! grep -Fq '/usr/local/libexec/drive.py 2>&1' "${test_harness}"
 }
 

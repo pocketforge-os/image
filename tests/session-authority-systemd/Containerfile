@@ -35,6 +35,7 @@ RUN apt-get update -qq \
 RUN install -d -m 0755 \
         /etc/systemd/system/pocketforge-foreground.target.d \
         /etc/systemd/system/pf-input-broker.service.d \
+        /etc/systemd/system/pf-session-authorityd.service.d \
         /etc/systemd/system/pf-shell-selected.service.d \
         /usr/share/pocketforge/device \
         /usr/share/pocketforge/devices/a133 \
@@ -51,6 +52,7 @@ RUN install -d -m 0755 \
 COPY --from=runtime-builder /out/pf-session-authorityd /usr/bin/pf-session-authorityd
 COPY --from=runtime-builder /out/pf-app-launch /usr/bin/pf-app-launch
 COPY runtime/systemd/pf-session-authorityd.service /etc/systemd/system/pf-session-authorityd.service
+COPY 10-test-driver-peer.conf /etc/systemd/system/pf-session-authorityd.service.d/10-test-driver-peer.conf
 COPY runtime/systemd/pocketforge.conf /usr/lib/tmpfiles.d/pocketforge.conf
 COPY session-authority-test-tmpfiles.conf /usr/lib/tmpfiles.d/session-authority-test.conf
 COPY pf-app@.service /etc/systemd/system/pf-app@.service
@@ -68,6 +70,7 @@ COPY fake-shell /usr/local/libexec/fake-shell
 COPY capabilities.toml /usr/share/pocketforge/device/capabilities.toml
 COPY capabilities.toml /usr/share/pocketforge/devices/a133/capabilities.toml
 COPY session-authority-test.target /etc/systemd/system/session-authority-test.target
+COPY session-authority-driver.service /etc/systemd/system/session-authority-driver.service
 COPY app.toml /opt/pocketforge/apps/org.pocketforge.fixture/app.toml
 COPY fixture /opt/pocketforge/apps/org.pocketforge.fixture/fixture
 COPY platform-capabilities.toml /usr/share/pocketforge/platform-capabilities.toml
@@ -85,6 +88,7 @@ RUN chmod 0755 \
         /usr/local/libexec/remount-cgroup-systemd \
     && chmod 0644 \
         /etc/systemd/system/pf-session-authorityd.service \
+        /etc/systemd/system/pf-session-authorityd.service.d/10-test-driver-peer.conf \
         /etc/systemd/system/pf-app@.service \
         /etc/systemd/system/pocketforge-foreground.target \
         /etc/systemd/system/pocketforge-gamescope-session.target \
@@ -97,11 +101,15 @@ RUN chmod 0755 \
         /usr/share/pocketforge/device/capabilities.toml \
         /usr/share/pocketforge/devices/a133/capabilities.toml \
         /etc/systemd/system/session-authority-test.target \
+        /etc/systemd/system/session-authority-driver.service \
         /usr/lib/tmpfiles.d/pocketforge.conf \
         /usr/lib/tmpfiles.d/session-authority-test.conf \
         /usr/share/pocketforge/platform-capabilities.toml \
         /opt/pocketforge/apps/org.pocketforge.fixture/app.toml \
     && ln -sf session-authority-test.target /etc/systemd/system/default.target \
+    && systemd-analyze verify \
+        /etc/systemd/system/pf-session-authorityd.service \
+        /etc/systemd/system/session-authority-driver.service \
     && ! find /etc/systemd/system -path '*.wants/*' -name pf-input-broker.service | grep -q .
 
 STOPSIGNAL SIGRTMIN+3
