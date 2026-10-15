@@ -5,6 +5,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 systemd_root="${root}/rootfs-overlay/etc/systemd/system"
 app="${systemd_root}/pf-app@.service"
 broker="${systemd_root}/pf-input-broker.service.d/10-app-session.conf"
+fallback="${systemd_root}/pocketforge-gamescope-fallback.service"
 renderer="${root}/scripts/render-app-runtime-root.py"
 take_panel="${root}/rootfs-overlay/usr/bin/pf-take-panel"
 workflow="${root}/.github/workflows/hermetic-tests.yml"
@@ -96,6 +97,28 @@ for name, candidate in controls.items():
     except AssertionError:
         continue
     raise AssertionError(f"negative control was accepted: {name}")
+PY
+
+# Every terminal path below releases the session target, whose PartOf= edge
+# stops Gamescope. Its OnSuccess=/OnFailure= fallback must be re-armable; a
+# RemainAfterExit oneshot handles only the first app session in a boot.
+python3 - "${fallback}" <<'PY'
+from pathlib import Path
+import sys
+
+
+def reusable(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines()]
+    return (
+        "Type=oneshot" in lines
+        and "ExecStart=/usr/bin/systemctl start --no-block pf-shell-selected.service" in lines
+        and not any(line in ("RemainAfterExit=yes", "RemainAfterExit=true") for line in lines)
+    )
+
+
+production = Path(sys.argv[1]).read_text(encoding="utf-8")
+assert reusable(production)
+assert not reusable(production + "\nRemainAfterExit=yes\n")
 PY
 
 # The runtime-root extension resets inherited groups before adding its compiled

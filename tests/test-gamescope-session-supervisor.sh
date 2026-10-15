@@ -75,10 +75,20 @@ grep -F 'SupplementaryGroups=video render pf-compositor-input' "${owner}" >/dev/
 ! grep -E 'SupplementaryGroups=.*(^| )input( |$)' "${owner}" >/dev/null
 grep -F -- '--xwayland-count 1' "${owner}" >/dev/null
 fallback="${unit_root}/pocketforge-gamescope-fallback.service"
-grep -Fx 'Type=oneshot' "${fallback}" >/dev/null
-grep -Fx 'RemainAfterExit=yes' "${fallback}" >/dev/null
-test "$(grep -Fc 'ExecStart=' "${fallback}")" -eq 1 \
-    || fail "fallback is not exactly once per boot"
+check_rearmable_fallback() {
+    local unit=$1
+
+    grep -Fx 'Type=oneshot' "${unit}" >/dev/null \
+        && ! grep -Eq '^RemainAfterExit=(yes|true)$' "${unit}" \
+        && test "$(grep -Fc 'ExecStart=' "${unit}")" -eq 1
+}
+check_rearmable_fallback "${fallback}" \
+    || fail "fallback cannot reactivate the selected shell after every session"
+cp "${fallback}" "${scratch}/sticky-fallback.service"
+printf '\nRemainAfterExit=yes\n' >>"${scratch}/sticky-fallback.service"
+if check_rearmable_fallback "${scratch}/sticky-fallback.service"; then
+    fail "fallback check accepted a once-per-boot sticky unit"
+fi
 
 rules="${scratch}/g1/etc/udev/rules.d/73-pocketforge-compositor-input.rules"
 for property in ID_INPUT_KEYBOARD ID_INPUT_MOUSE ID_INPUT_TOUCHSCREEN; do

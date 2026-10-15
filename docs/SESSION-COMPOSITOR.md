@@ -160,9 +160,11 @@ The A133 descriptor remains an expectation until G1 replaces
 pinned Gamescope as the display owner and atomically publishes an immutable
 generation at `/run/pocketforge/session`; this installation does not enable or
 select the target. `Restart=no` and a boot-long one-start limit prevent a
-second Gamescope session after exit, while
+second Gamescope session after exit. The re-armable
 `pocketforge-gamescope-fallback.service` restores `pf-shell-selected.service`
-once. The default-session decision remains outside this graph.
+after every supervisor exit; it does not remain active and suppress later
+`OnSuccess=` or `OnFailure=` activations. The default-session decision remains
+outside this graph.
 
 Xwayland is capability-scoped. The shared `environment` contains Wayland data
 only. `capabilities/x11` carries `DISPLAY` and the filesystem X socket for a

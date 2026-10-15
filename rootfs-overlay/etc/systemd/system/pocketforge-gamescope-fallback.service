@@ -5,4 +5,5 @@ After=pocketforge-gamescope.service
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/systemctl start --no-block pf-shell-selected.service
-RemainAfterExit=yes
+# Deliberately no RemainAfterExit: every later supervisor exit must be able to
+# activate this unit and return ownership to the selected shell again.
