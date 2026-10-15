@@ -120,6 +120,7 @@ assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
 # Broker drop-in: exactly the ruling's directives plus the Condition->Assert fix.
 assert broker == [
     ("Unit", "StopWhenUnneeded", "yes"),
+    ("Unit", "OnFailure", "pocketforge-gamescope-fallback.service"),
     ("Unit", "Wants", "pocketforge-gamescope-session.target"),
     ("Unit", "After", "pocketforge-gamescope-session.target pf-input-decode.service pf-prefsd.service"),
     ("Unit", "Conflicts", "pf-shell-selected.service"),

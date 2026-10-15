@@ -73,6 +73,9 @@ def validate(app_text: str, broker_text: str) -> None:
 
     assert words(broker, "Unit", "Wants") == [session]
     assert session in words(broker, "Unit", "After")
+    assert words(broker, "Unit", "OnFailure") == [
+        "pocketforge-gamescope-fallback.service"
+    ]
     assert foreground not in words(broker, "Unit", "Wants")
     assert foreground not in words(broker, "Unit", "After")
 
@@ -89,6 +92,9 @@ controls = {
     "broker-old-foreground-edge": broker_text.replace(
         "Wants=pocketforge-gamescope-session.target",
         "Wants=pocketforge-foreground.target",
+    ),
+    "broker-missing-failure-fallback": broker_text.replace(
+        "OnFailure=pocketforge-gamescope-fallback.service\n", ""
     ),
 }
 for name, candidate in controls.items():
