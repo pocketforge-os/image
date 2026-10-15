@@ -1296,13 +1296,16 @@ else
 fi
 
 # App-policy runtime paths are audited against one image-owned producer
-# inventory. Keep this independent rootfs feature outside the kernel-module
-# transaction above so module-only probes do not need app-policy artifacts.
+# inventory. The optional Gamescope installer replaces this base manifest with
+# its g1 union before the audit runs; the not-shipped profile retains this one.
+# Keep session installation outside the kernel-module transaction above: it is
+# an independent rootfs feature and must not become part of module-only probes.
 if [ "${PF_GPU_MODEL:-ddk}" = open ]; then
     install -D -m 0644 \
         /work/src/rootfs-overlay/usr/share/pocketforge/runtime-path-producers.json \
         "${ROOTFS}/usr/share/pocketforge/runtime-path-producers.json"
 fi
+/work/src/scripts/install-gamescope-session.sh "${PF_GAMESCOPE_MODE}" "${ROOTFS}"
 
 # The generic default-app mechanism is an A133-open-only atomic set. Its helper
 # enforces both directions: all five staged inputs must exist for open, while no

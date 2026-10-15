@@ -1,0 +1,182 @@
+#!/usr/bin/python3
+"""Publish and project the compositor-owned PocketForge session ABI."""
+
+from __future__ import annotations
+
+import argparse
+import grp
+import os
+from pathlib import Path
+import socket
+import stat
+import sys
+import time
+
+
+def refuse(reason: str, detail: str) -> "None":
+    print(f"session-publication-refused reason={reason} detail={detail}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def socket_ready(path: Path, connect: bool) -> bool:
+    try:
+        mode = path.stat().st_mode
+    except OSError:
+        return False
+    if not stat.S_ISSOCK(mode):
+        return False
+    if connect:
+        probe = socket.socket(socket.AF_UNIX)
+        probe.settimeout(1)
+        try:
+            probe.connect(str(path))
+        except OSError:
+            return False
+        finally:
+            probe.close()
+    return True
+
+
+def write_file(path: Path, data: str) -> None:
+    path.write_text(data, encoding="utf-8")
+    path.chmod(0o444)
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def has_abstract_x11(proc_net_unix: Path, display: int) -> bool:
+    needle = f"@/tmp/.X11-unix/X{display}"
+    try:
+        return any(line.split()[-1] == needle for line in proc_net_unix.read_text().splitlines() if line.split())
+    except OSError as error:
+        refuse("proc_net_unix_unreadable", str(error))
+
+
+def publish(args: argparse.Namespace) -> None:
+    gid = args.gid if args.gid is not None else grp.getgrnam(args.group).gr_gid
+    session = args.session
+    parent = session.parent
+    store = parent / ".session-generations"
+    deadline = time.monotonic() + args.timeout
+    while True:
+        if socket_ready(args.wayland, connect=True) and socket_ready(args.x11, connect=True):
+            break
+        if time.monotonic() >= deadline:
+            refuse("socket_readiness_timeout", f"timeout={args.timeout}")
+        time.sleep(0.05)
+    if has_abstract_x11(args.proc_net_unix, args.display):
+        refuse("abstract_x11_listener", f"display=:{args.display}")
+
+    parent.mkdir(parents=True, exist_ok=True)
+    store.mkdir(mode=0o750, exist_ok=True)
+    os.chmod(store, 0o750)
+    os.chown(store, -1, gid)
+    generations = [int(p.name) for p in store.iterdir() if p.is_dir() and p.name.isdecimal()]
+    number = max(generations, default=0) + 1
+    stage = store / f".{number}.staging-{os.getpid()}"
+    final = store / str(number)
+    stage.mkdir(mode=0o755)
+    os.chmod(stage, 0o755)
+    caps = stage / "capabilities" / "x11"
+    caps.mkdir(parents=True, mode=0o755)
+    (stage / "wayland-0").symlink_to(args.wayland)
+    (caps / f"X{args.display}").symlink_to(args.x11)
+    write_file(caps / "environment", f"DISPLAY=:{args.display}\n")
+    write_file(stage / "generation", f"{number}\n")
+    write_file(stage / "readiness", "ready\n")
+    write_file(
+        stage / "environment",
+        "POCKETFORGE_SESSION=/run/pocketforge/session\n"
+        f"POCKETFORGE_SESSION_GENERATION={number}\n"
+        "WAYLAND_DISPLAY=wayland-0\n",
+    )
+    os.chmod(stage / "capabilities", 0o755)
+    os.chmod(caps, 0o755)
+    os.chown(args.wayland, 0 if os.geteuid() == 0 else -1, gid)
+    os.chmod(args.wayland, 0o660)
+    # Keep the Xwayland uid so it can unlink X0 from sticky /tmp on exit; the
+    # capability group is the policy-controlled connect grant.
+    os.chown(args.x11, -1, gid)
+    os.chmod(args.x11, 0o660)
+    sync_directory(caps)
+    sync_directory(stage / "capabilities")
+    sync_directory(stage)
+    os.rename(stage, final)
+    sync_directory(store)
+    replacement = parent / f".session-link-{os.getpid()}"
+    replacement.symlink_to(final)
+    os.replace(replacement, session)
+    sync_directory(parent)
+    print(f"session-publication-ready generation={number}")
+
+
+def cleanup(args: argparse.Namespace) -> None:
+    if not args.session.is_symlink():
+        return
+    target = args.session.resolve(strict=False)
+    expected = args.session.parent / ".session-generations"
+    if target.parent != expected or not target.name.isdecimal():
+        refuse("cleanup_foreign_publication", str(target))
+    args.session.unlink()
+
+
+def project_x11(args: argparse.Namespace) -> None:
+    if "x11" not in args.capability:
+        return
+    capability = args.session / "capabilities" / "x11"
+    if not capability.is_dir():
+        return
+    x_socket = capability / "X0"
+    environment = capability / "environment"
+    if not x_socket.exists() or not environment.is_file():
+        return
+    args.output.mkdir(parents=True, mode=0o700)
+    socket_dir = args.output / ".X11-unix"
+    socket_dir.mkdir(mode=0o700)
+    (socket_dir / "X0").symlink_to(x_socket.resolve())
+    write_file(args.output / "environment", environment.read_text(encoding="utf-8"))
+    write_file(
+        args.output / "systemd.conf",
+        "[Service]\n"
+        "SupplementaryGroups=pf-session\n"
+        "BindPaths=/run/pocketforge/session/capabilities/x11/X0:/tmp/.X11-unix/X0\n"
+        "EnvironmentFile=/run/pocketforge/session/capabilities/x11/environment\n",
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    pub = sub.add_parser("publish")
+    pub.add_argument("--session", type=Path, required=True)
+    pub.add_argument("--wayland", type=Path, required=True)
+    pub.add_argument("--x11", type=Path, required=True)
+    pub.add_argument("--display", type=int, default=0)
+    pub.add_argument("--timeout", type=float, default=10.0)
+    pub.add_argument("--proc-net-unix", type=Path, default=Path("/proc/net/unix"))
+    identity = pub.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--gid", type=int)
+    identity.add_argument("--group")
+    pub.set_defaults(func=publish)
+    clean = sub.add_parser("cleanup")
+    clean.add_argument("--session", type=Path, required=True)
+    clean.set_defaults(func=cleanup)
+    projection = sub.add_parser("project-x11")
+    projection.add_argument("--session", type=Path, required=True)
+    projection.add_argument("--output", type=Path, required=True)
+    projection.add_argument("--capability", action="append", default=[])
+    projection.set_defaults(func=project_x11)
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
