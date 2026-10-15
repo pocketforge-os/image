@@ -11,7 +11,7 @@ runtime_source="${tmp}/runtime"
 mkdir -p "${runtime_source}/crates/pf-app-manifest/src"
 printf '%s\n' \
     'pub const KNOWN_CAPABILITIES: &[&str] = &[' \
-    '    "input", "vibration", "entropy", "audio", "settings",' \
+    '    "input", "vibration", "entropy", "audio", "settings", "x11",' \
     '];' \
     'pub const KNOWN_GLES_VERSIONS: &[&str] = &["2.0", "3.0", "3.1", "3.2"];' \
     'pub const KNOWN_VULKAN_VERSIONS: &[&str] = &["1.0", "1.1", "1.2", "1.3", "1.4"];' \
@@ -134,6 +134,27 @@ assert parsed == {
     "landlock_full_min_abi": 10,
     "landlock_browser_min_abi": 6,
 }, parsed
+PY
+
+# A g1 image has the supervisor-owned filesystem X socket and therefore adds
+# the exact runtime-owned x11 capability. The legacy fb0 image must not expose
+# it through the shared platform contract.
+g1_output="${tmp}/open-g1/usr/share/pocketforge/platform-capabilities.toml"
+PF_APP_RUNTIME_FAMILY=pocketforge/a133-powervr \
+PF_APP_RUNTIME_ABI=1 \
+PF_APP_PLATFORM_VERSION=20 \
+PF_APP_CAPABILITIES='audio entropy input settings' \
+    "${renderer}" --soc sun50iw10p1 --gpu-model open --gamescope-mode g1 \
+    --runtime-source "${runtime_source}" --descriptor "${descriptor}" --output "${g1_output}"
+python3 - "${output}" "${g1_output}" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+legacy = tomllib.loads(Path(sys.argv[1]).read_text())
+g1 = tomllib.loads(Path(sys.argv[2]).read_text())
+assert "x11" not in legacy["supported_capabilities"], legacy
+assert g1["supported_capabilities"] == ["audio", "entropy", "input", "settings", "x11"], g1
 PY
 
 # Descriptor v3 adds [input_profile] while retaining the v2 memory/graphics,
@@ -306,5 +327,6 @@ done
 grep -F 'render-platform-capabilities' "${dockerfile}" >/dev/null
 # The build passes the sha-verified staged descriptor from check-device-descriptor.
 grep -F -- '--descriptor "${DESCRIPTOR}"' "${dockerfile}" >/dev/null
+grep -F -- '--gamescope-mode "${PF_GAMESCOPE_MODE}"' "${dockerfile}" >/dev/null
 
 echo 'default-app platform contract: PASS (schema-2/v3 equivalence, descriptor-derived device facts, fail-closed versions, vocabularies and scope)'

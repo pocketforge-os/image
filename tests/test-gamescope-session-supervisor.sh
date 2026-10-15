@@ -226,6 +226,8 @@ assert set(g1) == {
     "/run/pocketforge/prefsd.sock",
     "/run/pocketforge/session/environment",
     "/run/pocketforge/session/wayland-0",
+    "/run/pocketforge/session/capabilities/x11/environment",
+    "/run/pocketforge/session/capabilities/x11/X0",
 }
 PY
 "${checker}" --root "${scratch}/g1" --inventory "${policy}" --producers "${manifest}"
@@ -234,13 +236,13 @@ python3 - "${scratch}/missing-producer.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 data = json.load(open(path, encoding="utf-8"))
-del data["producers"]["/run/pocketforge/session/wayland-0"]
+del data["producers"]["/run/pocketforge/session/capabilities/x11/X0"]
 open(path, "w", encoding="utf-8").write(json.dumps(data))
 PY
 if "${checker}" --root "${scratch}/g1" --inventory "${policy}" \
     --producers "${scratch}/missing-producer.json" >"${scratch}/negative.out" 2>&1; then
     fail "producer audit accepted a missing required producer"
 fi
-grep -F '/run/pocketforge/session/wayland-0' "${scratch}/negative.out" >/dev/null
+grep -F '/run/pocketforge/session/capabilities/x11/X0' "${scratch}/negative.out" >/dev/null
 
 echo 'PASS: dormant Gamescope session supervisor, atomic producer, scoped X11, input contract and producer audit'

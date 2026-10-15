@@ -88,6 +88,8 @@ RESOURCE_PREFIXES = {
     "render-devices": ("/dev/dri/renderD",),
     "session-environment": ("/run/pocketforge/session/environment",),
     "video-decode-devices": ("/dev/video",),
+    "x11-environment": ("/run/pocketforge/session/capabilities/x11/environment",),
+    "x11-socket": ("/run/pocketforge/session/capabilities/x11/X0",),
 }
 
 REFUSAL_EXIT = {

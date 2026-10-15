@@ -208,6 +208,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--soc", required=True)
     parser.add_argument("--gpu-model", required=True)
+    parser.add_argument(
+        "--gamescope-mode", choices=("not-shipped", "g1"), default="not-shipped"
+    )
     parser.add_argument("--runtime-source", required=True, type=Path)
     parser.add_argument(
         "--descriptor",
@@ -264,6 +267,10 @@ def main() -> None:
     unknown = sorted(set(capabilities) - set(vocabularies["KNOWN_CAPABILITIES"]))
     if unknown:
         fatal("PF_APP_CAPABILITIES contains runtime-unknown values: " + ", ".join(unknown))
+    if args.gamescope_mode == "g1":
+        if "x11" not in vocabularies["KNOWN_CAPABILITIES"]:
+            fatal("g1 requires the runtime x11 capability vocabulary")
+        capabilities = sorted(set(capabilities) | {"x11"})
 
     descriptor = load_descriptor(descriptor_path)
     physical_memory_mib, app_memory_budget_mib = descriptor_memory(descriptor)

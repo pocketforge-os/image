@@ -18,6 +18,16 @@
       "unit": "pocketforge-session-publisher.service",
       "type": "socket-link",
       "mode": "0660"
+    },
+    "/run/pocketforge/session/capabilities/x11/environment": {
+      "unit": "pocketforge-session-publisher.service",
+      "type": "regular",
+      "mode": "0444"
+    },
+    "/run/pocketforge/session/capabilities/x11/X0": {
+      "unit": "pocketforge-session-publisher.service",
+      "type": "socket-link",
+      "mode": "0660"
     }
   },
   "optional": []

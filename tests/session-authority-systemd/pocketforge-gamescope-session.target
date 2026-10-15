@@ -1,0 +1,3 @@
+[Unit]
+Description=Fixture Gamescope session lifetime
+StopWhenUnneeded=yes
