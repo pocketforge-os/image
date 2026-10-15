@@ -28,9 +28,11 @@ make_card() {
     ln -s "${tree}/sys/bus/platform/drivers/${driver}" \
         "${tree}/sys/class/drm/${card}/device/driver"
     if test "${connected}" = yes; then
-        mkdir -p "${tree}/sys/class/drm/${card}/${card}-DSI-1"
+        mkdir -p "${tree}/sys/class/drm/${card}-DSI-1"
         printf 'connected\n' \
-            >"${tree}/sys/class/drm/${card}/${card}-DSI-1/status"
+            >"${tree}/sys/class/drm/${card}-DSI-1/status"
+        printf 'enabled\n' \
+            >"${tree}/sys/class/drm/${card}-DSI-1/enabled"
     fi
 }
 
@@ -88,6 +90,22 @@ grep -Fx 'PF_GAMESCOPE_KMS_SELECT state=REFUSED reason=no_kms_node' \
     || fail "render-only refusal did not preserve the typed reason"
 test ! -e "${tree}/kms.env" \
     || fail "render-only refusal retained a stale EnvironmentFile"
+
+# A connector without an enabled CRTC is not yet a usable display pipeline.
+tree="${scratch}/no-crtc"
+make_card "${tree}" 0 sun4i-drm no
+mkdir -p "${tree}/sys/class/drm/card0-DSI-1"
+printf 'connected\n' >"${tree}/sys/class/drm/card0-DSI-1/status"
+printf 'disabled\n' >"${tree}/sys/class/drm/card0-DSI-1/enabled"
+if PF_DRM_DEV_ROOT="${tree}/dev/dri" \
+    PF_DRM_SYS_ROOT="${tree}/sys" \
+    PF_GAMESCOPE_KMS_ENV="${tree}/kms.env" \
+    "${selector}" >"${tree}/stdout" 2>"${tree}/stderr"; then
+    fail "connector without an enabled CRTC was accepted"
+fi
+grep -Fx 'PF_GAMESCOPE_KMS_SELECT state=REFUSED reason=no_kms_node' \
+    "${tree}/stderr" >/dev/null \
+    || fail "no-CRTC refusal did not preserve the typed reason"
 
 # A second display candidate is ambiguous; selecting the lowest card number
 # would silently reintroduce the probe-order dependency.

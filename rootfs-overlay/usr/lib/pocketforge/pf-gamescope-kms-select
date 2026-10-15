@@ -38,14 +38,17 @@ for class_node in "${sys_root}"/class/drm/card*; do
     driver=${driver_target##*/}
     test "${driver}" = "${expected_driver}" || continue
 
-    # DRM connector objects are exported below the card class device. A
-    # connected connector is the sysfs-visible proof that this driver owns a
-    # usable display pipeline; render-only PowerVR nodes have none.
+    # DRM connector objects are sibling class devices named cardN-CONNECTOR.
+    # Requiring a connected and enabled connector proves both a live connector
+    # and a CRTC-bound display pipeline; render-only PowerVR nodes have none.
     connected=no
-    for status_file in "${class_node}"/"${card}"-*/status; do
+    for status_file in "${sys_root}"/class/drm/"${card}"-*/status; do
         test -f "${status_file}" || continue
+        enabled_file=${status_file%/status}/enabled
+        test -f "${enabled_file}" || continue
         IFS= read -r status <"${status_file}" || status=
-        if test "${status}" = connected; then
+        IFS= read -r enabled <"${enabled_file}" || enabled=
+        if test "${status}" = connected && test "${enabled}" = enabled; then
             connected=yes
             break
         fi
