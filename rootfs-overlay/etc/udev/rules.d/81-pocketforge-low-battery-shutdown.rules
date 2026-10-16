@@ -1,0 +1,3 @@
+# Re-evaluate the policy for the normal power_supply_changed notification from
+# either AXP717 low-SOC alarm. The oneshot and its /run record coalesce storms.
+ACTION=="change", SUBSYSTEM=="power_supply", KERNEL=="axp20x-battery", RUN+="/usr/bin/systemctl --no-block start pocketforge-low-battery-shutdown.service"
