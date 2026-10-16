@@ -75,6 +75,8 @@ if values(owner, "ReadWritePaths") != [["/run/pocketforge/x11"]]:
     raise SystemExit(1)
 if any(path == "/tmp" for row in values(owner, "ReadWritePaths") for path in row):
     raise SystemExit(1)
+if values(owner, "RuntimeDirectoryMode") != [["0751"]]:
+    raise SystemExit(1)
 
 entries = {tuple(line.split()) for line in tmpfiles if line and not line.startswith("#")}
 required = {
@@ -108,6 +110,13 @@ sed -i '/^BindPaths=/d' "${scratch}/owner-without-x11-bind.service"
 if check_xwayland_write_contract "${scratch}/owner-without-x11-bind.service" \
     "${publisher_unit}" "${x11_tmpfiles}"; then
     fail "Xwayland write check accepted a missing namespace bind"
+fi
+cp "${owner}" "${scratch}/owner-without-app-traverse.service"
+sed -i 's/^RuntimeDirectoryMode=0751$/RuntimeDirectoryMode=0750/' \
+    "${scratch}/owner-without-app-traverse.service"
+if check_xwayland_write_contract "${scratch}/owner-without-app-traverse.service" \
+    "${publisher_unit}" "${x11_tmpfiles}"; then
+    fail "Xwayland write check accepted an app-inaccessible runtime directory"
 fi
 cp "${x11_tmpfiles}" "${scratch}/x11-without-sticky.conf"
 sed -i 's#x11/.X11-unix 1777#x11/.X11-unix 0777#' \

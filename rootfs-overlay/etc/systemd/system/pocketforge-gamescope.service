@@ -15,7 +15,9 @@ User=pf-gamescope
 Group=pf-gamescope
 SupplementaryGroups=video render pf-compositor-input
 RuntimeDirectory=pocketforge/gamescope
-RuntimeDirectoryMode=0750
+# App units traverse this directory to consume publisher-projected session
+# sockets; files within it remain owned and access-controlled separately.
+RuntimeDirectoryMode=0751
 EnvironmentFile=-/run/pocketforge/kbd-layout.env
 EnvironmentFile=-/run/pocketforge/gamescope/kms.env
 Environment=XDG_RUNTIME_DIR=/run/pocketforge/gamescope

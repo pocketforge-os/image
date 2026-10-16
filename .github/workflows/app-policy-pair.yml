@@ -18,6 +18,8 @@ on:
       - 'tests/test_app_runtime_abi.py'
       - 'tests/test-default-app-platform.sh'
       - 'tests/test-poolsuite-app-policy.sh'
+      - 'tests/test-steamlink-app-policy.sh'
+      - 'apps/steamlink/app.toml'
       - 'tests/test-poolsuite-rootfs-install.sh'
       - 'tests/test-poolsuite-variant-stage.sh'
       - 'tests/test-runtime-path-producers.sh'
@@ -76,5 +78,6 @@ jobs:
             "$(git rev-parse HEAD)" \
             "$(sha256sum "$PF_APP_POLICY_RENDER" | cut -d' ' -f1)"
           tests/test-app-runtime-root.sh
+          tests/test-steamlink-app-policy.sh "$PF_APP_POLICY_RENDER"
           tests/test-default-app-platform.sh
           tests/test-runtime-path-producers.sh

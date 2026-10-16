@@ -96,7 +96,7 @@ id = "org.pocketforge.steamlink"
 name = "Steam Link"
 category = "stream"
 version = "1.3.32.316"
-use = ["audio", "input", "vibration", "video-decode"]
+use = ["audio", "input", "x11", "egress:tcp/443@*"]
 
 [runtime]
 family = "pocketforge/a133-powervr"
