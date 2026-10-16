@@ -122,8 +122,17 @@ seed_pair() {
 
 umask 077
 export LC_ALL=C
-seed_pair 1
-seed_pair 2
+seed_pair 1 &
+seed_1_pid=$!
+seed_pair 2 &
+seed_2_pid=$!
+seed_status=0
+wait "${seed_1_pid}" || seed_status=$?
+wait "${seed_2_pid}" || seed_status=$?
+if (( seed_status != 0 )); then
+    echo 'one or more Gamescope PVR cache seed compiles failed' >&2
+    exit "${seed_status}"
+fi
 cmp "${scratch}/seed-1.foz" "${scratch}/seed-2.foz"
 cmp "${scratch}/seed-1_idx.foz" "${scratch}/seed-2_idx.foz"
 cmp "${scratch}/seed-1.relative-dir" "${scratch}/seed-2.relative-dir"
