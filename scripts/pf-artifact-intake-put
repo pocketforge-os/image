@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f /etc/pocketforge/artifact-store.conf ]; then
+    # shellcheck disable=SC1091
+    source /etc/pocketforge/artifact-store.conf
+elif [ -f "$SCRIPT_DIR/lib/artifact-store-config.sh" ]; then
+    # shellcheck source=lib/artifact-store-config.sh
+    source "$SCRIPT_DIR/lib/artifact-store-config.sh"
+else
+    printf 'reason=artifact_intake_config_missing\n' >&2
+    exit 1
+fi
+
+if [ "$#" -ne 1 ]; then
+    printf 'usage: %s <regular-file>\n' "$0" >&2
+    exit 2
+fi
+payload="$1"
+if [ ! -f "$payload" ] || [ -L "$payload" ]; then
+    printf 'reason=intake_payload_not_regular\n' >&2
+    exit 1
+fi
+for value in "$PF_ARTIFACT_INTAKE_MAX_BYTES" "$PF_ARTIFACT_INTAKE_PORT"; do
+    [[ "$value" =~ ^[0-9]+$ ]] || { printf 'reason=artifact_intake_config_invalid\n' >&2; exit 1; }
+done
+expected_base="http://192.168.151.1:8791/intake/v1"
+if [ "$PF_ARTIFACT_INTAKE_HOST" != 192.168.151.1 ] ||
+    [ "$PF_ARTIFACT_INTAKE_PORT" != 8791 ] ||
+    [ "$PF_ARTIFACT_INTAKE_BASE" != "$expected_base" ]; then
+    printf 'reason=artifact_intake_config_invalid\n' >&2
+    exit 1
+fi
+bytes="$(stat -c %s -- "$payload")"
+if [ "$bytes" -gt "$PF_ARTIFACT_INTAKE_MAX_BYTES" ]; then
+    printf 'reason=object_too_large bytes=%s max_bytes=%s\n' "$bytes" "$PF_ARTIFACT_INTAKE_MAX_BYTES" >&2
+    exit 1
+fi
+sha256="$(sha256sum -- "$payload" | cut -d' ' -f1)"
+[[ "$sha256" =~ ^[0-9a-f]{64}$ ]] || { printf 'reason=local_sha256_invalid\n' >&2; exit 1; }
+
+response="$(mktemp)"
+trap 'rm -f -- "$response"' EXIT
+url="${PF_ARTIFACT_INTAKE_BASE%/}/trusted-builder/sha256/$sha256"
+transport_attempts=3
+for ((attempt = 1; attempt <= transport_attempts; attempt++)); do
+    : >"$response"
+    set +e
+    http_status="$(curl --silent --show-error --proto '=http' --max-redirs 0 \
+        --request PUT --header "Content-Length: $bytes" --upload-file "$payload" \
+        --output "$response" --write-out '%{http_code}' "$url")"
+    curl_status=$?
+    set -e
+    if [ "$curl_status" -eq 0 ]; then break; fi
+    if [ "$attempt" -eq "$transport_attempts" ]; then
+        printf 'reason=intake_transport_failed curl_status=%s attempts=%s\n' "$curl_status" "$transport_attempts" >&2
+        exit "$curl_status"
+    fi
+    printf 'intake_transport_retry attempt=%s/%s curl_status=%s\n' "$attempt" "$transport_attempts" "$curl_status" >&2
+    sleep "$attempt"
+done
+
+disposition=
+case "$http_status" in
+201)
+    python3 - "$response" "$sha256" "$bytes" <<'PY'
+import json, sys
+path, sha256, size = sys.argv[1:]
+try:
+    receipt = json.load(open(path, encoding="utf-8"))
+except (OSError, UnicodeError, ValueError) as error:
+    raise SystemExit(f"reason=intake_receipt_unreadable detail={error}")
+expected = {"bytes": int(size), "schema": "pocketforge.artifact-intake-receipt/v1",
+            "sha256": sha256, "trust_class": "trusted-builder"}
+if receipt != expected:
+    raise SystemExit("reason=intake_receipt_mismatch")
+PY
+    disposition=created
+    ;;
+409)
+    if ! python3 - "$response" <<'PY'
+import json, sys
+try:
+    refusal = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if refusal == {"reason": "digest_exists"} else 1)
+PY
+    then
+        printf 'reason=intake_conflict_unconfirmed status=409\n' >&2
+        exit 1
+    fi
+    disposition=already-present
+    ;;
+*) printf 'reason=intake_http_error status=%s\n' "$http_status" >&2; exit 1 ;;
+esac
+printf 'intake_status=PASS disposition=%s trust_class=trusted-builder sha256=%s bytes=%s endpoint=%s\n' \
+    "$disposition" "$sha256" "$bytes" "$PF_ARTIFACT_INTAKE_BASE"
