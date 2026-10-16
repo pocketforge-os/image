@@ -157,6 +157,7 @@ ARG PF_TOOLCHAIN_GCC_VERSION
 # Required independently: an absent kernel epoch fails before compilation.
 ARG PF_KERNEL_SOURCE_DATE_EPOCH
 COPY --from=kernel-src . /work/kernel
+COPY --chmod=0555 --from=image-src scripts/emit-axp717-low-soc-capability.sh /usr/local/bin/emit-axp717-low-soc-capability
 RUN <<'KERNEL'
 set -eux
 : "${PF_KERNEL_SHA:?PF_KERNEL_SHA must be the lock-resolved full kernel revision}" \
@@ -178,6 +179,9 @@ staged_kernel_sha="$(cat .pf-source-revision 2>/dev/null || true)"
 [ "${staged_kernel_sha}" = "${PF_KERNEL_SHA}" ] \
   || { echo "GUARD FAIL: PF_KERNEL_SHA does not match the staged kernel archive receipt"; exit 1; }
 rm -f .pf-source-revision
+/usr/local/bin/emit-axp717-low-soc-capability \
+  /work/kernel /out/build/capabilities/axp717-low-soc-alarm-irqs-v1 \
+  "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}"
 
 # Linux places KBUILD_BUILD_VERSION only in UTS_VERSION (`uname -v`). Use the
 # first 12 lowercase hex characters of the authenticated full revision. Do not
@@ -2293,6 +2297,7 @@ ARG PF_APT_PROXY
 COPY --from=image-src . /work/src
 COPY --from=fetch  /out /work/blobs
 COPY --from=kernel /out/lib/modules /work/kernel-tsp
+COPY --from=kernel /out/build/capabilities /work/kernel-capabilities
 COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
 COPY --from=gpu-fw /out             /work/gpu-fw-tsp
 COPY --from=gpu-um-mesa /out        /work/gpu-um-mesa
@@ -2341,6 +2346,7 @@ case "${PF_SOC}" in
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
       PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL}" \
       PF_KERNEL_REPO="${PF_KERNEL_REPO}" \
+      PF_KERNEL_CAPABILITY_RECEIPT=/work/kernel-capabilities/axp717-low-soc-alarm-irqs-v1 \
       PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES}" \
       PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \
       PF_IMAGE_SHA="${PF_IMAGE_SHA}" PF_KERNEL_SHA="${PF_KERNEL_SHA}" \

@@ -59,6 +59,8 @@ run_scope_peak_bytes=0
 build_cache_records_removed=0
 build_cache_leftover_ids=
 build_cache_missing_ids=
+build_cache_builder=
+build_cache_builder_created=0
 docker_run_profile=owner-exception
 run_scope=
 docker_root=
@@ -146,6 +148,7 @@ assert_safe_host() {
 
     for socket_path in \
         "${fixture_root%/}/tmp/.X11-unix/"X* \
+        "${fixture_root%/}/run/pocketforge/x11/.X11-unix/"X* \
         "${fixture_root%/}/run/user/"*/wayland-*; do
         [ -S "${socket_path}" ] || continue
         fail "INTERACTIVE_WORKSTATION: graphical socket=${socket_path}"
@@ -198,13 +201,16 @@ assert_fixture_docker_shim() {
 }
 
 configure_run_identity() {
-    local requested="$1"
+    local requested="$1" builder_hash builder_prefix
 
     run_id="$(printf '%s' "${requested}" | tr -c 'A-Za-z0-9_.-' '-')"
     [ -n "${run_id}" ] || fail 'INVALID_RUN_ID: empty'
     run_label="${run_label_key}=${run_id}"
     systemd_container="tsp-f3fm-211-systemd-${run_id}"
     test_image="tsp-f3fm-211-systemd:${runtime_sha:0:12}-${run_id}"
+    builder_hash="$(printf '%s' "${run_id}" | sha256sum | cut -c1-12)"
+    builder_prefix="$(printf '%s' "${run_id}" | tr '[:upper:]' '[:lower:]' | cut -c1-48)"
+    build_cache_builder="pf-sa-${builder_prefix}-${builder_hash}"
 }
 
 configure_docker_root() {
@@ -363,7 +369,6 @@ print("\t".join(str(info[key]) for key in (
 cleanup() {
     local status=$? receipt_result receipt_reason scope_removed=false
     local container_status image_status labeled_containers labeled_images
-    local attempt
     trap - EXIT INT TERM
     cleanup_active=1
     set +e
@@ -402,24 +407,23 @@ cleanup() {
             fi
         fi
     fi
+    if [ "${build_cache_builder_created}" -eq 1 ]; then
+        if ! remove_run_build_cache_builder; then
+            cleanup_failed=1
+            [ -n "${failure_reason}" ] \
+                || failure_reason='BUILD_CACHE_BUILDER_CLEANUP_FAILED'
+        fi
+    fi
     sample_disk cleanup_end >/dev/null 2>&1 || true
     if [ "${docker_disk_configured}" -eq 1 ]; then
         docker_root_free_after_bytes="$(measure_docker_root_free_bytes)" \
             || cleanup_failed=1
         docker_root_df_after="$(capture_docker_root_df)" \
             || cleanup_failed=1
-        for ((attempt = 1; attempt <= 10; attempt++)); do
-            docker_system_df_after="$(capture_docker_system_df)" \
-                || cleanup_failed=1
-            build_cache_df_after="$(extract_build_cache_df \
-                "${docker_system_df_after}")" || cleanup_failed=1
-            [ "${build_cache_df_after}" != "${build_cache_df_before}" ] || break
-            sleep 0.2
-        done
-        if [ "${build_cache_df_after}" != "${build_cache_df_before}" ]; then
-            cleanup_failed=1
-            failure_reason="$(build_cache_drift_reason)"
-        fi
+        docker_system_df_after="$(capture_docker_system_df)" \
+            || cleanup_failed=1
+        build_cache_df_after="$(extract_build_cache_df \
+            "${docker_system_df_after}")" || cleanup_failed=1
     fi
 
     if [ "${scope_initialized}" -eq 1 ] && [ -d "${run_scope}" ]; then
@@ -448,9 +452,9 @@ cleanup() {
     fi
 
     if [ "${receipt_result}" = PASS ]; then
-        echo "session-authority real-systemd: PASS ${pass_fields} run_id=${run_id} docker_root=${docker_root:-unknown} docker_root_free_before_bytes=${docker_root_free_before_bytes:-unknown} docker_root_free_after_bytes=${docker_root_free_after_bytes:-unknown} docker_root_df_before=${docker_root_df_before:-unknown} docker_root_df_after=${docker_root_df_after:-unknown} docker_system_df_before=${docker_system_df_before:-unknown} docker_system_df_after=${docker_system_df_after:-unknown} build_cache_df_before=${build_cache_df_before:-unknown} build_cache_df_after=${build_cache_df_after:-unknown} build_cache_records_removed=${build_cache_records_removed} run_scope_peak_bytes=${run_scope_peak_bytes} docker_root_min_free_bytes=${docker_root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}"
+        echo "session-authority real-systemd: PASS ${pass_fields} run_id=${run_id} build_cache_builder=${build_cache_builder:-unknown} docker_root=${docker_root:-unknown} docker_root_free_before_bytes=${docker_root_free_before_bytes:-unknown} docker_root_free_after_bytes=${docker_root_free_after_bytes:-unknown} docker_root_df_before=${docker_root_df_before:-unknown} docker_root_df_after=${docker_root_df_after:-unknown} docker_system_df_before=${docker_system_df_before:-unknown} docker_system_df_after=${docker_system_df_after:-unknown} build_cache_df_before=${build_cache_df_before:-unknown} build_cache_df_after=${build_cache_df_after:-unknown} build_cache_records_removed=${build_cache_records_removed} run_scope_peak_bytes=${run_scope_peak_bytes} docker_root_min_free_bytes=${docker_root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}"
     else
-        echo "session-authority real-systemd: FAIL receipt_reason=${receipt_reason} run_id=${run_id:-unknown} docker_root=${docker_root:-unknown} docker_root_free_before_bytes=${docker_root_free_before_bytes:-unknown} docker_root_free_after_bytes=${docker_root_free_after_bytes:-unknown} docker_root_df_before=${docker_root_df_before:-unknown} docker_root_df_after=${docker_root_df_after:-unknown} docker_system_df_before=${docker_system_df_before:-unknown} docker_system_df_after=${docker_system_df_after:-unknown} build_cache_df_before=${build_cache_df_before:-unknown} build_cache_df_after=${build_cache_df_after:-unknown} build_cache_records_removed=${build_cache_records_removed} run_scope_peak_bytes=${run_scope_peak_bytes} docker_root_min_free_bytes=${docker_root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}" >&2
+        echo "session-authority real-systemd: FAIL receipt_reason=${receipt_reason} run_id=${run_id:-unknown} build_cache_builder=${build_cache_builder:-unknown} docker_root=${docker_root:-unknown} docker_root_free_before_bytes=${docker_root_free_before_bytes:-unknown} docker_root_free_after_bytes=${docker_root_free_after_bytes:-unknown} docker_root_df_before=${docker_root_df_before:-unknown} docker_root_df_after=${docker_root_df_after:-unknown} docker_system_df_before=${docker_system_df_before:-unknown} docker_system_df_after=${docker_system_df_after:-unknown} build_cache_df_before=${build_cache_df_before:-unknown} build_cache_df_after=${build_cache_df_after:-unknown} build_cache_records_removed=${build_cache_records_removed} run_scope_peak_bytes=${run_scope_peak_bytes} docker_root_min_free_bytes=${docker_root_min_free_bytes:-unknown} run_scope_removed=${scope_removed}" >&2
     fi
     exit "${status}"
 }
@@ -484,7 +488,9 @@ case "${1:-}" in
         lifecycle_commands=(
             'info --format {{json .}}'
             'version --format {{.Server.Version}}'
-            "build --label ${run_label} --iidfile /scope/image-id --tag ${test_image} --file /scope/Containerfile /scope"
+            "buildx create --name ${build_cache_builder} --driver docker-container"
+            "buildx inspect ${build_cache_builder} --bootstrap"
+            "buildx build --builder ${build_cache_builder} --load --label ${run_label} --iidfile /scope/image-id --tag ${test_image} --file /scope/Containerfile /scope"
             "exec ${systemd_container} /bin/true"
             "logs ${systemd_container}"
             "container inspect ${systemd_container}"
@@ -493,8 +499,10 @@ case "${1:-}" in
             "image inspect ${test_image}"
             "image ls --quiet --filter label=${run_label}"
             "image rm --force ${test_image}"
-            'buildx du --format json'
-            'buildx prune --force --filter id=fixture-cache-id'
+            "buildx du --builder ${build_cache_builder} --format json"
+            "buildx prune --builder ${build_cache_builder} --force --filter id=fixture-cache-id"
+            "buildx rm ${build_cache_builder}"
+            'buildx ls --format json'
         )
         make_systemd_argv "${test_image}" "${systemd_container}"
         audit_docker_argv "${systemd_argv[@]}"
@@ -591,6 +599,8 @@ build_cache_df_before="$(extract_build_cache_df "${docker_system_df_before}")" \
     || fail 'DOCKER_DISK_USAGE_UNREADABLE: build-cache total missing'
 run_started=1
 
+create_run_build_cache_builder \
+    || fail_recorded_or 'BUILD_CACHE_BUILDER_CREATE_FAILED: isolated buildx builder unavailable'
 capture_build_cache_records "${run_scope}/build-cache-before" \
     || fail_recorded_or 'BUILD_CACHE_AUDIT_UNAVAILABLE: docker buildx du failed'
 cleanup_docker_resources=1
@@ -708,7 +718,7 @@ install -m 0755 "${fixtures}/remount-cgroup-systemd" \
     "${context}/remount-cgroup-systemd"
 sample_disk build_context
 
-docker_checked build \
+docker_checked buildx build --builder "${build_cache_builder}" --load \
     --build-arg "PF_RUNTIME_SHA=${runtime_sha}" \
     --label "${run_label}" \
     --iidfile "${image_id_file}" \

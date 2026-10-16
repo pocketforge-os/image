@@ -41,7 +41,97 @@ test -z "$(find "${unit_root}" -path '*.wants/*' -print -quit)" \
     || fail "Gamescope session was enabled by the installer"
 
 owner="${unit_root}/pocketforge-gamescope.service"
+publisher_unit="${unit_root}/pocketforge-session-publisher.service"
+x11_tmpfiles="${scratch}/g1/usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf"
 drm_systemd_rule="${root}/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
+check_xwayland_write_contract() {
+    local owner_unit=$1
+    local publisher_service=$2
+    local tmpfiles_config=$3
+
+    python3 - "${owner_unit}" "${publisher_service}" "${tmpfiles_config}" <<'PY'
+import pathlib
+import sys
+
+owner_path, publisher_path, tmpfiles_path = map(pathlib.Path, sys.argv[1:])
+try:
+    owner = owner_path.read_text(encoding="utf-8").splitlines()
+    publisher = publisher_path.read_text(encoding="utf-8").splitlines()
+    tmpfiles = tmpfiles_path.read_text(encoding="utf-8").splitlines()
+except (OSError, UnicodeError):
+    raise SystemExit(1)
+
+def values(lines, key):
+    prefix = key + "="
+    return [line[len(prefix):].split() for line in lines if line.startswith(prefix)]
+
+if values(owner, "ProtectSystem") != [["strict"]]:
+    raise SystemExit(1)
+if any(value in (["yes"], ["true"]) for value in values(owner, "PrivateTmp")):
+    raise SystemExit(1)
+if values(owner, "BindPaths") != [["/run/pocketforge/x11:/tmp"]]:
+    raise SystemExit(1)
+if values(owner, "ReadWritePaths") != [["/run/pocketforge/x11"]]:
+    raise SystemExit(1)
+if any(path == "/tmp" for row in values(owner, "ReadWritePaths") for path in row):
+    raise SystemExit(1)
+if values(owner, "RuntimeDirectoryMode") != [["0751"]]:
+    raise SystemExit(1)
+
+entries = {tuple(line.split()) for line in tmpfiles if line and not line.startswith("#")}
+required = {
+    ("d", "/run/pocketforge/x11", "1777", "root", "root", "-"),
+    ("d", "/run/pocketforge/x11/.X11-unix", "1777", "root", "root", "-"),
+}
+if not required.issubset(entries):
+    raise SystemExit(1)
+
+# wlroots' fixed namespace paths must resolve to the same host-visible tree
+# consumed by the publisher. The display lock is deliberately created at
+# runtime with O_EXCL, so only its writable parent is provisioned.
+resolved_lock = "/run/pocketforge/x11/.X0-lock"
+resolved_socket = "/run/pocketforge/x11/.X11-unix/X0"
+if not resolved_lock.startswith("/run/pocketforge/x11/"):
+    raise SystemExit(1)
+exec_starts = [" ".join(row) for row in values(publisher, "ExecStart")]
+if len(exec_starts) != 1 or f"--x11 {resolved_socket}" not in exec_starts[0]:
+    raise SystemExit(1)
+if any("/tmp/.X11-unix" in line for line in publisher):
+    raise SystemExit(1)
+PY
+}
+
+# Gamescope must have writable storage for wlroots' /tmp/.X<N>-lock and
+# /tmp/.X11-unix/X<N> without receiving write access to the host's whole /tmp.
+check_xwayland_write_contract "${owner}" "${publisher_unit}" "${x11_tmpfiles}" \
+    || fail "Gamescope Xwayland write namespace is incomplete"
+cp "${owner}" "${scratch}/owner-without-x11-bind.service"
+sed -i '/^BindPaths=/d' "${scratch}/owner-without-x11-bind.service"
+if check_xwayland_write_contract "${scratch}/owner-without-x11-bind.service" \
+    "${publisher_unit}" "${x11_tmpfiles}"; then
+    fail "Xwayland write check accepted a missing namespace bind"
+fi
+cp "${owner}" "${scratch}/owner-without-app-traverse.service"
+sed -i 's/^RuntimeDirectoryMode=0751$/RuntimeDirectoryMode=0750/' \
+    "${scratch}/owner-without-app-traverse.service"
+if check_xwayland_write_contract "${scratch}/owner-without-app-traverse.service" \
+    "${publisher_unit}" "${x11_tmpfiles}"; then
+    fail "Xwayland write check accepted an app-inaccessible runtime directory"
+fi
+cp "${x11_tmpfiles}" "${scratch}/x11-without-sticky.conf"
+sed -i 's#x11/.X11-unix 1777#x11/.X11-unix 0777#' \
+    "${scratch}/x11-without-sticky.conf"
+if check_xwayland_write_contract "${owner}" "${publisher_unit}" \
+    "${scratch}/x11-without-sticky.conf"; then
+    fail "Xwayland write check accepted a non-sticky socket directory"
+fi
+cp "${publisher_unit}" "${scratch}/publisher-private-x11.service"
+sed -i 's#/run/pocketforge/x11/.X11-unix/X0#/tmp/.X11-unix/X0#' \
+    "${scratch}/publisher-private-x11.service"
+if check_xwayland_write_contract "${owner}" \
+    "${scratch}/publisher-private-x11.service" "${x11_tmpfiles}"; then
+    fail "Xwayland write check accepted a publisher-invisible socket path"
+fi
 check_drm_readiness_contract() {
     local unit=$1
     local rule=$2

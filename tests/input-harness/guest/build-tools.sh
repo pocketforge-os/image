@@ -12,7 +12,13 @@ cmake -S /src/sdl3 -B /src/sdl-build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DSDL_STATIC=OFF -DSDL_SHARED=ON -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
     -DSDL_VIDEO_DRIVER_SUNXIFB=OFF
-cmake --build /src/sdl-build --parallel 2
+parallel="$(nproc)"
+[[ "$parallel" =~ ^[0-9]+$ && "$parallel" -gt 0 ]] || {
+    echo "input-harness-payload=REFUSED reason=invalid_nproc value=$parallel" >&2
+    exit 1
+}
+echo "input-harness-payload-build parallel=$parallel"
+cmake --build /src/sdl-build --parallel "$parallel"
 cmake --install /src/sdl-build
 
 wayland-scanner client-header /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml \

@@ -95,14 +95,17 @@ jobs:
         run: |
           set -uo pipefail
           tests=(
+            tests/test-a133-battery-model-firmware.sh
             tests/test-a133-cma-bootargs.sh
             tests/test-a-cts-label-case-identity.sh
             tests/test-a-cts-worker-evidence-first.sh
             tests/test-a-cts-worker-recovery.sh
             tests/test-a-cts-worker-terminal.sh
             tests/test-alsa-config.sh
+            tests/test-artifact-intake-put.sh
             tests/test-boot-animator.sh
             tests/test-browser-platform-defaults.sh
+            tests/test-build-cache-audit-isolation.sh
             tests/test-build-id.sh
             tests/test-build-rootfs-direct.sh
             tests/test-cedar-spike.sh
@@ -132,6 +135,7 @@ jobs:
             tests/test-kernel-build-identity.sh
             tests/test-kernel-module-form.sh
             tests/test-launcher-runtime-contract.sh
+            tests/test-low-battery-shutdown.sh
             tests/test-mainline-rootfs-packages.sh
             tests/test-mesa-shader-cache.sh
             tests/test-none-gpu-model.sh

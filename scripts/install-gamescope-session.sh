@@ -28,6 +28,7 @@ files=(
     etc/systemd/system/pocketforge-gamescope-resident.service
     etc/udev/rules.d/73-pocketforge-compositor-input.rules
     usr/lib/sysusers.d/pocketforge-gamescope.conf
+    usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf
 )
 for file in "${files[@]}"; do
     install -D -m 0644 "${src}/${file}" "${rootfs}/${file}"

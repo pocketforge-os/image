@@ -80,11 +80,15 @@ krel=7.2.0-pocketforge
 run_kernel_stage() {
   local label=$1 sha=${2-__unset__} staged_sha=${3-__unset__} uts_layout=${4-6x}
   local work="${scratch}/${label}"
-  mkdir -p "${work}/kernel" "${work}/out"
+  mkdir -p "${work}/kernel/scripts" "${work}/out"
+  printf '%s\n' \
+    '#!/usr/bin/env python3' \
+    'print("PASS: semantic low-SOC capability fixture")' \
+    >"${work}/kernel/scripts/test-check-a133-axp717-low-soc.py"
   if [[ $staged_sha != __unset__ ]]; then
     printf '%s\n' "$staged_sha" >"${work}/kernel/.pf-source-revision"
   fi
-  sed "s#/work/kernel#${work}/kernel#g; s#/out#${work}/out#g" \
+  sed "s#/usr/local/bin/emit-axp717-low-soc-capability#${root}/scripts/emit-axp717-low-soc-capability.sh#g; s#/work/kernel#${work}/kernel#g; s#/out#${work}/out#g" \
     "${scratch}/kernel-heredoc.sh" >"${work}/run.sh"
   local -a env_args=(
     "PATH=${scratch}/bin:${PATH}" "FAKE_KREL=${krel}" "FAKE_UTS_LAYOUT=${uts_layout}"
@@ -108,6 +112,12 @@ test -d "${scratch}/locked/out/lib/modules/${krel}"
 test "$(find "${scratch}/locked/out/lib/modules" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')" = "$krel"
 grep -Fx "vermagic=${krel} SMP preempt" "${scratch}/locked/out/build/.pf-kernel-provenance" >/dev/null
 grep -Fx "build.version=${locked_sha:0:12}" "${scratch}/locked/out/build/.pf-kernel-provenance" >/dev/null
+grep -Fx 'capability=axp717-low-soc-alarm-irqs-v1' \
+  "${scratch}/locked/out/build/capabilities/axp717-low-soc-alarm-irqs-v1" >/dev/null
+grep -Fx 'result=present' \
+  "${scratch}/locked/out/build/capabilities/axp717-low-soc-alarm-irqs-v1" >/dev/null
+grep -Fx "kernel_sha=${locked_sha}" \
+  "${scratch}/locked/out/build/capabilities/axp717-low-soc-alarm-irqs-v1" >/dev/null
 
 run_kernel_stage other "$other_sha" "$other_sha"
 other_uts="$(sed -n 's/^#define UTS_VERSION "\(.*\)"$/\1/p' \

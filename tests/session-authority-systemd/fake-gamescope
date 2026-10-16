@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 WAYLAND = Path("/run/pocketforge/gamescope/gamescope-0")
-X11 = Path("/tmp/.X11-unix/X0")
+X11 = Path("/run/pocketforge/x11/.X11-unix/X0")
 stopping = threading.Event()
 
 
