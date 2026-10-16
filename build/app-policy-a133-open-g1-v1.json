@@ -19,10 +19,10 @@
       "/run/pocketforge/session/environment"
     ],
     "x11-environment": [
-      "/run/pocketforge/session/capabilities/x11/environment"
+      "/run/pocketforge/x11/policy/environment"
     ],
     "x11-socket": [
-      "/run/pocketforge/session/capabilities/x11/X0"
+      "/run/pocketforge/x11/.X11-unix/X0"
     ]
   }
 }

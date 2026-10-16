@@ -1466,7 +1466,7 @@ grep -Fqx '        run: python3 tests/verify-input-broker-wiring.py' "${workflow
 grep -Fq 'exit-before-ready' "${root}/tests/session-authority-systemd/fake-input-broker" || exit 1
 precondition_output="$(python3 "${precondition_verifier}")"
 grep -Fqx \
-    'session-authority path-preconditions: PASS conditions=1 providers=8 fb0=regular units=7' \
+    'session-authority path-preconditions: PASS conditions=1 providers=9 fb0=regular units=7' \
     <<<"${precondition_output}" || exit 1
 unprovided_unit="${tmp}/unprovided.service"
 printf '[Unit]\nConditionPathExists=/unprovided-test-path\n' >"${unprovided_unit}"

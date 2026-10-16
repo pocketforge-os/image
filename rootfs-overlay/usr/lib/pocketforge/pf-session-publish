@@ -44,6 +44,26 @@ def write_file(path: Path, data: str) -> None:
         os.fsync(handle.fileno())
 
 
+def write_atomic_file(path: Path, data: str) -> None:
+    temporary = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        descriptor = os.open(temporary, flags, 0o600)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.fchmod(descriptor, 0o444)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    sync_directory(path.parent)
+
+
 def sync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -85,11 +105,8 @@ def publish(args: argparse.Namespace) -> None:
     final = store / str(number)
     stage.mkdir(mode=0o755)
     os.chmod(stage, 0o755)
-    caps = stage / "capabilities" / "x11"
-    caps.mkdir(parents=True, mode=0o755)
+    (stage / "capabilities").mkdir(mode=0o755)
     (stage / "wayland-0").symlink_to(args.wayland)
-    (caps / f"X{args.display}").symlink_to(args.x11)
-    write_file(caps / "environment", f"DISPLAY=:{args.display}\n")
     write_file(stage / "generation", f"{number}\n")
     write_file(stage / "readiness", "ready\n")
     write_file(
@@ -99,14 +116,12 @@ def publish(args: argparse.Namespace) -> None:
         "WAYLAND_DISPLAY=wayland-0\n",
     )
     os.chmod(stage / "capabilities", 0o755)
-    os.chmod(caps, 0o755)
     os.chown(args.wayland, 0 if os.geteuid() == 0 else -1, gid)
     os.chmod(args.wayland, 0o660)
     # Keep the Xwayland uid so it can unlink X0 from sticky /tmp on exit; the
     # capability group is the policy-controlled connect grant.
     os.chown(args.x11, -1, gid)
     os.chmod(args.x11, 0o660)
-    sync_directory(caps)
     sync_directory(stage / "capabilities")
     sync_directory(stage)
     os.rename(stage, final)
@@ -115,41 +130,31 @@ def publish(args: argparse.Namespace) -> None:
     replacement.symlink_to(final)
     os.replace(replacement, session)
     sync_directory(parent)
+    try:
+        write_atomic_file(args.x11_environment, f"DISPLAY=:{args.display}\n")
+    except BaseException:
+        session.unlink(missing_ok=True)
+        sync_directory(parent)
+        raise
     print(f"session-publication-ready generation={number}")
 
 
 def cleanup(args: argparse.Namespace) -> None:
-    if not args.session.is_symlink():
-        return
-    target = args.session.resolve(strict=False)
-    expected = args.session.parent / ".session-generations"
-    if target.parent != expected or not target.name.isdecimal():
-        refuse("cleanup_foreign_publication", str(target))
-    args.session.unlink()
-
-
-def project_x11(args: argparse.Namespace) -> None:
-    if "x11" not in args.capability:
-        return
-    capability = args.session / "capabilities" / "x11"
-    if not capability.is_dir():
-        return
-    x_socket = capability / "X0"
-    environment = capability / "environment"
-    if not x_socket.exists() or not environment.is_file():
-        return
-    args.output.mkdir(parents=True, mode=0o700)
-    socket_dir = args.output / ".X11-unix"
-    socket_dir.mkdir(mode=0o700)
-    (socket_dir / "X0").symlink_to(x_socket.resolve())
-    write_file(args.output / "environment", environment.read_text(encoding="utf-8"))
-    write_file(
-        args.output / "systemd.conf",
-        "[Service]\n"
-        "SupplementaryGroups=pf-session\n"
-        "BindPaths=/run/pocketforge/session/capabilities/x11/X0:/tmp/.X11-unix/X0\n"
-        "EnvironmentFile=/run/pocketforge/session/capabilities/x11/environment\n",
-    )
+    if args.session.is_symlink():
+        target = args.session.resolve(strict=False)
+        expected = args.session.parent / ".session-generations"
+        if target.parent != expected or not target.name.isdecimal():
+            refuse("cleanup_foreign_publication", str(target))
+    if args.x11_environment.exists() or args.x11_environment.is_symlink():
+        if args.x11_environment.is_symlink() or not args.x11_environment.is_file():
+            refuse("cleanup_foreign_x11_environment", str(args.x11_environment))
+        if args.x11_environment.read_text(encoding="utf-8") != "DISPLAY=:0\n":
+            refuse("cleanup_foreign_x11_environment", str(args.x11_environment))
+    if args.session.is_symlink():
+        args.session.unlink()
+    if args.x11_environment.exists():
+        args.x11_environment.unlink()
+        sync_directory(args.x11_environment.parent)
 
 
 def main() -> None:
@@ -159,6 +164,7 @@ def main() -> None:
     pub.add_argument("--session", type=Path, required=True)
     pub.add_argument("--wayland", type=Path, required=True)
     pub.add_argument("--x11", type=Path, required=True)
+    pub.add_argument("--x11-environment", type=Path, required=True)
     pub.add_argument("--display", type=int, default=0)
     pub.add_argument("--timeout", type=float, default=10.0)
     pub.add_argument("--proc-net-unix", type=Path, default=Path("/proc/net/unix"))
@@ -168,12 +174,8 @@ def main() -> None:
     pub.set_defaults(func=publish)
     clean = sub.add_parser("cleanup")
     clean.add_argument("--session", type=Path, required=True)
+    clean.add_argument("--x11-environment", type=Path, required=True)
     clean.set_defaults(func=cleanup)
-    projection = sub.add_parser("project-x11")
-    projection.add_argument("--session", type=Path, required=True)
-    projection.add_argument("--output", type=Path, required=True)
-    projection.add_argument("--capability", action="append", default=[])
-    projection.set_defaults(func=project_x11)
     args = parser.parse_args()
     args.func(args)
 

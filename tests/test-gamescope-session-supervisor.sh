@@ -39,6 +39,10 @@ for unit in pocketforge-gamescope-session.target pocketforge-gamescope.service \
 done
 test -z "$(find "${unit_root}" -path '*.wants/*' -print -quit)" \
     || fail "Gamescope session was enabled by the installer"
+cmp "${root}/build/app-policy-a133-open-g1-v1.json" \
+    "${scratch}/g1/usr/share/pocketforge/app-policy/org.pocketforge.steamlink.resources.json"
+cmp "${root}/build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
+    "${unit_root}/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf"
 
 owner="${unit_root}/pocketforge-gamescope.service"
 publisher_unit="${unit_root}/pocketforge-session-publisher.service"
@@ -82,6 +86,7 @@ entries = {tuple(line.split()) for line in tmpfiles if line and not line.startsw
 required = {
     ("d", "/run/pocketforge/x11", "1777", "root", "root", "-"),
     ("d", "/run/pocketforge/x11/.X11-unix", "1777", "root", "root", "-"),
+    ("d", "/run/pocketforge/x11/policy", "0755", "root", "root", "-"),
 }
 if not required.issubset(entries):
     raise SystemExit(1)
@@ -95,6 +100,8 @@ if not resolved_lock.startswith("/run/pocketforge/x11/"):
     raise SystemExit(1)
 exec_starts = [" ".join(row) for row in values(publisher, "ExecStart")]
 if len(exec_starts) != 1 or f"--x11 {resolved_socket}" not in exec_starts[0]:
+    raise SystemExit(1)
+if "--x11-environment /run/pocketforge/x11/policy/environment" not in exec_starts[0]:
     raise SystemExit(1)
 if any("/tmp/.X11-unix" in line for line in publisher):
     raise SystemExit(1)
@@ -275,6 +282,8 @@ wayland = sockets / "gamescope-0"
 x11_dir = scratch / "tmp" / ".X11-unix"
 x11_dir.mkdir(parents=True)
 x11 = x11_dir / "X0"
+x11_environment = scratch / "tmp" / "policy" / "environment"
+x11_environment.parent.mkdir()
 listeners = []
 for path in (wayland, x11):
     sock = socket.socket(socket.AF_UNIX)
@@ -288,6 +297,7 @@ session = scratch / "run" / "pocketforge" / "session"
 common = [
     publisher, "publish", "--session", str(session),
     "--wayland", str(wayland), "--x11", str(x11),
+    "--x11-environment", str(x11_environment),
     "--proc-net-unix", str(proc), "--gid", str(os.getgid()),
 ]
 subprocess.run(common, check=True)
@@ -304,27 +314,10 @@ assert not any(
     for line in (generation / "environment").read_text().splitlines()
 )
 assert (generation / "environment").stat().st_mode & 0o777 == 0o444
-assert (generation / "capabilities" / "x11" / "environment").read_text() == "DISPLAY=:0\n"
+assert x11_environment.read_text() == "DISPLAY=:0\n"
+assert (x11_environment.stat().st_mode & 0o777) == 0o444
+assert not (generation / "capabilities" / "x11").exists()
 assert (generation / "wayland-0").resolve() == wayland.resolve()
-
-allowed = scratch / "allowed"
-subprocess.run([
-    publisher, "project-x11", "--session", str(session), "--output", str(allowed),
-    "--capability", "x11",
-], check=True)
-assert (allowed / "environment").read_text() == "DISPLAY=:0\n"
-assert (allowed / ".X11-unix" / "X0").resolve() == x11.resolve()
-fragment = (allowed / "systemd.conf").read_text()
-assert "SupplementaryGroups=pf-session" in fragment
-assert "BindPaths=/run/pocketforge/session/capabilities/x11/X0:/tmp/.X11-unix/X0" in fragment
-assert "EnvironmentFile=/run/pocketforge/session/capabilities/x11/environment" in fragment
-
-denied = scratch / "denied"
-subprocess.run([
-    publisher, "project-x11", "--session", str(session), "--output", str(denied),
-    "--capability", "audio",
-], check=True)
-assert not denied.exists()
 
 stale_x11 = x11_dir / "X1"
 stale_listener = socket.socket(socket.AF_UNIX)
@@ -335,6 +328,7 @@ stale = scratch / "stale-x11"
 failed = subprocess.run([
     publisher, "publish", "--session", str(stale),
     "--wayland", str(wayland), "--x11", str(stale_x11), "--display", "1",
+    "--x11-environment", str(scratch / "stale-environment"),
     "--proc-net-unix", str(proc), "--gid", str(os.getgid()), "--timeout", "0",
 ], text=True, capture_output=True)
 assert failed.returncode != 0
@@ -350,6 +344,7 @@ proc.write_text(
 failed = subprocess.run([
     publisher, "publish", "--session", str(refused),
     "--wayland", str(wayland), "--x11", str(x11),
+    "--x11-environment", str(scratch / "refused-environment"),
     "--proc-net-unix", str(proc), "--gid", str(os.getgid()),
 ], text=True, capture_output=True)
 assert failed.returncode != 0
@@ -360,17 +355,35 @@ not_ready = scratch / "not-ready"
 failed = subprocess.run([
     publisher, "publish", "--session", str(not_ready),
     "--wayland", str(sockets / "missing"), "--x11", str(x11),
+    "--x11-environment", str(scratch / "not-ready-environment"),
     "--proc-net-unix", str(proc), "--gid", str(os.getgid()), "--timeout", "0",
 ], text=True, capture_output=True)
 assert failed.returncode != 0
 assert "socket_readiness_timeout" in failed.stderr
 assert not not_ready.exists()
+environment_failed = scratch / "environment-failed"
+failed = subprocess.run([
+    publisher, "publish", "--session", str(environment_failed),
+    "--wayland", str(wayland), "--x11", str(x11),
+    "--x11-environment", str(scratch / "missing-policy-parent" / "environment"),
+    "--proc-net-unix", str(proc), "--gid", str(os.getgid()),
+], text=True, capture_output=True)
+assert failed.returncode != 0
+assert not environment_failed.exists() and not environment_failed.is_symlink()
+subprocess.run([
+    publisher, "cleanup", "--session", str(session),
+    "--x11-environment", str(x11_environment),
+], check=True)
+assert not session.exists() and not session.is_symlink()
+assert not x11_environment.exists()
 for listener in listeners:
     listener.close()
 PY
 
 # The producer inventory and audit must agree: required paths pass, deleting a
 # producer makes the same invocation fail, and not-shipped has no requirements.
+mkdir -p "${scratch}/g1/run/dbus"
+: >"${scratch}/g1/run/dbus/system_bus_socket"
 checker="${root}/scripts/check-runtime-path-producers.py"
 manifest="${scratch}/g1/usr/share/pocketforge/runtime-path-producers.json"
 policy="${root}/build/app-policy-a133-open-g1-v1.json"
@@ -390,8 +403,8 @@ assert set(g1) == {
     "/run/pocketforge/prefsd.sock",
     "/run/pocketforge/session/environment",
     "/run/pocketforge/session/wayland-0",
-    "/run/pocketforge/session/capabilities/x11/environment",
-    "/run/pocketforge/session/capabilities/x11/X0",
+    "/run/pocketforge/x11/policy/environment",
+    "/run/pocketforge/x11/.X11-unix/X0",
 }
 PY
 "${checker}" --root "${scratch}/g1" --inventory "${policy}" --producers "${manifest}"
@@ -400,13 +413,13 @@ python3 - "${scratch}/missing-producer.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 data = json.load(open(path, encoding="utf-8"))
-del data["producers"]["/run/pocketforge/session/capabilities/x11/X0"]
+del data["producers"]["/run/pocketforge/x11/.X11-unix/X0"]
 open(path, "w", encoding="utf-8").write(json.dumps(data))
 PY
 if "${checker}" --root "${scratch}/g1" --inventory "${policy}" \
     --producers "${scratch}/missing-producer.json" >"${scratch}/negative.out" 2>&1; then
     fail "producer audit accepted a missing required producer"
 fi
-grep -F '/run/pocketforge/session/capabilities/x11/X0' "${scratch}/negative.out" >/dev/null
+grep -F '/run/pocketforge/x11/.X11-unix/X0' "${scratch}/negative.out" >/dev/null
 
 echo 'PASS: dormant Gamescope session supervisor, atomic producer, scoped X11, input contract and producer audit'

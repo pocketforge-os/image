@@ -40,6 +40,12 @@ install -D -m 0755 "${src}/usr/lib/pocketforge/pf-gamescope-kms-select" \
 install -D -m 0644 \
     "${src}/usr/share/pocketforge/runtime-path-producers-g1.json" \
     "${rootfs}/usr/share/pocketforge/runtime-path-producers.json"
+install -D -m 0644 \
+    "${src}/../build/app-policy-a133-open-g1-v1.json" \
+    "${rootfs}/usr/share/pocketforge/app-policy/org.pocketforge.steamlink.resources.json"
+install -D -m 0644 \
+    "${src}/../build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
+    "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf"
 
 # The session is never enabled or selected as the default. A user opts into a
 # resident session by explicitly starting pocketforge-gamescope-resident.service.

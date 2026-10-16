@@ -10,6 +10,7 @@ on:
       - 'scripts/check-runtime-path-producers.py'
       - 'build/app-policy-a133-open-v1.json'
       - 'build/app-policy-a133-open-g1-v1.json'
+      - 'build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf'
       - 'rootfs-overlay/usr/share/pocketforge/runtime-path-producers.json'
       - 'rootfs-overlay/usr/share/pocketforge/runtime-path-producers-g1.json'
       - 'build/Dockerfile.pf'
@@ -51,7 +52,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/runtime
-          ref: 7375a11ab1a45b85ad086f1ba5bb1679bc5fc1c4
+          ref: 74394861fefec25fed34f9b3194d1136ca94f6a1
           path: runtime-pair
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -60,7 +61,7 @@ jobs:
           path: launcher-pair
       - name: Prove exact runtime, launcher, and image candidates together
         run: |
-          test "$(git -C runtime-pair rev-parse HEAD)" = 7375a11ab1a45b85ad086f1ba5bb1679bc5fc1c4
+          test "$(git -C runtime-pair rev-parse HEAD)" = 74394861fefec25fed34f9b3194d1136ca94f6a1
           test "$(git -C launcher-pair rev-parse HEAD)" = e536781107e3fac9c98877e861b6e38a1397f9d9
           scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
             pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
