@@ -81,7 +81,7 @@ jobs:
       needs.probe.outputs.owner_exception == 'ephemeral-only' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, pf-public-ci]
+    runs-on: [self-hosted, pf-builder-vm]
     timeout-minutes: 30
     env:
       PF_SYSTEMD_TEST_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}-live
