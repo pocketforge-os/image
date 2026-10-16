@@ -58,6 +58,28 @@ mkdir -p "${fixture_src}/scripts" "${fixture_board}/initrd" \
 # new hand-added line here every time build-sd-image.sh grows one
 # (bd tsp-mc9m.41.984.30).
 cp -a "${repo_dir}/scripts/." "${fixture_src}/scripts/"
+# Preserve the real capability producer while interposing an integration probe
+# at the build-sd-image -> build-rootfs-direct boundary.  The direct builder
+# must receive the authenticated repository identity as well as the kernel
+# tree; otherwise a capable tree produces an absent receipt.
+mv "${fixture_src}/scripts/emit-axp717-low-soc-capability.sh" \
+    "${fixture_src}/scripts/emit-axp717-low-soc-capability.real.sh"
+cat > "${fixture_src}/scripts/emit-axp717-low-soc-capability.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${3-}" != kernel-sunxi-7.x ]; then
+    echo "FAIL: direct fallback lost PF_KERNEL_REPO (got ${3-<unset>})" >&2
+    exit 97
+fi
+echo "direct fallback kernel repo: ${3}" >&2
+exec "$(dirname "$0")/emit-axp717-low-soc-capability.real.sh" "$@"
+EOF
+chmod 0755 "${fixture_src}/scripts/emit-axp717-low-soc-capability.sh"
+grep -F '        PF_KERNEL_REPO="${PF_KERNEL_REPO}" \' \
+    "${repo_dir}/scripts/build-sd-image.sh" >/dev/null || {
+    echo 'FAIL: build-sd-image does not explicitly pass PF_KERNEL_REPO to the direct builder' >&2
+    exit 1
+}
 for input in rootfs-packages.txt rootfs-packages-dev.txt rootfs-packages-mainline.txt rootfs-packages-mainline-dev.txt \
     rootfs-packages-a133-open-7x-gpu.txt \
     snapshot-date.txt; do
@@ -226,6 +248,8 @@ grep -F "required kernel module powervr (module): ${powervr_module}" \
 grep -F "libsdl3: ${scratch}/libsdl3/libSDL3-pocketforge.so.0" \
     "${scratch}/modules-present.out" >/dev/null
 grep -F 'owned wpa_supplicant not found' "${scratch}/modules-present.err" >/dev/null
+grep -F 'direct fallback kernel repo: kernel-sunxi-7.x' \
+    "${scratch}/modules-present.err" >/dev/null
 
 # The diagnostic sibling must traverse the identical open/in-tree-7.x fallback
 # contract while retaining its exact device ID.
@@ -234,6 +258,8 @@ grep -F "required kernel module powervr (module): ${powervr_module}" \
     "${scratch}/modules-present-noradio.out" >/dev/null
 grep -F 'owned wpa_supplicant not found' \
     "${scratch}/modules-present-noradio.err" >/dev/null
+grep -F 'direct fallback kernel repo: kernel-sunxi-7.x' \
+    "${scratch}/modules-present-noradio.err" >/dev/null
 
 # The CTS profile is a normal open-GPU release when the lock emits no CTS
 # selector; it must reach the same preflight without staging test payloads.
@@ -241,6 +267,8 @@ run_sd_fallback modules-present-cts-release a133-open-7x-gpu-cts
 grep -F "required kernel module powervr (module): ${powervr_module}" \
     "${scratch}/modules-present-cts-release.out" >/dev/null
 grep -F 'owned wpa_supplicant not found' \
+    "${scratch}/modules-present-cts-release.err" >/dev/null
+grep -F 'direct fallback kernel repo: kernel-sunxi-7.x' \
     "${scratch}/modules-present-cts-release.err" >/dev/null
 
 # Missing required modules must fail in that same real preflight, before its
