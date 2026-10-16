@@ -8,7 +8,12 @@ policy="${root}/rootfs-overlay/usr/lib/pocketforge/low-battery-shutdown.sh"
 unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-low-battery-shutdown.service"
 rule="${root}/rootfs-overlay/etc/udev/rules.d/81-pocketforge-low-battery-shutdown.rules"
 builder="${root}/scripts/build-rootfs.sh"
+dockerfile="${root}/build/Dockerfile.pf"
+capability_emitter="${root}/scripts/emit-axp717-low-soc-capability.sh"
 alarm_kernel_sha=973d40af95f2dc5754bfe57e2b7a9c18fc4e92c8
+descendant_kernel_sha=1111111111111111111111111111111111111111
+ancestor_kernel_sha=a811ccb911d019d24fa194ee74789b8ea83436dc
+unrelated_kernel_sha=2222222222222222222222222222222222222222
 scratch="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-low-battery.XXXXXX")"
 cleanup() {
     find "${scratch}" -mindepth 1 -delete
@@ -231,23 +236,77 @@ if grep -Ei 'regmap|i2c|/dev/mem' "${policy}" >/dev/null; then
     fail "policy reaches below power-supply sysfs"
 fi
 
-# Exercise the real builder function: all A133 7.x profiles receive the policy,
-# while a different kernel or device receives nothing.
+# Exercise the capability producer and real builder function. The producer runs
+# the kernel-owned semantic checker against the authenticated source archive and
+# binds the result to that archive's repo/SHA. A feature-preserving descendant
+# passes without an equality allowlist; pre-feature and unrelated sources do not.
+[ -x "${capability_emitter}" ] || fail "missing kernel capability emitter"
+capable_source="${scratch}/kernel-capable"
+descendant_source="${scratch}/kernel-descendant"
+ancestor_source="${scratch}/kernel-ancestor"
+unrelated_source="${scratch}/kernel-unrelated"
+mkdir -p "${capable_source}/scripts" "${ancestor_source}" \
+    "${unrelated_source}/scripts"
+cat > "${capable_source}/scripts/test-check-a133-axp717-low-soc.py" <<'EOF'
+#!/usr/bin/env python3
+print("PASS: semantic low-SOC capability fixture")
+EOF
+cp -a "${capable_source}" "${descendant_source}"
+printf '%s\n' 'unrelated follow-on kernel change' > "${descendant_source}/later-change"
+cat > "${unrelated_source}/scripts/test-check-a133-axp717-low-soc.py" <<'EOF'
+#!/usr/bin/env python3
+raise SystemExit("low-SOC capability absent")
+EOF
+
+emit_receipt() {
+    local source="$1" output="$2" repo="$3" sha="$4"
+    "${capability_emitter}" "${source}" "${output}" "${repo}" "${sha}" \
+        > "${output}.log" 2>&1
+}
+exact_receipt="${scratch}/receipts/exact"
+descendant_receipt="${scratch}/receipts/descendant"
+ancestor_receipt="${scratch}/receipts/ancestor"
+unrelated_receipt="${scratch}/receipts/unrelated"
+emit_receipt "${capable_source}" "${exact_receipt}" kernel-sunxi-7.x \
+    "${alarm_kernel_sha}"
+emit_receipt "${descendant_source}" "${descendant_receipt}" kernel-sunxi-7.x \
+    "${descendant_kernel_sha}"
+emit_receipt "${ancestor_source}" "${ancestor_receipt}" kernel-sunxi-7.x \
+    "${ancestor_kernel_sha}"
+emit_receipt "${unrelated_source}" "${unrelated_receipt}" kernel-sunxi-7.x \
+    "${unrelated_kernel_sha}"
+grep -Fx 'result=present' "${exact_receipt}" >/dev/null \
+    || fail "exact #106 source did not produce a capability receipt"
+grep -Fx 'result=present' "${descendant_receipt}" >/dev/null \
+    || fail "feature-preserving descendant did not produce a capability receipt"
+grep -Fx 'result=absent' "${ancestor_receipt}" >/dev/null \
+    || fail "pre-#106 source falsely produced a capability receipt"
+grep -Fx 'result=absent' "${unrelated_receipt}" >/dev/null \
+    || fail "unrelated source falsely produced a capability receipt"
+
 install_fn="${scratch}/install-low-battery-shutdown.sh"
 awk '/^install_low_battery_shutdown\(\) \{$/ { on = 1 } on { print } on && /^}$/ { exit }' \
     "${builder}" > "${install_fn}"
 [ "$(tail -n 1 "${install_fn}")" = '}' ] \
     || fail "could not extract install_low_battery_shutdown"
-install_tree() {
-    local dest="$1" kernel="$2" sha="$3" device="$4"
+install_tree_from() {
+    local function_file="$1" dest="$2" kernel="$3" sha="$4"
+    local receipt="$5" device="$6"
     mkdir -p "${dest}"
     # shellcheck disable=SC2016 # Positional parameters expand in the inner bash.
     env -i PATH=/usr/bin:/bin bash -c \
-        'set -euo pipefail; source "$1"; install_low_battery_shutdown "$2" "$3" "$4" "$5" "$6"' \
-        _ "${install_fn}" "${dest}" "${kernel}" "${sha}" "${device}" "${root}" \
+        'set -euo pipefail; source "$1"; install_low_battery_shutdown "$2" "$3" "$4" "$5" "$6" "$7"' \
+        _ "${function_file}" "${dest}" "${kernel}" "${sha}" "${receipt}" \
+        "${device}" "${root}" \
         > "${dest}.log"
 }
-install_tree "${scratch}/installed" kernel-sunxi-7.x "${alarm_kernel_sha}" a133-open-7x-gpu
+install_tree() {
+    install_tree_from "${install_fn}" "$@"
+}
+install_tree "${scratch}/installed" kernel-sunxi-7.x "${alarm_kernel_sha}" \
+    "${exact_receipt}" a133-open-7x-gpu
+install_tree "${scratch}/descendant" kernel-sunxi-7.x "${descendant_kernel_sha}" \
+    "${descendant_receipt}" a133-open-7x-gpu
 for rel in \
     usr/lib/pocketforge/low-battery-shutdown.sh \
     etc/systemd/system/pocketforge-low-battery-shutdown.service \
@@ -257,22 +316,46 @@ done
 [ "$(readlink "${scratch}/installed/etc/systemd/system/multi-user.target.wants/pocketforge-low-battery-shutdown.service")" = \
     /etc/systemd/system/pocketforge-low-battery-shutdown.service ] \
     || fail "builder enablement link drifted"
-if install_tree "${scratch}/wrong-kernel" kernel-sunxi-6.x "${alarm_kernel_sha}" a133-open-7x-gpu; then
+if install_tree "${scratch}/wrong-kernel" kernel-sunxi-6.x "${alarm_kernel_sha}" \
+    "${exact_receipt}" a133-open-7x-gpu; then
     fail "A133 image accepted the wrong kernel repository"
 fi
-if install_tree "${scratch}/pre-alarm-kernel" kernel-sunxi-7.x \
-    61969bd000000000000000000000000000000000 a133-open-7x-gpu; then
+if install_tree "${scratch}/pre-alarm-kernel" kernel-sunxi-7.x "${ancestor_kernel_sha}" \
+    "${ancestor_receipt}" a133-open-7x-gpu; then
     fail "A133 image accepted a kernel revision without #106"
 fi
-if install_tree "${scratch}/missing-kernel-sha" kernel-sunxi-7.x '' a133-open-7x-gpu; then
-    fail "A133 image accepted a missing kernel revision"
+if install_tree "${scratch}/unrelated-kernel" kernel-sunxi-7.x "${unrelated_kernel_sha}" \
+    "${unrelated_receipt}" a133-open-7x-gpu; then
+    fail "A133 image accepted an unrelated kernel without the capability"
 fi
-install_tree "${scratch}/wrong-device" kernel-sunxi-7.x '' unrelated-device
+if install_tree "${scratch}/stale-receipt" kernel-sunxi-7.x "${descendant_kernel_sha}" \
+    "${exact_receipt}" a133-open-7x-gpu; then
+    fail "A133 image accepted a capability receipt from another kernel SHA"
+fi
+install_tree "${scratch}/wrong-device" kernel-sunxi-7.x '' /dev/null unrelated-device
 [ -z "$(find "${scratch}/wrong-device" -mindepth 1 -print -quit)" ] \
     || fail "policy shipped on an unrelated device"
+
+# Mutation control: reintroducing exact equality must reject the simulated
+# feature-preserving descendant that the production capability gate accepts.
+equality_mutant="${scratch}/install-equality-mutant.sh"
+sed "/local required_kernel_sha=/a\\    [ \"\${kernel_sha}\" = \"\${required_kernel_sha}\" ] || return 1" \
+    "${install_fn}" > "${equality_mutant}"
+grep -F '[ "${kernel_sha}" = "${required_kernel_sha}" ] || return 1' \
+    "${equality_mutant}" >/dev/null || fail "equality mutant did not apply"
+if install_tree_from "${equality_mutant}" "${scratch}/equality-mutant" \
+    kernel-sunxi-7.x "${descendant_kernel_sha}" "${descendant_receipt}" \
+    a133-open-7x-gpu; then
+    fail "exact-equality mutant accepted a feature-preserving descendant"
+fi
+echo "mutation exact-kernel-equality: caught"
 
 # shellcheck disable=SC2016 # Match literal builder expansion in hook command.
 grep -F 'PF_KERNEL_SHA=${PF_KERNEL_SHA}' "${builder}" >/dev/null \
     || fail "rootfs builder does not authenticate PF_KERNEL_SHA in the customize hook"
+grep -F 'PF_KERNEL_CAPABILITY_RECEIPT=${PF_KERNEL_CAPABILITY_RECEIPT}' "${builder}" >/dev/null \
+    || fail "rootfs builder does not pass the kernel capability receipt to the hook"
+grep -F 'COPY --from=kernel /out/build/capabilities /work/kernel-capabilities' \
+    "${dockerfile}" >/dev/null || fail "rootfs stage does not receive kernel capabilities"
 
 echo "PASS low-battery shutdown thresholds, external-power hold, coalescing, boot/event wiring, sysfs-only policy, and voltage-floor mutant"
