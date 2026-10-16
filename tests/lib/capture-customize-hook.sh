@@ -77,7 +77,8 @@ EOF
     CLOUD_INIT_DIR="${fixture}/cloud-init" \
     KERNEL_TSP_DIR="${fixture}/kernel" GPU_KM_TSP_DIR="${fixture}/unused-gpu" \
     OUT_DIR="${fixture}/out" SOURCE_DATE_EPOCH=1700000000 \
-    PF_DEVICE_ID=a133-open-7x-gpu PF_KERNEL_REPO=kernel-sunxi-7.x PF_GPU_MODEL=open \
+    PF_DEVICE_ID=a133-open-7x-gpu PF_KERNEL_REPO=kernel-sunxi-7.x \
+    PF_KERNEL_SHA=973d40af95f2dc5754bfe57e2b7a9c18fc4e92c8 PF_GPU_MODEL=open \
     PF_CLOUD_INIT_SHA=5656565656565656565656565656565656565656 \
     PF_GPU_KM_MODEL=in-tree-7.x PF_KERNEL_REQUIRED_MODULES=powervr \
     PF_DISPLAY_PIPELINE=none \

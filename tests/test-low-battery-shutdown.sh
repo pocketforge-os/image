@@ -8,6 +8,7 @@ policy="${root}/rootfs-overlay/usr/lib/pocketforge/low-battery-shutdown.sh"
 unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-low-battery-shutdown.service"
 rule="${root}/rootfs-overlay/etc/udev/rules.d/81-pocketforge-low-battery-shutdown.rules"
 builder="${root}/scripts/build-rootfs.sh"
+alarm_kernel_sha=973d40af95f2dc5754bfe57e2b7a9c18fc4e92c8
 scratch="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-low-battery.XXXXXX")"
 cleanup() {
     find "${scratch}" -mindepth 1 -delete
@@ -127,12 +128,62 @@ make_fixture "${systemctl_fail}" 5 Low 3600000 1 0
 [ ! -e "${systemctl_fail}/run/requested" ] \
     || fail "failed systemctl request left a coalescing marker"
 
-# Unreadable mandatory evidence must not silently become a threshold result.
-unreadable="${scratch}/unreadable"
-make_fixture "${unreadable}" 5 Low 3600000 1 0
-rm "${unreadable}/sys/class/power_supply/axp20x-battery/voltage_now"
-[ "$(invoke "${unreadable}")" -ne 0 ] || fail "unreadable voltage passed"
-[ ! -s "${unreadable}/systemctl.log" ] || fail "unreadable voltage powered off"
+# Each valid safety signal remains authoritative when the other signal is
+# unreadable or malformed. Unknown external-power state cannot suppress a
+# proven critical condition; only a validated online=1 may do so.
+missing_voltage="${scratch}/missing-voltage"
+make_fixture "${missing_voltage}" 5 Low 3600000 1 0
+rm "${missing_voltage}/sys/class/power_supply/axp20x-battery/voltage_now"
+[ "$(invoke "${missing_voltage}")" -eq 0 ] || fail "missing voltage masked low SOC"
+[ "$(wc -l < "${missing_voltage}/systemctl.log")" -eq 1 ] \
+    || fail "missing voltage did not power off on low SOC"
+grep -F 'degraded=voltage_unreadable' "${missing_voltage}/stderr" >/dev/null \
+    || fail "missing voltage was not recorded as degraded evidence"
+
+invalid_voltage="${scratch}/invalid-voltage"
+make_fixture "${invalid_voltage}" 5 Low invalid 1 0
+[ "$(invoke "${invalid_voltage}")" -eq 0 ] || fail "invalid voltage masked low SOC"
+[ "$(wc -l < "${invalid_voltage}/systemctl.log")" -eq 1 ] \
+    || fail "invalid voltage did not power off on low SOC"
+
+missing_capacity="${scratch}/missing-capacity"
+make_fixture "${missing_capacity}" 80 Normal 3500000 1 0
+rm "${missing_capacity}/sys/class/power_supply/axp20x-battery/capacity"
+[ "$(invoke "${missing_capacity}")" -eq 0 ] || fail "missing capacity masked low voltage"
+[ "$(wc -l < "${missing_capacity}/systemctl.log")" -eq 1 ] \
+    || fail "missing capacity did not power off on low voltage"
+grep -F 'degraded=capacity_unreadable' "${missing_capacity}/stderr" >/dev/null \
+    || fail "missing capacity was not recorded as degraded evidence"
+
+invalid_capacity="${scratch}/invalid-capacity"
+make_fixture "${invalid_capacity}" invalid Normal 3500000 1 0
+[ "$(invoke "${invalid_capacity}")" -eq 0 ] || fail "invalid capacity masked low voltage"
+[ "$(wc -l < "${invalid_capacity}/systemctl.log")" -eq 1 ] \
+    || fail "invalid capacity did not power off on low voltage"
+
+missing_external="${scratch}/missing-external"
+make_fixture "${missing_external}" 5 Low 3600000 1 0
+rm "${missing_external}/sys/class/power_supply/axp20x-usb/online"
+[ "$(invoke "${missing_external}")" -eq 0 ] || fail "missing external state masked low SOC"
+[ "$(wc -l < "${missing_external}/systemctl.log")" -eq 1 ] \
+    || fail "missing external state did not power off on low SOC"
+grep -F 'degraded=external_power_unreadable' "${missing_external}/stderr" >/dev/null \
+    || fail "missing external state was not recorded as degraded evidence"
+
+invalid_external="${scratch}/invalid-external"
+make_fixture "${invalid_external}" 80 Normal 3500000 1 invalid
+[ "$(invoke "${invalid_external}")" -eq 0 ] || fail "invalid external state masked low voltage"
+[ "$(wc -l < "${invalid_external}/systemctl.log")" -eq 1 ] \
+    || fail "invalid external state did not power off on low voltage"
+
+no_threshold_evidence="${scratch}/no-threshold-evidence"
+make_fixture "${no_threshold_evidence}" 80 Normal 3600000 1 0
+rm "${no_threshold_evidence}/sys/class/power_supply/axp20x-battery/capacity"
+rm "${no_threshold_evidence}/sys/class/power_supply/axp20x-battery/voltage_now"
+[ "$(invoke "${no_threshold_evidence}")" -ne 0 ] \
+    || fail "missing all threshold evidence passed"
+[ ! -s "${no_threshold_evidence}/systemctl.log" ] \
+    || fail "missing all threshold evidence powered off without a proven threshold"
 
 # Mutation control: the same low-voltage/high-SOC oracle must reject a policy
 # that skips the 3500 mV floor.
@@ -188,15 +239,15 @@ awk '/^install_low_battery_shutdown\(\) \{$/ { on = 1 } on { print } on && /^}$/
 [ "$(tail -n 1 "${install_fn}")" = '}' ] \
     || fail "could not extract install_low_battery_shutdown"
 install_tree() {
-    local dest="$1" kernel="$2" device="$3"
+    local dest="$1" kernel="$2" sha="$3" device="$4"
     mkdir -p "${dest}"
     # shellcheck disable=SC2016 # Positional parameters expand in the inner bash.
     env -i PATH=/usr/bin:/bin bash -c \
-        'set -euo pipefail; source "$1"; install_low_battery_shutdown "$2" "$3" "$4" "$5"' \
-        _ "${install_fn}" "${dest}" "${kernel}" "${device}" "${root}" \
+        'set -euo pipefail; source "$1"; install_low_battery_shutdown "$2" "$3" "$4" "$5" "$6"' \
+        _ "${install_fn}" "${dest}" "${kernel}" "${sha}" "${device}" "${root}" \
         > "${dest}.log"
 }
-install_tree "${scratch}/installed" kernel-sunxi-7.x a133-open-7x-gpu
+install_tree "${scratch}/installed" kernel-sunxi-7.x "${alarm_kernel_sha}" a133-open-7x-gpu
 for rel in \
     usr/lib/pocketforge/low-battery-shutdown.sh \
     etc/systemd/system/pocketforge-low-battery-shutdown.service \
@@ -206,11 +257,21 @@ done
 [ "$(readlink "${scratch}/installed/etc/systemd/system/multi-user.target.wants/pocketforge-low-battery-shutdown.service")" = \
     /etc/systemd/system/pocketforge-low-battery-shutdown.service ] \
     || fail "builder enablement link drifted"
-install_tree "${scratch}/wrong-kernel" kernel-sunxi-6.x a133-open-7x-gpu
-install_tree "${scratch}/wrong-device" kernel-sunxi-7.x unrelated-device
-[ -z "$(find "${scratch}/wrong-kernel" -mindepth 1 -print -quit)" ] \
-    || fail "policy shipped without kernel-sunxi-7.x#106"
+if install_tree "${scratch}/wrong-kernel" kernel-sunxi-6.x "${alarm_kernel_sha}" a133-open-7x-gpu; then
+    fail "A133 image accepted the wrong kernel repository"
+fi
+if install_tree "${scratch}/pre-alarm-kernel" kernel-sunxi-7.x \
+    61969bd000000000000000000000000000000000 a133-open-7x-gpu; then
+    fail "A133 image accepted a kernel revision without #106"
+fi
+if install_tree "${scratch}/missing-kernel-sha" kernel-sunxi-7.x '' a133-open-7x-gpu; then
+    fail "A133 image accepted a missing kernel revision"
+fi
+install_tree "${scratch}/wrong-device" kernel-sunxi-7.x '' unrelated-device
 [ -z "$(find "${scratch}/wrong-device" -mindepth 1 -print -quit)" ] \
     || fail "policy shipped on an unrelated device"
+
+grep -F 'PF_KERNEL_SHA=${PF_KERNEL_SHA}' "${builder}" >/dev/null \
+    || fail "rootfs builder does not authenticate PF_KERNEL_SHA in the customize hook"
 
 echo "PASS low-battery shutdown thresholds, external-power hold, coalescing, boot/event wiring, sysfs-only policy, and voltage-floor mutant"
