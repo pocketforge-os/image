@@ -189,7 +189,7 @@ rm "${no_threshold_evidence}/sys/class/power_supply/axp20x-battery/voltage_now"
 # that skips the 3500 mV floor.
 mutant="${scratch}/skip-voltage-floor.sh"
 # shellcheck disable=SC2016 # Match literal production-shell variables.
-sed 's/elif \[ "${voltage_uv}" -le "${VOLTAGE_FLOOR_UV}" \]; then/elif false; then/' \
+sed 's/elif \[ "${voltage_valid}" -eq 1 \] && \[ "${voltage_uv}" -le "${VOLTAGE_FLOOR_UV}" \]; then/elif false; then/' \
     "${policy}" > "${mutant}"
 chmod 0755 "${mutant}"
 grep -F 'elif false; then' "${mutant}" >/dev/null \
@@ -271,6 +271,7 @@ install_tree "${scratch}/wrong-device" kernel-sunxi-7.x '' unrelated-device
 [ -z "$(find "${scratch}/wrong-device" -mindepth 1 -print -quit)" ] \
     || fail "policy shipped on an unrelated device"
 
+# shellcheck disable=SC2016 # Match literal builder expansion in hook command.
 grep -F 'PF_KERNEL_SHA=${PF_KERNEL_SHA}' "${builder}" >/dev/null \
     || fail "rootfs builder does not authenticate PF_KERNEL_SHA in the customize hook"
 

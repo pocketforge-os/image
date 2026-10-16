@@ -45,54 +45,69 @@ if [ "${present}" != 1 ]; then
     exit 1
 fi
 
-capacity="$(read_attr "${BATTERY}/capacity")" || {
-    log "decision=error reason=capacity_unreadable" >&2
-    exit 1
-}
-voltage_uv="$(read_attr "${BATTERY}/voltage_now")" || {
-    log "decision=error reason=voltage_unreadable" >&2
-    exit 1
-}
+capacity=Unavailable
+capacity_valid=0
+if value="$(read_attr "${BATTERY}/capacity")"; then
+    if is_uint "${value}" && [ "${value}" -le 100 ]; then
+        capacity="${value}"
+        capacity_valid=1
+    else
+        log "decision=degraded degraded=capacity_invalid value=${value}" >&2
+    fi
+else
+    log "decision=degraded degraded=capacity_unreadable" >&2
+fi
+
+voltage_uv=Unavailable
+voltage_valid=0
+if value="$(read_attr "${BATTERY}/voltage_now")"; then
+    if is_uint "${value}"; then
+        voltage_uv="${value}"
+        voltage_valid=1
+    else
+        log "decision=degraded degraded=voltage_invalid value=${value}" >&2
+    fi
+else
+    log "decision=degraded degraded=voltage_unreadable" >&2
+fi
 # kernel-sunxi-7.x#106 emits the low-SOC events but does not yet publish the
 # optional capacity_level attribute. Observe and record it when present without
 # making its absence disable the numeric SOC and voltage safety thresholds.
 capacity_level="$(read_attr "${BATTERY}/capacity_level")" || capacity_level=Unavailable
-external_online="$(read_attr "${EXTERNAL}/online")" || {
-    log "decision=error reason=external_power_unreadable" >&2
-    exit 1
-}
-
-if ! is_uint "${capacity}" || [ "${capacity}" -gt 100 ]; then
-    log "decision=error reason=capacity_invalid value=${capacity}" >&2
-    exit 1
-fi
-if ! is_uint "${voltage_uv}"; then
-    log "decision=error reason=voltage_invalid value=${voltage_uv}" >&2
-    exit 1
-fi
-if [ "${external_online}" != 0 ] && [ "${external_online}" != 1 ]; then
-    log "decision=error reason=external_power_invalid value=${external_online}" >&2
-    exit 1
+external_online=Unavailable
+external_online_valid=0
+if value="$(read_attr "${EXTERNAL}/online")"; then
+    if [ "${value}" = 0 ] || [ "${value}" = 1 ]; then
+        external_online="${value}"
+        external_online_valid=1
+    else
+        log "decision=degraded degraded=external_power_invalid value=${value}" >&2
+    fi
+else
+    log "decision=degraded degraded=external_power_unreadable" >&2
 fi
 
 # Match the boot gate: while external power is online, keep charging instead
 # of shutting down. The kernel alarm will retrigger evaluation if power leaves.
-if [ "${external_online}" = 1 ]; then
+if [ "${external_online_valid}" -eq 1 ] && [ "${external_online}" = 1 ]; then
     log "decision=continue reason=external_power_online capacity=${capacity} voltage_uv=${voltage_uv}"
     exit 0
 fi
 
 reason=""
 missed_lvl1=0
-if [ "${capacity}" -eq 0 ]; then
+if [ "${capacity_valid}" -eq 1 ] && [ "${capacity}" -eq 0 ]; then
     reason=soc_lvl2
     missed_lvl1=1
-elif [ "${capacity}" -le 5 ]; then
+elif [ "${capacity_valid}" -eq 1 ] && [ "${capacity}" -le 5 ]; then
     reason=soc_lvl1
-elif [ "${voltage_uv}" -le "${VOLTAGE_FLOOR_UV}" ]; then
+elif [ "${voltage_valid}" -eq 1 ] && [ "${voltage_uv}" -le "${VOLTAGE_FLOOR_UV}" ]; then
     reason=voltage_floor
+elif [ "${capacity_valid}" -eq 0 ] && [ "${voltage_valid}" -eq 0 ]; then
+    log "decision=error reason=no_valid_threshold_evidence capacity=${capacity} voltage_uv=${voltage_uv}" >&2
+    exit 1
 else
-    log "decision=continue reason=battery_safe capacity=${capacity} capacity_level=${capacity_level} voltage_uv=${voltage_uv}"
+    log "decision=continue reason=battery_safe capacity=${capacity} capacity_level=${capacity_level} voltage_uv=${voltage_uv} external_online=${external_online}"
     exit 0
 fi
 
@@ -111,6 +126,7 @@ tmp="${STATE_DIR}/.requested.$$"
     printf 'capacity=%s\n' "${capacity}"
     printf 'capacity_level=%s\n' "${capacity_level}"
     printf 'voltage_uv=%s\n' "${voltage_uv}"
+    printf 'external_online=%s\n' "${external_online}"
     printf 'missed_lvl1=%s\n' "${missed_lvl1}"
 } > "${tmp}" || {
     log "decision=error reason=request_record_write_failed" >&2
