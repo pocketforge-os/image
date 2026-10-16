@@ -97,8 +97,11 @@ timing evidence, then verify without writing any external store. A matching
 main push sends the verified squashfs, manifest and
 CI receipt through the write-once trusted modelmaker intake, emitting a typed
 receipt and SHA256 for each object. GitHub artifact storage is not used for
-these build outputs. Consumers fetch only the separately published immutable
-objects and verify the committed addresses again.
+these build outputs. Intake is not publication: the producer never writes the
+read-only store. After the main run, gpu-14 promotes each named, verified
+`trusted-builder` intake object and confirms it is served from the modelmaker
+SHA store. Consumers pin and fetch only those promoted immutable objects and
+verify the committed addresses again.
 
 The bootstrap loader cache is discarded with the other install-time state,
 then regenerated once from the completed arm64 tree with its own

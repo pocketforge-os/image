@@ -376,6 +376,9 @@ def section_asset_audit(work):
     require(
         "pf-artifact-intake-put" in payload_workflow
         and payload_workflow.count("intake_status=PASS") >= 1
+        and "input-harness-intake=PASS name=$name sha256=$actual promotion=required"
+        in payload_workflow
+        and "publication=not_performed" in payload_workflow
         and "actions/upload-artifact" not in payload_workflow,
         "payload workflow does not use trusted intake exclusively",
     )

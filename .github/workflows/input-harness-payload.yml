@@ -129,16 +129,19 @@ jobs:
           set -euo pipefail
           out="$RUNNER_TEMP/input-harness-payload"
           put_and_check() {
-            file=$1
-            expected=$2
+            name=$1
+            file=$2
+            expected=$3
             result="$(scripts/pf-artifact-intake-put "$file")"
             printf '%s\n' "$result"
             actual="$(sed -n 's/^intake_status=PASS .* sha256=\([0-9a-f]\{64\}\) .*$/\1/p' <<< "$result")"
             test "$actual" = "$expected"
+            echo "input-harness-intake=PASS name=$name sha256=$actual promotion=required"
           }
-          put_and_check "$out/input-harness.squashfs" '${{ steps.receipt.outputs.payload_sha256 }}'
-          put_and_check "$out/manifest.json" '${{ steps.receipt.outputs.manifest_sha256 }}'
-          put_and_check "$out/CI-RECEIPT.txt" '${{ steps.receipt.outputs.receipt_sha256 }}'
+          put_and_check input-harness.squashfs "$out/input-harness.squashfs" '${{ steps.receipt.outputs.payload_sha256 }}'
+          put_and_check manifest.json "$out/manifest.json" '${{ steps.receipt.outputs.manifest_sha256 }}'
+          put_and_check CI-RECEIPT.txt "$out/CI-RECEIPT.txt" '${{ steps.receipt.outputs.receipt_sha256 }}'
+          echo 'input-harness-intake-summary=PASS objects=3 publication=not_performed promotion=trusted-owner-required'
       - name: Remove staged source contexts
         if: always()
         run: |
