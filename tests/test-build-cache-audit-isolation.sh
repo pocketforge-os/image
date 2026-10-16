@@ -27,11 +27,24 @@ build_cache_docker() {
             ;;
         inspect)
             test "${2:-}" = "$build_cache_builder"
+            if test "${3:-}" = --bootstrap && test "${FAKE_BOOTSTRAP_FAIL:-0}" -eq 1; then
+                return 42
+            fi
             test -s "$builder_marker"
             ;;
         rm)
             test "${2:-}" = "$build_cache_builder"
+            test -s "$builder_marker" || return 1
             find "$builder_marker" -delete
+            ;;
+        ls)
+            test "${2:-}" = --format && test "${3:-}" = json
+            test "${FAKE_LIST_FAIL:-0}" -eq 0 || return 55
+            if test -s "$builder_marker"; then
+                printf '{"Name":"%s","Driver":"docker-container"}\n' \
+                    "$build_cache_builder"
+            fi
+            printf '%s\n' '{"Name":"foreign-builder","Driver":"docker-container"}'
             ;;
         du)
             if test "${2:-}" = --builder && test "${3:-}" = "$build_cache_builder"; then
@@ -68,6 +81,36 @@ build_cache_cleanup_pause() { :; }
 
 # shellcheck source=tests/session-authority-systemd/build-cache-audit.sh
 source "$repo_root/tests/session-authority-systemd/build-cache-audit.sh"
+
+# Bootstrap-failure negative: create succeeded, so ownership must already be
+# recorded and mandatory teardown must still remove the run's builder.
+build_cache_builder_created=0
+FAKE_BOOTSTRAP_FAIL=1
+export FAKE_BOOTSTRAP_FAIL
+if create_run_build_cache_builder; then
+    printf 'FAIL bootstrap failure passed builder creation\n' >&2
+    exit 1
+fi
+test "$build_cache_builder_created" -eq 1
+test -s "$builder_marker"
+unset FAKE_BOOTSTRAP_FAIL
+remove_run_build_cache_builder
+test "$build_cache_builder_created" -eq 0
+
+# Verification-query negative: a daemon/list failure after removal is not
+# proof of absence. Ownership remains recorded until a retry confirms absence.
+create_run_build_cache_builder
+test "$build_cache_builder_created" -eq 1
+FAKE_LIST_FAIL=1
+export FAKE_LIST_FAIL
+if remove_run_build_cache_builder; then
+    printf 'FAIL builder list failure passed teardown verification\n' >&2
+    exit 1
+fi
+test "$build_cache_builder_created" -eq 1
+unset FAKE_LIST_FAIL
+remove_run_build_cache_builder
+test "$build_cache_builder_created" -eq 0
 
 # Positive plus foreign-record negative: only the owned builder is visible to
 # the audit, so a concurrent default-builder record survives without failing.
@@ -106,4 +149,4 @@ test "$(build_cache_drift_reason)" = \
 remove_run_build_cache_builder
 unset FAKE_STUCK_ID
 
-printf 'build-cache audit isolation test: PASS foreign=ignored own_leak=failed builder=owned-only\n'
+printf 'build-cache audit isolation test: PASS foreign=ignored own_leak=failed bootstrap=tracked verify_error=failed builder=owned-only\n'

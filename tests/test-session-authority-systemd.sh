@@ -412,7 +412,6 @@ cleanup() {
             [ -n "${failure_reason}" ] \
                 || failure_reason='BUILD_CACHE_BUILDER_CLEANUP_FAILED'
         fi
-        build_cache_builder_created=0
     fi
     sample_disk cleanup_end >/dev/null 2>&1 || true
     if [ "${docker_disk_configured}" -eq 1 ]; then
@@ -502,7 +501,7 @@ case "${1:-}" in
             "buildx du --builder ${build_cache_builder} --format json"
             "buildx prune --builder ${build_cache_builder} --force --filter id=fixture-cache-id"
             "buildx rm ${build_cache_builder}"
-            "buildx inspect ${build_cache_builder}"
+            'buildx ls --format json'
         )
         make_systemd_argv "${test_image}" "${systemd_container}"
         audit_docker_argv "${systemd_argv[@]}"
@@ -601,7 +600,6 @@ run_started=1
 
 create_run_build_cache_builder \
     || fail_recorded_or 'BUILD_CACHE_BUILDER_CREATE_FAILED: isolated buildx builder unavailable'
-build_cache_builder_created=1
 capture_build_cache_records "${run_scope}/build-cache-before" \
     || fail_recorded_or 'BUILD_CACHE_AUDIT_UNAVAILABLE: docker buildx du failed'
 cleanup_docker_resources=1

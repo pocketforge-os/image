@@ -147,7 +147,6 @@ cleanup() {
             [ "${failure_reason}" != UNEXPECTED_EXIT ] \
                 || failure_reason=BUILD_CACHE_BUILDER_CLEANUP_FAILED
         fi
-        build_cache_builder_created=0
     fi
 
     [ -z "$(docker container ls --all --quiet --filter "label=${run_label}" 2>/dev/null)" ] \
@@ -215,7 +214,6 @@ build_cache_df_expected_after="${build_cache_df_before}"
 kernel="$(uname -r)"
 create_run_build_cache_builder \
     || fail 'BUILD_CACHE_BUILDER_CREATE_FAILED: isolated buildx builder unavailable'
-build_cache_builder_created=1
 capture_build_cache_records "${cache_before}"
 cache_baseline_ready=1
 
