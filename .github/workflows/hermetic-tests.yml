@@ -101,6 +101,7 @@ jobs:
             tests/test-a-cts-worker-recovery.sh
             tests/test-a-cts-worker-terminal.sh
             tests/test-alsa-config.sh
+            tests/test-artifact-intake-put.sh
             tests/test-boot-animator.sh
             tests/test-browser-platform-defaults.sh
             tests/test-build-id.sh
