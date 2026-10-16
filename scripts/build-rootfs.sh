@@ -48,6 +48,8 @@ PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 # required here so fixture runs that stop before the hook keep working; the
 # installer fails the real build when it is empty or unknown.
 PF_KERNEL_REPO="${PF_KERNEL_REPO:-}"
+PF_KERNEL_SHA="${PF_KERNEL_SHA:-}"
+PF_KERNEL_CAPABILITY_RECEIPT="${PF_KERNEL_CAPABILITY_RECEIPT:-}"
 declare -a KERNEL_REQUIRED_MODULE_LIST=()
 
 is_a133_open_7x_gpu_device() {
@@ -732,6 +734,61 @@ install_usbnet_bench() {
     ln -sf "/etc/systemd/system/${unit}" \
         "${rootfs}/etc/systemd/system/usb-gadget.target.wants/${unit}"
     echo "[customize] dev: usbnet bench installed (usbnet contract v1: ${unit} via usb-gadget.target, 30-usb0.network, VBUS udev rule)"
+}
+
+# AXP717 low-battery shutdown policy. It is coupled to the 7.x A133 battery
+# alarm driver (kernel-sunxi-7.x#106) and therefore must not ship on another
+# kernel/device profile.
+# Usage: install_low_battery_shutdown ROOTFS KERNEL_REPO KERNEL_SHA CAPABILITY_RECEIPT DEVICE SRC
+install_low_battery_shutdown() {
+    local rootfs="$1" kernel_repo="$2" kernel_sha="$3" capability_receipt="$4"
+    local device="$5" src="$6"
+    local overlay="${src}/rootfs-overlay"
+    local unit=pocketforge-low-battery-shutdown.service
+    local actual_receipt expected_receipt
+
+    case "${device}" in
+        a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio) ;;
+        *)
+            echo "[customize] low-battery shutdown: NOT-SHIPPED (kernel=${kernel_repo} device=${device})"
+            return 0
+            ;;
+    esac
+    if [ "${kernel_repo}" != kernel-sunxi-7.x ]; then
+        echo "FATAL: low-battery shutdown requires kernel-sunxi-7.x#106 (kernel=${kernel_repo:-<none>} device=${device})" >&2
+        return 1
+    fi
+    if [ ! -f "${capability_receipt}" ] || [ -L "${capability_receipt}" ]; then
+        echo "FATAL: low-battery shutdown requires a regular AXP717 low-SOC capability receipt (got ${capability_receipt:-<none>})" >&2
+        return 1
+    fi
+    actual_receipt="$(cat "${capability_receipt}")" || {
+        echo "FATAL: low-battery shutdown could not read capability receipt ${capability_receipt}" >&2
+        return 1
+    }
+    expected_receipt="$(printf '%s\n' \
+        'schema=1' \
+        'capability=axp717-low-soc-alarm-irqs-v1' \
+        'result=present' \
+        "kernel_repo=${kernel_repo}" \
+        "kernel_sha=${kernel_sha}")"
+    if [ "${actual_receipt}" != "${expected_receipt}" ]; then
+        echo "FATAL: low-battery shutdown kernel capability receipt does not authenticate ${kernel_repo}@${kernel_sha:-<none>}" >&2
+        return 1
+    fi
+
+    install -d "${rootfs}/usr/lib/pocketforge" "${rootfs}/etc/udev/rules.d" \
+        "${rootfs}/etc/systemd/system/multi-user.target.wants"
+    install -m 0755 "${overlay}/usr/lib/pocketforge/low-battery-shutdown.sh" \
+        "${rootfs}/usr/lib/pocketforge/low-battery-shutdown.sh"
+    install -m 0644 "${overlay}/etc/systemd/system/${unit}" \
+        "${rootfs}/etc/systemd/system/${unit}"
+    install -m 0644 \
+        "${overlay}/etc/udev/rules.d/81-pocketforge-low-battery-shutdown.rules" \
+        "${rootfs}/etc/udev/rules.d/81-pocketforge-low-battery-shutdown.rules"
+    ln -sf "/etc/systemd/system/${unit}" \
+        "${rootfs}/etc/systemd/system/multi-user.target.wants/${unit}"
+    echo "[customize] low-battery shutdown installed (boot check + AXP717 battery change events)"
 }
 
 # Debian gives its locally re-signed regulatory database a higher alternatives
@@ -1765,6 +1822,9 @@ echo "[customize] Applying variant-specific config (variant=${VARIANT})..."
 ## -- Journald + coredump config (bd: tsp-iuz.2.8) ---
 # Both variants get a journald drop-in; the file differs per variant.
 install -d "${ROOTFS}/etc/systemd/journald.conf.d"
+install_low_battery_shutdown "${ROOTFS}" "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}" \
+    "${PF_KERNEL_CAPABILITY_RECEIPT}" "${PF_DEVICE_ID}" /work/src
+
 if [ "${VARIANT}" = "dev" ]; then
     # Dev: persistent journald (logs survive reboots for bug-report capture)
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/journald.conf.d/pocketforge-dev.conf" \
@@ -2035,7 +2095,7 @@ mmdebstrap \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
     "${LOCAL_PACKAGE_OPTS[@]}" \
-    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_KERNEL_REPO=${PF_KERNEL_REPO} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} GAMESCOPE_DIR=${GAMESCOPE_DIR} PF_GAMESCOPE_MODE=${PF_GAMESCOPE_MODE} PF_GAMESCOPE_IDENTITY_SHA256=${PF_GAMESCOPE_IDENTITY_SHA256} PF_CTS_BUNDLE_SHA256=${PF_CTS_BUNDLE_SHA256} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
+    --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} PF_DEVICE_ID=${PF_DEVICE_ID} PF_KERNEL_REPO=${PF_KERNEL_REPO} PF_KERNEL_SHA=${PF_KERNEL_SHA} PF_KERNEL_CAPABILITY_RECEIPT=${PF_KERNEL_CAPABILITY_RECEIPT} PF_GPU_MODEL=${PF_GPU_MODEL} PF_GPU_KM_MODEL=${PF_GPU_KM_MODEL} PF_DISPLAY_PIPELINE=${PF_DISPLAY_PIPELINE} PF_HAS_DISPLAY=${PF_HAS_DISPLAY} KERNEL_MODULES_ROOT=${KERNEL_MODULES_ROOT} KERNEL_POWERVR_FORM=${KERNEL_POWERVR_FORM:-absent} KERNEL_WIFI_FORM=${KERNEL_WIFI_FORM:-absent} PF_BT_ATTACH_BIN=${PF_BT_ATTACH_BIN} PF_ANIMATOR_BIN=${PF_ANIMATOR_BIN} PF_ANIM_FRAMES_DIR=${PF_ANIM_FRAMES_DIR} PF_PLACEHOLDER_BIN=${PF_PLACEHOLDER_BIN} PF_MENU_BIN=${PF_MENU_BIN} PF_RECOVERY_BIN=${PF_RECOVERY_BIN} POOLSUITE_DIR=${POOLSUITE_DIR} GAMESCOPE_DIR=${GAMESCOPE_DIR} PF_GAMESCOPE_MODE=${PF_GAMESCOPE_MODE} PF_GAMESCOPE_IDENTITY_SHA256=${PF_GAMESCOPE_IDENTITY_SHA256} PF_CTS_BUNDLE_SHA256=${PF_CTS_BUNDLE_SHA256} ${CUSTOMIZE_SCRIPT} \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
     --dpkgopt='path-include=/usr/share/doc/*/copyright' \
