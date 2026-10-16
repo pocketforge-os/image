@@ -948,6 +948,14 @@ install_open_gpu_module_options
 echo "[customize] Installing firmware..."
 install -d "${ROOTFS}/lib/firmware"
 
+# The 128-byte AXP717 fuel-gauge model remains derived from the original DTB
+# under the non-redistributable sunxi-a133-boot-chain custody group.  The
+# extractor pins both its input and output and publishes neither byte array in
+# this source tree (owner ruling 2026-09-22; tsp-mc9m.60.29.34 R1).
+python3 "${SRC_DIR}/scripts/extract-a133-battery-model.py" \
+    --source "${BLOBS_DIR}/sunxi/a133/boot-chain/vendor-dtb.bin" \
+    --output "${ROOTFS}/lib/firmware/x-powers/axp717-tsp-battery-model.bin"
+
 # GPU firmware (both files required — missing rgx.sh.* causes firmware-load failures).
 # Closed-DDK model only (tsp-mc9m.41.924.2 / B4 review fix) — a133-open's blobs carry no
 # GPU blob group, so this firmware doesn't exist yet for PF_GPU_MODEL=open.

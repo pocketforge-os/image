@@ -1,7 +1,16 @@
 #!/bin/sh
 set -eu
 
-rootfs="${1:?usage: verify-rootfs-firmware.sh ROOTFS}"
+expected_axp717_model_sha256=b44940da920519986192f758eb4eb65eea5728179ebdd28393671be4c5557c5a
+if [ "${1:-}" = --expected-axp717-model-sha256 ]; then
+    expected_axp717_model_sha256="${2:?missing test fixture digest}"
+    shift 2
+fi
+rootfs="${1:?usage: verify-rootfs-firmware.sh [--expected-axp717-model-sha256 SHA256] ROOTFS}"
+[ "$#" -eq 1 ] || {
+    echo 'FATAL: rootfs firmware: unexpected verifier arguments' >&2
+    exit 2
+}
 rootfs="$(realpath -m -- "$rootfs")"
 
 require_rootfs_file() {
@@ -64,4 +73,21 @@ for artifact in fw_xr829.bin boot_xr829.bin sdd_xr829.bin fw_xr829_bt.bin; do
     fi
 done
 
-echo 'rootfs-firmware=PASS regulatory.db=wireless-regdb_2026.02.04-1~deb12u1-upstream xr829=EMBEDDED:fw_xr829.bin,boot_xr829.bin,sdd_xr829.bin,fw_xr829_bt.bin'
+# The generated gauge model must be exactly the custody-pinned 128-byte
+# extraction.  A non-empty or same-sized substitute is unsafe calibration.
+if ! require_rootfs_file "lib/firmware/x-powers/axp717-tsp-battery-model.bin"; then
+    echo 'FATAL: rootfs firmware: AXP717 battery model is missing' >&2
+    exit 1
+fi
+axp717_model="$resolved_rootfs_file"
+if [ "$(stat -c %s -- "$axp717_model")" -ne 128 ]; then
+    echo 'FATAL: rootfs firmware: AXP717 battery model is not 128 bytes' >&2
+    exit 1
+fi
+actual_axp717_model_sha256="$(sha256sum -- "$axp717_model" | cut -d ' ' -f 1)"
+if [ "$actual_axp717_model_sha256" != "$expected_axp717_model_sha256" ]; then
+    echo 'FATAL: rootfs firmware: AXP717 battery model SHA-256 mismatch' >&2
+    exit 1
+fi
+
+echo 'rootfs-firmware=PASS regulatory.db=wireless-regdb_2026.02.04-1~deb12u1-upstream xr829=EMBEDDED:fw_xr829.bin,boot_xr829.bin,sdd_xr829.bin,fw_xr829_bt.bin axp717-model=PINNED:128'

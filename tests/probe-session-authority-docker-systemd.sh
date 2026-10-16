@@ -13,6 +13,10 @@ source "${root}/tests/session-authority-systemd/build-cache-audit.sh"
 label_key=org.pocketforge.session-authority-probe
 run_id="gha-${GITHUB_RUN_ID:-missing}-${GITHUB_RUN_ATTEMPT:-missing}-probe"
 run_id="$(printf '%s' "${run_id}" | tr -c 'A-Za-z0-9_.-' '-')"
+builder_hash="$(printf '%s' "${run_id}" | sha256sum | cut -c1-12)"
+builder_prefix="$(printf '%s' "${run_id}" | tr '[:upper:]' '[:lower:]' | cut -c1-48)"
+build_cache_builder="pf-sa-${builder_prefix}-${builder_hash}"
+build_cache_builder_created=0
 run_label="${label_key}=${run_id}"
 probe_image="tsp-f3fm-211-systemd-probe:${run_id}"
 test_image="${probe_image}"
@@ -120,7 +124,7 @@ require_disk_floor() {
 }
 
 cleanup() {
-    local status=$? attempt
+    local status=$?
     local -a ids=()
     trap - EXIT INT TERM
     set +e
@@ -137,6 +141,13 @@ cleanup() {
             failure_reason="$(build_cache_drift_reason)"
         fi
     fi
+    if [ "${build_cache_builder_created}" -eq 1 ]; then
+        if ! remove_run_build_cache_builder; then
+            status=1
+            [ "${failure_reason}" != UNEXPECTED_EXIT ] \
+                || failure_reason=BUILD_CACHE_BUILDER_CLEANUP_FAILED
+        fi
+    fi
 
     [ -z "$(docker container ls --all --quiet --filter "label=${run_label}" 2>/dev/null)" ] \
         || status=1
@@ -144,17 +155,9 @@ cleanup() {
         || status=1
     docker_root_free_after_bytes="$(measure_free 2>/dev/null)" || status=1
     docker_root_df_after="$(capture_root_df 2>/dev/null)" || status=1
-    for ((attempt = 1; attempt <= 10; attempt++)); do
-        docker_system_df_after="$(capture_system_df)" || status=1
-        build_cache_df_after="$(extract_build_cache_df "${docker_system_df_after}")" \
-            || status=1
-        [ "${build_cache_df_after}" != "${build_cache_df_expected_after}" ] || break
-        sleep 0.2
-    done
-    if [ "${build_cache_df_after}" != "${build_cache_df_expected_after}" ]; then
-        status=1
-        failure_reason="$(build_cache_drift_reason)"
-    fi
+    docker_system_df_after="$(capture_system_df)" || status=1
+    build_cache_df_after="$(extract_build_cache_df "${docker_system_df_after}")" \
+        || status=1
 
     if [ -n "${work}" ] && [ -d "${work}" ]; then
         find "${work}" -mindepth 1 -delete >/dev/null 2>&1
@@ -166,7 +169,7 @@ cleanup() {
         result=FAIL
         status=1
     fi
-    echo "systemd-docker-probe: ${result} receipt_reason=${failure_reason} run_id=${run_id} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_free_after_bytes=${docker_root_free_after_bytes} docker_root_df_before=${docker_root_df_before} docker_root_df_after=${docker_root_df_after} docker_system_df_before=${docker_system_df_before} docker_system_df_after=${docker_system_df_after} build_cache_df_before=${build_cache_df_before} build_cache_df_expected_after=${build_cache_df_expected_after} build_cache_df_after=${build_cache_df_after} build_cache_records_removed=${build_cache_records_removed} least_allowed=${least_allowed} candidate_e=${candidate_e_result} adopted=${adopted} owner_exception=${owner_exception} cleanup_asserted=true"
+    echo "systemd-docker-probe: ${result} receipt_reason=${failure_reason} run_id=${run_id} build_cache_builder=${build_cache_builder} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_free_after_bytes=${docker_root_free_after_bytes} docker_root_df_before=${docker_root_df_before} docker_root_df_after=${docker_root_df_after} docker_system_df_before=${docker_system_df_before} docker_system_df_after=${docker_system_df_after} build_cache_df_before=${build_cache_df_before} build_cache_df_expected_after=${build_cache_df_expected_after} build_cache_df_after=${build_cache_df_after} build_cache_records_removed=${build_cache_records_removed} least_allowed=${least_allowed} candidate_e=${candidate_e_result} adopted=${adopted} owner_exception=${owner_exception} cleanup_asserted=true"
     exit "${status}"
 }
 
@@ -209,12 +212,14 @@ build_cache_df_expected_after="${build_cache_df_before}"
     exit 1
 }
 kernel="$(uname -r)"
+create_run_build_cache_builder \
+    || fail 'BUILD_CACHE_BUILDER_CREATE_FAILED: isolated buildx builder unavailable'
 capture_build_cache_records "${cache_before}"
 cache_baseline_ready=1
 
 echo "systemd-docker-probe: environment docker_version=${docker_version} cgroup=${cgroup_version} cgroup_driver=${cgroup_driver} kernel=${kernel} docker_root=${docker_root} docker_root_free_before_bytes=${docker_root_free_before_bytes} docker_root_df_before=${docker_root_df_before} docker_system_df_before=${docker_system_df_before}"
 
-docker build \
+docker buildx build --builder "${build_cache_builder}" --load \
     --label "${run_label}" \
     --tag "${probe_image}" \
     --file "${probe_recipe}" \

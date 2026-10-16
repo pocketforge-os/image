@@ -580,7 +580,10 @@ case "${1:-}" in
         case "${2:-}" in
             du)
                 if [ -n "${FAKE_CACHE_RECORDS:-}" ]; then
-                    [ "${3:-}" = --format ] && [ "${4:-}" = json ] || exit 2
+                    [ "${3:-}" = --builder ] \
+                        && [ "${4:-}" = "${FAKE_CACHE_BUILDER:?}" ] \
+                        && [ "${5:-}" = --format ] \
+                        && [ "${6:-}" = json ] || exit 2
                     while IFS= read -r record; do
                         [ -z "${record}" ] || printf '%s\n' "${record}"
                     done <"${FAKE_CACHE_RECORDS}"
@@ -600,6 +603,8 @@ case "${1:-}" in
                 ;;
             prune)
                 if [ -n "${FAKE_CACHE_RECORDS:-}" ]; then
+                    [ "${3:-}" = --builder ] \
+                        && [ "${4:-}" = "${FAKE_CACHE_BUILDER:?}" ] || exit 2
                     cache_id=
                     previous=
                     for argument in "$@"; do
@@ -1250,7 +1255,9 @@ for command_pattern in \
     'docker run ' \
     'docker info ' \
     'docker version ' \
-    'docker build ' \
+    'docker buildx create ' \
+    'docker buildx inspect ' \
+    'docker buildx build ' \
     'docker exec ' \
     'docker logs ' \
     'docker container inspect ' \
@@ -1260,7 +1267,8 @@ for command_pattern in \
     'docker image ls ' \
     'docker image rm ' \
     'docker buildx du ' \
-    'docker buildx prune '; do
+    'docker buildx prune ' \
+    'docker buildx rm '; do
     grep -Fq "${command_pattern}" "${stdout_log}" || {
         echo "session-authority systemd-safety: FAIL: lifecycle audit missed ${command_pattern}" >&2
         exit 1
@@ -1583,6 +1591,8 @@ cache_after="${tmp}/cache-after.tsv"
 cache_expected_prunes="${tmp}/cache-expected-prunes"
 cache_du_counter="${tmp}/cache-du-counter"
 export FAKE_CACHE_RECORDS="${cache_state}"
+build_cache_builder=pf-sa-safety-cache
+export FAKE_CACHE_BUILDER="${build_cache_builder}"
 build_cache_docker() {
     DOCKER_CALL_LOG="${call_log}" "${fake_bin}/docker" "$@"
 }
@@ -1615,10 +1625,10 @@ cmp -s "${cache_before}" "${cache_after}" || {
 [ -z "${build_cache_leftover_ids}" ] || exit 1
 [ -z "${build_cache_missing_ids}" ] || exit 1
 printf '%s\n' \
-    'cmd=buildx prune --force --filter id=z-new-child' \
-    'cmd=buildx prune --force --filter id=a-new-parent' \
-    'cmd=buildx prune --force --filter id=m-new-baseline-child' \
-    'cmd=buildx prune --force --filter id=late-new' \
+    'cmd=buildx prune --builder pf-sa-safety-cache --force --filter id=z-new-child' \
+    'cmd=buildx prune --builder pf-sa-safety-cache --force --filter id=a-new-parent' \
+    'cmd=buildx prune --builder pf-sa-safety-cache --force --filter id=m-new-baseline-child' \
+    'cmd=buildx prune --builder pf-sa-safety-cache --force --filter id=late-new' \
     >"${cache_expected_prunes}"
 grep -F 'cmd=buildx prune ' "${call_log}" | cmp -s - "${cache_expected_prunes}" \
     || exit 1
@@ -1640,6 +1650,6 @@ if cleanup_run_build_cache "${cache_before}" "${tmp}/cache-stuck"; then
 fi
 [ "$(build_cache_drift_reason)" = \
     'BUILD_CACHE_USAGE_DRIFT:leftover_ids=stuck-new;missing_ids=none' ] || exit 1
-unset FAKE_CACHE_STUCK_ID FAKE_CACHE_RECORDS
+unset FAKE_CACHE_STUCK_ID FAKE_CACHE_RECORDS FAKE_CACHE_BUILDER
 
 echo 'session-authority systemd-safety: PASS graphical_refusal=ok ephemeral_guard=ok fixture_root_modes=external-docker-refused owner_exception=ephemeral-only exception_non_ephemeral=refused exception_graphical=refused-zero-docker other_forbidden=refused run_allowlist=ok probe_host_cgroup_bind=refused-zero-docker probe_fixture=audit-only probe_argv_audit=shared probe_matrix=approved-only docker_root_disk=ok disk_floor_abort=ok docker_metrics=before-after cache_baseline=exact cache_parent_graph=child-first cache_leftover_ids=reported argv_audit=ok docker_lifecycle=ok builder_stage=ok path_preconditions=1 shell_fixture_parity=ok fb0=regular workflow=pf-builder-vm probe_positive_control=static probe_diagnostics=fake-docker getty_masks=5 runtime=fake-docker'

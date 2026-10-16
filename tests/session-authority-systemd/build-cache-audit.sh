@@ -5,10 +5,75 @@
 # default ID-only view omits the parent graph needed for dependency-safe prune
 # ordering.
 
+validate_build_cache_builder() {
+    [[ "${build_cache_builder:-}" =~ ^pf-sa-[a-z0-9][a-z0-9_.-]{0,80}$ ]]
+}
+
+create_run_build_cache_builder() {
+    validate_build_cache_builder || return 1
+    build_cache_docker buildx create \
+        --name "${build_cache_builder}" --driver docker-container \
+        >/dev/null || return 1
+    # Ownership begins when create succeeds, not when bootstrap finishes.  An
+    # EXIT cleanup must still own and remove a builder whose bootstrap fails.
+    build_cache_builder_created=1
+    build_cache_docker buildx inspect "${build_cache_builder}" --bootstrap \
+        >/dev/null
+}
+
+remove_run_build_cache_builder() {
+    local listing attempt
+
+    validate_build_cache_builder || return 1
+    listing="$(mktemp "${RUNNER_TEMP:-/tmp}/pf-buildx-list.XXXXXX")" \
+        || return 1
+    for attempt in 1 2; do
+        # A retry may observe that the prior remove succeeded even when its
+        # verification query failed.  In that case rm may report not-found;
+        # only the successful structured list proves absence.
+        build_cache_docker buildx rm "${build_cache_builder}" \
+            >/dev/null 2>&1 || :
+        if build_cache_docker buildx ls --format json \
+            >"${listing}" 2>/dev/null \
+            && python3 - "${listing}" "${build_cache_builder}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1])
+target = sys.argv[2]
+text = source.read_text()
+records = []
+if text.strip():
+    try:
+        value = json.loads(text)
+        records = value if isinstance(value, list) else [value]
+    except json.JSONDecodeError:
+        try:
+            records = [json.loads(line) for line in text.splitlines() if line.strip()]
+        except json.JSONDecodeError as error:
+            raise SystemExit(f"invalid buildx builder list: {error}")
+if not all(isinstance(record, dict) and isinstance(record.get("Name"), str)
+           for record in records):
+    raise SystemExit("invalid buildx builder list record")
+raise SystemExit(1 if any(record["Name"] == target for record in records) else 0)
+PY
+        then
+            find "${listing}" -delete
+            build_cache_builder_created=0
+            return 0
+        fi
+    done
+    find "${listing}" -delete
+    return 1
+}
+
 capture_build_cache_records() {
     local destination="$1" raw="${1}.jsonl"
 
-    build_cache_docker buildx du --format json >"${raw}" 2>/dev/null || return 1
+    validate_build_cache_builder || return 1
+    build_cache_docker buildx du --builder "${build_cache_builder}" \
+        --format json >"${raw}" 2>/dev/null || return 1
     python3 - "${raw}" "${destination}" <<'PY'
 import json
 from pathlib import Path
@@ -134,7 +199,8 @@ cleanup_run_build_cache() {
                 [ -n "${cache_id}" ] || continue
                 # Every prune is exact-ID scoped. Baseline IDs are never placed
                 # in created_ids, including when a new record has one as parent.
-                build_cache_docker buildx prune --force --filter "id=${cache_id}" \
+                build_cache_docker buildx prune --builder "${build_cache_builder}" \
+                    --force --filter "id=${cache_id}" \
                     >/dev/null 2>&1 || true
             done <"${prune_order}"
         fi

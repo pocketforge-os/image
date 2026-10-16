@@ -393,16 +393,49 @@ audit_docker_argv() {
             esac
             ;;
         buildx)
-            if [ "${argv[1]-}" = du ]; then
-                if [ "${#argv[@]}" -ne 4 ] \
-                    || [ "${argv[2]-}" != --format ] \
-                    || [ "${argv[3]-}" != json ]; then
+            if [ "${argv[1]-}" = build ]; then
+                argv_has_option_value --builder "${build_cache_builder}" "${argv[@]}" \
+                    || fail 'UNSCOPED_CONTAINER_ARGV: buildx build lacks owned builder'
+                argv_has --load "${argv[@]}" \
+                    || fail 'UNSCOPED_CONTAINER_ARGV: buildx build does not load run image'
+                argv_has_option_value --label "${run_label}" "${argv[@]}" \
+                    || fail 'UNSCOPED_CONTAINER_ARGV: buildx build lacks run label'
+                argv_has_option_value --tag "${test_image}" "${argv[@]}" \
+                    || fail 'UNSCOPED_CONTAINER_ARGV: buildx build lacks run image tag'
+            elif [ "${argv[1]-}" = create ]; then
+                if [ "${#argv[@]}" -ne 6 ] \
+                    || [ "${argv[2]-}" != --name ] \
+                    || [ "${argv[3]-}" != "${build_cache_builder}" ] \
+                    || [ "${argv[4]-}" != --driver ] \
+                    || [ "${argv[5]-}" != docker-container ]; then
+                    fail 'UNSCOPED_CONTAINER_ARGV: buildx create is not the owned builder'
+                fi
+            elif [ "${argv[1]-}" = inspect ]; then
+                if [ "${argv[2]-}" != "${build_cache_builder}" ] \
+                    || { [ "${#argv[@]}" -ne 3 ] \
+                        && { [ "${#argv[@]}" -ne 4 ] \
+                            || [ "${argv[3]-}" != --bootstrap ]; }; }; then
+                    fail 'UNSCOPED_CONTAINER_ARGV: buildx inspect is not the owned builder'
+                fi
+            elif [ "${argv[1]-}" = rm ]; then
+                if [ "${#argv[@]}" -ne 3 ] \
+                    || [ "${argv[2]-}" != "${build_cache_builder}" ]; then
+                    fail 'UNSCOPED_CONTAINER_ARGV: buildx rm is not the owned builder'
+                fi
+            elif [ "${argv[1]-}" = du ]; then
+                if [ "${#argv[@]}" -ne 6 ] \
+                    || [ "${argv[2]-}" != --builder ] \
+                    || [ "${argv[3]-}" != "${build_cache_builder}" ] \
+                    || [ "${argv[4]-}" != --format ] \
+                    || [ "${argv[5]-}" != json ]; then
                     fail 'UNSCOPED_CONTAINER_ARGV: build-cache audit is not exact JSON listing'
                 fi
             elif [ "${argv[1]-}" = prune ]; then
-                if [ "${#argv[@]}" -ne 5 ] \
-                    || [ "${argv[2]-}" != --force ] \
-                    || [ "${argv[3]-}" != --filter ]; then
+                if [ "${#argv[@]}" -ne 7 ] \
+                    || [ "${argv[2]-}" != --builder ] \
+                    || [ "${argv[3]-}" != "${build_cache_builder}" ] \
+                    || [ "${argv[4]-}" != --force ] \
+                    || [ "${argv[5]-}" != --filter ]; then
                     fail 'UNSCOPED_CONTAINER_ARGV: build-cache prune argv drifted'
                 fi
                 value=
