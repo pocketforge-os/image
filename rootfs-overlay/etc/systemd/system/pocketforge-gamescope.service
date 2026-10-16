@@ -1,6 +1,6 @@
 [Unit]
 Description=PocketForge Gamescope display owner
-After=dev-dri-renderD128.device pf-kbd-layout-env.service pf-open-gpu-gate.service pocketforge-boot-animator.service pf-shell-selected.service
+After=dev-dri-renderD128.device pf-kbd-layout-env.service pf-open-gpu-gate.service pocketforge-boot-animator.service pf-shell-selected.service systemd-tmpfiles-setup.service
 Wants=dev-dri-renderD128.device pf-kbd-layout-env.service
 PartOf=pocketforge-gamescope-session.target
 Conflicts=pf-shell-selected.service pocketforge-foreground.target
@@ -27,6 +27,10 @@ NoNewPrivileges=yes
 PrivateDevices=no
 ProtectSystem=strict
 ProtectHome=yes
+# Xwayland requires /tmp lock and socket paths. Map only its shared runtime tree;
+# the publisher exposes the filesystem socket to separately sandboxed app units.
+ReadWritePaths=/run/pocketforge/x11
+BindPaths=/run/pocketforge/x11:/tmp
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
