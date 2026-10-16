@@ -87,6 +87,28 @@ def wait_for(predicate: Callable[[], bool], description: str, timeout: float = 1
     raise TestFailure(f"timed out waiting for {description}")
 
 
+def verify_tmpfiles_contract() -> None:
+    """The production X11 tmpfiles contract must converge after boot."""
+
+    command("systemd-tmpfiles", "--create")
+    gamer_gid = grp.getgrnam("gamer").gr_gid
+    expected = {
+        Path("/run/pocketforge"): (0o775, 0, gamer_gid),
+        Path("/run/pocketforge/x11"): (0o1777, 0, 0),
+        Path("/run/pocketforge/x11/.X11-unix"): (0o1777, 0, 0),
+        Path("/run/pocketforge/x11/policy"): (0o755, 0, 0),
+    }
+    for path, (mode, uid, gid) in expected.items():
+        metadata = path.stat()
+        require(stat.S_ISDIR(metadata.st_mode), f"tmpfiles path is not a directory: {path}")
+        require(
+            (stat.S_IMODE(metadata.st_mode), metadata.st_uid, metadata.st_gid) == (mode, uid, gid),
+            f"tmpfiles contract mismatch for {path}: "
+            f"mode={stat.S_IMODE(metadata.st_mode):04o} uid={metadata.st_uid} gid={metadata.st_gid}",
+        )
+    print("session-authority tmpfiles idempotence: PASS", flush=True)
+
+
 def receive_exact(stream: socket.socket, length: int) -> bytes:
     chunks: list[bytes] = []
     remaining = length
@@ -1688,6 +1710,7 @@ def self_test() -> None:
 def main() -> None:
     require(Path("/proc/1/comm").read_text().strip() == "systemd", "PID 1 is not systemd")
     require(command("uname", "-m").stdout.strip() == "x86_64", "container is not x86_64")
+    verify_tmpfiles_contract()
     framebuffer = Path("/dev/fb0")
     require(
         framebuffer.is_file() and framebuffer.stat().st_size == 0,

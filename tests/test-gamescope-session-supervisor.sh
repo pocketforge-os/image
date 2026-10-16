@@ -84,12 +84,25 @@ if values(owner, "RuntimeDirectoryMode") != [["0751"]]:
 
 entries = {tuple(line.split()) for line in tmpfiles if line and not line.startswith("#")}
 required = {
+    ("d", "/run/pocketforge", "0775", "root", "gamer", "-"),
     ("d", "/run/pocketforge/x11", "1777", "root", "root", "-"),
     ("d", "/run/pocketforge/x11/.X11-unix", "1777", "root", "root", "-"),
     ("d", "/run/pocketforge/x11/policy", "0755", "root", "root", "-"),
 }
 if not required.issubset(entries):
     raise SystemExit(1)
+
+# Reapplying the exact production rows must converge an old gamer-owned parent
+# without changing the root-owned X11 subtree on the second pass.
+state = {"/run/pocketforge": ("0755", "gamer", "gamer")}
+for _ in range(2):
+    for kind, path, mode, owner_name, group_name, _age in entries:
+        if kind == "d" and path.startswith("/run/pocketforge"):
+            state[path] = (mode, owner_name, group_name)
+    if state["/run/pocketforge"] != ("0775", "root", "gamer"):
+        raise SystemExit(1)
+    if state["/run/pocketforge/x11/policy"] != ("0755", "root", "root"):
+        raise SystemExit(1)
 
 # wlroots' fixed namespace paths must resolve to the same host-visible tree
 # consumed by the publisher. The display lock is deliberately created at
@@ -112,6 +125,13 @@ PY
 # /tmp/.X11-unix/X<N> without receiving write access to the host's whole /tmp.
 check_xwayland_write_contract "${owner}" "${publisher_unit}" "${x11_tmpfiles}" \
     || fail "Gamescope Xwayland write namespace is incomplete"
+cp "${x11_tmpfiles}" "${scratch}/x11-without-safe-parent.conf"
+sed -i '\#^d /run/pocketforge 0775 root gamer -$#d' \
+    "${scratch}/x11-without-safe-parent.conf"
+if check_xwayland_write_contract "${owner}" "${publisher_unit}" \
+    "${scratch}/x11-without-safe-parent.conf"; then
+    fail "Xwayland write check accepted an unsafe runtime parent"
+fi
 cp "${owner}" "${scratch}/owner-without-x11-bind.service"
 sed -i '/^BindPaths=/d' "${scratch}/owner-without-x11-bind.service"
 if check_xwayland_write_contract "${scratch}/owner-without-x11-bind.service" \

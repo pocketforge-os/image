@@ -56,6 +56,7 @@ COPY --from=runtime-builder /out/pf-app-launch /usr/bin/pf-app-launch
 COPY runtime/systemd/pf-session-authorityd.service /etc/systemd/system/pf-session-authorityd.service
 COPY 10-test-driver-peer.conf /etc/systemd/system/pf-session-authorityd.service.d/10-test-driver-peer.conf
 COPY runtime/systemd/pocketforge.conf /usr/lib/tmpfiles.d/pocketforge.conf
+COPY pocketforge-gamescope-x11.conf /usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf
 COPY session-authority-test-tmpfiles.conf /usr/lib/tmpfiles.d/session-authority-test.conf
 COPY pf-app@.service /etc/systemd/system/pf-app@.service
 COPY 10-test-landlock-unavailable.conf /etc/systemd/system/pf-app@.service.d/10-test-landlock-unavailable.conf
@@ -120,6 +121,7 @@ RUN chmod 0755 \
         /etc/systemd/system/session-authority-test.target \
         /etc/systemd/system/session-authority-driver.service \
         /usr/lib/tmpfiles.d/pocketforge.conf \
+        /usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf \
         /usr/lib/tmpfiles.d/session-authority-test.conf \
         /usr/share/pocketforge/platform-capabilities.toml \
         /usr/share/pocketforge/app-policy/org.pocketforge.fixture.resources.json \

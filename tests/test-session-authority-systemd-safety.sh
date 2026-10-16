@@ -13,6 +13,7 @@ real_gamescope_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-games
 fake_gamescope_unit="${root}/tests/session-authority-systemd/pocketforge-gamescope.service"
 fake_gamescope="${root}/tests/session-authority-systemd/fake-gamescope"
 test_tmpfiles="${root}/tests/session-authority-systemd/session-authority-test-tmpfiles.conf"
+real_tmpfiles="${root}/rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf"
 fake_broker="${root}/tests/session-authority-systemd/fake-input-broker"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
@@ -105,8 +106,15 @@ verify_session_producer_fixture() {
             "${fake_gamescope}" \
         && grep -Fq 'X11 = Path("/run/pocketforge/x11/.X11-unix/X0")' \
             "${fake_gamescope}" \
+        && grep -Fqx 'd /run/pocketforge 0775 root gamer -' "${real_tmpfiles}" \
         && grep -Fqx 'd /run/pocketforge/x11/.X11-unix 1777 root root -' \
-            "${test_tmpfiles}" \
+            "${real_tmpfiles}" \
+        && ! grep -Fq '/run/pocketforge/x11' "${test_tmpfiles}" \
+        && grep -Fq \
+            'COPY pocketforge-gamescope-x11.conf /usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf' \
+            "${recipe}" \
+        && grep -Fq 'verify_tmpfiles_contract()' "${driver}" \
+        && grep -Fq 'command("systemd-tmpfiles", "--create")' "${driver}" \
         && grep -Fq '"${fixture_root%/}/run/pocketforge/x11/.X11-unix/"X*' \
             "${harness}" \
         && grep -Fq 'for group_name in gamer audio input video pf-session; do' "${recipe}" \
