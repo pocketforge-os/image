@@ -269,7 +269,7 @@ run_contract_builder() {
 }
 
 previous_uapi_sha=45b87a7d0e68a5aaafdc94523db791483e8a27cd
-build11_uapi_sha=07bb60764cbc64b5a5d760c34709f07f8259e985
+build11_uapi_sha=973d40af95f2dc5754bfe57e2b7a9c18fc4e92c8
 if run_contract_builder "${previous_uapi_sha}" \
         >"${scratch}/stale-uapi.log" 2>&1; then
     echo 'FAIL: previous platform UAPI pin was accepted' >&2
@@ -286,8 +286,8 @@ if grep -Fq 'kernel UAPI source receipt missing' "${scratch}/stale-uapi.log"; th
     exit 1
 fi
 
-# Preserve the real Build 11 failure as a negative control: the previous image
-# witness admits the previous platform value, then rejects the boot-kernel tree.
+# Preserve the receipt-drift failure as a negative control: an older image
+# witness admits an older platform value, then rejects the current boot-kernel tree.
 legacy_definition="${scratch}/legacy-definition"
 mkdir -p "${legacy_definition}"
 cp "${builder}" "${legacy_definition}/build.sh"
