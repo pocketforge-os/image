@@ -2,6 +2,7 @@
 # Supply deterministic provenance for the legacy build-sd-image -> build-rootfs path.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="${SRC_DIR:-/work/src}"
 BLOBS_DIR="${BLOBS_DIR:-/work/blobs}"
 LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
@@ -11,6 +12,7 @@ RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"
 LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 KERNEL_TSP_DIR="${KERNEL_TSP_DIR:-/work/kernel-tsp}"
+OUT_DIR="${OUT_DIR:-/work/out}"
 # build-sd-image supplies a complete kernel tree because it also consumes Image
 # and the DTB.  Rootfs assembly consumes the modules_install subtree only.  Keep
 # both identities explicit instead of rewriting KERNEL_TSP_DIR for every other
@@ -23,6 +25,7 @@ PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}"
 PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
 PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:-}"
+PF_KERNEL_REPO="${PF_KERNEL_REPO:-}"
 
 case "${PF_DEVICE_ID}" in
     [a-z0-9]*) ;;
@@ -78,6 +81,10 @@ tree_identity() {
 PF_VARIANT="${variant}"
 PF_IMAGE_SHA="$(tree_identity "${SRC_DIR}")"
 PF_KERNEL_SHA="$(tree_identity "${KERNEL_TSP_DIR}")"
+PF_KERNEL_CAPABILITY_RECEIPT="${OUT_DIR}/.pf-kernel-capabilities/axp717-low-soc-alarm-irqs-v1"
+"${SCRIPT_DIR}/emit-axp717-low-soc-capability.sh" \
+    "${KERNEL_TSP_DIR}" "${PF_KERNEL_CAPABILITY_RECEIPT}" \
+    "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}" >&2
 PF_GPU_SHA="$(tree_identity "${GPU_KM_TSP_DIR}")"
 PF_LIBSDL3_SHA="$(tree_identity "${LIBSDL3_DIR}")"
 PF_WPA_SHA="$(tree_identity "${WPA_DIR}")"
@@ -106,7 +113,7 @@ else
     PF_UBOOT_SHA=""
 fi
 PF_TFA_SHA=""
-export PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA PF_GPU_SHA
+export PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA PF_KERNEL_CAPABILITY_RECEIPT PF_GPU_SHA
 export PF_GPU_MODEL PF_GPU_KM_MODEL PF_KERNEL_REQUIRED_MODULES PF_DISPLAY_PIPELINE
 export PF_LIBSDL3_SHA PF_WPA_SHA PF_CLOUD_INIT_SHA PF_RUNTIME_SHA PF_LAUNCHER_SHA PF_HWPROBE_SHA PF_SIM_SHA PF_BLOBS_SHA
 export PF_VENDOR_MANIFEST_SHA PF_CAR_SHA256 PF_UBOOT_SHA PF_TFA_SHA

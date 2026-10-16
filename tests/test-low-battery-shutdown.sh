@@ -267,6 +267,7 @@ exact_receipt="${scratch}/receipts/exact"
 descendant_receipt="${scratch}/receipts/descendant"
 ancestor_receipt="${scratch}/receipts/ancestor"
 unrelated_receipt="${scratch}/receipts/unrelated"
+mkdir -p "${scratch}/receipts"
 emit_receipt "${capable_source}" "${exact_receipt}" kernel-sunxi-7.x \
     "${alarm_kernel_sha}"
 emit_receipt "${descendant_source}" "${descendant_receipt}" kernel-sunxi-7.x \
@@ -339,9 +340,9 @@ install_tree "${scratch}/wrong-device" kernel-sunxi-7.x '' /dev/null unrelated-d
 # Mutation control: reintroducing exact equality must reject the simulated
 # feature-preserving descendant that the production capability gate accepts.
 equality_mutant="${scratch}/install-equality-mutant.sh"
-sed "/local required_kernel_sha=/a\\    [ \"\${kernel_sha}\" = \"\${required_kernel_sha}\" ] || return 1" \
+sed "/local unit=/a\\    [ \"\${kernel_sha}\" = \"${alarm_kernel_sha}\" ] || return 1" \
     "${install_fn}" > "${equality_mutant}"
-grep -F '[ "${kernel_sha}" = "${required_kernel_sha}" ] || return 1' \
+grep -F "[ \"\${kernel_sha}\" = \"${alarm_kernel_sha}\" ] || return 1" \
     "${equality_mutant}" >/dev/null || fail "equality mutant did not apply"
 if install_tree_from "${equality_mutant}" "${scratch}/equality-mutant" \
     kernel-sunxi-7.x "${descendant_kernel_sha}" "${descendant_receipt}" \
@@ -353,9 +354,18 @@ echo "mutation exact-kernel-equality: caught"
 # shellcheck disable=SC2016 # Match literal builder expansion in hook command.
 grep -F 'PF_KERNEL_SHA=${PF_KERNEL_SHA}' "${builder}" >/dev/null \
     || fail "rootfs builder does not authenticate PF_KERNEL_SHA in the customize hook"
+# shellcheck disable=SC2016 # Match literal builder expansion in hook command.
 grep -F 'PF_KERNEL_CAPABILITY_RECEIPT=${PF_KERNEL_CAPABILITY_RECEIPT}' "${builder}" >/dev/null \
     || fail "rootfs builder does not pass the kernel capability receipt to the hook"
 grep -F 'COPY --from=kernel /out/build/capabilities /work/kernel-capabilities' \
     "${dockerfile}" >/dev/null || fail "rootfs stage does not receive kernel capabilities"
+grep -F 'COPY --chmod=0555 --from=image-src scripts/emit-axp717-low-soc-capability.sh' \
+    "${dockerfile}" >/dev/null || fail "kernel stage does not receive the capability emitter"
+grep -F '/work/kernel /out/build/capabilities/axp717-low-soc-alarm-irqs-v1' \
+    "${dockerfile}" >/dev/null || fail "kernel stage does not verify its authenticated source"
+if grep -F "${alarm_kernel_sha}" "${builder}" "${capability_emitter}" "${dockerfile}" \
+    >/dev/null; then
+    fail "production capability gate contains an exact #106 SHA allowlist"
+fi
 
 echo "PASS low-battery shutdown thresholds, external-power hold, coalescing, boot/event wiring, sysfs-only policy, and voltage-floor mutant"

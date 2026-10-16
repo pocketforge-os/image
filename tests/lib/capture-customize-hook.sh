@@ -25,6 +25,7 @@ capture_customize_hook() {
 
     mkdir -p "${fixture}/bin" "${fixture}/out" "${fixture}/wpa" \
         "${fixture}/cloud-init" \
+        "${fixture}/kernel-capabilities" \
         "${fixture}/blobs/sunxi/a133/wifi-firmware" \
         "${fixture}/mesa/usr/local/lib/gbm" "${release}"
     : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin"
@@ -40,6 +41,13 @@ capture_customize_hook() {
     : > "${release}/powervr.ko"
     : > "${fixture}/wpa/wpa_supplicant"
     : > "${fixture}/cloud-init/cloud-init-pocketforge.deb"
+    printf '%s\n' \
+        'schema=1' \
+        'capability=axp717-low-soc-alarm-irqs-v1' \
+        'result=present' \
+        'kernel_repo=kernel-sunxi-7.x' \
+        'kernel_sha=973d40af95f2dc5754bfe57e2b7a9c18fc4e92c8' \
+        > "${fixture}/kernel-capabilities/axp717-low-soc-alarm-irqs-v1"
 
     cat > "${fixture}/bin/qemu-aarch64-static" <<'EOF'
 #!/bin/sh
@@ -79,6 +87,7 @@ EOF
     OUT_DIR="${fixture}/out" SOURCE_DATE_EPOCH=1700000000 \
     PF_DEVICE_ID=a133-open-7x-gpu PF_KERNEL_REPO=kernel-sunxi-7.x \
     PF_KERNEL_SHA=973d40af95f2dc5754bfe57e2b7a9c18fc4e92c8 PF_GPU_MODEL=open \
+    PF_KERNEL_CAPABILITY_RECEIPT="${fixture}/kernel-capabilities/axp717-low-soc-alarm-irqs-v1" \
     PF_CLOUD_INIT_SHA=5656565656565656565656565656565656565656 \
     PF_GPU_KM_MODEL=in-tree-7.x PF_KERNEL_REQUIRED_MODULES=powervr \
     PF_DISPLAY_PIPELINE=none \
