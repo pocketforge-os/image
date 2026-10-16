@@ -12,6 +12,7 @@ resident_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-r
 real_gamescope_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope.service"
 fake_gamescope_unit="${root}/tests/session-authority-systemd/pocketforge-gamescope.service"
 fake_gamescope="${root}/tests/session-authority-systemd/fake-gamescope"
+test_tmpfiles="${root}/tests/session-authority-systemd/session-authority-test-tmpfiles.conf"
 fake_broker="${root}/tests/session-authority-systemd/fake-input-broker"
 recipe="${root}/tests/session-authority-systemd/Containerfile"
 probe="${root}/tests/probe-session-authority-docker-systemd.sh"
@@ -102,7 +103,12 @@ verify_session_producer_fixture() {
         && grep -Fqx 'ExecStart=/usr/local/libexec/fake-gamescope' "${test_gamescope}" \
         && grep -Fq 'WAYLAND = Path("/run/pocketforge/gamescope/gamescope-0")' \
             "${fake_gamescope}" \
-        && grep -Fq 'X11 = Path("/tmp/.X11-unix/X0")' "${fake_gamescope}" \
+        && grep -Fq 'X11 = Path("/run/pocketforge/x11/.X11-unix/X0")' \
+            "${fake_gamescope}" \
+        && grep -Fqx 'd /run/pocketforge/x11/.X11-unix 1777 root root -' \
+            "${test_tmpfiles}" \
+        && grep -Fq '"${fixture_root%/}/run/pocketforge/x11/.X11-unix/"X*' \
+            "${harness}" \
         && grep -Fq 'for group_name in gamer audio input video pf-session; do' "${recipe}" \
         && grep -Fq 'COPY pocketforge-session-publisher.service' "${recipe}" \
         && grep -Fq 'COPY pf-session-publish /usr/lib/pocketforge/pf-session-publish' "${recipe}" \
@@ -448,8 +454,10 @@ mkdir -p \
     "${sentinel_bin}" \
     "${fake_root}/etc/pocketforge" \
     "${fake_root}/tmp/.X11-unix" \
+    "${fake_root}/run/pocketforge/x11/.X11-unix" \
     "${fake_root}/run/user" \
     "${fake_unapproved_root}/tmp/.X11-unix" \
+    "${fake_unapproved_root}/run/pocketforge/x11/.X11-unix" \
     "${fake_unapproved_root}/run/user"
 printf 'PF_RUNNER_USER=runner\n' >"${fake_root}/etc/pocketforge/ephemeral-runner.conf"
 : >"${call_log}"
@@ -1033,20 +1041,24 @@ if run_fake --check-host-guard "${fake_unapproved_root}" \
 fi
 grep -Fq 'UNAPPROVED_HOST: ephemeral runner marker missing' "${stderr_log}" || exit 1
 
-python3 - "${fake_root}/tmp/.X11-unix/X77" <<'PY'
+for x_socket in \
+    "${fake_root}/tmp/.X11-unix/X77" \
+    "${fake_root}/run/pocketforge/x11/.X11-unix/X77"; do
+python3 - "${x_socket}" <<'PY'
 import socket
 import sys
 
 with socket.socket(socket.AF_UNIX) as display:
     display.bind(sys.argv[1])
 PY
-reset_logs
-if run_fake --check-host-guard "${fake_root}" >"${stdout_log}" 2>"${stderr_log}"; then
-    echo 'session-authority systemd-safety: FAIL: X socket passed guard' >&2
-    exit 1
-fi
-grep -Fq 'INTERACTIVE_WORKSTATION: graphical socket=' "${stderr_log}" || exit 1
-find "${fake_root}/tmp/.X11-unix" -mindepth 1 -delete
+    reset_logs
+    if run_fake --check-host-guard "${fake_root}" >"${stdout_log}" 2>"${stderr_log}"; then
+        echo "session-authority systemd-safety: FAIL: X socket passed guard path=${x_socket}" >&2
+        exit 1
+    fi
+    grep -Fq 'INTERACTIVE_WORKSTATION: graphical socket=' "${stderr_log}" || exit 1
+    find "$(dirname "${x_socket}")" -mindepth 1 -delete
+done
 
 reset_logs
 FAKE_DISK_MODE=preflight-low
@@ -1454,7 +1466,7 @@ grep -Fqx '        run: python3 tests/verify-input-broker-wiring.py' "${workflow
 grep -Fq 'exit-before-ready' "${root}/tests/session-authority-systemd/fake-input-broker" || exit 1
 precondition_output="$(python3 "${precondition_verifier}")"
 grep -Fqx \
-    'session-authority path-preconditions: PASS conditions=1 providers=6 fb0=regular units=7' \
+    'session-authority path-preconditions: PASS conditions=1 providers=8 fb0=regular units=7' \
     <<<"${precondition_output}" || exit 1
 unprovided_unit="${tmp}/unprovided.service"
 printf '[Unit]\nConditionPathExists=/unprovided-test-path\n' >"${unprovided_unit}"

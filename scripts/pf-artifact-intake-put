@@ -22,9 +22,14 @@ if [ ! -f "$payload" ] || [ -L "$payload" ]; then
     printf 'reason=intake_payload_not_regular\n' >&2
     exit 1
 fi
-for value in "$PF_ARTIFACT_INTAKE_MAX_BYTES" "$PF_ARTIFACT_INTAKE_PORT"; do
+for value in "$PF_ARTIFACT_INTAKE_MAX_BYTES" "$PF_ARTIFACT_INTAKE_PORT" \
+    "$PF_ARTIFACT_INTAKE_REQUEST_TIMEOUT_SECONDS"; do
     [[ "$value" =~ ^[0-9]+$ ]] || { printf 'reason=artifact_intake_config_invalid\n' >&2; exit 1; }
 done
+if [ "$PF_ARTIFACT_INTAKE_REQUEST_TIMEOUT_SECONDS" -eq 0 ]; then
+    printf 'reason=artifact_intake_config_invalid\n' >&2
+    exit 1
+fi
 expected_base="http://192.168.151.1:8791/intake/v1"
 if [ "$PF_ARTIFACT_INTAKE_HOST" != 192.168.151.1 ] ||
     [ "$PF_ARTIFACT_INTAKE_PORT" != 8791 ] ||
@@ -44,10 +49,16 @@ response="$(mktemp)"
 trap 'rm -f -- "$response"' EXIT
 url="${PF_ARTIFACT_INTAKE_BASE%/}/trusted-builder/sha256/$sha256"
 transport_attempts=3
+connect_timeout_seconds=10
+if [ "$PF_ARTIFACT_INTAKE_REQUEST_TIMEOUT_SECONDS" -lt "$connect_timeout_seconds" ]; then
+    connect_timeout_seconds="$PF_ARTIFACT_INTAKE_REQUEST_TIMEOUT_SECONDS"
+fi
 for ((attempt = 1; attempt <= transport_attempts; attempt++)); do
     : >"$response"
     set +e
     http_status="$(curl --silent --show-error --proto '=http' --max-redirs 0 \
+        --connect-timeout "$connect_timeout_seconds" \
+        --max-time "$PF_ARTIFACT_INTAKE_REQUEST_TIMEOUT_SECONDS" \
         --request PUT --header "Content-Length: $bytes" --upload-file "$payload" \
         --output "$response" --write-out '%{http_code}' "$url")"
     curl_status=$?

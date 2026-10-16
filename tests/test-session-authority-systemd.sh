@@ -148,6 +148,7 @@ assert_safe_host() {
 
     for socket_path in \
         "${fixture_root%/}/tmp/.X11-unix/"X* \
+        "${fixture_root%/}/run/pocketforge/x11/.X11-unix/"X* \
         "${fixture_root%/}/run/user/"*/wayland-*; do
         [ -S "${socket_path}" ] || continue
         fail "INTERACTIVE_WORKSTATION: graphical socket=${socket_path}"
