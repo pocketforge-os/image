@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ARM64_DESTINATION = "/etc/apt/sources.list.d/ubuntu-arm64.sources"
-PINNED_GPU_UM_SHA = "1ae75772e7f42251062cf660fc13577b8fd60664"
+PINNED_GPU_UM_SHA = "87ad73611a548e1805f0c21ed083915d79e34c09"
 
 INSTALLED_REPRO_CONTRACT = {
     "first-pass install": (
@@ -173,7 +173,7 @@ def main() -> int:
     parser.add_argument(
         "--fixture",
         type=Path,
-        default=root / "build/tests/fixtures/gpu-um-toolchain-1ae75772.Dockerfile",
+        default=root / "build/tests/fixtures/gpu-um-toolchain-87ad7361.Dockerfile",
     )
     parser.add_argument("--source-sha", default=PINNED_GPU_UM_SHA)
     args = parser.parse_args()
