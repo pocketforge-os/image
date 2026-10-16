@@ -34,7 +34,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, pf-builder-vm]
+    runs-on: [self-hosted, pf-public-ci]
     timeout-minutes: 30
     outputs:
       least_allowed: ${{ steps.probe.outputs.least_allowed }}
@@ -46,6 +46,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
 
       - name: Run static broker wiring contract
         run: python3 tests/verify-input-broker-wiring.py
