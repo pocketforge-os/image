@@ -75,7 +75,8 @@ echo "direct fallback kernel repo: ${3}" >&2
 exec "$(dirname "$0")/emit-axp717-low-soc-capability.real.sh" "$@"
 EOF
 chmod 0755 "${fixture_src}/scripts/emit-axp717-low-soc-capability.sh"
-grep -F '        PF_KERNEL_REPO="${PF_KERNEL_REPO}" \' \
+# shellcheck disable=SC2016 # Match the literal caller-side assignment.
+grep -F 'PF_KERNEL_REPO="${PF_KERNEL_REPO}"' \
     "${repo_dir}/scripts/build-sd-image.sh" >/dev/null || {
     echo 'FAIL: build-sd-image does not explicitly pass PF_KERNEL_REPO to the direct builder' >&2
     exit 1

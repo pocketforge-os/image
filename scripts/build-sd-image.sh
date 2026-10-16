@@ -491,6 +491,7 @@ else
         PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL}" \
         PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES}" \
         PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \
+        PF_KERNEL_REPO="${PF_KERNEL_REPO}" \
         bash "${SRC_DIR}/scripts/build-rootfs-direct.sh" \
             --variant "${VARIANT}" \
             --uboot-spl "${UBOOT_SPL}" \
