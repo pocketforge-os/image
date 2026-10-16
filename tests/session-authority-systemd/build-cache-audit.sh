@@ -5,10 +5,37 @@
 # default ID-only view omits the parent graph needed for dependency-safe prune
 # ordering.
 
+validate_build_cache_builder() {
+    [[ "${build_cache_builder:-}" =~ ^pf-sa-[a-z0-9][a-z0-9_.-]{0,80}$ ]]
+}
+
+create_run_build_cache_builder() {
+    validate_build_cache_builder || return 1
+    build_cache_docker buildx create \
+        --name "${build_cache_builder}" --driver docker-container \
+        >/dev/null || return 1
+    if ! build_cache_docker buildx inspect "${build_cache_builder}" --bootstrap \
+        >/dev/null; then
+        build_cache_docker buildx rm "${build_cache_builder}" >/dev/null 2>&1
+        return 1
+    fi
+}
+
+remove_run_build_cache_builder() {
+    validate_build_cache_builder || return 1
+    build_cache_docker buildx rm "${build_cache_builder}" >/dev/null || return 1
+    if build_cache_docker buildx inspect "${build_cache_builder}" \
+        >/dev/null 2>&1; then
+        return 1
+    fi
+}
+
 capture_build_cache_records() {
     local destination="$1" raw="${1}.jsonl"
 
-    build_cache_docker buildx du --format json >"${raw}" 2>/dev/null || return 1
+    validate_build_cache_builder || return 1
+    build_cache_docker buildx du --builder "${build_cache_builder}" \
+        --format json >"${raw}" 2>/dev/null || return 1
     python3 - "${raw}" "${destination}" <<'PY'
 import json
 from pathlib import Path
@@ -134,7 +161,8 @@ cleanup_run_build_cache() {
                 [ -n "${cache_id}" ] || continue
                 # Every prune is exact-ID scoped. Baseline IDs are never placed
                 # in created_ids, including when a new record has one as parent.
-                build_cache_docker buildx prune --force --filter "id=${cache_id}" \
+                build_cache_docker buildx prune --builder "${build_cache_builder}" \
+                    --force --filter "id=${cache_id}" \
                     >/dev/null 2>&1 || true
             done <"${prune_order}"
         fi
