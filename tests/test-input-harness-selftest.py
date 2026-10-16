@@ -348,6 +348,12 @@ def section_asset_audit(work):
         "payload workflow does not pass the fleet apt-cacher-ng endpoint",
     )
     require(
+        'GITHUB_EVENT_NAME" = pull_request' in payload_workflow
+        and "cache_args+=(--no-cache)" in payload_workflow
+        and "input-harness-payload-cache-mode=cold" in payload_workflow,
+        "payload PR workflow does not force and report a cold timing sample",
+    )
+    require(
         '--build-context sdl-src="$RUNNER_TEMP/payload-contexts/sdl"' in payload_workflow
         and '--build-context gamescope-src="$RUNNER_TEMP/payload-contexts/gamescope"'
         in payload_workflow
@@ -360,6 +366,28 @@ def section_asset_audit(work):
         < payload_workflow.index("verify-guest-payload.sh")
         and "apt-sources.txt runtime-packages.tsv payload-files.tsv" in payload_workflow,
         "payload workflow does not print full provenance before pin verification",
+    )
+    require(
+        "push:" in payload_workflow
+        and "branches: [main]" in payload_workflow
+        and "github.event_name == 'push'" in payload_workflow,
+        "payload workflow lacks its main-only trusted-intake producer",
+    )
+    require(
+        "pf-artifact-intake-put" in payload_workflow
+        and payload_workflow.count("intake_status=PASS") >= 1
+        and "actions/upload-artifact" not in payload_workflow,
+        "payload workflow does not use trusted intake exclusively",
+    )
+    with open(
+        os.path.join(HARNESS, "guest", "build-tools.sh"), "r", encoding="utf-8"
+    ) as handle:
+        guest_build_tools = handle.read()
+    require(
+        "nproc" in guest_build_tools
+        and "--parallel 2" not in guest_build_tools
+        and "parallel=" in guest_build_tools,
+        "payload guest build does not use and report runner capacity",
     )
     with open(os.path.join(HARNESS, "run-guest.sh"), "r", encoding="utf-8") as handle:
         guest_runner = handle.read()

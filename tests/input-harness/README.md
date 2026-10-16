@@ -90,6 +90,16 @@ mismatch fails before publication. `manifest.json` records the
 snapshot, external commits, recipe/source hashes, runtime package closure,
 payload size and digest.
 
+The guest tool build runs through qemu-user on the x86 builder and takes its
+parallelism from that runner's `nproc`; a cold producer must fit the existing
+40-minute build-step guard. Pull requests force a no-cache build to retain cold
+timing evidence, then verify without writing any external store. A matching
+main push sends the verified squashfs, manifest and
+CI receipt through the write-once trusted modelmaker intake, emitting a typed
+receipt and SHA256 for each object. GitHub artifact storage is not used for
+these build outputs. Consumers fetch only the separately published immutable
+objects and verify the committed addresses again.
+
 The bootstrap loader cache is discarded with the other install-time state,
 then regenerated once from the completed arm64 tree with its own
 `/usr/sbin/ldconfig -i`. The auxiliary cache is removed afterward. This keeps
