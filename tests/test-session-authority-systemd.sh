@@ -19,6 +19,7 @@ resident_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-r
 broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
 containerfile="${fixtures}/Containerfile"
+gamescope_tmpfiles="${root}/rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf"
 ephemeral_marker=/etc/pocketforge/ephemeral-runner.conf
 run_label_key=org.pocketforge.session-authority-run
 
@@ -709,6 +710,8 @@ install -m 0644 "${fixtures}/session-authority-driver.service" \
     "${context}/session-authority-driver.service"
 install -m 0644 "${fixtures}/session-authority-test-tmpfiles.conf" \
     "${context}/session-authority-test-tmpfiles.conf"
+install -m 0644 "${gamescope_tmpfiles}" \
+    "${context}/pocketforge-gamescope-x11.conf"
 install -m 0644 "${fixtures}/app.toml" "${context}/app.toml"
 install -m 0755 "${fixtures}/fixture" "${context}/fixture"
 install -m 0644 "${app_policy_inventory}" \

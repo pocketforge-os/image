@@ -176,12 +176,14 @@ rate limit for an autonomous crash loop. The fallback does not remain active
 and suppress later `OnSuccess=` or `OnFailure=` activations. The default-session
 decision remains outside this graph.
 
-Xwayland is capability-scoped. The shared `environment` contains Wayland data
-only. `capabilities/x11` carries `DISPLAY` and the filesystem X socket for a
+Xwayland is capability-scoped. The shared session `environment` contains
+Wayland data only. The producer-owned real tree `/run/pocketforge/x11` carries
+the filesystem X socket and a protected `policy/environment` record for a
 compiled `x11` policy projection into an application's private `/tmp`; an app
-without that grant gets neither. Publication refuses an observable abstract X
-listener. The production app vocabulary does not grant `x11` yet, so this
-projection remains fail-closed until the `.440.11` security/policy co-land.
+without that grant gets neither. These inputs deliberately do not traverse the
+generation-selecting `/run/pocketforge/session` symlink, so the launcher can
+keep strict no-symlink descriptor traversal. Publication refuses an observable
+abstract X listener.
 Gamescope runs without the broad `input` group: udev grants its
 dedicated compositor-input group only keyboard, mouse, touchscreen, and the
 input router's virtual mouse. The broker retains the built-in controller and
@@ -193,9 +195,12 @@ generation counter. The public `session` symlink selects a complete 0755
 generation. The selected display owner creates exactly:
 
 - Wayland socket `/run/pocketforge/session/wayland-0`, mode 0660;
-- environment record `/run/pocketforge/session/environment`; and
-- optional `/run/pocketforge/session/capabilities/x11`, only for an
-  X11-authorized app projection.
+- environment record `/run/pocketforge/session/environment`.
+
+The separately lifecycle-bound X11 producer creates
+`/run/pocketforge/x11/.X11-unix/X0` and the root-owned mode-0444
+`/run/pocketforge/x11/policy/environment`; only a renderer-compiled `x11`
+policy projects them into an app unit.
 
 The environment record is data, never shell-evaluated, and contains a strict
 allow-list:
@@ -206,7 +211,7 @@ POCKETFORGE_SESSION_GENERATION=<unsigned decimal>
 WAYLAND_DISPLAY=wayland-0
 ```
 
-`DISPLAY` appears only in the `x11` capability-local environment fragment. The
+`DISPLAY` appears only in the `x11` policy environment record. The
 supervisor waits with a bounded deadline for a connectable Wayland socket and a
 filesystem X socket, rejects the abstract X listener, writes and fsyncs the
 complete generation, then atomically replaces the public symlink. Cleanup

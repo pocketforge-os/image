@@ -19,14 +19,14 @@
       "type": "socket-link",
       "mode": "0660"
     },
-    "/run/pocketforge/session/capabilities/x11/environment": {
+    "/run/pocketforge/x11/policy/environment": {
       "unit": "pocketforge-session-publisher.service",
       "type": "regular",
       "mode": "0444"
     },
-    "/run/pocketforge/session/capabilities/x11/X0": {
+    "/run/pocketforge/x11/.X11-unix/X0": {
       "unit": "pocketforge-session-publisher.service",
-      "type": "socket-link",
+      "type": "socket",
       "mode": "0660"
     }
   },

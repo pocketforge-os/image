@@ -160,9 +160,9 @@ def inventory(platform_version: str = PLATFORM_VERSION) -> dict[str, object]:
             "session-environment": ["/run/pocketforge/session/environment"],
             "video-decode-devices": ["/dev/video10"],
             "x11-environment": [
-                "/run/pocketforge/session/capabilities/x11/environment"
+                "/run/pocketforge/x11/policy/environment"
             ],
-            "x11-socket": ["/run/pocketforge/session/capabilities/x11/X0"],
+            "x11-socket": ["/run/pocketforge/x11/.X11-unix/X0"],
         },
     }
 
@@ -470,23 +470,23 @@ class RendererTest(unittest.TestCase):
         self.render(manifest(capabilities=("x11",)))
         unit = self.output.read_text(encoding="utf-8")
         self.assertIn(
-            "BindPaths=/run/pocketforge/session/capabilities/x11/X0:/tmp/.X11-unix/X0",
+            "BindPaths=/run/pocketforge/x11/.X11-unix/X0:/tmp/.X11-unix/X0",
             unit,
         )
         policy = json.loads(self.policy_output.read_text(encoding="utf-8"))
         self.assertNotIn("environment", policy)
         self.assertEqual(
             policy["resources"]["x11-environment"],
-            ["/run/pocketforge/session/capabilities/x11/environment"],
+            ["/run/pocketforge/x11/policy/environment"],
         )
         self.assertEqual(
             policy["resources"]["x11-socket"],
-            ["/run/pocketforge/session/capabilities/x11/X0"],
+            ["/run/pocketforge/x11/.X11-unix/X0"],
         )
 
         self.render(manifest())
         plain = self.output.read_text(encoding="utf-8")
-        self.assertNotIn("capabilities/x11", plain)
+        self.assertNotIn("/run/pocketforge/x11", plain)
         self.assertNotIn("/tmp/.X11-unix/X0", plain)
 
         data = inventory()

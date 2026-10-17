@@ -32,11 +32,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--provider-config",
+        action="append",
         type=Path,
-        default=fixtures / "session-authority-test-tmpfiles.conf",
     )
     parser.add_argument("--unit", action="append", type=Path)
     args = parser.parse_args()
+    if args.provider_config is None:
+        args.provider_config = [
+            fixtures / "session-authority-test-tmpfiles.conf",
+            root / "rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf",
+        ]
     if args.unit is None:
         args.unit = [
             root / "rootfs-overlay/etc/systemd/system/pf-app@.service",
@@ -53,21 +58,28 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def tmpfiles_providers(path: Path) -> dict[str, str]:
+def tmpfiles_providers(paths: list[Path]) -> dict[str, str]:
     providers: dict[str, str] = {}
-    for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
-        fields = shlex.split(raw_line, comments=True)
-        if not fields:
-            continue
-        if len(fields) < 2 or not fields[1].startswith("/"):
-            fail(f"invalid tmpfiles entry {path}:{line_number}: {raw_line}")
-        entry_type, provided_path = fields[:2]
-        if entry_type not in SAFE_PROVIDER_TYPES:
-            fail(
-                f"unsafe or unsupported tmpfiles provider type={entry_type} "
-                f"path={provided_path} at {path}:{line_number}"
-            )
-        providers[provided_path] = entry_type
+    for path in paths:
+        for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
+            fields = shlex.split(raw_line, comments=True)
+            if not fields:
+                continue
+            if len(fields) < 2 or not fields[1].startswith("/"):
+                fail(f"invalid tmpfiles entry {path}:{line_number}: {raw_line}")
+            entry_type, provided_path = fields[:2]
+            if entry_type not in SAFE_PROVIDER_TYPES:
+                fail(
+                    f"unsafe or unsupported tmpfiles provider type={entry_type} "
+                    f"path={provided_path} at {path}:{line_number}"
+                )
+            previous = providers.get(provided_path)
+            if previous is not None and previous != entry_type:
+                fail(
+                    f"conflicting tmpfiles providers path={provided_path} "
+                    f"types={previous},{entry_type} at {path}:{line_number}"
+                )
+            providers[provided_path] = entry_type
     return providers
 
 
@@ -86,18 +98,20 @@ def positive_condition_path(value: str) -> str | None:
 def main() -> None:
     args = parse_args()
     recipe = args.containerfile.read_text()
-    expected_copy = (
-        f"COPY {args.provider_config.name} "
-        "/usr/lib/tmpfiles.d/session-authority-test.conf"
-    )
-    if expected_copy not in recipe:
-        fail(f"recipe does not install provider config: {expected_copy}")
+    for provider_config in args.provider_config:
+        destination = provider_config.name
+        if destination == "session-authority-test-tmpfiles.conf":
+            destination = "session-authority-test.conf"
+        expected_copy = f"COPY {provider_config.name} /usr/lib/tmpfiles.d/{destination}"
+        if expected_copy not in recipe:
+            fail(f"recipe does not install provider config: {expected_copy}")
 
     providers = tmpfiles_providers(args.provider_config)
     fb0_fields = next(
         (
             shlex.split(line, comments=True)
-            for line in args.provider_config.read_text().splitlines()
+            for provider_config in args.provider_config
+            for line in provider_config.read_text().splitlines()
             if shlex.split(line, comments=True)[1:2] == ["/dev/fb0"]
         ),
         None,

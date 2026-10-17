@@ -46,7 +46,7 @@ capture_customize_hook() {
         'capability=axp717-low-soc-alarm-irqs-v1' \
         'result=present' \
         'kernel_repo=kernel-sunxi-7.x' \
-        'kernel_sha=973d40af95f2dc5754bfe57e2b7a9c18fc4e92c8' \
+        'kernel_sha=f5af3e87100e843c394a2eb19d315de866280311' \
         > "${fixture}/kernel-capabilities/axp717-low-soc-alarm-irqs-v1"
 
     cat > "${fixture}/bin/qemu-aarch64-static" <<'EOF'
@@ -86,7 +86,7 @@ EOF
     KERNEL_TSP_DIR="${fixture}/kernel" GPU_KM_TSP_DIR="${fixture}/unused-gpu" \
     OUT_DIR="${fixture}/out" SOURCE_DATE_EPOCH=1700000000 \
     PF_DEVICE_ID=a133-open-7x-gpu PF_KERNEL_REPO=kernel-sunxi-7.x \
-    PF_KERNEL_SHA=973d40af95f2dc5754bfe57e2b7a9c18fc4e92c8 PF_GPU_MODEL=open \
+    PF_KERNEL_SHA=f5af3e87100e843c394a2eb19d315de866280311 PF_GPU_MODEL=open \
     PF_KERNEL_CAPABILITY_RECEIPT="${fixture}/kernel-capabilities/axp717-low-soc-alarm-irqs-v1" \
     PF_CLOUD_INIT_SHA=5656565656565656565656565656565656565656 \
     PF_GPU_KM_MODEL=in-tree-7.x PF_KERNEL_REQUIRED_MODULES=powervr \
