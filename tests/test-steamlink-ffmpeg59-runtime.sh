@@ -268,15 +268,15 @@ run_contract_builder() {
     )
 }
 
-previous_uapi_sha=45b87a7d0e68a5aaafdc94523db791483e8a27cd
-build11_uapi_sha=973d40af95f2dc5754bfe57e2b7a9c18fc4e92c8
+previous_uapi_sha=973d40af95f2dc5754bfe57e2b7a9c18fc4e92c8
+current_uapi_sha=f5af3e87100e843c394a2eb19d315de866280311
 if run_contract_builder "${previous_uapi_sha}" \
         >"${scratch}/stale-uapi.log" 2>&1; then
     echo 'FAIL: previous platform UAPI pin was accepted' >&2
     exit 1
 fi
 if ! grep -Fxq \
-        "steamlink-ffmpeg59: PF_FFMPEG_UAPI_SHA drift: got '${previous_uapi_sha}', want '${build11_uapi_sha}'" \
+        "steamlink-ffmpeg59: PF_FFMPEG_UAPI_SHA drift: got '${previous_uapi_sha}', want '${current_uapi_sha}'" \
         "${scratch}/stale-uapi.log"; then
     echo 'FAIL: stale kernel UAPI pin did not report the current image witness' >&2
     exit 1
@@ -293,9 +293,9 @@ mkdir -p "${legacy_definition}"
 cp "${builder}" "${legacy_definition}/build.sh"
 cp "${root}/build/platform-runtimes/steamlink-ffmpeg59/v1/source.lock" \
     "${legacy_definition}/source.lock"
-sed -i "s/${build11_uapi_sha}/${previous_uapi_sha}/" \
+sed -i "s/${current_uapi_sha}/${previous_uapi_sha}/" \
     "${legacy_definition}/source.lock"
-printf '%s\n' "${build11_uapi_sha}" \
+printf '%s\n' "${current_uapi_sha}" \
     > "${scratch}/contract-kernel/.pf-source-revision"
 if builder="${legacy_definition}/build.sh" \
         run_contract_builder "${previous_uapi_sha}" \
@@ -304,9 +304,9 @@ if builder="${legacy_definition}/build.sh" \
     exit 1
 fi
 if ! grep -Fxq \
-        "steamlink-ffmpeg59: kernel-uapi-receipt drift: got '${build11_uapi_sha}', want '${previous_uapi_sha}'" \
+        "steamlink-ffmpeg59: kernel-uapi-receipt drift: got '${current_uapi_sha}', want '${previous_uapi_sha}'" \
         "${scratch}/legacy-receipt.log"; then
-    echo 'FAIL: previous image witness did not reproduce the Build 11 refusal' >&2
+    echo 'FAIL: previous image witness did not reproduce the current refusal' >&2
     exit 1
 fi
 
@@ -323,7 +323,7 @@ exec /bin/mkdir "$@"
 EOF
 chmod +x "${scratch}/contract-bin/mkdir"
 if PATH="${scratch}/contract-bin:${PATH}" \
-        run_contract_builder "${build11_uapi_sha}" \
+        run_contract_builder "${current_uapi_sha}" \
         >"${scratch}/contract.log" 2>&1; then
     echo 'FAIL: hermetic producer stop was not reached' >&2
     exit 1
