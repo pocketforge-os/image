@@ -306,7 +306,7 @@ fi
 if ! grep -Fxq \
         "steamlink-ffmpeg59: kernel-uapi-receipt drift: got '${current_uapi_sha}', want '${previous_uapi_sha}'" \
         "${scratch}/legacy-receipt.log"; then
-    echo 'FAIL: previous image witness did not reproduce the Build 11 refusal' >&2
+    echo 'FAIL: previous image witness did not reproduce the current refusal' >&2
     exit 1
 fi
 
