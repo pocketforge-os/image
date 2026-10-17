@@ -81,6 +81,8 @@ def has_abstract_x11(proc_net_unix: Path, display: int) -> bool:
 
 
 def publish(args: argparse.Namespace) -> None:
+    if args.display != 0:
+        refuse("unsupported_x11_display", f"display=:{args.display}")
     gid = args.gid if args.gid is not None else grp.getgrnam(args.group).gr_gid
     session = args.session
     parent = session.parent

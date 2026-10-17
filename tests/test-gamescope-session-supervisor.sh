@@ -320,6 +320,22 @@ common = [
     "--x11-environment", str(x11_environment),
     "--proc-net-unix", str(proc), "--gid", str(os.getgid()),
 ]
+
+for display in (1, -1):
+    nonzero_session = scratch / f"nonzero-session-{display}"
+    nonzero_environment = scratch / "tmp" / "policy" / f"nonzero-{display}"
+    failed = subprocess.run([
+        publisher, "publish", "--session", str(nonzero_session),
+        "--wayland", str(wayland), "--x11", str(x11),
+        "--x11-environment", str(nonzero_environment),
+        "--proc-net-unix", str(proc), "--gid", str(os.getgid()),
+        "--display", str(display),
+    ], text=True, capture_output=True)
+    assert failed.returncode != 0
+    assert "unsupported_x11_display" in failed.stderr
+    assert not nonzero_session.exists() and not nonzero_session.is_symlink()
+    assert not nonzero_environment.exists()
+
 subprocess.run(common, check=True)
 assert session.is_symlink()
 generation = session.resolve()
@@ -347,7 +363,7 @@ stale_listener.close()
 stale = scratch / "stale-x11"
 failed = subprocess.run([
     publisher, "publish", "--session", str(stale),
-    "--wayland", str(wayland), "--x11", str(stale_x11), "--display", "1",
+    "--wayland", str(wayland), "--x11", str(stale_x11),
     "--x11-environment", str(scratch / "stale-environment"),
     "--proc-net-unix", str(proc), "--gid", str(os.getgid()), "--timeout", "0",
 ], text=True, capture_output=True)
