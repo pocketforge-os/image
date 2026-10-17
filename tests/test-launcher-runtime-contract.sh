@@ -19,8 +19,8 @@ grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 # The paired runtime adds the hang-sampler trigger contract without coupling
 # authority consumers to the ptrace implementation; the paired launcher vendors
 # that exact generation. Reject every older or crossed source generation.
-expected_runtime=715eaaed23a22ac21e5469c3729ef535ad4957cc
-expected_launcher=af4fa8b1387ccb66b3f7324760f169287ede86bf
+expected_runtime=e1aa7e373e39efb48bd4cf0c7a74b310beddf70e
+expected_launcher=f26bfd66ab739d06caf4e5347fc4150e2777c1ab
 prior_runtime=74394861fefec25fed34f9b3194d1136ca94f6a1
 prior_launcher=e536781107e3fac9c98877e861b6e38a1397f9d9
 older_runtime=31eaa601b57464349e04fcbcb235f5537bf1fcca
