@@ -10,6 +10,7 @@ on:
       - 'scripts/check-runtime-path-producers.py'
       - 'build/app-policy-a133-open-v1.json'
       - 'build/app-policy-a133-open-g1-v1.json'
+      - 'build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf'
       - 'rootfs-overlay/usr/share/pocketforge/runtime-path-producers.json'
       - 'rootfs-overlay/usr/share/pocketforge/runtime-path-producers-g1.json'
       - 'build/Dockerfile.pf'
@@ -51,17 +52,17 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/runtime
-          ref: 7375a11ab1a45b85ad086f1ba5bb1679bc5fc1c4
+          ref: e1aa7e373e39efb48bd4cf0c7a74b310beddf70e
           path: runtime-pair
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/launcher
-          ref: e536781107e3fac9c98877e861b6e38a1397f9d9
+          ref: f26bfd66ab739d06caf4e5347fc4150e2777c1ab
           path: launcher-pair
       - name: Prove exact runtime, launcher, and image candidates together
         run: |
-          test "$(git -C runtime-pair rev-parse HEAD)" = 7375a11ab1a45b85ad086f1ba5bb1679bc5fc1c4
-          test "$(git -C launcher-pair rev-parse HEAD)" = e536781107e3fac9c98877e861b6e38a1397f9d9
+          test "$(git -C runtime-pair rev-parse HEAD)" = e1aa7e373e39efb48bd4cf0c7a74b310beddf70e
+          test "$(git -C launcher-pair rev-parse HEAD)" = f26bfd66ab739d06caf4e5347fc4150e2777c1ab
           scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
             pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
             pf-framehost-wayland pf-hang-trigger pf-theme pf-input-map pf-prefs pf-prefs-port \
