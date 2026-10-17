@@ -1474,8 +1474,19 @@ grep -Fqx '        run: python3 tests/verify-input-broker-wiring.py' "${workflow
 grep -Fq 'exit-before-ready' "${root}/tests/session-authority-systemd/fake-input-broker" || exit 1
 precondition_output="$(python3 "${precondition_verifier}")"
 grep -Fqx \
-    'session-authority path-preconditions: PASS conditions=1 providers=9 fb0=regular units=7' \
+    'session-authority path-preconditions: PASS conditions=1 providers=10 fb0=regular units=7' \
     <<<"${precondition_output}" || exit 1
+sed '\|^COPY pocketforge-gamescope-x11.conf /usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf$|d' \
+    "${recipe}" >"${tmp}/missing-production-tmpfiles.Containerfile"
+if python3 "${precondition_verifier}" \
+    --containerfile "${tmp}/missing-production-tmpfiles.Containerfile" \
+    >"${stdout_log}" 2>"${stderr_log}"; then
+    echo 'session-authority systemd-safety: FAIL: missing production tmpfiles copy passed audit' >&2
+    exit 1
+fi
+grep -Fq \
+    'recipe does not install provider config: COPY pocketforge-gamescope-x11.conf /usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf' \
+    "${stderr_log}" || exit 1
 unprovided_unit="${tmp}/unprovided.service"
 printf '[Unit]\nConditionPathExists=/unprovided-test-path\n' >"${unprovided_unit}"
 if python3 "${precondition_verifier}" --unit "${unprovided_unit}" \
