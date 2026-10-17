@@ -140,6 +140,56 @@ grep -F 'run_target "${replay_root}" "${scratch}/replay.log" 0 "${cache_name}"' 
 grep -F 'gamescope-cache-hit' "${producer}" >/dev/null
 grep -F 'cmp ' "${producer}" >/dev/null
 grep -F '16777216' "${producer}" >/dev/null
+grep -F 'seed_pair 1 &' "${producer}" >/dev/null
+grep -F 'seed_pair 2 &' "${producer}" >/dev/null
+grep -F 'wait "${seed_1_pid}" || seed_status=$?' "${producer}" >/dev/null
+grep -F 'wait "${seed_2_pid}" || seed_status=$?' "${producer}" >/dev/null
+if grep -Fx 'seed_pair 1' "${producer}" >/dev/null ||
+   grep -Fx 'seed_pair 2' "${producer}" >/dev/null; then
+    echo 'Gamescope PVR seed compiles regressed to serial execution' >&2
+    exit 1
+fi
+
+# Execute the production wait block with paired stubs. The positive control
+# requires overlap (each seed observes the other's start marker), while the
+# negative proves a background failure is returned after both waits complete.
+seed_block=${scratch}/seed-block.sh
+sed -n '/^seed_pair 1 &$/,/^cmp /p' "${producer}" | sed '$d' >"${seed_block}"
+run_seed_control() {
+    local fail_seed=$1
+    local control_dir=$2
+    PF_FAIL_SEED=${fail_seed} PF_CONTROL_DIR=${control_dir} bash -euo pipefail -c '
+        seed_pair() {
+            number=$1
+            touch "${PF_CONTROL_DIR}/started-${number}"
+            other=$((3 - number))
+            for _ in $(seq 1 100); do
+                [ ! -e "${PF_CONTROL_DIR}/started-${other}" ] || break
+                sleep 0.01
+            done
+            [ -e "${PF_CONTROL_DIR}/started-${other}" ] || return 90
+            touch "${PF_CONTROL_DIR}/finished-${number}"
+            [ "${PF_FAIL_SEED}" != "${number}" ] || return 23
+        }
+        source "$1"
+    ' _ "${seed_block}"
+}
+parallel_control=${scratch}/parallel-control
+mkdir -p "${parallel_control}"
+run_seed_control 0 "${parallel_control}"
+test -e "${parallel_control}/finished-1"
+test -e "${parallel_control}/finished-2"
+failure_control=${scratch}/failure-control
+mkdir -p "${failure_control}"
+set +e
+run_seed_control 2 "${failure_control}" >"${scratch}/seed-failure.log" 2>&1
+seed_failure_rc=$?
+set -e
+test "${seed_failure_rc}" -eq 23
+test -e "${failure_control}/finished-1"
+test -e "${failure_control}/finished-2"
+grep -F 'one or more Gamescope PVR cache seed compiles failed' \
+    "${scratch}/seed-failure.log" >/dev/null
 
 # The generated pair and provenance are package-owned, never copied around
 # dpkg by the rootfs builder.
