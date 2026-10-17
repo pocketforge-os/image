@@ -1,0 +1,5 @@
+# Vendored canonical host-route conformance cases (tsp-ihne1.56.5). Do not edit; re-vendor.
+source_repo=runtime
+source_commit=75f9081d9a3acfa110e8b4d1fe01aa229bfa481f
+source_path=tests/fixtures/host-route-cases-v1.jsonl
+fixture_sha256=d1e311ba2edffd7e1d21a8257055784d271e877d5eac8ed4b295a80af079043f

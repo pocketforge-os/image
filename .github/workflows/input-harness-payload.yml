@@ -6,8 +6,12 @@ on:
       - tests/input-harness/**
       - tests/test-input-harness-selftest.py
       - tests/test-input-harness-selftest.sh
+      - tests/test-host-route-pins.sh
       - tests/uinput_inventory.py
+      - tests/uinput_inventory.py.SOURCE
       - tests/uinput-inventory.txt
+      - tests/fixtures/host-route-*
+      - tests/fixtures/input-runner-host-map-v1.*
       - snapshot-date.txt
       - .github/workflows/input-harness-payload.yml
       - scripts/pf-artifact-intake-put
@@ -18,8 +22,12 @@ on:
       - tests/input-harness/**
       - tests/test-input-harness-selftest.py
       - tests/test-input-harness-selftest.sh
+      - tests/test-host-route-pins.sh
       - tests/uinput_inventory.py
+      - tests/uinput_inventory.py.SOURCE
       - tests/uinput-inventory.txt
+      - tests/fixtures/host-route-*
+      - tests/fixtures/input-runner-host-map-v1.*
       - snapshot-date.txt
       - .github/workflows/input-harness-payload.yml
       - scripts/pf-artifact-intake-put

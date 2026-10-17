@@ -1,0 +1,5 @@
+# Vendored canonical runner-host map schema (tsp-ihne1.56.5). Do not edit; re-vendor.
+source_repo=runtime
+source_commit=75f9081d9a3acfa110e8b4d1fe01aa229bfa481f
+source_path=tests/fixtures/input-runner-host-map-v1.schema.json
+fixture_sha256=f8d2290f985aba251205d9fa4b3112234b8119b75c309ce58333cf8b623ec5d2
