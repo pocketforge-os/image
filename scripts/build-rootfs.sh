@@ -1472,6 +1472,20 @@ if [ -f "${PREFSD_BIN}" ]; then
     echo "[customize] pf-prefsd installed and enabled as the preference state authority"
 fi
 
+# --- authenticated power action authority (tsp-mc9m.60.29.31) -------------
+POWERD_BIN="${RUNTIME_DIR}/bin/pf-powerd"
+if [ -f "${POWERD_BIN}" ]; then
+    powerd_em="$(od -An -tx1 -j18 -N2 "${POWERD_BIN}" | tr -d ' ')"
+    [ "${powerd_em}" = "b700" ] || { echo "FATAL: ${POWERD_BIN} is not an aarch64 ELF (e_machine=${powerd_em}, want b700)" >&2; exit 1; }
+    install -D -m 0755 "${POWERD_BIN}" "${ROOTFS}/usr/bin/pf-powerd"
+    install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-powerd.service" \
+        "${ROOTFS}/etc/systemd/system/pf-powerd.service"
+    install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+    ln -sf /etc/systemd/system/pf-powerd.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-powerd.service"
+    echo "[customize] pf-powerd installed and enabled as the authenticated power action authority"
+fi
+
 # --- keyboardLayout session env generator (tsp-ihne1.6) ----------------------
 # One keyboard layout preference drives gamescope/Xwayland (XKB_DEFAULT_*),
 # fcitx5 and the OSK. The generator resolves explicit store > cloud-init seed

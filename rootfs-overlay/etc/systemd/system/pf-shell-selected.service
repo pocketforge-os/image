@@ -29,7 +29,8 @@
 [Unit]
 Description=PocketForge selected persistent foreground owner
 Wants=pf-prefsd.service
-After=dev-fb0.device pf-input-decode.service pf-prefsd.service pocketforge-boot-animator.service
+Wants=pf-powerd.service
+After=dev-fb0.device pf-input-decode.service pf-powerd.service pf-prefsd.service pocketforge-boot-animator.service
 Requires=dev-fb0.device
 Conflicts=pocketforge-menu.service pocketforge-placeholder.service shutdown.target
 Before=shutdown.target
@@ -39,6 +40,7 @@ ConditionPathExists=/dev/fb0
 Type=simple
 User=gamer
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
+Environment=PF_POWER_SOCK=/run/pocketforge-power/power.sock
 Environment=MESA_DISK_CACHE_COMBINE_RW_WITH_RO_FOZ=1
 Environment=MESA_DISK_CACHE_READ_ONLY_FOZ_DBS=pocketforge-gamescope-ge8300
 SupplementaryGroups=input video pf-pref-writer
