@@ -66,8 +66,8 @@ def verify(dockerfile: str, rootfs: str, finalizer: str, steamlink_builder: str)
         missing.append("rootfs central C linker flag")
     if dockerfile.count(
         'RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1"'
-    ) != 6:
-        missing.append("all six runtime musl cargo invocations")
+    ) != 7:
+        missing.append("all seven runtime musl cargo invocations")
     if missing:
         raise AssertionError("missing explicit build-id policy: " + ", ".join(missing))
 
@@ -107,7 +107,7 @@ sampler_without_build_id = dockerfile.replace(
 try:
     verify(sampler_without_build_id, rootfs, finalizer, steamlink_builder)
 except AssertionError as exc:
-    assert "all six runtime musl cargo invocations" in str(exc)
+    assert "all seven runtime musl cargo invocations" in str(exc)
 else:
     raise AssertionError("negative control: missing sampler build-id policy was accepted")
 
