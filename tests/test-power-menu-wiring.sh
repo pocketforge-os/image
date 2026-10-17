@@ -22,6 +22,6 @@ done
 
 grep -Fx 'Wants=pf-powerd.service' "${shell_unit}" >/dev/null
 grep -E '^After=.*[[:space:]]pf-powerd\.service([[:space:]]|$)' "${shell_unit}" >/dev/null
-grep -Fx 'Environment=PF_POWER_SOCK=/run/pocketforge/power.sock' "${shell_unit}" >/dev/null
+grep -Fx 'Environment=PF_POWER_SOCK=/run/pocketforge-power/power.sock' "${shell_unit}" >/dev/null
 
 echo 'PASS power menu authority is built, installed, enabled, and ordered before pf-shell'

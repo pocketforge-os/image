@@ -40,7 +40,7 @@ ConditionPathExists=/dev/fb0
 Type=simple
 User=gamer
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
-Environment=PF_POWER_SOCK=/run/pocketforge/power.sock
+Environment=PF_POWER_SOCK=/run/pocketforge-power/power.sock
 Environment=MESA_DISK_CACHE_COMBINE_RW_WITH_RO_FOZ=1
 Environment=MESA_DISK_CACHE_READ_ONLY_FOZ_DBS=pocketforge-gamescope-ge8300
 SupplementaryGroups=input video pf-pref-writer
