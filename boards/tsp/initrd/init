@@ -961,6 +961,32 @@ else
     mount -t ext4 -o rw,noatime "$ROOT" /newroot || fail "mount $ROOT failed"
 fi
 
+# Diagnostic candidate for tsp-mc9m.60.29.29: keep all evidence boot-local while
+# proving that PID 1 and both kernel-console paths remain live after switch_root.
+# /run is a tmpfs, so this does not alter the shipped root filesystem.
+mkdir -p /newroot/run
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /newroot/run \
+    || fail "diagnostic /run tmpfs mount failed"
+mkdir -p /newroot/run/systemd/system/sysinit.target.wants
+cat > /newroot/run/systemd/system/pf-boot-heartbeat.service <<'EOF'
+[Unit]
+Description=PocketForge early boot diagnostic heartbeat
+DefaultDependencies=no
+Before=sysinit.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'n=0; while :; do n=$((n + 1)); IFS=" " read -r uptime _ < /proc/uptime || uptime=unknown; IFS=" " read -r _ _ state _ < /proc/1/stat || state=unknown; line="PF_BOOT_HEARTBEAT seq=$n uptime=$uptime pid1_state=$state"; printf "<6>%%s\\n" "$line" > /dev/kmsg 2>/dev/null || :; printf "%%s\\n" "$line" > /dev/console 2>/dev/null || :; sleep 1; done'
+Restart=no
+
+[Install]
+WantedBy=sysinit.target
+EOF
+ln -s ../pf-boot-heartbeat.service \
+    /newroot/run/systemd/system/sysinit.target.wants/pf-boot-heartbeat.service \
+    || fail "diagnostic heartbeat enable failed"
+log "STAGE: volatile systemd heartbeat installed"
+
 # --- first-frame helper: reap before handoff (bd tsp-3rd3.7) ------------------
 # Nothing the initrd started may outlive it into switch_root (see FIRST LIGHT).
 pf_first_frame_reap
