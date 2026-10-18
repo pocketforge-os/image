@@ -695,6 +695,8 @@ COPY --from=gpu-um-native-precompilers /opt/mesa-native /opt/mesa-native
 # resource path.  They are generator inputs only, never target headers.
 COPY --from=gpu-um-native-precompilers /usr/lib/llvm-20/lib/clang /usr/lib/llvm-20/lib/clang
 COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
+COPY --from=image-src tools/glx-readback-probe.c /tmp/glx-readback-probe.c
+COPY --from=image-src tools/glx-renderer-policy.h /tmp/glx-renderer-policy.h
 COPY --from=image-src build/package-open-gpu-stack.sh /tmp/package-open-gpu-stack.sh
 COPY --from=image-src build/produce-gamescope-pvr-cache.sh /tmp/produce-gamescope-pvr-cache.sh
 COPY --from=image-src build/run-gamescope-pvr-cache.sh /tmp/run-gamescope-pvr-cache.sh
@@ -825,6 +827,12 @@ aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
   -lvulkan -lEGL -lGLESv2 -lgbm
 readelf -h /tmp/open-gpu-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
 install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
+aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
+  /tmp/glx-readback-probe.c -o /tmp/glx-readback-probe \
+  -lGL -lX11
+readelf -h /tmp/glx-readback-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
+install -D -m 0755 /tmp/glx-readback-probe \
+  /instroot/usr/local/libexec/pocketforge/glx-readback-probe
 /tmp/run-gamescope-pvr-cache.sh \
   "${PF_GAMESCOPE_MODE}" /tmp/produce-gamescope-pvr-cache.sh \
   /src /src/build-cross /instroot "${PF_GAMESCOPE_SHA:-}"
