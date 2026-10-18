@@ -1,23 +1,17 @@
-# Controls of the mainline sun4i-codec card "Codec" as bound for the A133
-# ("allwinner,sun50i-a133-codec" -> H616 card, "H616 Audio Codec"), read from
-# the driver source at the kernel pin below (bd tsp-f3fm.220).
+# Controls of the mainline sun4i-codec card "Codec" as bound for the A133,
+# read from the merged driver source below (bd tsp-ihne1.11).
 #   repo:   pocketforge-os/kernel-sunxi-7.x
-#   commit: bea8779b08a8679000cd9036ba9c86ae4b057cc8  (platform.lock kernel-sunxi-7.x pin; the tsp-f3fm.215 P4 image kernel)
+#   commit: 3010de56dbd1057513c035fff8623f80596fe9e8
 #   file:   sound/soc/sunxi/sun4i-codec.c
-# Complete for this card: the H616 codec component controls (plain and DAPM
-# mixer/mux) plus the card's one pin switch. The TSP DTS's aux speaker amp
-# (simple-audio-amplifier with only enable-gpios) adds no controls.
-# Names as ALSA shows them: the mixer switches are shared by Left/Right Mixer
-# (SOC_MIXER_ARRAY over one array), so soc-dapm names them without a widget
-# prefix. A mux control takes the widget name. SOC_DAPM_PIN_SWITCH("Speaker")
-# appends " Switch".
-# Re-derive: git show bea8779b08a8679000cd9036ba9c86ae4b057cc8:sound/soc/sunxi/sun4i-codec.c | sed -n '1097,1098p;1918,1952p;1995,1997p'
+# Complete for the A133 component and card controls, plus the boolean jack
+# control created by snd_soc_card_jack_new_pins("Headphone Jack", ...).
+# Re-derive: git show 3010de56dbd1057513c035fff8623f80596fe9e8:sound/soc/sunxi/sun4i-codec.c | sed -n '2147,2161p;2308,2311p;2388,2405p'
 # Columns (TAB-separated): name, kind, spec, source line
 #   int <min> <max> | bool | enum <item>|<item>...
-DAC Playback Volume	int	0 63	sun4i-codec.c:1919
-Line Out Playback Volume	int	0 31	sun4i-codec.c:1922
-Line Out Playback Switch	bool	-	sun4i-codec.c:1926
-DAC Playback Switch	bool	-	sun4i-codec.c:1933
-DAC Reversed Playback Switch	bool	-	sun4i-codec.c:1937
-Line Out Source Playback Route	enum	Stereo|Mono Differential	sun4i-codec.c:1950 (items :1097-1098)
-Speaker Switch	bool	-	sun4i-codec.c:1996
+DAC Playback Volume	int	0 63	sun4i-codec.c:2148
+Line Out Playback Volume	int	0 31	sun4i-codec.c:2151
+Line Out Differential Playback Switch	bool	-	sun4i-codec.c:2155
+Headphone Playback Volume	int	0 7	sun4i-codec.c:2158
+Headphone Switch	bool	-	sun4i-codec.c:2309
+Speaker Switch	bool	-	sun4i-codec.c:2310
+Headphone Jack	bool	-	sun4i-codec.c:2398

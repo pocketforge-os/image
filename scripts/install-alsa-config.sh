@@ -48,7 +48,15 @@ case "${family}" in
         echo "[customize] ALSA: stock /etc/asound.conf (card audiocodec) for ${kernel_repo}"
         ;;
     sun4i-codec)
-        install -D -m 0644 "${src}/device-config/alsa/mixer-defaults.sun4i-codec" \
+        case "${kernel_repo}" in
+            kernel-sunxi-6.x)
+                mixer_defaults="${src}/device-config/alsa/mixer-defaults.sun4i-codec"
+                ;;
+            kernel-sunxi-7.x)
+                mixer_defaults="${src}/device-config/alsa/mixer-defaults.sun4i-codec-7.x"
+                ;;
+        esac
+        install -D -m 0644 "${mixer_defaults}" \
             "${rootfs}/usr/share/pocketforge/alsa/mixer-defaults.sun4i-codec"
         install -D -m 0755 "${src}/rootfs-overlay/usr/lib/pocketforge/audio-defaults.sh" \
             "${rootfs}/usr/lib/pocketforge/audio-defaults.sh"

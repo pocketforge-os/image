@@ -1472,6 +1472,21 @@ if [ -f "${PREFSD_BIN}" ]; then
     echo "[customize] pf-prefsd installed and enabled as the preference state authority"
 fi
 
+# --- system volume preference applier (tsp-ihne1.11) ------------------------
+VOLUMED_BIN="${RUNTIME_DIR}/bin/pf-volumed"
+if [ -f "${VOLUMED_BIN}" ]; then
+    [ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-volumed staged without pf-prefsd" >&2; exit 1; }
+    volumed_em="$(od -An -tx1 -j18 -N2 "${VOLUMED_BIN}" | tr -d ' ')"
+    [ "${volumed_em}" = "b700" ] || { echo "FATAL: ${VOLUMED_BIN} is not an aarch64 ELF (e_machine=${volumed_em}, want b700)" >&2; exit 1; }
+    install -D -m 0755 "${VOLUMED_BIN}" "${ROOTFS}/usr/bin/pf-volumed"
+    install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-volumed.service" \
+        "${ROOTFS}/etc/systemd/system/pf-volumed.service"
+    install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+    ln -sf /etc/systemd/system/pf-volumed.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-volumed.service"
+    echo "[customize] pf-volumed installed and enabled as the per-output volume applier"
+fi
+
 # --- authenticated power action authority (tsp-mc9m.60.29.31) -------------
 POWERD_BIN="${RUNTIME_DIR}/bin/pf-powerd"
 if [ -f "${POWERD_BIN}" ]; then

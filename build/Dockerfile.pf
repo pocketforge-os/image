@@ -1327,7 +1327,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "e1aa7e373e39efb48bd4cf0c7a74b310beddf70e" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "4dbadfd36f5c08098f45d64fa0d8cbbaa8a9d074" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # files exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml plus the byte-identical device-neutral
@@ -1416,16 +1416,21 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-powerd --bin pf-powerd
   CARGO_NET_LOCKED=1 \
   RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
+  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-volumed --bin pf-volumed
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-app-launch --bin pf-app-launch
   AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
   HANG_SAMPLER_BIN="target/${PF_RUNTIME_TARGET}/release/pf-hang-sampler"
   PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
   POWERD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-powerd"
+  VOLUMED_BIN="target/${PF_RUNTIME_TARGET}/release/pf-volumed"
   APP_LAUNCH_BIN="target/${PF_RUNTIME_TARGET}/release/pf-app-launch"
   [ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
   [ -f "${HANG_SAMPLER_BIN}" ] || { echo "FATAL: pf-hang-sampler not built at ${HANG_SAMPLER_BIN}"; exit 1; }
   [ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-prefsd not built at ${PREFSD_BIN}"; exit 1; }
   [ -f "${POWERD_BIN}" ] || { echo "FATAL: pf-powerd not built at ${POWERD_BIN}"; exit 1; }
+  [ -f "${VOLUMED_BIN}" ] || { echo "FATAL: pf-volumed not built at ${VOLUMED_BIN}"; exit 1; }
   [ -f "${APP_LAUNCH_BIN}" ] || { echo "FATAL: pf-app-launch not built at ${APP_LAUNCH_BIN}"; exit 1; }
   AUTHORITY_EM="$(od -An -tx1 -j18 -N2 "${AUTHORITY_BIN}" | tr -d ' ')"
   [ "${AUTHORITY_EM}" = "b700" ] || { echo "FATAL: pf-session-authorityd is not aarch64 (e_machine=${AUTHORITY_EM}, want b700)"; exit 1; }
@@ -1439,6 +1444,9 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   POWERD_EM="$(od -An -tx1 -j18 -N2 "${POWERD_BIN}" | tr -d ' ')"
   [ "${POWERD_EM}" = "b700" ] || { echo "FATAL: pf-powerd is not aarch64 (e_machine=${POWERD_EM}, want b700)"; exit 1; }
   if grep -qa 'ld-musl\|ld-linux' "${POWERD_BIN}"; then echo "FATAL: pf-powerd is dynamically linked (expected static musl)"; exit 1; fi
+  VOLUMED_EM="$(od -An -tx1 -j18 -N2 "${VOLUMED_BIN}" | tr -d ' ')"
+  [ "${VOLUMED_EM}" = "b700" ] || { echo "FATAL: pf-volumed is not aarch64 (e_machine=${VOLUMED_EM}, want b700)"; exit 1; }
+  if grep -qa 'ld-musl\|ld-linux' "${VOLUMED_BIN}"; then echo "FATAL: pf-volumed is dynamically linked (expected static musl)"; exit 1; fi
   APP_LAUNCH_EM="$(od -An -tx1 -j18 -N2 "${APP_LAUNCH_BIN}" | tr -d ' ')"
   [ "${APP_LAUNCH_EM}" = "b700" ] || { echo "FATAL: pf-app-launch is not aarch64 (e_machine=${APP_LAUNCH_EM}, want b700)"; exit 1; }
   if grep -qa 'ld-musl\|ld-linux' "${APP_LAUNCH_BIN}"; then echo "FATAL: pf-app-launch is dynamically linked (expected static musl)"; exit 1; fi
@@ -1446,10 +1454,12 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   install -D -m 0755 "${HANG_SAMPLER_BIN}" /out/bin/pf-hang-sampler
   install -D -m 0755 "${PREFSD_BIN}" /out/bin/pf-prefsd
   install -D -m 0755 "${POWERD_BIN}" /out/bin/pf-powerd
+  install -D -m 0755 "${VOLUMED_BIN}" /out/bin/pf-volumed
   install -D -m 0755 "${APP_LAUNCH_BIN}" /out/bin/pf-app-launch
   install -D -m 0644 systemd/pf-session-authorityd.service /out/systemd/pf-session-authorityd.service
   install -D -m 0644 systemd/pf-prefsd.service /out/systemd/pf-prefsd.service
   install -D -m 0644 systemd/pf-powerd.service /out/systemd/pf-powerd.service
+  install -D -m 0644 systemd/pf-volumed.service /out/systemd/pf-volumed.service
   install -D -m 0644 systemd/pocketforge.conf /out/tmpfiles.d/pocketforge.conf
   # Build-time-only wrapper around the same pf-app-manifest Resolver used by
   # authority and pf-app-launch. Poolsuite consumes it before installation; it
@@ -1534,6 +1544,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     printf '  pf-hang-sampler sha256=%s\n' "$(sha256sum /out/bin/pf-hang-sampler | cut -d' ' -f1)"
     printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
     printf '  pf-powerd sha256=%s\n' "$(sha256sum /out/bin/pf-powerd | cut -d' ' -f1)"
+    printf '  pf-volumed sha256=%s\n' "$(sha256sum /out/bin/pf-volumed | cut -d' ' -f1)"
     printf '  pf-app-launch sha256=%s\n' "$(sha256sum /out/bin/pf-app-launch | cut -d' ' -f1)"
     printf '  pf-input-broker sha256=%s\n' "$(sha256sum /out/bin/pf-input-broker | cut -d' ' -f1)"
     printf '  libpocketforge.so.1 sha256=%s\n' "$(sha256sum /out/lib/libpocketforge.so.1 | cut -d' ' -f1)"
@@ -2085,7 +2096,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "f26bfd66ab739d06caf4e5347fc4150e2777c1ab" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "c3f05fc296692cb67c6d490e56c6fe07f8a846c5" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fifteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
