@@ -9,7 +9,7 @@ SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
 RUNTIME_SHA = "4dbadfd36f5c08098f45d64fa0d8cbbaa8a9d074"
-LAUNCHER_SHA = "ac5c53bcd13a0087f9c06ffdd50eda26b752d1bd"
+LAUNCHER_SHA = "c3f05fc296692cb67c6d490e56c6fe07f8a846c5"
 
 
 def text(path: Path) -> str:
@@ -92,6 +92,7 @@ assert "73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5" not in dockerfile
 assert "95302865bc584ce5e1c96e09df387aa5f58455f6" not in dockerfile
 assert "77c0f054558b1dac8ff2d2795576577963f60760" not in dockerfile
 assert "8629eebc508638fd78f087727aca475ca6848733" not in dockerfile
+assert "8bc5ca7b79c6cf90012e4cc9ae4fcfc5085e34e6" not in dockerfile
 assert "f26bfd66ab739d06caf4e5347fc4150e2777c1ab" not in dockerfile
 assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
