@@ -109,6 +109,8 @@ for package in libegl1 libgles2 libgl1 libglx0 libglvnd0; do
 done
 package_is_installed xwayland || fatal 'Xwayland is not installed for the glamor path'
 [ -x "$rootfs/usr/bin/Xwayland" ] || fatal 'Xwayland binary is missing'
+package_is_installed mesa-utils || fatal 'mesa-utils is not installed for GLX identity evidence'
+[ -x "$rootfs/usr/bin/glxinfo" ] || fatal 'glxinfo binary is missing'
 [ -e "$rootfs/usr/lib/aarch64-linux-gnu/libEGL.so.1" ] \
     || fatal 'neutral GLVND libEGL.so.1 dispatcher is missing'
 [ -e "$rootfs/usr/lib/aarch64-linux-gnu/libGL.so.1" ] \
@@ -152,9 +154,12 @@ for artifact in \
     usr/local/lib/libgbm.so.1 \
     usr/local/lib/gbm/dri_gbm.so \
     usr/local/lib/libgallium_dri.so \
-    usr/local/lib/libvulkan_powervr_mesa.so; do
+    usr/local/lib/libvulkan_powervr_mesa.so \
+    usr/local/libexec/pocketforge/glx-readback-probe; do
     verify_owned_artifact "$artifact"
 done
+[ -x "$rootfs/usr/local/libexec/pocketforge/glx-readback-probe" ] \
+    || fatal 'owned GLX draw/present/readback probe is missing or not executable'
 
 zink_policy_relative=usr/local/share/drirc.d/10-pocketforge-zink.conf
 zink_policy_source="$producer/$zink_policy_relative"
@@ -227,7 +232,8 @@ for artifact in \
     usr/local/lib/libgbm.so.1 \
     usr/local/lib/gbm/dri_gbm.so \
     usr/local/lib/libgallium_dri.so \
-    usr/local/lib/libvulkan_powervr_mesa.so; do
+    usr/local/lib/libvulkan_powervr_mesa.so \
+    usr/local/libexec/pocketforge/glx-readback-probe; do
     verify_aarch64_elf "$artifact"
 done
 if ! egl_symbols=$($readelf_command -Ws \

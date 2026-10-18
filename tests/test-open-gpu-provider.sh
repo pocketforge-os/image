@@ -101,6 +101,7 @@ mkdir -p \
     "$producer/usr/local/lib" \
     "$producer/usr/local/lib/gbm" \
     "$producer/usr/local/lib/pkgconfig" \
+    "$producer/usr/local/libexec/pocketforge" \
     "$producer/usr/local/share/drirc.d" \
     "$producer/usr/local/share/glvnd/egl_vendor.d" \
     "$producer/usr/local/share/vulkan/icd.d" \
@@ -126,6 +127,9 @@ printf 'gpu-um-tsp fixture: dri_gbm.so\n' \
     >"$producer/usr/local/lib/gbm/dri_gbm.so"
 printf 'Name: dri\nVersion: 26.1.7\n' \
     >"$producer/usr/local/lib/pkgconfig/dri.pc"
+printf '#!/bin/sh\nexit 0\n' \
+    >"$producer/usr/local/libexec/pocketforge/glx-readback-probe"
+chmod 0755 "$producer/usr/local/libexec/pocketforge/glx-readback-probe"
 printf '%s\n' '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_mesa.so.0"}}' \
     >"$producer/usr/local/share/glvnd/egl_vendor.d/50_mesa.json"
 printf '%s\n' '{"ICD":{"library_path":"/usr/local/lib/libvulkan_powervr_mesa.so"}}' \
@@ -379,6 +383,8 @@ printf 'neutral GLVND dispatcher\n' \
     >"$rootfs/usr/lib/aarch64-linux-gnu/libGLX.so.0"
 printf '#!/bin/sh\nexit 0\n' >"$rootfs/usr/bin/Xwayland"
 chmod 0755 "$rootfs/usr/bin/Xwayland"
+printf '#!/bin/sh\nexit 0\n' >"$rootfs/usr/bin/glxinfo"
+chmod 0755 "$rootfs/usr/bin/glxinfo"
 
 cat >"$rootfs/var/lib/dpkg/status" <<EOF
 Package: pocketforge-open-gpu-stack
@@ -419,6 +425,11 @@ Package: xwayland
 Status: install ok installed
 Architecture: arm64
 Version: 2:22.1.9-1
+
+Package: mesa-utils
+Status: install ok installed
+Architecture: arm64
+Version: 8.5.0-1
 EOF
 dpkg-deb --fsys-tarfile "$scratch/provider-a.deb" | tar -tf - | \
     sed 's|^\./|/|' >"$rootfs/var/lib/dpkg/info/pocketforge-open-gpu-stack.list"
@@ -592,6 +603,30 @@ rm "$candidate/usr/local/lib/libGLX_mesa.so.0"
 expect_rejection red-missing-glx-vendor "$candidate" \
     'rootfs gpu-um-tsp artifact is missing: usr/local/lib/libGLX_mesa.so.0'
 
+candidate="$scratch/red-missing-glx-probe"
+cp -a "$rootfs" "$candidate"
+rm "$candidate/usr/local/libexec/pocketforge/glx-readback-probe"
+expect_rejection red-missing-glx-probe "$candidate" \
+    'rootfs gpu-um-tsp artifact is missing: usr/local/libexec/pocketforge/glx-readback-probe'
+
+candidate="$scratch/red-nonexec-glx-probe"
+cp -a "$rootfs" "$candidate"
+chmod 0644 "$candidate/usr/local/libexec/pocketforge/glx-readback-probe"
+expect_rejection red-nonexec-glx-probe "$candidate" \
+    'owned GLX draw/present/readback probe is missing or not executable'
+
+candidate="$scratch/red-missing-glxinfo"
+cp -a "$rootfs" "$candidate"
+rm "$candidate/usr/bin/glxinfo"
+expect_rejection red-missing-glxinfo "$candidate" \
+    'glxinfo binary is missing'
+
+candidate="$scratch/red-missing-mesa-utils"
+cp -a "$rootfs" "$candidate"
+sed -i '/^Package: mesa-utils$/,$d' "$candidate/var/lib/dpkg/status"
+expect_rejection red-missing-mesa-utils "$candidate" \
+    'mesa-utils is not installed for GLX identity evidence'
+
 candidate="$scratch/red-changed-gallium"
 cp -a "$rootfs" "$candidate"
 printf 'tampered\n' >"$candidate/usr/local/lib/libgallium_dri.so"
@@ -666,4 +701,6 @@ fi
 grep -F 'Mesa build option mismatch: xmlconfig expected=enabled actual=disabled' \
     "$scratch/red-xmlconfig-disabled.err" >/dev/null
 
-echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+drirc-powervr+kmsro+zink-renderonly+static-symtab+stripped-build-options-fallback red=loader-environment,missing-zink-policy,old-two-block-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,no-kmsro-symbols,stripped-without-kmsro,glx-disabled,xmlconfig-disabled'
+PF_DESKTOP_GLX_PROVIDER_NESTED=1 "$root/tests/test-desktop-glx-acceptance.sh"
+
+echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+glxinfo+glx-probe+drirc-powervr+kmsro+zink-renderonly+static-symtab+stripped-build-options-fallback red=loader-environment,missing-zink-policy,old-two-block-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,missing-glx-probe,nonexec-glx-probe,missing-glxinfo,missing-mesa-utils,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,no-kmsro-symbols,stripped-without-kmsro,glx-disabled,xmlconfig-disabled'
