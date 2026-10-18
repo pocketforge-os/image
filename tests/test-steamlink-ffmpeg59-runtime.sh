@@ -268,8 +268,8 @@ run_contract_builder() {
     )
 }
 
-previous_uapi_sha=f5af3e87100e843c394a2eb19d315de866280311
-current_uapi_sha=6be18a3b4342da7c51dbc0ad132751290d4474f6
+previous_uapi_sha=6be18a3b4342da7c51dbc0ad132751290d4474f6
+current_uapi_sha=3010de56dbd1057513c035fff8623f80596fe9e8
 if run_contract_builder "${previous_uapi_sha}" \
         >"${scratch}/stale-uapi.log" 2>&1; then
     echo 'FAIL: previous platform UAPI pin was accepted' >&2
