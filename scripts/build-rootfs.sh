@@ -1785,6 +1785,16 @@ install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system.conf.d/watchdog.con
     "${ROOTFS}/etc/systemd/system.conf.d/watchdog.conf"
 echo "[customize] Watchdog: systemd drop-in installed"
 
+# Diagnostic candidate for tsp-mc9m.60.29.29. Keep the boot partition exactly
+# unchanged while proving whether PID 1 and both console paths remain alive
+# after switch_root. This service is intentionally enabled at sysinit.
+install -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-boot-heartbeat.service" \
+    "${ROOTFS}/etc/systemd/system/pf-boot-heartbeat.service"
+install -d "${ROOTFS}/etc/systemd/system/sysinit.target.wants"
+ln -sf /etc/systemd/system/pf-boot-heartbeat.service \
+    "${ROOTFS}/etc/systemd/system/sysinit.target.wants/pf-boot-heartbeat.service"
+echo "[customize] diagnostic boot heartbeat installed"
+
 # --- Browser platform defaults (bd: tsp-be9lx) --------------------------------
 # WebKit reads CHASSIS from /etc/machine-info to pick its user agent; handset
 # makes UA-sniffing sites serve mobile pages on this handheld (also reported

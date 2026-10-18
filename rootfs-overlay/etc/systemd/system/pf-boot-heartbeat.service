@@ -1,0 +1,12 @@
+[Unit]
+Description=PocketForge early boot diagnostic heartbeat
+DefaultDependencies=no
+Before=sysinit.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'n=0; while :; do n=$((n + 1)); IFS=" " read -r uptime _ < /proc/uptime || uptime=unknown; IFS=" " read -r _ _ state _ < /proc/1/stat || state=unknown; line="PF_BOOT_HEARTBEAT seq=$n uptime=$uptime pid1_state=$state"; printf "<6>%%s\n" "$line" > /dev/kmsg 2>/dev/null || :; printf "%%s\n" "$line" > /dev/console 2>/dev/null || :; sleep 1; done'
+Restart=no
+
+[Install]
+WantedBy=sysinit.target
