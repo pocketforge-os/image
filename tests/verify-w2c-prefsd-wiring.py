@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
-RUNTIME_SHA = "e1aa7e373e39efb48bd4cf0c7a74b310beddf70e"
-LAUNCHER_SHA = "f26bfd66ab739d06caf4e5347fc4150e2777c1ab"
+RUNTIME_SHA = "ff049977a7e966c5ddf38384841c97d7b91cd79a"
+LAUNCHER_SHA = "ac5c53bcd13a0087f9c06ffdd50eda26b752d1bd"
 
 
 def text(path: Path) -> str:
@@ -70,6 +70,7 @@ assert "de890215bd97eb0b5b63287a51e8b9a2e18d1125" not in dockerfile
 assert "4b71a503909090219c3a01c1718e9e772e0d488b" not in dockerfile
 assert "679eb323a7eddb27b6af3273fa77ce63c33c42cd" not in dockerfile
 assert "9e48779641953a846d7010479956478a537e9e26" not in dockerfile
+assert "e1aa7e373e39efb48bd4cf0c7a74b310beddf70e" not in dockerfile
 launcher_guard = re.findall(
     r'^\[ "\$\{PF_LAUNCHER_SHA\}" = "([0-9a-f]{40})" \] '
     r'\|\| \{ echo "FATAL: F13 launcher pin drift: \$\{PF_LAUNCHER_SHA\}"; exit 1; \}$',
@@ -91,6 +92,7 @@ assert "73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5" not in dockerfile
 assert "95302865bc584ce5e1c96e09df387aa5f58455f6" not in dockerfile
 assert "77c0f054558b1dac8ff2d2795576577963f60760" not in dockerfile
 assert "8629eebc508638fd78f087727aca475ca6848733" not in dockerfile
+assert "f26bfd66ab739d06caf4e5347fc4150e2777c1ab" not in dockerfile
 assert "cargo build --offline --locked --release --target \"${PF_RUNTIME_TARGET}\" -p pf-prefsd --bin pf-prefsd" in dockerfile
 assert "install -D -m 0755 \"${PREFSD_BIN}\" /out/bin/pf-prefsd" in dockerfile
 assert "systemd/pf-prefsd.service /out/systemd/pf-prefsd.service" in dockerfile

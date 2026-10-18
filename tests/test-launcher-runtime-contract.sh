@@ -16,13 +16,13 @@ shift 3
 test "$*" = "$crates"
 grep -q 'COPY --from=runtime-src . /work/runtime-contract' "$dockerfile"
 grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
-# The paired runtime adds the hang-sampler trigger contract without coupling
-# authority consumers to the ptrace implementation; the paired launcher vendors
-# that exact generation. Reject every older or crossed source generation.
-expected_runtime=e1aa7e373e39efb48bd4cf0c7a74b310beddf70e
-expected_launcher=f26bfd66ab739d06caf4e5347fc4150e2777c1ab
-prior_runtime=74394861fefec25fed34f9b3194d1136ca94f6a1
-prior_launcher=e536781107e3fac9c98877e861b6e38a1397f9d9
+# The paired runtime adds the system-volume preference contract and the paired
+# launcher vendors that exact generation. Reject every older or crossed source
+# generation, including the immediately preceding matched pair.
+expected_runtime=ff049977a7e966c5ddf38384841c97d7b91cd79a
+expected_launcher=ac5c53bcd13a0087f9c06ffdd50eda26b752d1bd
+prior_runtime=e1aa7e373e39efb48bd4cf0c7a74b310beddf70e
+prior_launcher=f26bfd66ab739d06caf4e5347fc4150e2777c1ab
 older_runtime=31eaa601b57464349e04fcbcb235f5537bf1fcca
 older_launcher=95302865bc584ce5e1c96e09df387aa5f58455f6
 old_launcher=73cda6ceb17ec6c2f8b9e030aa28c162a5d601c5
@@ -58,8 +58,8 @@ reject_guard_pair() {
     fi
 }
 # The production guards accept exactly the target pair. The preceding matched
-# pair is still invalid because it lacks the resident-monitor deadline fix;
-# crossing either generation is invalid because pf-session-authority drifts.
+# pair is still invalid because it lacks the system-volume preference contract;
+# crossing either generation is invalid because pf-prefs drifts.
 new_guard_accepts "$expected_runtime" "$expected_launcher"
 reject_guard_pair "$prior_runtime" "$prior_launcher"
 reject_guard_pair "$expected_runtime" "$old_launcher"
