@@ -32,14 +32,13 @@ name: sign-and-scan
 #     this repo to `gha_sign_repos`.)
 # ──────────────────────────────────────────────────────────────────────────────────────────
 #
-# ── RUNNER ROUTING (tsp-ikk0.22) ──────────────────────────────────────────────────────────
-# The [self-hosted, docker] jobs target the trimui-build-lab runner (the org's only docker-
-# labelled runner), but the `image` repo is NOT yet on the build-lab runner group's allow-list,
-# so these jobs cannot schedule (they queue unassigned) until the OWNER adds `image` to the
-# build-lab runner group (org-admin; listed on bead tsp-ikk0.22's owner batch). Because `image`
-# is PUBLIC, that add extends the fork-PR surface bounded by the build-lab confinement invariant
-# (BUILD_PIPELINE.md) — hence the job-level fork guard on `package` below (the sim#23 /
-# pf-hwprobe#11 pattern), landed BEFORE the group add so the add is safe to make.
+# ── RUNNER ROUTING (tsp-mc9m.41.984.47.50) ──────────────────────────────────────────────
+# The [self-hosted, pf-ci-container] jobs resolve to the static, non-ephemeral
+# mm-review-vm pool. Its runner slots share the `runner` account on two VMs.
+# The selected `pf-ci-container` runner group currently allows only the private
+# pocketforge-automation repo and rejects public repositories, so this public
+# `image` repo cannot schedule here. Admitting it requires a separate owner security-policy
+# change; the label change alone does not expand the pool's repository or fork-PR surface.
 # (Historical: every run before 2026-07-17 ended conclusion=startup_failure regardless of
 # routing — unpinned `actions/checkout@v4` under the org's sha_pinning_required Actions policy;
 # the checkouts below are now SHA-pinned.)
@@ -70,9 +69,9 @@ env:
 jobs:
   # ---- package + scan (runs on every apps/** change; no secrets, never blocks on CVEs) -----
   package:
-    # Fork guard (build-lab confinement invariant, BUILD_PIPELINE.md): never execute fork /
-    # public-PR code on the self-hosted docker runner — same-repo PRs and pushes only
-    # (sim#23 / pf-hwprobe#11 pattern).
+    # Defence in depth for any future policy that admits this public repo: allow only
+    # same-repo PRs and pushes. Today the selected runner group excludes `image` and rejects
+    # public repositories, so neither image forks nor trusted image refs can reach the pool.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, pf-ci-container]
     timeout-minutes: 45
