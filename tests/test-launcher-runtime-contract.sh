@@ -19,7 +19,7 @@ grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 # The paired runtime adds the system-volume preference contract and the paired
 # launcher vendors that exact generation. Reject every older or crossed source
 # generation, including the immediately preceding matched pair.
-expected_runtime=ff049977a7e966c5ddf38384841c97d7b91cd79a
+expected_runtime=4dbadfd36f5c08098f45d64fa0d8cbbaa8a9d074
 expected_launcher=ac5c53bcd13a0087f9c06ffdd50eda26b752d1bd
 prior_runtime=e1aa7e373e39efb48bd4cf0c7a74b310beddf70e
 prior_launcher=f26bfd66ab739d06caf4e5347fc4150e2777c1ab
