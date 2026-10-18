@@ -46,7 +46,7 @@ if grep -Eq '^(Line Out|DAC Playback Switch|DAC Reversed)' "$defaults"; then
 fi
 for control in 'DAC Playback Volume' 'Line Out Playback Volume' \
                'Line Out Differential Playback Switch' 'Headphone Playback Volume' \
-               'Headphone Switch' 'Speaker Switch'; do
+               'Headphone Switch' 'Speaker Switch' 'Headphone Jack'; do
     grep -F -- "$control" "$fixture" >/dev/null \
         || fail "7.x control fixture omits $control"
 done
