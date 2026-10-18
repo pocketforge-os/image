@@ -74,7 +74,7 @@ jobs:
     # public-PR code on the self-hosted docker runner — same-repo PRs and pushes only
     # (sim#23 / pf-hwprobe#11 pattern).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, docker]
+    runs-on: [self-hosted, pf-ci-container]
     timeout-minutes: 45
     steps:
       # SHA-pinned (org Actions policy sha_pinning_required=true; bare @v4 = startup_failure)
@@ -117,7 +117,7 @@ jobs:
     needs: package
     # gate: manual release dispatch on main, in the protected `sign` environment
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.release == true && github.ref == 'refs/heads/main' }}
-    runs-on: [self-hosted, docker]
+    runs-on: [self-hosted, pf-ci-container]
     environment: sign            # main-only deployment policy; holds the OIDC trust
     permissions:
       contents: read
