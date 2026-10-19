@@ -117,7 +117,8 @@ assert 'chroot "$ROOTFS" groupadd --system pf-pref-writer' in rootfs_builder
 assert not re.search(r"usermod[^\n]*pf-pref-writer[^\n]*gamer", rootfs_builder)
 assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
 
-# Broker drop-in: exactly the ruling's directives plus the Condition->Assert fix.
+# Broker drop-in: exactly the ruling's directives, the Condition->Assert fix,
+# and the protected-session memory policy.
 assert broker == [
     ("Unit", "StopWhenUnneeded", "yes"),
     ("Unit", "OnFailure", "pocketforge-gamescope-fallback.service"),
@@ -125,6 +126,8 @@ assert broker == [
     ("Unit", "After", "pocketforge-gamescope-session.target pf-input-decode.service pf-prefsd.service"),
     ("Unit", "Conflicts", "pf-shell-selected.service"),
     ("Unit", "ConditionPathExists", ""),
+    ("Service", "Slice", "pocketforge-session.slice"),
+    ("Service", "OOMScoreAdjust", "-900"),
     ("Service", "ExecStartPre", "/usr/bin/test -e /dev/uinput"),
     ("Service", "Group", "gamer"),
     ("Service", "UMask", "0007"),

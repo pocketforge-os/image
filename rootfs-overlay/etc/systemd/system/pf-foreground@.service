@@ -18,5 +18,6 @@ StateDirectory=pocketforge/sessions/%i
 KillSignal=SIGTERM
 TimeoutStopSec=2s
 Restart=no
-MemoryMax=256M
+Slice=pocketforge-session.slice
+OOMScoreAdjust=-900
 Nice=-5

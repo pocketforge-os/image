@@ -83,6 +83,7 @@ sudo
 systemd-resolved
 systemd-sysv
 systemd-timesyncd
+systemd-zram-generator
 udev
 # Debian bookworm 2026.02.04-1~deb12u1 at snapshot 20260601T000000Z;
 # supplies the signed regulatory.db + .p7s pair.

@@ -43,7 +43,6 @@ check_policy() {
     local unit
 
     expect_package "${root}/rootfs-packages.txt" systemd-zram-generator
-    expect_package "${root}/rootfs-packages-a523.txt" systemd-zram-generator
 
     expect_line "${zram}" '[zram0]'
     expect_line "${zram}" 'zram-size = ram'
@@ -88,13 +87,12 @@ fi
 # Positive control: the checked-in image policy must satisfy the contract.
 check_policy "${repo_root}"
 
-# Negative control: one reintroduced app cap must be rejected in this invocation.
+# Negative controls: each policy layer must fail closed in this invocation.
 tmp="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-memory-policy.XXXXXX")"
 trap 'find "${tmp}" -mindepth 1 -delete; rmdir "${tmp}"' EXIT
 fixture="${tmp}/fixture"
 required_files=(
     rootfs-packages.txt
-    rootfs-packages-a523.txt
     rootfs-overlay/etc/systemd/zram-generator.conf
     rootfs-overlay/etc/sysctl.d/90-pocketforge-memory.conf
     rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-memory.conf
@@ -111,13 +109,66 @@ for relative in "${required_files[@]}"; do
     mkdir -p "${fixture}/$(dirname "${relative}")"
     cp "${repo_root}/${relative}" "${fixture}/${relative}"
 done
-printf '\nMemoryMax=1M\n' >> "${fixture}/rootfs-overlay/etc/systemd/system/pf-app@.service"
 
-negative_output="${tmp}/negative.out"
-if (check_policy "${fixture}") >"${negative_output}" 2>&1; then
-    fail 'negative control accepted an app MemoryMax'
-fi
-grep -Fq 'pf-app@.service must not set MemoryMax or MemoryHigh' "${negative_output}" ||
-    fail 'negative control failed for an unexpected reason'
+expect_rejected() {
+    local label="$1"
+    local expected="$2"
+    local case_root="${tmp}/${label}"
+    local output="${tmp}/${label}.out"
+
+    mkdir -p "${case_root}"
+    cp -a "${fixture}/." "${case_root}/"
+    shift 2
+    "$@" "${case_root}"
+    if (check_policy "${case_root}") >"${output}" 2>&1; then
+        fail "negative control ${label} was accepted"
+    fi
+    grep -Fq -- "${expected}" "${output}" ||
+        fail "negative control ${label} failed for an unexpected reason"
+}
+
+replace_line() {
+    local relative="$1"
+    local old="$2"
+    local new="$3"
+    local root="$4"
+
+    sed -i "s|^${old}$|${new}|" "${root}/${relative}"
+    grep -Fxq -- "${new}" "${root}/${relative}" || fail "mutation did not apply: ${new}"
+}
+
+append_line() {
+    local relative="$1"
+    local line="$2"
+    local root="$3"
+
+    printf '%s\n' "${line}" >> "${root}/${relative}"
+}
+
+expect_rejected package_missing 'does not install systemd-zram-generator' \
+    replace_line rootfs-packages.txt systemd-zram-generator systemd-zram-generator-missing
+expect_rejected zram_size 'lacks: zram-size = ram' \
+    replace_line rootfs-overlay/etc/systemd/zram-generator.conf 'zram-size = ram' 'zram-size = ram / 2'
+expect_rejected zram_algorithm 'lacks: compression-algorithm = lz4' \
+    replace_line rootfs-overlay/etc/systemd/zram-generator.conf 'compression-algorithm = lz4' 'compression-algorithm = lzo-rle'
+expect_rejected sysctl 'lacks: vm.swappiness = 100' \
+    replace_line rootfs-overlay/etc/sysctl.d/90-pocketforge-memory.conf 'vm.swappiness = 100' 'vm.swappiness = 60'
+expect_rejected mglru_ttl 'lacks: w /sys/kernel/mm/lru_gen/min_ttl_ms - - - - 1000' \
+    replace_line rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-memory.conf \
+    'w /sys/kernel/mm/lru_gen/min_ttl_ms - - - - 1000' \
+    'w /sys/kernel/mm/lru_gen/min_ttl_ms - - - - 0'
+expect_rejected session_reserve 'lacks: MemoryLow=192M' \
+    replace_line rootfs-overlay/etc/systemd/system/pocketforge-session.slice \
+    'MemoryLow=192M' 'MemoryLow=64M'
+expect_rejected session_oom 'lacks: OOMScoreAdjust=-900' \
+    replace_line rootfs-overlay/etc/systemd/system/pocketforge-gamescope.service \
+    'OOMScoreAdjust=-900' 'OOMScoreAdjust=0'
+expect_rejected app_oom 'lacks: OOMScoreAdjust=300' \
+    replace_line rootfs-overlay/etc/systemd/system/pf-app@.service \
+    'OOMScoreAdjust=300' 'OOMScoreAdjust=0'
+expect_rejected app_cap 'pf-app@.service must not set MemoryMax or MemoryHigh' \
+    append_line rootfs-overlay/etc/systemd/system/pf-app@.service 'MemoryMax=1M'
+expect_rejected slice_cap 'apps.slice must not set MemoryMax or MemoryHigh' \
+    append_line rootfs-overlay/etc/systemd/system/apps.slice 'MemoryHigh=1M'
 
 echo 'PASS: zram, VM tuning, session reserve, and uncapped app policy are complete'

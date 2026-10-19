@@ -64,7 +64,10 @@ KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
 Restart=no
-MemoryMax=256M
+# Apps share the machine and zram without a fixed per-process ceiling. Under
+# global pressure the kernel selects them before the protected session.
+Slice=apps.slice
+OOMScoreAdjust=300
 Nice=-5
 """
 actual = Path(sys.argv[1]).read_text()

@@ -25,7 +25,7 @@ run_label_key=org.pocketforge.session-authority-run
 
 runtime_sha=0b36a9e880d7294677e899b2f6db03262cdc7774
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=dc0931940164e368766ea9d6d5d1333354691f08390d7ea34678b6c6e9f8d5e3
+app_unit_sha256=39392839e930e0e9d57a7596cfcc5ffaa16c9a3f92f2f3f8792f86200522a774
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
 # is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
 # The input-broker unit is unchanged through 511109df (runtime#141); the later

@@ -1,0 +1,8 @@
+[Unit]
+Description=PocketForge protected interactive session
+
+[Slice]
+# Provisional soft protection pending the tsp-r45im working-set measurement.
+# MemoryMin is deliberately not guessed: an incorrect hard reservation could
+# starve applications on the ~973 MiB A133 device.
+MemoryLow=192M

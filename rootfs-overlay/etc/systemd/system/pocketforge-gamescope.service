@@ -11,6 +11,8 @@ StartLimitBurst=1
 
 [Service]
 Type=simple
+Slice=pocketforge-session.slice
+OOMScoreAdjust=-900
 User=pf-gamescope
 Group=pf-gamescope
 SupplementaryGroups=video render pf-compositor-input

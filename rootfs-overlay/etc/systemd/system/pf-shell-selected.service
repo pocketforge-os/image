@@ -53,7 +53,8 @@ KillSignal=SIGTERM
 TimeoutStopSec=2s
 Restart=on-failure
 RestartSec=2s
-MemoryMax=256M
+Slice=pocketforge-session.slice
+OOMScoreAdjust=-900
 Nice=-5
 
 [Install]

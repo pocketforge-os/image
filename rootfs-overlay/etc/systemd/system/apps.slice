@@ -1,0 +1,6 @@
+[Unit]
+Description=PocketForge applications
+
+# Intentionally no MemoryMax or MemoryHigh. The provisional policy lets apps
+# consume physical RAM plus zram while OOMScoreAdjust makes them the backstop.
+[Slice]
