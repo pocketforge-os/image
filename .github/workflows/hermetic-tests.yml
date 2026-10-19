@@ -146,6 +146,7 @@ jobs:
             tests/test-open-gpu-provider.sh
             tests/test-open-gpu-tools.sh
             tests/test-open-module-contract.sh
+            tests/test-overlay-coverage.sh
             tests/test-poolsuite-rootfs-install.sh
             tests/test-poolsuite-variant-stage.sh
             tests/test-pf-app-session-graph.sh

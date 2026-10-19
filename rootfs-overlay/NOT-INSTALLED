@@ -1,0 +1,3 @@
+# Format: overlay-relative path<TAB>one-line reason
+etc/modules-load.d/pocketforge-wifi.conf	Legacy XR819 template; build-rootfs.sh generates profile-specific XR829/xradio content instead.
+usr/lib/pocketforge/cedar-spike.sh	Preserved tsp-h5ed.17 harness; its userspace dependencies remain detached pending a safely gated re-land.

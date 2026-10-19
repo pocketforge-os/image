@@ -1,0 +1,3 @@
+# Format: overlay-relative path<TAB>one-line reason
+usr/lib/preserved.sh	Fixture retained outside the image build.
+usr/lib/preserved-two.sh	Second fixture retained outside the image build.
