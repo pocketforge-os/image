@@ -43,6 +43,54 @@ expect_package() {
         fail "${file} does not install ${package}"
 }
 
+seed_shared_units() {
+    local rootfs="$1"
+    local units="${rootfs}/etc/systemd/system"
+    local unit
+
+    install -d "${units}"
+    for unit in \
+        pf-app@.service \
+        pf-foreground@.service \
+        pf-shell-selected.service \
+        pocketforge-audio-defaults.service; do
+        install -m 0644 \
+            "${repo_root}/rootfs-overlay/etc/systemd/system/${unit}" \
+            "${units}/${unit}"
+    done
+}
+
+effective_directive() {
+    local rootfs="$1"
+    local unit="$2"
+    local directive="$3"
+    local units="${rootfs}/etc/systemd/system"
+    local value=''
+    local file line
+
+    for file in "${units}/${unit}" "${units}/${unit}.d/"*.conf; do
+        [ -f "${file}" ] || continue
+        while IFS= read -r line; do
+            case "${line}" in
+                "${directive}="*) value="${line#*=}" ;;
+            esac
+        done < "${file}"
+    done
+    printf '%s' "${value}"
+}
+
+expect_effective_directive() {
+    local rootfs="$1"
+    local unit="$2"
+    local directive="$3"
+    local expected="$4"
+    local actual
+
+    actual="$(effective_directive "${rootfs}" "${unit}" "${directive}")"
+    [ "${actual}" = "${expected}" ] ||
+        fail "${unit} effective ${directive}: expected '${expected}', got '${actual}'"
+}
+
 check_policy() {
     local root="$1"
     local units="${root}/rootfs-overlay/etc/systemd/system"
@@ -159,18 +207,56 @@ grep -Fq '/work/src/scripts/install-memory-policy.sh' "${repo_root}/scripts/buil
     fail 'build-rootfs.sh does not invoke the memory-policy installer'
 built_rootfs="${tmp}/built-rootfs"
 mkdir -p "${built_rootfs}"
+seed_shared_units "${built_rootfs}"
 "${installer}" "${built_rootfs}" kernel-sunxi-7.x a133-open-7x-gpu "${repo_root}"
 check_installed_policy "${built_rootfs}"
+for unit in pf-app@.service pf-foreground@.service pf-shell-selected.service; do
+    expect_effective_directive "${built_rootfs}" "${unit}" MemoryMax ''
+done
+expect_effective_directive "${built_rootfs}" pf-app@.service OOMScoreAdjust 300
+for unit in \
+    pf-foreground@.service \
+    pf-shell-selected.service \
+    pocketforge-audio-defaults.service; do
+    expect_effective_directive "${built_rootfs}" "${unit}" Slice pfsession.slice
+done
 
 # Source controls retain exact unit semantics and drive mutation tests.
 check_policy "${repo_root}"
 
-# Negative control: another kernel/device profile must remain untouched.
+# Compatibility control: the shared units also enter the a133-open/6.x image,
+# so profiles outside the 7.x policy retain their legacy caps and no session
+# slice assignment. They must not receive the 7.x zram or sysctl policy.
+compat_rootfs="${tmp}/compat-rootfs"
+mkdir -p "${compat_rootfs}"
+seed_shared_units "${compat_rootfs}"
+"${installer}" "${compat_rootfs}" kernel-sunxi-6.x a133-open "${repo_root}"
+[ ! -e "${compat_rootfs}/etc/systemd/zram-generator.conf" ] ||
+    fail '7.x zram policy leaked into the 6.x rootfs'
+[ ! -e "${compat_rootfs}/etc/sysctl.d/90-pocketforge-memory.conf" ] ||
+    fail '7.x sysctl policy leaked into the 6.x rootfs'
+[ ! -e "${compat_rootfs}/etc/systemd/system/pfsession.slice" ] ||
+    fail '7.x session slice leaked into the 6.x rootfs'
+for unit in pf-app@.service pf-foreground@.service pf-shell-selected.service; do
+    expect_effective_directive "${compat_rootfs}" "${unit}" MemoryMax 256M
+done
+for unit in \
+    pf-foreground@.service \
+    pf-shell-selected.service \
+    pocketforge-audio-defaults.service; do
+    expect_effective_directive "${compat_rootfs}" "${unit}" Slice ''
+    expect_effective_directive "${compat_rootfs}" "${unit}" OOMScoreAdjust 0
+done
+
+# Negative control: another kernel/device profile gets only the compatibility
+# safeguards, never the 7.x policy.
 closed_rootfs="${tmp}/closed-rootfs"
 mkdir -p "${closed_rootfs}"
+seed_shared_units "${closed_rootfs}"
 "${installer}" "${closed_rootfs}" kernel-sunxi-4.9 a133-owned "${repo_root}"
 [ ! -e "${closed_rootfs}/etc/systemd/zram-generator.conf" ] ||
     fail 'memory policy leaked into the closed 4.9 rootfs'
+expect_effective_directive "${closed_rootfs}" pf-app@.service MemoryMax 256M
 
 # Negative control: a selected A133 7.x profile with a different kernel must
 # fail closed rather than silently shipping an unreviewed policy combination.
