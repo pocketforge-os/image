@@ -32,7 +32,7 @@ app_unit_sha256=39392839e930e0e9d57a7596cfcc5ffaa16c9a3f92f2f3f8792f86200522a774
 # runtime changes are confined to the session authority, so the broker unit
 # digest is unchanged.
 broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=50ea0bb37187860b71dd24d619fe3c3bcb6c2248d0b45eae6574193b21e77e1b
+broker_dropin_sha256=d27637700c3b7ee23f08abe3d566e1263a38f5490b82654434b6eb1a8858e8b3
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))

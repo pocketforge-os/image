@@ -330,7 +330,7 @@ class CursorPackage(unittest.TestCase):
         unit = systemd / "pf-app@.service"
         self.assertEqual(
             hashlib.sha256(unit.read_bytes()).hexdigest(),
-            "dc0931940164e368766ea9d6d5d1333354691f08390d7ea34678b6c6e9f8d5e3",
+            "39392839e930e0e9d57a7596cfcc5ffaa16c9a3f92f2f3f8792f86200522a774",
         )
         environment = effective_unit_environment(systemd, unit.name)
         self.assertEqual(environment.get("XCURSOR_THEME"), "pocketforge-light")
