@@ -43,7 +43,6 @@ for relative in \
     etc/systemd/zram-generator.conf \
     etc/sysctl.d/90-pocketforge-memory.conf \
     usr/lib/tmpfiles.d/pocketforge-memory.conf \
-    etc/systemd/system/apps.slice \
     etc/systemd/system/pfsession.slice \
     etc/systemd/system/systemd-zram-setup@zram0.service.d/10-pocketforge-mem-limit.conf \
     etc/systemd/system/pf-session-authorityd.service.d/10-memory-policy.conf \
@@ -52,7 +51,8 @@ for relative in \
     etc/systemd/system/pf-input-decode.service.d/10-memory-policy.conf \
     etc/systemd/system/pf-fcitx5.service.d/10-memory-policy.conf \
     etc/systemd/system/pf-osk.service.d/10-memory-policy.conf \
-    etc/systemd/system/pf-ime-bus.service.d/10-memory-policy.conf; do
+    etc/systemd/system/pf-ime-bus.service.d/10-memory-policy.conf \
+    etc/systemd/system/pf-volumed.service.d/10-memory-policy.conf; do
     install_policy_file "${relative}"
 done
 
