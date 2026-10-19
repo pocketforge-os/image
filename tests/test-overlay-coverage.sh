@@ -12,9 +12,21 @@ if ! "${checker}" --repo "${fixtures}/valid" >"${tmp}/valid.out" 2>"${tmp}/valid
     cat "${tmp}/valid.err" >&2
     exit 1
 fi
-grep -Fxq 'OVERLAY_COVERAGE PASS files=6 referenced=5 not_installed=1' "${tmp}/valid.out" || {
+grep -Fxq 'OVERLAY_COVERAGE PASS files=7 referenced=6 not_installed=1' "${tmp}/valid.out" || {
     echo 'FAIL: valid fixture did not report its complete coverage totals' >&2
     cat "${tmp}/valid.out" >&2
+    exit 1
+}
+
+if "${checker}" --repo "${fixtures}/malformed-manifest" \
+    >"${tmp}/manifest.out" 2>"${tmp}/manifest.err"; then
+    echo 'FAIL: malformed NOT-INSTALLED fixture was accepted' >&2
+    exit 1
+fi
+grep -Fq 'MANIFEST NOT-INSTALLED:1: expected path<TAB>one-line reason' \
+    "${tmp}/manifest.err" || {
+    echo 'FAIL: malformed manifest fixture did not report its missing reason' >&2
+    cat "${tmp}/manifest.err" >&2
     exit 1
 }
 

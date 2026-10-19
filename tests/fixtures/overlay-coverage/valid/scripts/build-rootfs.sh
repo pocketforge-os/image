@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+source "${SRC_DIR}/scripts/overlay-helper.sh"
+
 install -D -m 0644 \
     "/work/src/rootfs-overlay/etc/literal.conf" \
     "${ROOTFS}/etc/literal.conf"
