@@ -15,7 +15,8 @@
 # repos arrive as NAMED BUILD CONTEXTS, each a `git archive` of the lock SHA — NEVER a
 # clone inside the build (platform docs/KERNEL-SOURCE-STRATEGY.md §3: the archive of a
 # content-addressed SHA is byte-identical regardless of transport, and is air-gap-safe):
-#   --build-context image-src=<archive>  kernel-src=<archive>  gpu-src=<archive>
+#   --build-context image-src=<archive>  kernel-src=<archive>  kernel-uapi-src=<archive>
+#   --build-context gpu-src=<archive>
 #                    sdl-src=<archive>    blobs-src=<archive>   wpa-src=<archive>
 #                    cloud-init-src=<archive>
 #                    runtime-src=<archive> launcher-src=<archive> poolsuite-src=<archive>
@@ -1580,7 +1581,7 @@ ARG PF_FFMPEG_PATCH_SERIES_SHA256
 ARG PF_FFMPEG_UAPI_SHA
 ARG PF_FFMPEG_SOURCE_DATE_EPOCH
 COPY --from=image-src build/platform-runtimes/steamlink-ffmpeg59/v1 /work/runtime-definition
-COPY --from=kernel-src . /work/kernel-uapi
+COPY --from=kernel-uapi-src . /work/kernel-uapi
 RUN <<'STEAMLINK_FFMPEG59'
 set -eux
 export SOURCE_DATE_EPOCH="${PF_FFMPEG_SOURCE_DATE_EPOCH:?}"

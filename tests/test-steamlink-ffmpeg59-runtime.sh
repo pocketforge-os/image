@@ -222,6 +222,11 @@ grep -F 'v1 producer contains NOT-SHIPPED marker' "${scratch}/selector-mismatch.
 
 grep -F 'AS platform-runtime-steamlink-ffmpeg59-v1' "${dockerfile}" >/dev/null
 grep -F 'AS platform-runtime-steamlink-ffmpeg59-not-shipped' "${dockerfile}" >/dev/null
+grep -F 'COPY --from=kernel-uapi-src . /work/kernel-uapi' "${dockerfile}" >/dev/null
+if grep -F 'COPY --from=kernel-src . /work/kernel-uapi' "${dockerfile}" >/dev/null; then
+    echo 'FAIL: Steam Link runtime reused the boot-kernel source context' >&2
+    exit 1
+fi
 # Literal Dockerfile interpolation must remain unexpanded here.
 # shellcheck disable=SC2016
 selector='FROM platform-runtime-steamlink-ffmpeg59-${PF_STEAMLINK_FFMPEG59_MODE} AS platform-runtime-steamlink-ffmpeg59'
