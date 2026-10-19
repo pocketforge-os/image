@@ -181,7 +181,12 @@ def read_manifest(overlay: Path) -> tuple[dict[str, str], list[str]]:
             continue
         rel, reason = fields[0], fields[1].strip()
         pure = PurePosixPath(rel)
-        if pure.is_absolute() or ".." in pure.parts or rel == MANIFEST:
+        if (
+            not SIMPLE_VALUE.fullmatch(rel)
+            or pure.is_absolute()
+            or ".." in pure.parts
+            or rel == MANIFEST
+        ):
             errors.append(f"MANIFEST {MANIFEST}:{number}: invalid overlay path {rel}")
             continue
         if rel in entries:

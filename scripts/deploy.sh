@@ -121,6 +121,7 @@ if [ "$DO_OVERLAY" = 1 ]; then
             exit 1
         fi
         OVERLAY_EXCLUDES=(--exclude=/NOT-INSTALLED)
+        NOT_INSTALLED_TARGETS=()
         manifest_line=0
         while IFS= read -r entry || [ -n "${entry}" ]; do
             manifest_line=$((manifest_line + 1))
@@ -133,6 +134,10 @@ if [ "$DO_OVERLAY" = 1 ]; then
             fi
             excluded_path="${entry%%$'\t'*}"
             exclusion_reason="${entry#*$'\t'}"
+            if [[ ! "${excluded_path}" =~ ^[A-Za-z0-9_@.+/-]+$ ]]; then
+                echo "FATAL: ${NOT_INSTALLED}:${manifest_line}: invalid overlay path ${excluded_path}" >&2
+                exit 1
+            fi
             case "/${excluded_path}/" in
                 *'//'*|*'/./'*|*'/../'*)
                     echo "FATAL: ${NOT_INSTALLED}:${manifest_line}: invalid overlay path ${excluded_path}" >&2
@@ -144,6 +149,7 @@ if [ "$DO_OVERLAY" = 1 ]; then
                 exit 1
             fi
             OVERLAY_EXCLUDES+=("--exclude=/${excluded_path}")
+            NOT_INSTALLED_TARGETS+=("/${excluded_path}")
         done < "${NOT_INSTALLED}"
         echo "Deploying rootfs-overlay -> /..."
         # rsync the overlay tree to / on the device.
@@ -153,6 +159,9 @@ if [ "$DO_OVERLAY" = 1 ]; then
             "${OVERLAY_EXCLUDES[@]}" \
             -e "${RSYNC_SSH}" \
             "${OVERLAY_DIR}/" "${TSP_HOST}:/"
+        if [ "${#NOT_INSTALLED_TARGETS[@]}" -gt 0 ]; then
+            ssh_retry sudo rm -f -- "${NOT_INSTALLED_TARGETS[@]}"
+        fi
         echo "  rootfs-overlay deployed."
     fi
 fi
