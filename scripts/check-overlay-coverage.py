@@ -132,11 +132,11 @@ def references(repo: Path, sources: list[Path]) -> dict[str, set[str]]:
     all_code = "\n".join(
         code_without_comments(source.read_text(encoding="utf-8")) for source in sources
     )
-    values = variable_values(all_code)
 
     for source in sources:
         rel_source = source.relative_to(repo).as_posix()
         code = code_without_comments(source.read_text(encoding="utf-8"))
+        values = variable_values(code)
         src_is_overlay = bool(re.search(r"(?m)^\s*src=.*?/rootfs-overlay\s*$", code))
         for match in OVERLAY_TOKEN.finditer(code):
             expression = match.group(1)
