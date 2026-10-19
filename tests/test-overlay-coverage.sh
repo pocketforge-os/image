@@ -39,4 +39,42 @@ grep -Fq 'DANGLING scripts/build-rootfs.sh:etc/missing.conf' "${tmp}/dangling.er
     exit 1
 }
 
-echo 'PASS: overlay coverage accepts complete input and rejects orphan and dangling-reference fixtures'
+mkdir -p "${tmp}/bin"
+cat >"${tmp}/bin/ssh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat >"${tmp}/bin/rsync" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"${RSYNC_CAPTURE}"
+EOF
+chmod +x "${tmp}/bin/ssh" "${tmp}/bin/rsync"
+RSYNC_CAPTURE="${tmp}/rsync.args" \
+PATH="${tmp}/bin:${PATH}" \
+SRC_DIR="${fixtures}/valid" \
+TSP_HOST=fixture@invalid \
+SSH_KEY="${tmp}/unused-key" \
+    "${root}/scripts/deploy.sh" --overlay-only --no-restart >"${tmp}/deploy.out"
+grep -Fxq -- '--exclude=/NOT-INSTALLED' "${tmp}/rsync.args" || {
+    echo 'FAIL: deploy would copy the overlay exclusion manifest' >&2
+    cat "${tmp}/rsync.args" >&2
+    exit 1
+}
+grep -Fxq -- '--exclude=/usr/lib/preserved.sh' "${tmp}/rsync.args" || {
+    echo 'FAIL: deploy would copy a NOT-INSTALLED overlay path' >&2
+    cat "${tmp}/rsync.args" >&2
+    exit 1
+}
+
+grep -Fq 'tests/test-overlay-coverage.sh' "${root}/.github/workflows/hermetic-tests.yml" || {
+    echo 'FAIL: hermetic CI does not run the overlay coverage check' >&2
+    exit 1
+}
+"${checker}" --repo "${root}" >"${tmp}/repository.out"
+grep -Fq 'OVERLAY_COVERAGE PASS ' "${tmp}/repository.out" || {
+    echo 'FAIL: repository overlay did not report complete coverage' >&2
+    cat "${tmp}/repository.out" >&2
+    exit 1
+}
+
+echo 'PASS: overlay coverage rejects orphan/dangling fixtures and deploy honors NOT-INSTALLED'

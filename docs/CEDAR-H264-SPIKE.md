@@ -52,12 +52,17 @@ batched DUT run. It reports PASS only when all of these hold:
 4. The direct decoder exits successfully and reports exactly 900 decoded frames (30 seconds at
    30 fps).
 
-## Build and DUT handoff
+## Future build and DUT handoff
 
-After the integration is safely re-landed, build the eligible A133 dev OS image on
-modelmaker. The build creates the clip inside the target rootfs with the
-snapshot-pinned target FFmpeg and installs the runner. The coordinator records the
-resulting OS artifact SHA-256 and batches this exact command:
+The preserved runner is not installed in current images: its userspace stages were
+deliberately detached after they broke closed-DDK A133 and A523 builds. Do not run
+the source-tree runner path as though it were present in a built image.
+
+After the integration is safely re-landed with an eligible-profile selector, build
+the A133 dev OS image on modelmaker. That future build creates the clip inside the
+target rootfs with the snapshot-pinned target FFmpeg and installs the runner. The
+coordinator records the resulting OS artifact SHA-256 and may then batch this exact
+command against that re-landed artifact:
 
 ```sh
 sudo /usr/lib/pocketforge/cedar-spike.sh

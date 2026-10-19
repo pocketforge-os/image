@@ -115,11 +115,42 @@ if [ "$DO_OVERLAY" = 1 ]; then
     if [ ! -d "${OVERLAY_DIR}" ]; then
         echo "WARN: rootfs-overlay not found at ${OVERLAY_DIR}, skipping config deploy" >&2
     else
+        NOT_INSTALLED="${OVERLAY_DIR}/NOT-INSTALLED"
+        if [ ! -f "${NOT_INSTALLED}" ]; then
+            echo "FATAL: overlay exclusion manifest not found at ${NOT_INSTALLED}" >&2
+            exit 1
+        fi
+        OVERLAY_EXCLUDES=(--exclude=/NOT-INSTALLED)
+        manifest_line=0
+        while IFS= read -r entry || [ -n "${entry}" ]; do
+            manifest_line=$((manifest_line + 1))
+            case "${entry}" in
+                ''|'#'*) continue ;;
+            esac
+            if [[ "${entry}" != *$'\t'* ]]; then
+                echo "FATAL: ${NOT_INSTALLED}:${manifest_line}: expected path<TAB>one-line reason" >&2
+                exit 1
+            fi
+            excluded_path="${entry%%$'\t'*}"
+            exclusion_reason="${entry#*$'\t'}"
+            case "/${excluded_path}/" in
+                *'//'*|*'/./'*|*'/../'*)
+                    echo "FATAL: ${NOT_INSTALLED}:${manifest_line}: invalid overlay path ${excluded_path}" >&2
+                    exit 1
+                    ;;
+            esac
+            if [ -z "${excluded_path}" ] || [ -z "${exclusion_reason}" ]; then
+                echo "FATAL: ${NOT_INSTALLED}:${manifest_line}: expected path<TAB>one-line reason" >&2
+                exit 1
+            fi
+            OVERLAY_EXCLUDES+=("--exclude=/${excluded_path}")
+        done < "${NOT_INSTALLED}"
         echo "Deploying rootfs-overlay -> /..."
         # rsync the overlay tree to / on the device.
         # --rsync-path='sudo rsync' because target paths (/etc/, /usr/lib/) are root-owned.
         # --chmod=D755,F644 preserves standard permissions for config files.
         rsync_retry -rlpt --rsync-path='sudo rsync' \
+            "${OVERLAY_EXCLUDES[@]}" \
             -e "${RSYNC_SSH}" \
             "${OVERLAY_DIR}/" "${TSP_HOST}:/"
         echo "  rootfs-overlay deployed."
