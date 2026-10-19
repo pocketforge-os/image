@@ -25,6 +25,15 @@ expect_no_memory_cap() {
     fi
 }
 
+expect_default_app_slice() {
+    local file="$1"
+
+    [ -f "${file}" ] || fail "missing ${file}"
+    if grep -Eq '^[[:space:]]*Slice[[:space:]]*=' "${file}"; then
+        fail "${file} must retain default dedicated slice placement"
+    fi
+}
+
 expect_package() {
     local file="$1"
     local package="$2"
@@ -76,6 +85,10 @@ check_policy() {
         expect_line "${units}/${unit}" 'OOMScoreAdjust=-900'
     done
 
+    expect_default_app_slice "${units}/pf-app@.service"
+    expect_line "${units}/pf-app@.service" 'OOMScoreAdjust=300'
+    [ ! -e "${units}/apps.slice" ] || fail 'obsolete apps.slice must not be shipped'
+
     for unit in \
         pf-session-authorityd.service \
         pf-prefsd.service \
@@ -83,18 +96,15 @@ check_policy() {
         pf-input-decode.service \
         pf-fcitx5.service \
         pf-osk.service \
-        pf-ime-bus.service; do
+        pf-ime-bus.service \
+        pf-volumed.service; do
         expect_line "${units}/${unit}.d/10-memory-policy.conf" 'Slice=pfsession.slice'
         expect_line "${units}/${unit}.d/10-memory-policy.conf" 'OOMScoreAdjust=-900'
     done
 
-    expect_line "${units}/pf-app@.service" 'Slice=apps.slice'
-    expect_line "${units}/pf-app@.service" 'OOMScoreAdjust=300'
     for unit in pf-app@.service pf-foreground@.service pf-shell-selected.service; do
         expect_no_memory_cap "${units}/${unit}"
     done
-
-    expect_no_memory_cap "${units}/apps.slice"
 }
 
 check_installed_policy() {
@@ -115,7 +125,7 @@ check_installed_policy() {
     [ ! -e "${units}/pocketforge-session.slice" ] ||
         fail 'built rootfs contains nested pocketforge-session.slice'
     case "${session_stem}" in *-*) fail 'session slice must be top-level' ;; esac
-    expect_no_memory_cap "${units}/apps.slice"
+    [ ! -e "${units}/apps.slice" ] || fail 'built rootfs contains obsolete apps.slice'
 
     for unit in \
         pf-session-authorityd.service \
@@ -124,7 +134,8 @@ check_installed_policy() {
         pf-input-decode.service \
         pf-fcitx5.service \
         pf-osk.service \
-        pf-ime-bus.service; do
+        pf-ime-bus.service \
+        pf-volumed.service; do
         expect_line "${units}/${unit}.d/10-memory-policy.conf" 'Slice=pfsession.slice'
         expect_line "${units}/${unit}.d/10-memory-policy.conf" 'OOMScoreAdjust=-900'
     done
@@ -180,7 +191,6 @@ required_files=(
     rootfs-overlay/etc/systemd/zram-generator.conf
     rootfs-overlay/etc/sysctl.d/90-pocketforge-memory.conf
     rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-memory.conf
-    rootfs-overlay/etc/systemd/system/apps.slice
     rootfs-overlay/etc/systemd/system/pfsession.slice
     rootfs-overlay/etc/systemd/system/systemd-zram-setup@zram0.service.d/10-pocketforge-mem-limit.conf
     rootfs-overlay/etc/systemd/system/pf-session-authorityd.service.d/10-memory-policy.conf
@@ -190,6 +200,7 @@ required_files=(
     rootfs-overlay/etc/systemd/system/pf-fcitx5.service.d/10-memory-policy.conf
     rootfs-overlay/etc/systemd/system/pf-osk.service.d/10-memory-policy.conf
     rootfs-overlay/etc/systemd/system/pf-ime-bus.service.d/10-memory-policy.conf
+    rootfs-overlay/etc/systemd/system/pf-volumed.service.d/10-memory-policy.conf
     rootfs-overlay/etc/systemd/system/pf-app@.service
     rootfs-overlay/etc/systemd/system/pf-foreground@.service
     rootfs-overlay/etc/systemd/system/pf-shell-selected.service
@@ -267,7 +278,7 @@ expect_rejected app_oom 'lacks: OOMScoreAdjust=300' \
     'OOMScoreAdjust=300' 'OOMScoreAdjust=0'
 expect_rejected app_cap 'pf-app@.service must not set MemoryMax or MemoryHigh' \
     append_line rootfs-overlay/etc/systemd/system/pf-app@.service 'MemoryMax=1M'
-expect_rejected slice_cap 'apps.slice must not set MemoryMax or MemoryHigh' \
-    append_line rootfs-overlay/etc/systemd/system/apps.slice 'MemoryHigh=1M'
+expect_rejected app_slice_override 'must retain default dedicated slice placement' \
+    append_line rootfs-overlay/etc/systemd/system/pf-app@.service 'Slice=apps.slice'
 
 echo 'PASS: zram, VM tuning, session reserve, and uncapped app policy are complete'
