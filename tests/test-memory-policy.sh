@@ -49,7 +49,7 @@ check_policy() {
     expect_line "${zram}" 'zram-size = ram'
     expect_line "${zram}" 'compression-algorithm = lz4'
     expect_line "${zram}" 'swap-priority = 100'
-    expect_line "${zram_limit}" "ExecStartPost=/bin/sh -c 'printf %s 448M > /sys/block/zram0/mem_limit'"
+    expect_line "${zram_limit}" "ExecStartPost=/bin/sh -c 'echo 448M > /sys/block/zram0/mem_limit'"
 
     expect_line "${sysctl}" 'vm.swappiness = 100'
     expect_line "${sysctl}" 'vm.page-cluster = 0'
@@ -57,10 +57,14 @@ check_policy() {
     expect_line "${sysctl}" 'vm.watermark_boost_factor = 0'
     expect_line "${tmpfiles}" 'w- /sys/kernel/mm/lru_gen/min_ttl_ms - - - - 1000'
 
-    expect_line "${units}/pfsession.slice" 'MemoryLow=192M'
+    local session_slice='pfsession.slice'
+    local session_stem="${session_slice%.slice}"
+
+    expect_line "${units}/${session_slice}" 'MemoryLow=192M'
     expect_no_memory_cap "${units}/pfsession.slice"
     [ ! -e "${units}/pocketforge-session.slice" ] ||
         fail 'nested pocketforge-session.slice must not exist'
+    case "${session_stem}" in *-*) fail 'session slice must be top-level' ;; esac
 
     for unit in \
         pf-foreground@.service \
@@ -97,6 +101,8 @@ check_installed_policy() {
     local rootfs="$1"
     local units="${rootfs}/etc/systemd/system"
     local unit
+    local session_slice='pfsession.slice'
+    local session_stem="${session_slice%.slice}"
 
     expect_line "${rootfs}/etc/systemd/zram-generator.conf" 'zram-size = ram'
     expect_line "${rootfs}/etc/systemd/zram-generator.conf" 'compression-algorithm = lz4'
@@ -105,10 +111,10 @@ check_installed_policy() {
         'w- /sys/kernel/mm/lru_gen/min_ttl_ms - - - - 1000'
     expect_line "${units}/pfsession.slice" 'MemoryLow=192M'
     expect_line "${units}/systemd-zram-setup@zram0.service.d/10-pocketforge-mem-limit.conf" \
-        "ExecStartPost=/bin/sh -c 'printf %s 448M > /sys/block/zram0/mem_limit'"
+        "ExecStartPost=/bin/sh -c 'echo 448M > /sys/block/zram0/mem_limit'"
     [ ! -e "${units}/pocketforge-session.slice" ] ||
         fail 'built rootfs contains nested pocketforge-session.slice'
-    case pfsession in *-*) fail 'session slice must be top-level' ;; esac
+    case "${session_stem}" in *-*) fail 'session slice must be top-level' ;; esac
     expect_no_memory_cap "${units}/apps.slice"
 
     for unit in \
@@ -154,6 +160,18 @@ mkdir -p "${closed_rootfs}"
 "${installer}" "${closed_rootfs}" kernel-sunxi-4.9 a133-owned "${repo_root}"
 [ ! -e "${closed_rootfs}/etc/systemd/zram-generator.conf" ] ||
     fail 'memory policy leaked into the closed 4.9 rootfs'
+
+# Negative control: a selected A133 7.x profile with a different kernel must
+# fail closed rather than silently shipping an unreviewed policy combination.
+wrong_kernel_rootfs="${tmp}/wrong-kernel-rootfs"
+wrong_kernel_output="${tmp}/wrong-kernel.out"
+mkdir -p "${wrong_kernel_rootfs}"
+if "${installer}" "${wrong_kernel_rootfs}" kernel-sunxi-4.9 \
+    a133-open-7x-gpu "${repo_root}" >"${wrong_kernel_output}" 2>&1; then
+    fail 'memory policy accepted a 7.x device with the wrong kernel'
+fi
+grep -Fq 'expected=kernel-sunxi-7.x' "${wrong_kernel_output}" ||
+    fail 'wrong-kernel rejection did not explain the expected kernel'
 
 # Negative controls: each policy layer must fail closed in this invocation.
 fixture="${tmp}/fixture"
@@ -225,6 +243,10 @@ expect_rejected zram_size 'lacks: zram-size = ram' \
     replace_line rootfs-overlay/etc/systemd/zram-generator.conf 'zram-size = ram' 'zram-size = ram / 2'
 expect_rejected zram_algorithm 'lacks: compression-algorithm = lz4' \
     replace_line rootfs-overlay/etc/systemd/zram-generator.conf 'compression-algorithm = lz4' 'compression-algorithm = lzo-rle'
+expect_rejected zram_mem_limit 'lacks: ExecStartPost=' \
+    replace_line rootfs-overlay/etc/systemd/system/systemd-zram-setup@zram0.service.d/10-pocketforge-mem-limit.conf \
+    "ExecStartPost=/bin/sh -c 'echo 448M > /sys/block/zram0/mem_limit'" \
+    "ExecStartPost=/bin/sh -c 'echo 768M > /sys/block/zram0/mem_limit'"
 expect_rejected sysctl 'lacks: vm.swappiness = 100' \
     replace_line rootfs-overlay/etc/sysctl.d/90-pocketforge-memory.conf 'vm.swappiness = 100' 'vm.swappiness = 60'
 expect_rejected mglru_ttl 'lacks: w- /sys/kernel/mm/lru_gen/min_ttl_ms - - - - 1000' \
@@ -236,6 +258,9 @@ expect_rejected session_reserve 'lacks: MemoryLow=192M' \
     'MemoryLow=192M' 'MemoryLow=64M'
 expect_rejected session_oom 'lacks: OOMScoreAdjust=-900' \
     replace_line rootfs-overlay/etc/systemd/system/pocketforge-gamescope.service \
+    'OOMScoreAdjust=-900' 'OOMScoreAdjust=0'
+expect_rejected session_daemon_oom 'lacks: OOMScoreAdjust=-900' \
+    replace_line rootfs-overlay/etc/systemd/system/pf-session-authorityd.service.d/10-memory-policy.conf \
     'OOMScoreAdjust=-900' 'OOMScoreAdjust=0'
 expect_rejected app_oom 'lacks: OOMScoreAdjust=300' \
     replace_line rootfs-overlay/etc/systemd/system/pf-app@.service \
