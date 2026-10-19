@@ -14,7 +14,7 @@ ARG BASE_IMAGE=debian@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d76
 # ---------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS gamescope-builder
 ARG GAMESCOPE_URL=https://github.com/pocketforge-os/gamescope.git
-ARG GAMESCOPE_COMMIT=0b03a62e720ae93afbd5e59167c8774f8ad74f0c
+ARG GAMESCOPE_COMMIT=60d6d0ebbb2285dd8e19d66e8760c6066b60d25e
 ARG WAYLAND_PROTOCOLS_URL=https://github.com/pocketforge-os/wayland-protocols.git
 ARG WAYLAND_PROTOCOLS_COMMIT=aa62366fb800a0689f4e9de83811ff33f6a91f44
 
