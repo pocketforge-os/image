@@ -1,0 +1,2 @@
+# Format: overlay-relative path<TAB>one-line reason
+usr/lib/preserved.sh	Fixture retained outside the image build.
