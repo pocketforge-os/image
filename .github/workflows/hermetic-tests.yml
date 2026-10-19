@@ -137,6 +137,7 @@ jobs:
             tests/test-launcher-runtime-contract.sh
             tests/test-low-battery-shutdown.sh
             tests/test-mainline-rootfs-packages.sh
+            tests/test-memory-policy.sh
             tests/test-mesa-shader-cache.sh
             tests/test-none-gpu-model.sh
             tests/test-open-gpu-integration.sh

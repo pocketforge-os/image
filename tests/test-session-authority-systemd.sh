@@ -25,14 +25,14 @@ run_label_key=org.pocketforge.session-authority-run
 
 runtime_sha=0b36a9e880d7294677e899b2f6db03262cdc7774
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=dc0931940164e368766ea9d6d5d1333354691f08390d7ea34678b6c6e9f8d5e3
+app_unit_sha256=bb64af66d1b3fc4097898e485a3c4c139154a75af507351106d0756f39489c59
 # B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
 # is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
 # The input-broker unit is unchanged through 511109df (runtime#141); the later
 # runtime changes are confined to the session authority, so the broker unit
 # digest is unchanged.
 broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=50ea0bb37187860b71dd24d619fe3c3bcb6c2248d0b45eae6574193b21e77e1b
+broker_dropin_sha256=6e4084a8e422b4dbccb5cc72eb501da69d8714c493d93f0fe004c21e1d63ef41
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))

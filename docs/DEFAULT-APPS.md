@@ -392,7 +392,11 @@ KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
 Restart=no
-MemoryMax=256M
+# Apps share the machine and zram without a fixed per-process ceiling. Keep
+# systemd's default system-pf\x2dapp.slice placement: runtime peer identity
+# derives the app ID from that cgroup path. Under global pressure the kernel
+# selects apps before the protected session.
+OOMScoreAdjust=300
 Nice=-5
 ```
 
@@ -961,6 +965,8 @@ Conflicts=pf-shell-selected.service
 ConditionPathExists=
 
 [Service]
+Slice=pfsession.slice
+OOMScoreAdjust=-900
 ExecStartPre=/usr/bin/test -e /dev/uinput
 Group=gamer
 UMask=0007

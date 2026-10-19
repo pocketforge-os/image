@@ -1853,6 +1853,8 @@ echo "[customize] Applying variant-specific config (variant=${VARIANT})..."
 install -d "${ROOTFS}/etc/systemd/journald.conf.d"
 install_low_battery_shutdown "${ROOTFS}" "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}" \
     "${PF_KERNEL_CAPABILITY_RECEIPT}" "${PF_DEVICE_ID}" /work/src
+/work/src/scripts/install-memory-policy.sh \
+    "${ROOTFS}" "${PF_KERNEL_REPO}" "${PF_DEVICE_ID}" /work/src
 
 if [ "${VARIANT}" = "dev" ]; then
     # Dev: persistent journald (logs survive reboots for bug-report capture)
