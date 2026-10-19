@@ -964,7 +964,7 @@ Conflicts=pf-shell-selected.service
 ConditionPathExists=
 
 [Service]
-Slice=pocketforge-session.slice
+Slice=pfsession.slice
 OOMScoreAdjust=-900
 ExecStartPre=/usr/bin/test -e /dev/uinput
 Group=gamer

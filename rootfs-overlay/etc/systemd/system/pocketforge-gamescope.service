@@ -11,7 +11,7 @@ StartLimitBurst=1
 
 [Service]
 Type=simple
-Slice=pocketforge-session.slice
+Slice=pfsession.slice
 OOMScoreAdjust=-900
 User=pf-gamescope
 Group=pf-gamescope

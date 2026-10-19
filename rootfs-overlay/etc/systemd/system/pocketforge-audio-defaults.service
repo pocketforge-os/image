@@ -34,7 +34,7 @@ After=alsa-restore.service alsa-state.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-Slice=pocketforge-session.slice
+Slice=pfsession.slice
 OOMScoreAdjust=-900
 ExecStart=/usr/lib/pocketforge/audio-defaults.sh
 

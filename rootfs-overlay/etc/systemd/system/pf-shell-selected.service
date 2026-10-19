@@ -53,7 +53,7 @@ KillSignal=SIGTERM
 TimeoutStopSec=2s
 Restart=on-failure
 RestartSec=2s
-Slice=pocketforge-session.slice
+Slice=pfsession.slice
 OOMScoreAdjust=-900
 Nice=-5
 

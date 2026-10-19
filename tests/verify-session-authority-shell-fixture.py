@@ -51,7 +51,7 @@ NOT_MODELLED = {
                                          "it never grabs input (bd tsp-3rd3.12)",
     "pocketforge-menu.service": "an alternative panel owner, never enabled with the shell",
     "pocketforge-placeholder.service": "an alternative panel owner, never enabled with the shell",
-    "pocketforge-session.slice": "memory-pressure policy is covered by test-memory-policy.sh; "
+    "pfsession.slice": "memory-pressure policy is covered by test-memory-policy.sh; "
                                   "the authority harness does not induce memory pressure",
     "shutdown.target": "shutdown ordering (the fixture gets it from DefaultDependencies=yes)",
 }
