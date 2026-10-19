@@ -19,7 +19,41 @@ case "${device_id}" in
         fi
         ;;
     *)
-        echo "memory-policy install: NOT-SHIPPED device=${device_id} kernel=${kernel_repo}"
+        compat="${source_root}/memory-policy-compat"
+        for unit in \
+            pf-app@.service \
+            pf-foreground@.service \
+            pf-shell-selected.service; do
+            source="${compat}/${unit}.d/90-memory-compat.conf"
+            destination="${rootfs}/etc/systemd/system/${unit}.d/90-memory-compat.conf"
+            [ -f "${source}" ] || {
+                echo "memory-policy install: FAIL missing ${source}" >&2
+                exit 1
+            }
+            install -d "$(dirname "${destination}")"
+            install -m 0644 "${source}" "${destination}"
+        done
+
+        # These assignments belong to the Linux 7 policy. The shared source
+        # units also feed older images, so restore their pre-policy defaults in
+        # the assembled rootfs. An empty Slice= assignment is invalid in
+        # systemd v252; the directive must truly be absent.
+        for relative in \
+            etc/systemd/system/pf-app@.service \
+            etc/systemd/system/pf-foreground@.service \
+            etc/systemd/system/pf-shell-selected.service \
+            etc/systemd/system/pocketforge-gamescope.service \
+            etc/systemd/system/pocketforge-audio-defaults.service \
+            etc/systemd/system/pf-input-broker.service.d/10-app-session.conf; do
+            unit_file="${rootfs}/${relative}"
+            [ -f "${unit_file}" ] || continue
+            sed -i \
+                -e '/^Slice=pfsession\.slice$/d' \
+                -e '/^OOMScoreAdjust=-900$/d' \
+                -e '/^OOMScoreAdjust=300$/d' \
+                "${unit_file}"
+        done
+        echo "memory-policy install: COMPAT device=${device_id} kernel=${kernel_repo} app_memory_max=256M session_slice=default"
         exit 0
         ;;
 esac

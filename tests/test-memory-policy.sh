@@ -53,11 +53,15 @@ seed_shared_units() {
         pf-app@.service \
         pf-foreground@.service \
         pf-shell-selected.service \
+        pocketforge-gamescope.service \
         pocketforge-audio-defaults.service; do
         install -m 0644 \
             "${repo_root}/rootfs-overlay/etc/systemd/system/${unit}" \
             "${units}/${unit}"
     done
+    install -D -m 0644 \
+        "${repo_root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf" \
+        "${units}/pf-input-broker.service.d/10-app-session.conf"
 }
 
 effective_directive() {
@@ -217,8 +221,11 @@ expect_effective_directive "${built_rootfs}" pf-app@.service OOMScoreAdjust 300
 for unit in \
     pf-foreground@.service \
     pf-shell-selected.service \
-    pocketforge-audio-defaults.service; do
+    pocketforge-gamescope.service \
+    pocketforge-audio-defaults.service \
+    pf-input-broker.service; do
     expect_effective_directive "${built_rootfs}" "${unit}" Slice pfsession.slice
+    expect_effective_directive "${built_rootfs}" "${unit}" OOMScoreAdjust -900
 done
 
 # Source controls retain exact unit semantics and drive mutation tests.
@@ -243,10 +250,13 @@ done
 for unit in \
     pf-foreground@.service \
     pf-shell-selected.service \
-    pocketforge-audio-defaults.service; do
+    pocketforge-gamescope.service \
+    pocketforge-audio-defaults.service \
+    pf-input-broker.service; do
     expect_effective_directive "${compat_rootfs}" "${unit}" Slice ''
-    expect_effective_directive "${compat_rootfs}" "${unit}" OOMScoreAdjust 0
+    expect_effective_directive "${compat_rootfs}" "${unit}" OOMScoreAdjust ''
 done
+expect_effective_directive "${compat_rootfs}" pf-app@.service OOMScoreAdjust ''
 
 # Negative control: another kernel/device profile gets only the compatibility
 # safeguards, never the 7.x policy.
