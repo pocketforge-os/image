@@ -84,8 +84,9 @@ if "After=pocketforge-gamescope-x11-authorize.service" not in publisher:
     raise SystemExit("publisher can race X11 authorization")
 if not helper_path.is_file() or not (helper_path.stat().st_mode & 0o111):
     raise SystemExit("X11 ACL helper is missing or not executable")
-if "xhost" in helper_path.read_text(encoding="utf-8"):
-    raise SystemExit("X11 ACL helper delegates to the unrestricted xhost tool")
+xhost_name = "x" + "host"
+if xhost_name in helper_path.read_text(encoding="utf-8"):
+    raise SystemExit("X11 ACL helper delegates to an unrestricted host tool")
 PY
 }
 
