@@ -120,6 +120,7 @@ def base_gate_text() -> str:
 
 
 def build_root(work: Path, *, gate_text: str, node_driver: str | None,
+               child_driver: str | None = None,
                powervr_module: bool, icd: bool, firmware: bool,
                provenance_sha: str | None, probe_mode: str) -> Path:
     """A fixture rootfs skeleton: fake /sys, /dev/dri, /usr/lib/pocketforge,
@@ -137,6 +138,13 @@ def build_root(work: Path, *, gate_text: str, node_driver: str | None,
         device = root / "sys/class/drm/renderD128/device"
         device.mkdir(parents=True)
         os.symlink(f"../../../../bus/drivers/{node_driver}", device / "driver")
+        if child_driver is not None:
+            child_driver_dir = root / f"sys/bus/drivers/{child_driver}"
+            child_driver_dir.mkdir(parents=True)
+            virtio_device = device / "virtio0"
+            virtio_device.mkdir()
+            os.symlink(f"../../../../../bus/drivers/{child_driver}",
+                       virtio_device / "driver")
         (root / "dev/dri/renderD128").write_text("")
     if powervr_module:
         (root / "sys/module/powervr").mkdir(parents=True)
@@ -228,8 +236,10 @@ def main() -> int:
             raise
 
     try:
-        # v1: the strict virtual success path.
-        rc, out, err = case("v1-virtual-pass", probe_mode="venus-ok", **virtio)
+        # v1: the strict virtual success path.  virtio-mmio is the immediate
+        # DRM parent in the real A133 sysfs topology; virtio_gpu is its child.
+        virtio_mmio = dict(virtio, node_driver="virtio-mmio", child_driver="virtio_gpu")
+        rc, out, err = case("v1-virtual-pass", probe_mode="venus-ok", **virtio_mmio)
         check(rc == 0, f"v1: rc={rc} stderr={err.strip()!r}, expected 0")
         check("PF-OPEN-GPU PASS: branch=virtual backend=virtio_gpu+venus" in out,
               f"v1: stdout lacks the virtual receipt: {out.strip()!r}")
@@ -241,6 +251,15 @@ def main() -> int:
               f"v1: venus probe result not echoed: {out!r}")
         check("gles_version=3.2" in out and "renderer=zink" in out,
               f"v1: zink GLES result not echoed: {out!r}")
+
+        # v1-negative: a virtio-mmio parent with a different child remains
+        # physical and must not be promoted to the virtual branch.
+        rc, out, err = case("v1-negative-non-virtio-child", probe_mode="venus-ok",
+                            node_driver="virtio-mmio", child_driver="some_other_driver",
+                            powervr_module=False, icd=True, firmware=False,
+                            provenance_sha=None)
+        check(rc == 1 and "branch=virtual" not in out and "powervr is not loaded" in err,
+              f"v1-negative: non-virtio child was accepted: rc={rc} out={out!r} err={err!r}")
 
         # v2: a direct guest lavapipe ICD is never the virtual success path.
         rc, out, err = case("v2-lavapipe-rejected", probe_mode="lavapipe", **virtio)
