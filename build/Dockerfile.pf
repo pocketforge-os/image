@@ -825,7 +825,7 @@ install -D -m 0644 /tmp/10-pocketforge-zink.conf \
 meson introspect --buildoptions build-cross >/instroot/.pf-gpu-um-build-options.json
 aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
   /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe \
-  -lvulkan -lEGL -lGLESv2 -lgbm
+  -lvulkan -lEGL -lGLESv2
 readelf -h /tmp/open-gpu-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
 install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
 aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \

@@ -21,7 +21,6 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
-#include <gbm.h>
 
 /*
  * Strict-virtual constants. The kernel UAPI (include/uapi/drm/virtgpu_drm.h)
@@ -36,8 +35,8 @@
 #define VIRTGPU_DRM_CAPSET_VENUS 4
 #endif
 
-#ifndef EGL_PLATFORM_GBM_KHR
-#define EGL_PLATFORM_GBM_KHR 0x31D7
+#ifndef EGL_PLATFORM_SURFACELESS_MESA
+#define EGL_PLATFORM_SURFACELESS_MESA 0x31DD
 #endif
 #ifndef EGL_OPENGL_ES3_BIT
 #define EGL_OPENGL_ES3_BIT 0x00000040
@@ -762,13 +761,10 @@ static int probe_gles32_zink_readback(void)
         "layout(location = 0) out vec4 color;\n"
         "void main() { color = vec4(1.0, 0.0, 0.0, 1.0); }\n";
     char node[256], icd[256];
-    int drm_fd;
-    struct gbm_device *gbm = NULL;
-    struct gbm_surface *surface = NULL;
     EGLDisplay display = EGL_NO_DISPLAY;
     EGLConfig config;
     EGLContext context = EGL_NO_CONTEXT;
-    EGLSurface window = EGL_NO_SURFACE;
+    EGLSurface surface = EGL_NO_SURFACE;
     EGLint config_count = 0, major = 0, minor = 0;
     GLuint program = 0, vertex_shader = 0, fragment_shader = 0;
     GLuint framebuffer = 0, texture = 0;
@@ -778,7 +774,7 @@ static int probe_gles32_zink_readback(void)
     int status = 1;
 
     const EGLint config_attributes[] = {
-        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
         EGL_RED_SIZE, 8,
         EGL_GREEN_SIZE, 8,
@@ -791,6 +787,11 @@ static int probe_gles32_zink_readback(void)
         EGL_CONTEXT_MINOR_VERSION_KHR, 2,
         EGL_NONE,
     };
+    const EGLint surface_attributes[] = {
+        EGL_WIDTH, 16,
+        EGL_HEIGHT, 16,
+        EGL_NONE,
+    };
 
     if (find_virtgpu_render_node(node, sizeof(node)) != 0)
         return 1;
@@ -801,15 +802,13 @@ static int probe_gles32_zink_readback(void)
     if (setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1) != 0)
         return virtual_fail("cannot pin the zink loader override");
 
-    drm_fd = open(node, O_RDWR | O_CLOEXEC);
-    if (drm_fd < 0)
-        return virtual_fail("cannot open the virtio_gpu render node");
-    gbm = gbm_create_device(drm_fd);
-    if (gbm == NULL) {
-        fprintf(stderr, "open-gpu-probe: gbm_create_device failed\n");
-        goto cleanup;
-    }
-    display = eglGetPlatformDisplay(EGL_PLATFORM_GBM_KHR, gbm, NULL);
+    /*
+     * The QEMU Venus device is intentionally render-only: KMS is disabled
+     * and max_outputs=0.  Use Mesa's public surfaceless platform with a
+     * pbuffer so Zink never needs a GBM window or scanout-capable device.
+     */
+    display = eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA,
+                                    EGL_DEFAULT_DISPLAY, NULL);
     if (display == EGL_NO_DISPLAY ||
         eglInitialize(display, &major, &minor) != EGL_TRUE) {
         fprintf(stderr, "open-gpu-probe: EGL initialize failed (0x%x)\n", eglGetError());
@@ -822,7 +821,7 @@ static int probe_gles32_zink_readback(void)
     }
     if (eglChooseConfig(display, config_attributes, &config, 1, &config_count) != EGL_TRUE ||
         config_count < 1) {
-        fprintf(stderr, "open-gpu-probe: no ES3 window config (0x%x)\n", eglGetError());
+        fprintf(stderr, "open-gpu-probe: no ES3 pbuffer config (0x%x)\n", eglGetError());
         goto cleanup;
     }
     context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attributes);
@@ -831,18 +830,13 @@ static int probe_gles32_zink_readback(void)
                 eglGetError());
         goto cleanup;
     }
-    surface = gbm_surface_create(gbm, 16, 16, GBM_FORMAT_ARGB8888, GBM_BO_USE_RENDERING);
+    surface = eglCreatePbufferSurface(display, config, surface_attributes);
     if (surface == NULL) {
-        fprintf(stderr, "open-gpu-probe: gbm_surface_create failed\n");
-        goto cleanup;
-    }
-    window = eglCreateWindowSurface(display, config, (EGLNativeWindowType)surface, NULL);
-    if (window == EGL_NO_SURFACE) {
-        fprintf(stderr, "open-gpu-probe: eglCreateWindowSurface failed (0x%x)\n",
+        fprintf(stderr, "open-gpu-probe: eglCreatePbufferSurface failed (0x%x)\n",
                 eglGetError());
         goto cleanup;
     }
-    if (eglMakeCurrent(display, window, window, context) != EGL_TRUE) {
+    if (eglMakeCurrent(display, surface, surface, context) != EGL_TRUE) {
         fprintf(stderr, "open-gpu-probe: eglMakeCurrent failed (0x%x)\n", eglGetError());
         goto cleanup;
     }
@@ -908,16 +902,10 @@ cleanup:
         eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     if (context != EGL_NO_CONTEXT && display != EGL_NO_DISPLAY)
         eglDestroyContext(display, context);
-    if (window != EGL_NO_SURFACE && display != EGL_NO_DISPLAY)
-        eglDestroySurface(display, window);
+    if (surface != EGL_NO_SURFACE && display != EGL_NO_DISPLAY)
+        eglDestroySurface(display, surface);
     if (display != EGL_NO_DISPLAY)
         eglTerminate(display);
-    if (surface != NULL)
-        gbm_surface_destroy(surface);
-    if (gbm != NULL)
-        gbm_device_destroy(gbm);
-    if (drm_fd >= 0)
-        close(drm_fd);
     return status;
 }
 
