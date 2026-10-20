@@ -781,7 +781,7 @@ for pass in 1 2; do
     --wrap-mode=nodownload \
     -Dvulkan-drivers=imagination,virtio -Dimagination-srv=false -Dllvm=disabled \
     -Dmesa-clc=system \
-    -Dprecomp-compiler=system -Dgallium-drivers=zink -Dplatforms=x11,wayland \
+    -Dprecomp-compiler=system -Dgallium-drivers=zink -Dplatforms=x11,wayland,surfaceless \
     -Dglx=dri -Degl=enabled -Dgbm=enabled \
     -Dglvnd=enabled -Dglvnd-vendor-name=mesa -Dshader-cache=enabled \
     -Dshader-cache-max-size=64M \
