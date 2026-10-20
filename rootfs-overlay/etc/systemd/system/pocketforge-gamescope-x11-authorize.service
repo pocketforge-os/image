@@ -1,0 +1,23 @@
+[Unit]
+Description=Authorize the PocketForge app uid on Xwayland
+Requires=pocketforge-gamescope.service
+BindsTo=pocketforge-gamescope.service
+After=pocketforge-gamescope.service
+Before=pocketforge-session-publisher.service
+PartOf=pocketforge-gamescope-session.target
+OnFailure=pocketforge-gamescope-fallback.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=pf-gamescope
+Group=pf-gamescope
+ExecStart=/usr/lib/pocketforge/pf-x11-authorize --socket /run/pocketforge/x11/.X11-unix/X0 --user gamer --timeout 9 --monitor
+TimeoutStartSec=10s
+Restart=on-failure
+RestartSec=1s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX

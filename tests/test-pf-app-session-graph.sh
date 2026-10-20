@@ -189,6 +189,7 @@ for unit in \
     pf-app@.service \
     pocketforge-gamescope-session.target \
     pocketforge-gamescope.service \
+    pocketforge-gamescope-x11-authorize.service \
     pocketforge-session-publisher.service \
     pocketforge-gamescope-fallback.service \
     pocketforge-gamescope-resident.service; do
@@ -219,11 +220,15 @@ cp "${root}/rootfs-overlay/usr/lib/pocketforge/pf-session-publish" \
     "${verify}/usr/lib/pocketforge/pf-session-publish"
 cp "${root}/rootfs-overlay/usr/lib/pocketforge/pf-gamescope-kms-select" \
     "${verify}/usr/lib/pocketforge/pf-gamescope-kms-select"
+cp "${root}/rootfs-overlay/usr/lib/pocketforge/pf-x11-authorize" \
+    "${verify}/usr/lib/pocketforge/pf-x11-authorize"
+chmod 0755 "${verify}/usr/lib/pocketforge/pf-x11-authorize"
 
 if ! systemd-analyze verify --man=no --root="${verify}" \
     pf-app@org.pocketforge.fixture.service \
     pocketforge-gamescope-session.target \
     pocketforge-gamescope.service \
+    pocketforge-gamescope-x11-authorize.service \
     pocketforge-session-publisher.service \
     pocketforge-gamescope-fallback.service \
     pocketforge-gamescope-resident.service \

@@ -23,6 +23,7 @@ esac
 files=(
     etc/systemd/system/pocketforge-gamescope-session.target
     etc/systemd/system/pocketforge-gamescope.service
+    etc/systemd/system/pocketforge-gamescope-x11-authorize.service
     etc/systemd/system/pocketforge-session-publisher.service
     etc/systemd/system/pocketforge-gamescope-fallback.service
     etc/systemd/system/pocketforge-gamescope-resident.service
@@ -35,6 +36,8 @@ for file in "${files[@]}"; do
 done
 install -D -m 0755 "${src}/usr/lib/pocketforge/pf-session-publish" \
     "${rootfs}/usr/lib/pocketforge/pf-session-publish"
+install -D -m 0755 "${src}/usr/lib/pocketforge/pf-x11-authorize" \
+    "${rootfs}/usr/lib/pocketforge/pf-x11-authorize"
 install -D -m 0755 "${src}/usr/lib/pocketforge/pf-gamescope-kms-select" \
     "${rootfs}/usr/lib/pocketforge/pf-gamescope-kms-select"
 install -D -m 0644 \
