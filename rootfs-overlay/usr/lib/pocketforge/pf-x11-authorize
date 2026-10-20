@@ -30,7 +30,7 @@ def recv_exact(sock: socket.socket, size: int) -> bytes:
     return bytes(data)
 
 
-def authorize(path: Path, user: str, timeout: float) -> None:
+def connect_authorized(path: Path, user: str, timeout: float) -> socket.socket:
     if user != "gamer" or not USER_RE.fullmatch(user) or len(user) > MAX_USER:
         fail("unsupported_user")
     deadline = time.monotonic() + timeout
@@ -46,7 +46,7 @@ def authorize(path: Path, user: str, timeout: float) -> None:
                 fail("x11_socket_timeout")
             time.sleep(0.05)
 
-    with client:
+    try:
         # X11 setup with no authentication is admitted because this process
         # runs as the Xwayland server owner, pf-gamescope.
         client.sendall(struct.pack("<BBHHHHH", ord("l"), 0, 11, 0, 0, 0, 0))
@@ -76,16 +76,17 @@ def authorize(path: Path, user: str, timeout: float) -> None:
             fail("server_rejected_acl")
         if reply[0] != 1:
             fail("unexpected_x11_reply")
+    except BaseException:
+        client.close()
+        raise
+    return client
+
+
+def authorize(path: Path, user: str, timeout: float) -> None:
+    with connect_authorized(path, user, timeout):
+        pass
 
     print(f"x11-authorization-ready user={user}")
-
-
-def socket_identity(path: Path) -> tuple[int, int] | None:
-    try:
-        state = path.stat()
-    except OSError:
-        return None
-    return state.st_dev, state.st_ino
 
 
 def notify_ready() -> None:
@@ -98,24 +99,36 @@ def notify_ready() -> None:
         notify.sendto(b"READY=1\nSTATUS=Xwayland gamer ACL monitor active", address)
 
 
+def probe(client: socket.socket, poll_seconds: float) -> None:
+    client.settimeout(max(0.1, poll_seconds))
+    try:
+        client.sendall(struct.pack("<BBH", 43, 0, 1))
+        reply = recv_exact(client, 32)
+    except (OSError, SystemExit) as error:
+        raise ConnectionError("x11 server generation ended") from error
+    if reply[0] != 1:
+        raise ConnectionError("x11 server rejected health probe")
+
+
 def monitor(path: Path, user: str, timeout: float, poll_seconds: float) -> None:
     # Type=notify keeps the publisher behind this first successful ACL update.
-    authorize(path, user, timeout)
+    client = connect_authorized(path, user, timeout)
+    print(f"x11-authorization-ready user={user}")
     notify_ready()
-    identity = socket_identity(path)
-    while True:
-        time.sleep(poll_seconds)
-        current = socket_identity(path)
-        if current == identity:
-            continue
-        if current is None:
-            identity = None
-            continue
-        # wlroots may replace Xwayland's child while Gamescope and X0 remain
-        # alive. Re-apply the ACL to the newly bound socket before exposing it
-        # to the next client.
-        authorize(path, user, timeout)
-        identity = current
+    try:
+        while True:
+            time.sleep(poll_seconds)
+            try:
+                probe(client, poll_seconds)
+            except ConnectionError:
+                # wlroots may replace Xwayland's child while Gamescope and X0
+                # keep the same filesystem socket. The old connection ends at
+                # the generation boundary; reconnect and apply the ACL before
+                # the replacement can be used by the published app path.
+                client.close()
+                client = connect_authorized(path, user, timeout)
+    finally:
+        client.close()
 
 
 def main() -> None:

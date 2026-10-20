@@ -430,12 +430,12 @@ ready = threading.Event()
 accepted = []
 
 def serve_x11() -> None:
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(path))
+    listener.listen(1)
+    initial_inode = path.stat().st_ino
+    ready.set()
     for generation in range(2):
-        listener = socket.socket(socket.AF_UNIX)
-        listener.bind(str(path))
-        listener.listen(1)
-        if generation == 0:
-            ready.set()
         client, _ = listener.accept()
         with client:
             setup = client.recv(12)
@@ -447,15 +447,16 @@ def serve_x11() -> None:
             accepted.append((header[4], body))
             assert client.recv(4) == struct.pack("<BBH", 43, 0, 1)
             client.sendall(b"\1" + b"\0" * 31)
-        listener.close()
-        path.unlink()
         if generation == 0:
             time.sleep(0.2)
+    assert path.stat().st_ino == initial_inode
+    listener.close()
+    path.unlink()
 
 notify = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 notify.bind(str(notify_path))
 environment = dict(os.environ, NOTIFY_SOCKET=str(notify_path))
-server = threading.Thread(target=serve_x11)
+server = threading.Thread(target=serve_x11, daemon=True)
 server.start()
 assert ready.wait(2)
 process = subprocess.Popen(
