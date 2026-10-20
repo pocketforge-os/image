@@ -434,7 +434,14 @@ fi
 grep -F -- '-Dvulkan-drivers=imagination,virtio' "$dockerfile" >/dev/null
 grep -F -- '-Dvulkan-drivers=imagination -Dimagination-srv=false -Dllvm=enabled' "$dockerfile" >/dev/null
 grep -F 'libgbm-dev:arm64' "$dockerfile" >/dev/null
-grep -F -- '-lvulkan -lEGL -lGLESv2 -lgbm' "$dockerfile" >/dev/null
+# The render-only Zink probe uses surfaceless EGL and therefore must not carry
+# the old GBM/window-system dependency. GBM remains required by Mesa's target
+# stack above, but it is not a dependency of this standalone probe.
+grep -F -- '-lvulkan -lEGL -lGLESv2' "$dockerfile" >/dev/null
+if grep -F -- '-lvulkan -lEGL -lGLESv2 -lgbm' "$dockerfile" >/dev/null; then
+    echo 'render-only open GPU probe must not link the obsolete GBM dependency' >&2
+    exit 1
+fi
 grep -F 'virtio_icd.aarch64.json' "$root/build/package-open-gpu-stack.sh" >/dev/null
 grep -F 'virtio_icd.aarch64.json' "$root/scripts/verify-open-gpu-tools.sh" >/dev/null
 grep -F 'virtio_gpu' "$gate" >/dev/null
