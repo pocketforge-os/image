@@ -30,7 +30,8 @@
 Description=PocketForge selected persistent foreground owner
 Wants=pf-prefsd.service
 Wants=pf-powerd.service
-After=dev-fb0.device pf-input-decode.service pf-powerd.service pf-prefsd.service pocketforge-boot-animator.service
+Wants=cloud-config.service
+After=cloud-config.service dev-fb0.device pf-input-decode.service pf-powerd.service pf-prefsd.service pocketforge-boot-animator.service
 Requires=dev-fb0.device
 Conflicts=pocketforge-menu.service pocketforge-placeholder.service shutdown.target
 Before=shutdown.target
