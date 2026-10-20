@@ -690,8 +690,15 @@ install -m 0644 "${authorization_unit}" \
     "${context}/pocketforge-gamescope-x11-authorize.service"
 install -m 0755 "${fixtures}/fake-x11-authorize" \
     "${context}/fake-x11-authorize"
-sed -i 's#^ExecStart=/usr/lib/pocketforge/pf-x11-authorize .*#ExecStart=/usr/local/libexec/fake-x11-authorize#' \
+sed -i \
+    -e 's#^ExecStart=/usr/lib/pocketforge/pf-x11-authorize .*#ExecStart=/usr/local/libexec/fake-x11-authorize#' \
+    -e 's#^User=pf-gamescope$#User=root#' \
+    -e 's#^Group=pf-gamescope$#Group=root#' \
     "${context}/pocketforge-gamescope-x11-authorize.service"
+grep -Fqx 'User=root' "${context}/pocketforge-gamescope-x11-authorize.service" \
+    || fail 'AUTH_FIXTURE_IDENTITY_MISSING: fake notifier must run as root in the hermetic container'
+grep -Fqx 'Group=root' "${context}/pocketforge-gamescope-x11-authorize.service" \
+    || fail 'AUTH_FIXTURE_IDENTITY_MISSING: fake notifier group missing in the hermetic container'
 install -m 0644 \
     "${root}/rootfs-overlay/etc/systemd/system/pocketforge-session-publisher.service" \
     "${context}/pocketforge-session-publisher.service"
