@@ -1475,9 +1475,17 @@ else
     install -D -m 0644 "${PREFS_SCHEMA_FALLBACK}" \
         "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
 fi
-python3 /work/src/scripts/verify-prefs-schema-xkb.py \
-    "${ROOTFS}/usr/share/X11/xkb/rules/evdev.xml" \
-    "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
+PREFS_SCHEMA_XKB_RULES="${ROOTFS}/usr/share/X11/xkb/rules/evdev.xml"
+if [ -f "${PREFS_SCHEMA_XKB_RULES}" ]; then
+    python3 /work/src/scripts/verify-prefs-schema-xkb.py \
+        "${PREFS_SCHEMA_XKB_RULES}" \
+        "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
+elif [ "${PF_DISPLAY_PIPELINE}" = "none" ]; then
+    echo "[customize] pf-prefs schema XKB check NOT-SHIPPED (headless rootfs)"
+else
+    echo "FATAL: display rootfs is missing installed XKB rules: ${PREFS_SCHEMA_XKB_RULES}" >&2
+    exit 1
+fi
 echo "[customize] pf-prefs seed schema installed at /usr/share/pocketforge/prefs.schema.json"
 
 # --- W2c preference state authority (tsp-op5a.134) --------------------------

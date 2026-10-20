@@ -94,6 +94,8 @@ grep -Fq 'verify-prefs-schema-xkb.py' "${builder}" \
     || fail "rootfs builder does not validate the schema against shipped XKB"
 grep -Fq '/usr/share/X11/xkb/rules/evdev.xml' "${builder}" \
     || fail "rootfs builder does not use the installed evdev.xml"
+grep -Fq 'PF_DISPLAY_PIPELINE}' "${builder}" \
+    || fail "rootfs builder does not classify headless XKB omission"
 cat >"${scratch}/evdev.xml" <<'XML'
 <?xml version="1.0"?>
 <xkbConfigRegistry version="1.1">
