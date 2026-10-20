@@ -1453,6 +1453,41 @@ if [ -f "${SHELL_BIN}" ] || [ -f "${AUTHORITY_BIN}" ] || [ -f "${HANG_SAMPLER_BI
     fi
 fi
 
+# The runtime pf-prefs generator is the source of this contract artifact. Keep
+# a pinned copy in the image tree until that runtime output is available, and
+# refuse to package a runtime artifact that silently disagrees with the pinned
+# schema. This makes a producer drift a build failure rather than a split-brain
+# first-run contract.
+PREFS_SCHEMA_RUNTIME="${RUNTIME_DIR}/share/pocketforge/prefs.schema.json"
+PREFS_SCHEMA_FALLBACK="/work/src/rootfs-overlay/usr/share/pocketforge/prefs.schema.json"
+[ -s "${PREFS_SCHEMA_FALLBACK}" ] || {
+    echo "FATAL: pinned pf-prefs seed schema is missing at ${PREFS_SCHEMA_FALLBACK}" >&2
+    exit 1
+}
+if [ -e "${PREFS_SCHEMA_RUNTIME}" ]; then
+    cmp -s "${PREFS_SCHEMA_RUNTIME}" "${PREFS_SCHEMA_FALLBACK}" || {
+        echo "FATAL: runtime pf-prefs schema drifted from pinned image schema" >&2
+        exit 1
+    }
+    install -D -m 0644 "${PREFS_SCHEMA_RUNTIME}" \
+        "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
+else
+    install -D -m 0644 "${PREFS_SCHEMA_FALLBACK}" \
+        "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
+fi
+PREFS_SCHEMA_XKB_RULES="${ROOTFS}/usr/share/X11/xkb/rules/evdev.xml"
+if [ -f "${PREFS_SCHEMA_XKB_RULES}" ]; then
+    python3 /work/src/scripts/verify-prefs-schema-xkb.py \
+        "${PREFS_SCHEMA_XKB_RULES}" \
+        "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
+elif [ "${PF_DISPLAY_PIPELINE}" = "none" ]; then
+    echo "[customize] pf-prefs schema XKB check NOT-SHIPPED (headless rootfs)"
+else
+    echo "FATAL: display rootfs is missing installed XKB rules: ${PREFS_SCHEMA_XKB_RULES}" >&2
+    exit 1
+fi
+echo "[customize] pf-prefs seed schema installed at /usr/share/pocketforge/prefs.schema.json"
+
 # --- W2c preference state authority (tsp-op5a.134) --------------------------
 PREFSD_BIN="${RUNTIME_DIR}/bin/pf-prefsd"
 if [ -f "${PREFSD_BIN}" ]; then
@@ -1461,6 +1496,9 @@ if [ -f "${PREFSD_BIN}" ]; then
     install -D -m 0755 "${PREFSD_BIN}" "${ROOTFS}/usr/bin/pf-prefsd"
     install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-prefsd.service" \
         "${ROOTFS}/etc/systemd/system/pf-prefsd.service"
+    install -D -m 0644 \
+        "/work/src/rootfs-overlay/etc/systemd/system/pf-prefsd.service.d/10-cloud-init-firstboot.conf" \
+        "${ROOTFS}/etc/systemd/system/pf-prefsd.service.d/10-cloud-init-firstboot.conf"
     install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-broker.service.d/10-prefsd.conf" \
         "${ROOTFS}/etc/systemd/system/pf-broker.service.d/10-prefsd.conf"
     touch "${ROOTFS}/etc/environment"
