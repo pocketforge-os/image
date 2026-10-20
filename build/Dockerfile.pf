@@ -1215,12 +1215,17 @@ COPY --from=image-src build/Dockerfile.pf /work/image/build/Dockerfile.pf
 COPY --from=image-src scripts/build-rootfs.sh /work/image/scripts/build-rootfs.sh
 COPY --from=image-src scripts/build-sd-image.sh /work/image/scripts/build-sd-image.sh
 COPY --from=image-src scripts/generate-build-id.sh /work/image/scripts/generate-build-id.sh
+COPY --from=image-src scripts/verify-prefs-schema-xkb.py /work/image/scripts/verify-prefs-schema-xkb.py
 COPY --from=image-src Makefile /work/image/Makefile
 COPY --from=image-src rootfs-packages.txt /work/image/rootfs-packages.txt
 COPY --from=image-src boards/tsp/boot-resource /work/image/boards/tsp/boot-resource
 COPY --from=image-src rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-firstboot.conf /work/image/rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-firstboot.conf
 COPY --from=image-src rootfs-overlay/etc/ssh/sshd_config.d/00-pocketforge.conf /work/image/rootfs-overlay/etc/ssh/sshd_config.d/00-pocketforge.conf
 COPY --from=image-src rootfs-overlay/etc/systemd/system/ssh.service.d/pocketforge-firstboot.conf /work/image/rootfs-overlay/etc/systemd/system/ssh.service.d/pocketforge-firstboot.conf
+COPY --from=image-src rootfs-overlay/usr/share/pocketforge/prefs.schema.json /work/image/rootfs-overlay/usr/share/pocketforge/prefs.schema.json
+COPY --from=image-src rootfs-overlay/etc/systemd/system/pf-kbd-layout-env.service /work/image/rootfs-overlay/etc/systemd/system/pf-kbd-layout-env.service
+COPY --from=image-src rootfs-overlay/etc/systemd/system/pf-shell-selected.service /work/image/rootfs-overlay/etc/systemd/system/pf-shell-selected.service
+COPY --from=image-src rootfs-overlay/etc/systemd/system/pf-prefsd.service.d/10-cloud-init-firstboot.conf /work/image/rootfs-overlay/etc/systemd/system/pf-prefsd.service.d/10-cloud-init-firstboot.conf
 RUN <<'CLOUD_INIT'
 set -eux
 : "${PF_CLOUD_INIT_SHA:?}"
