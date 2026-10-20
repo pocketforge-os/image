@@ -78,6 +78,12 @@ if "--socket /run/pocketforge/x11/.X11-unix/X0" not in auth:
     raise SystemExit("X11 ACL helper does not target the published socket")
 if "--user gamer" not in auth:
     raise SystemExit("X11 ACL helper does not grant only the app uid")
+if "Type=notify" not in auth or "NotifyAccess=main" not in auth:
+    raise SystemExit("X11 ACL helper does not gate publication on initial authorization")
+if "--monitor" not in auth or "Restart=on-failure" not in auth:
+    raise SystemExit("X11 ACL helper does not re-authorize restarted Xwayland children")
+if "RemainAfterExit=yes" in auth:
+    raise SystemExit("X11 ACL helper is a one-shot authorization")
 if "Requires=pocketforge-gamescope-x11-authorize.service" not in publisher:
     raise SystemExit("publisher does not require X11 authorization")
 if "After=pocketforge-gamescope-x11-authorize.service" not in publisher:
@@ -401,6 +407,76 @@ negative = subprocess.run(
 assert negative.returncode != 0
 assert "unsupported_user" in negative.stderr
 assert not negative.stdout
+PY
+
+# The Xwayland child can be replaced while Gamescope keeps X0 published. The
+# monitor must gate readiness on the first ACL and repeat the request for the
+# replacement socket.
+python3 - "${authorization_helper}" "${scratch}" <<'PY'
+import os
+from pathlib import Path
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+
+helper = sys.argv[1]
+scratch = Path(sys.argv[2])
+path = scratch / "x11-monitor.sock"
+notify_path = scratch / "x11-notify.sock"
+ready = threading.Event()
+accepted = []
+
+def serve_x11() -> None:
+    for generation in range(2):
+        listener = socket.socket(socket.AF_UNIX)
+        listener.bind(str(path))
+        listener.listen(1)
+        if generation == 0:
+            ready.set()
+        client, _ = listener.accept()
+        with client:
+            setup = client.recv(12)
+            assert len(setup) == 12 and setup[0] == ord("l")
+            client.sendall(struct.pack("<BBHHH", 1, 0, 11, 0, 0))
+            header = client.recv(8)
+            assert len(header) == 8 and header[0] == 109
+            body = client.recv(struct.unpack_from("<H", header, 2)[0] * 4 - 8)
+            accepted.append((header[4], body))
+            assert client.recv(4) == struct.pack("<BBH", 43, 0, 1)
+            client.sendall(b"\1" + b"\0" * 31)
+        listener.close()
+        path.unlink()
+        if generation == 0:
+            time.sleep(0.2)
+
+notify = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+notify.bind(str(notify_path))
+environment = dict(os.environ, NOTIFY_SOCKET=str(notify_path))
+server = threading.Thread(target=serve_x11)
+server.start()
+assert ready.wait(2)
+process = subprocess.Popen(
+    [helper, "--socket", str(path), "--user", "gamer", "--timeout", "2", "--monitor"],
+    env=environment,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+try:
+    notify.settimeout(2)
+    assert notify.recv(256).startswith(b"READY=1")
+    server.join(4)
+    assert not server.is_alive()
+    assert len(accepted) == 2
+    assert all(family == 5 and b"localuser\0gamer" in body for family, body in accepted)
+finally:
+    process.terminate()
+    process.wait(timeout=2)
+    notify.close()
+assert process.returncode == -15
 PY
 
 # Exercise publication with real filesystem Unix sockets and a controlled

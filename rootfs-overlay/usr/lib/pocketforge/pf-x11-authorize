@@ -1,9 +1,10 @@
 #!/usr/bin/python3
-"""Grant one local X11 uid access to the compositor-owned Xwayland."""
+"""Grant one local X11 uid access to each compositor-owned Xwayland."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import socket
 import struct
@@ -79,13 +80,56 @@ def authorize(path: Path, user: str, timeout: float) -> None:
     print(f"x11-authorization-ready user={user}")
 
 
+def socket_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        state = path.stat()
+    except OSError:
+        return None
+    return state.st_dev, state.st_ino
+
+
+def notify_ready() -> None:
+    address = os.environ.get("NOTIFY_SOCKET", "")
+    if not address:
+        fail("notify_socket_missing")
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+        notify.sendto(b"READY=1\nSTATUS=Xwayland gamer ACL monitor active", address)
+
+
+def monitor(path: Path, user: str, timeout: float, poll_seconds: float) -> None:
+    # Type=notify keeps the publisher behind this first successful ACL update.
+    authorize(path, user, timeout)
+    notify_ready()
+    identity = socket_identity(path)
+    while True:
+        time.sleep(poll_seconds)
+        current = socket_identity(path)
+        if current == identity:
+            continue
+        if current is None:
+            identity = None
+            continue
+        # wlroots may replace Xwayland's child while Gamescope and X0 remain
+        # alive. Re-apply the ACL to the newly bound socket before exposing it
+        # to the next client.
+        authorize(path, user, timeout)
+        identity = current
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--user", required=True)
     parser.add_argument("--timeout", type=float, default=9.0)
+    parser.add_argument("--monitor", action="store_true")
+    parser.add_argument("--poll-seconds", type=float, default=0.1)
     args = parser.parse_args()
-    authorize(args.socket, args.user, args.timeout)
+    if args.monitor:
+        monitor(args.socket, args.user, args.timeout, args.poll_seconds)
+    else:
+        authorize(args.socket, args.user, args.timeout)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ platform_renderer="${root}/scripts/render-platform-capabilities.py"
 nonproduction_platform_renderer="${root}/tests/session-authority-systemd/make-nonproduction-platform.py"
 owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf"
 resident_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-resident.service"
+authorization_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-x11-authorize.service"
 broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
 containerfile="${fixtures}/Containerfile"
@@ -685,6 +686,12 @@ install -m 0644 "${resident_unit}" \
     "${context}/pocketforge-gamescope-resident.service"
 install -m 0644 "${fixtures}/pocketforge-gamescope.service" \
     "${context}/pocketforge-gamescope.service"
+install -m 0644 "${authorization_unit}" \
+    "${context}/pocketforge-gamescope-x11-authorize.service"
+install -m 0755 "${fixtures}/fake-x11-authorize" \
+    "${context}/fake-x11-authorize"
+sed -i 's#^ExecStart=/usr/lib/pocketforge/pf-x11-authorize .*#ExecStart=/usr/local/libexec/fake-x11-authorize#' \
+    "${context}/pocketforge-gamescope-x11-authorize.service"
 install -m 0644 \
     "${root}/rootfs-overlay/etc/systemd/system/pocketforge-session-publisher.service" \
     "${context}/pocketforge-session-publisher.service"
@@ -864,6 +871,7 @@ if ! docker_checked exec "${systemd_container}" \
         --unit pf-app@org.pocketforge.fixture.service \
         --unit pf-input-broker.service \
         --unit pocketforge-gamescope.service \
+        --unit pocketforge-gamescope-x11-authorize.service \
         --unit pocketforge-gamescope-fallback.service \
         --unit pocketforge-gamescope-resident.service \
         --unit pocketforge-session-publisher.service \
