@@ -282,7 +282,7 @@ import sys
 
 options = {entry["name"]: entry["value"] for entry in json.load(open(sys.argv[1], encoding="utf-8"))}
 expected = {
-    "platforms": ["x11", "wayland"],
+    "platforms": ["x11", "wayland", "surfaceless"],
     "glvnd": "enabled",
     "glvnd-vendor-name": "mesa",
     "glx": "dri",

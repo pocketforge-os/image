@@ -22,7 +22,7 @@ test -x "$verifier" || {
 test "$(grep -Fc 'scripts/verify-open-gpu-provider.sh' "$builder")" -eq 2
 grep -F -- '-Dglvnd=enabled -Dglvnd-vendor-name=mesa' "$dockerfile" >/dev/null
 grep -F -- '-Dglx=dri -Degl=enabled -Dgbm=enabled' "$dockerfile" >/dev/null
-grep -F -- '-Dplatforms=x11,wayland' "$dockerfile" >/dev/null
+grep -F -- '-Dplatforms=x11,wayland,surfaceless' "$dockerfile" >/dev/null
 grep -F -- '-Dxmlconfig=enabled' "$dockerfile" >/dev/null
 grep -F 'libexpat1-dev:arm64' "$dockerfile" >/dev/null
 grep -F 'packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf /tmp/10-pocketforge-zink.conf' \
@@ -148,7 +148,7 @@ printf '%s\n' \
     >"$producer/.pf-gpu-um-provenance"
 cat >"$producer/.pf-gpu-um-build-options.json" <<'EOF'
 [
-  {"name":"platforms","value":["x11","wayland"]},
+  {"name":"platforms","value":["x11","wayland","surfaceless"]},
   {"name":"glvnd","value":"enabled"},
   {"name":"glvnd-vendor-name","value":"mesa"},
   {"name":"glx","value":"dri"},

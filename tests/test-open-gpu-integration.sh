@@ -172,7 +172,7 @@ target_stage_block="$(awk '
 }
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dshader-cache=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dzstd=enabled' >/dev/null
-printf '%s\n' "$target_stage_block" | grep -F -- '-Dplatforms=x11,wayland' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dplatforms=x11,wayland,surfaceless' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dglvnd=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dglvnd-vendor-name=mesa' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dglx=dri' >/dev/null
