@@ -184,6 +184,18 @@ without that grant gets neither. These inputs deliberately do not traverse the
 generation-selecting `/run/pocketforge/session` symlink, so the launcher can
 keep strict no-symlink descriptor traversal. Publication refuses an observable
 abstract X listener.
+
+The pinned wlroots launch has no `-auth` option, so this image does not invent
+or project an Xauthority cookie. Instead,
+`pocketforge-gamescope-x11-authorize.service` runs
+`/usr/lib/pocketforge/pf-x11-authorize` as the compositor owner
+(`pf-gamescope`) and adds only the X11 server-interpreted
+`localuser:gamer` entry. The helper uses the filesystem X socket and a bounded
+raw X11 request; it rejects every other requested user. Thus the compositor's
+uid remains the Xwayland owner, the app uid is explicitly admitted, and an
+unauthorized local uid still receives Xwayland's authorization refusal. The
+publisher requires this authorization unit before it publishes the app-visible
+X11 policy.
 Gamescope runs without the broad `input` group: udev grants its
 dedicated compositor-input group only keyboard, mouse, touchscreen, and the
 input router's virtual mouse. The broker retains the built-in controller and
@@ -200,7 +212,8 @@ generation. The selected display owner creates exactly:
 The separately lifecycle-bound X11 producer creates
 `/run/pocketforge/x11/.X11-unix/X0` and the root-owned mode-0444
 `/run/pocketforge/x11/policy/environment`; only a renderer-compiled `x11`
-policy projects them into an app unit.
+policy projects them into an app unit. That environment contains `DISPLAY=:0`;
+there is intentionally no `XAUTHORITY` variable or file.
 
 The environment record is data, never shell-evaluated, and contains a strict
 allow-list:

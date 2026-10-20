@@ -1,8 +1,10 @@
 [Unit]
 Description=Publish the PocketForge compositor session ABI
 Requires=pocketforge-gamescope.service
+Requires=pocketforge-gamescope-x11-authorize.service
 BindsTo=pocketforge-gamescope.service
 After=pocketforge-gamescope.service
+After=pocketforge-gamescope-x11-authorize.service
 Before=pocketforge-gamescope-session.target
 PartOf=pocketforge-gamescope-session.target
 OnFailure=pocketforge-gamescope-fallback.service

@@ -33,7 +33,8 @@ test -z "$(find "${scratch}/absent" -mindepth 1 -print -quit)" \
 "${installer}" g1 "${scratch}/g1"
 unit_root="${scratch}/g1/etc/systemd/system"
 for unit in pocketforge-gamescope-session.target pocketforge-gamescope.service \
-    pocketforge-session-publisher.service pocketforge-gamescope-fallback.service \
+    pocketforge-gamescope-x11-authorize.service pocketforge-session-publisher.service \
+    pocketforge-gamescope-fallback.service \
     pocketforge-gamescope-resident.service; do
     test -f "${unit_root}/${unit}" || fail "g1 install omitted ${unit}"
 done
@@ -48,6 +49,60 @@ owner="${unit_root}/pocketforge-gamescope.service"
 publisher_unit="${unit_root}/pocketforge-session-publisher.service"
 x11_tmpfiles="${scratch}/g1/usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf"
 drm_systemd_rule="${root}/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
+
+# Xwayland's default uid check is the only authorization primitive provided by
+# the pinned wlroots launch path. Keep the compositor owner uid isolated, but
+# add exactly the app uid through the X11 server-interpreted local-user ACL.
+# There is deliberately no cookie producer or xhost-all grant. Keep the
+# negative control in this invocation: an ACL for another uid must fail.
+check_xwayland_authorization_contract() {
+    local owner_unit=$1
+    local publisher_service=$2
+    local auth_unit=$3
+    local helper=$4
+
+    python3 - "${owner_unit}" "${publisher_service}" "${auth_unit}" \
+        "${helper}" <<'PY'
+import pathlib
+import sys
+
+owner_path, publisher_path, auth_path, helper_path = map(pathlib.Path, sys.argv[1:])
+owner = owner_path.read_text(encoding="utf-8")
+publisher = publisher_path.read_text(encoding="utf-8")
+auth = auth_path.read_text(encoding="utf-8")
+if "User=pf-gamescope" not in owner or "Group=pf-gamescope" not in owner:
+    raise SystemExit("Gamescope no longer owns the Xwayland server")
+if "User=pf-gamescope" not in auth or "Group=pf-gamescope" not in auth:
+    raise SystemExit("X11 ACL helper is not confined to the compositor uid")
+if "--socket /run/pocketforge/x11/.X11-unix/X0" not in auth:
+    raise SystemExit("X11 ACL helper does not target the published socket")
+if "--user gamer" not in auth:
+    raise SystemExit("X11 ACL helper does not grant only the app uid")
+if "Requires=pocketforge-gamescope-x11-authorize.service" not in publisher:
+    raise SystemExit("publisher does not require X11 authorization")
+if "After=pocketforge-gamescope-x11-authorize.service" not in publisher:
+    raise SystemExit("publisher can race X11 authorization")
+if not helper_path.is_file() or not (helper_path.stat().st_mode & 0o111):
+    raise SystemExit("X11 ACL helper is missing or not executable")
+if "xhost" in helper_path.read_text(encoding="utf-8"):
+    raise SystemExit("X11 ACL helper delegates to the unrestricted xhost tool")
+PY
+}
+
+authorization_unit="${unit_root}/pocketforge-gamescope-x11-authorize.service"
+authorization_helper="${root}/rootfs-overlay/usr/lib/pocketforge/pf-x11-authorize"
+check_xwayland_authorization_contract "${owner}" "${publisher_unit}" \
+    "${authorization_unit}" "${authorization_helper}" \
+    || fail "Xwayland authorization projection contract is incomplete"
+cp "${authorization_unit}" "${scratch}/authorization-for-unauthorized-user.service"
+sed -i 's/--user gamer/--user unauthorized/' \
+    "${scratch}/authorization-for-unauthorized-user.service"
+if check_xwayland_authorization_contract "${owner}" \
+    "${publisher_unit}" "${scratch}/authorization-for-unauthorized-user.service" \
+    "${authorization_helper}"; then
+    fail "authorization check accepted an ACL for an unauthorized uid"
+fi
+
 check_xwayland_write_contract() {
     local owner_unit=$1
     local publisher_service=$2
@@ -273,7 +328,8 @@ for target in sysinit.target basic.target shutdown.target; do
 done
 if ! systemd-analyze verify --man=no --root="${verify_root}" \
     pocketforge-gamescope-session.target pocketforge-gamescope.service \
-    pocketforge-session-publisher.service pocketforge-gamescope-fallback.service \
+    pocketforge-gamescope-x11-authorize.service pocketforge-session-publisher.service \
+    pocketforge-gamescope-fallback.service \
     pocketforge-gamescope-resident.service \
     >"${scratch}/systemd-verify.out" 2>&1; then
     cat "${scratch}/systemd-verify.out" >&2
@@ -283,6 +339,68 @@ if test -s "${scratch}/systemd-verify.out"; then
     cat "${scratch}/systemd-verify.out" >&2
     fail "systemd-analyze reported a Gamescope session warning"
 fi
+
+# Exercise the ACL helper's real X11 request shape against a hermetic server
+# stub. The positive control must request only localuser:gamer; the negative
+# control must refuse another uid before it can connect.
+python3 - "${authorization_helper}" "${scratch}/x11-authorize.sock" <<'PY'
+from pathlib import Path
+import socket
+import struct
+import subprocess
+import sys
+import threading
+
+helper = sys.argv[1]
+path = Path(sys.argv[2])
+seen = []
+ready = threading.Event()
+
+def recv_exact(client, size):
+    data = bytearray()
+    while len(data) < size:
+        chunk = client.recv(size - len(data))
+        assert chunk
+        data.extend(chunk)
+    return bytes(data)
+
+def serve():
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(path))
+    listener.listen(1)
+    ready.set()
+    with listener:
+        client, _ = listener.accept()
+        with client:
+            assert recv_exact(client, 12)[0] == ord("l")
+            client.sendall(struct.pack("<BBHHH", 1, 0, 11, 0, 0))
+            header = recv_exact(client, 8)
+            assert header[0] == 109
+            request_length = struct.unpack_from("<H", header, 2)[0]
+            body = recv_exact(client, request_length * 4 - 8)
+            address_length = struct.unpack_from("<H", header, 6)[0]
+            seen.append((header[4], body[:address_length]))
+            assert recv_exact(client, 4) == struct.pack("<BBH", 43, 0, 1)
+            client.sendall(b"\1" + b"\0" * 31)
+
+thread = threading.Thread(target=serve)
+thread.start()
+assert ready.wait(2)
+positive = subprocess.run(
+    [helper, "--socket", str(path), "--user", "gamer", "--timeout", "2"],
+    text=True, capture_output=True,
+)
+thread.join(2)
+assert positive.returncode == 0, positive.stderr
+assert seen == [(5, b"localuser\0gamer")]
+negative = subprocess.run(
+    [helper, "--socket", str(path), "--user", "unauthorized", "--timeout", "0"],
+    text=True, capture_output=True,
+)
+assert negative.returncode != 0
+assert "unsupported_user" in negative.stderr
+assert not negative.stdout
+PY
 
 # Exercise publication with real filesystem Unix sockets and a controlled
 # /proc/net/unix view. The helper owns the atomic generation and projection.

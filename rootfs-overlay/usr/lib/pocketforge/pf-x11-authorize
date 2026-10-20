@@ -1,0 +1,92 @@
+#!/usr/bin/python3
+"""Grant one local X11 uid access to the compositor-owned Xwayland."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import socket
+import struct
+import time
+from pathlib import Path
+
+
+MAX_USER = 32
+USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+
+
+def fail(message: str) -> "None":
+    raise SystemExit(f"x11-authorization-refused reason={message}")
+
+
+def recv_exact(sock: socket.socket, size: int) -> bytes:
+    data = bytearray()
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            fail("short_x11_reply")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def authorize(path: Path, user: str, timeout: float) -> None:
+    if user != "gamer" or not USER_RE.fullmatch(user) or len(user) > MAX_USER:
+        fail("unsupported_user")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            client = socket.socket(socket.AF_UNIX)
+            client.settimeout(max(0.1, deadline - time.monotonic()))
+            client.connect(str(path))
+            break
+        except OSError:
+            client.close()
+            if time.monotonic() >= deadline:
+                fail("x11_socket_timeout")
+            time.sleep(0.05)
+
+    with client:
+        # X11 setup with no authentication is admitted because this process
+        # runs as the Xwayland server owner, pf-gamescope.
+        client.sendall(struct.pack("<BBHHHHH", ord("l"), 0, 11, 0, 0, 0, 0))
+        header = recv_exact(client, 8)
+        if header[0] != 1:
+            fail("server_owner_connection_refused")
+        extra_words = struct.unpack_from("<H", header, 6)[0]
+        recv_exact(client, extra_words * 4)
+
+        # ChangeHosts(FamilyServerInterpreted, localuser, gamer). This is the
+        # same narrow ACL as a local-user server-interpreted grant, without
+        # invoking an unrestricted host-access tool or touching the abstract
+        # namespace.
+        address = b"localuser\0" + user.encode("ascii")
+        padding = b"\0" * ((-len(address)) & 3)
+        request_length = (8 + len(address) + len(padding)) // 4
+        client.sendall(
+            struct.pack("<BBHBBH", 109, 0, request_length, 5, 0, len(address))
+            + address
+            + padding
+        )
+        # Force the request through the server and fail closed on a protocol
+        # error. GetInputFocus is harmless and has a fixed-size reply.
+        client.sendall(struct.pack("<BBH", 43, 0, 1))
+        reply = recv_exact(client, 32)
+        if reply[0] == 0:
+            fail("server_rejected_acl")
+        if reply[0] != 1:
+            fail("unexpected_x11_reply")
+
+    print(f"x11-authorization-ready user={user}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--socket", type=Path, required=True)
+    parser.add_argument("--user", required=True)
+    parser.add_argument("--timeout", type=float, default=9.0)
+    args = parser.parse_args()
+    authorize(args.socket, args.user, args.timeout)
+
+
+if __name__ == "__main__":
+    main()
