@@ -20,7 +20,7 @@ grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 # launcher vendors that exact generation. Reject every older or crossed source
 # generation, including the immediately preceding matched pair.
 expected_runtime=4dbadfd36f5c08098f45d64fa0d8cbbaa8a9d074
-expected_launcher=c3f05fc296692cb67c6d490e56c6fe07f8a846c5
+expected_launcher=c11bc89b8df758f22cdc8df73e6688c854266e17
 pr_head_launcher=8bc5ca7b79c6cf90012e4cc9ae4fcfc5085e34e6
 prior_runtime=e1aa7e373e39efb48bd4cf0c7a74b310beddf70e
 prior_launcher=f26bfd66ab739d06caf4e5347fc4150e2777c1ab
