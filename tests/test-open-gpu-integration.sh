@@ -172,7 +172,11 @@ target_stage_block="$(awk '
 }
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dshader-cache=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dzstd=enabled' >/dev/null
-printf '%s\n' "$target_stage_block" | grep -F -- '-Dplatforms=x11,wayland,surfaceless' >/dev/null
+printf '%s\n' "$target_stage_block" | grep -F -- '-Dplatforms=x11,wayland' >/dev/null
+if printf '%s\n' "$target_stage_block" | grep -F -- '-Dplatforms=x11,wayland,surfaceless' >/dev/null; then
+    echo 'Mesa surfaceless EGL is unconditional; it must not be passed as a platforms option' >&2
+    exit 1
+fi
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dglvnd=enabled' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dglvnd-vendor-name=mesa' >/dev/null
 printf '%s\n' "$target_stage_block" | grep -F -- '-Dglx=dri' >/dev/null

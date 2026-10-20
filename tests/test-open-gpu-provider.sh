@@ -22,7 +22,11 @@ test -x "$verifier" || {
 test "$(grep -Fc 'scripts/verify-open-gpu-provider.sh' "$builder")" -eq 2
 grep -F -- '-Dglvnd=enabled -Dglvnd-vendor-name=mesa' "$dockerfile" >/dev/null
 grep -F -- '-Dglx=dri -Degl=enabled -Dgbm=enabled' "$dockerfile" >/dev/null
-grep -F -- '-Dplatforms=x11,wayland,surfaceless' "$dockerfile" >/dev/null
+grep -F -- '-Dplatforms=x11,wayland' "$dockerfile" >/dev/null
+if grep -F -- '-Dplatforms=x11,wayland,surfaceless' "$dockerfile" >/dev/null; then
+    echo 'Mesa surfaceless EGL is unconditional; it must not be passed as a platforms option' >&2
+    exit 1
+fi
 grep -F -- '-Dxmlconfig=enabled' "$dockerfile" >/dev/null
 grep -F 'libexpat1-dev:arm64' "$dockerfile" >/dev/null
 grep -F 'packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf /tmp/10-pocketforge-zink.conf' \
@@ -120,6 +124,8 @@ for artifact in \
     printf 'gpu-um-tsp fixture: %s\n' "$artifact" \
         >"$producer/usr/local/lib/$artifact"
 done
+printf '%s\n' 'EGL_MESA_platform_surfaceless eglGetPlatformDisplay' \
+    >"$producer/usr/local/lib/libEGL_mesa.so.0.0.0"
 ln -s libEGL_mesa.so.0.0.0 "$producer/usr/local/lib/libEGL_mesa.so.0"
 ln -s libGLX_mesa.so.0.0.0 "$producer/usr/local/lib/libGLX_mesa.so.0"
 ln -s libgbm.so.1.0.0 "$producer/usr/local/lib/libgbm.so.1"
@@ -148,7 +154,7 @@ printf '%s\n' \
     >"$producer/.pf-gpu-um-provenance"
 cat >"$producer/.pf-gpu-um-build-options.json" <<'EOF'
 [
-  {"name":"platforms","value":["x11","wayland","surfaceless"]},
+  {"name":"platforms","value":["x11","wayland"]},
   {"name":"glvnd","value":"enabled"},
   {"name":"glvnd-vendor-name","value":"mesa"},
   {"name":"glx","value":"dri"},
@@ -176,6 +182,12 @@ cat >"$scratch/readelf" <<'EOF'
 set -eu
 emit_symbols() {
     case "$1" in
+        *libEGL.so.1)
+            case "$1" in
+                *red-missing-platform-display*) ;;
+                *) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 eglGetPlatformDisplay@@EGL_1.5\n' ;;
+            esac
+            ;;
         *red-missing-egl-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n' ;;
         *red-missing-glx-main*) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n' ;;
         *) printf '  1: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __egl_Main\n  2: 0000000000000000 0 FUNC GLOBAL DEFAULT 1 __glx_Main\n' ;;
@@ -437,7 +449,7 @@ dpkg-deb --fsys-tarfile "$scratch/provider-a.deb" | tar -tf - | \
 positive_output=$("$verifier" "$rootfs" "$producer")
 printf '%s\n' "$positive_output"
 printf '%s\n' "$positive_output" | grep -Fx \
-    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr+venus vulkan_manifests=2 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
+    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr+venus vulkan_manifests=2 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
     >/dev/null
 
 # A stripped DSO has no static symbol table. In that case the verifier must
@@ -642,6 +654,30 @@ candidate="$scratch/red-missing-egl-main"
 cp -a "$rootfs" "$candidate"
 expect_rejection red-missing-egl-main "$candidate" \
     'GLVND EGL vendor does not export __egl_Main'
+
+# The render-only path depends on Mesa's built surfaceless EGL platform, not on
+# a Meson platforms-list token. Mutating the real provider DSO and its mirrored
+# rootfs artifact must fail closed even when all package and ELF checks pass.
+candidate="$scratch/red-missing-surfaceless"
+producer_bad="$scratch/producer-missing-surfaceless"
+cp -a "$rootfs" "$candidate"
+cp -a "$producer" "$producer_bad"
+printf '%s\n' 'EGL vendor without the surfaceless platform' \
+    >"$candidate/usr/local/lib/libEGL_mesa.so.0.0.0"
+printf '%s\n' 'EGL vendor without the surfaceless platform' \
+    >"$producer_bad/usr/local/lib/libEGL_mesa.so.0.0.0"
+if "$verifier" "$candidate" "$producer_bad" \
+    >"$scratch/red-missing-surfaceless.out" \
+    2>"$scratch/red-missing-surfaceless.err"; then
+    echo 'FAIL: red-missing-surfaceless fixture was accepted' >&2
+    exit 1
+fi
+grep -F 'Mesa EGL vendor does not advertise EGL_MESA_platform_surfaceless' \
+    "$scratch/red-missing-surfaceless.err" >/dev/null || {
+    cat "$scratch/red-missing-surfaceless.err" >&2
+    echo 'FAIL: red-missing-surfaceless did not report missing surfaceless support' >&2
+    exit 1
+}
 
 candidate="$scratch/red-missing-glx-main"
 cp -a "$rootfs" "$candidate"
