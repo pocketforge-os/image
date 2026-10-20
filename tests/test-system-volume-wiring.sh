@@ -19,7 +19,8 @@ check_recipe() {
     for token in \
         'install -D -m 0755 "${VOLUMED_BIN}" "${ROOTFS}/usr/bin/pf-volumed"' \
         '"${RUNTIME_DIR}/systemd/pf-volumed.service"' \
-        'multi-user.target.wants/pf-volumed.service'; do
+        'multi-user.target.wants/pf-volumed.service' \
+        '73-pocketforge-headphone-jack.rules'; do
         grep -F -- "$token" "$rootfs" >/dev/null || return 1
     done
 }
@@ -31,6 +32,17 @@ cp "$repo/build/Dockerfile.pf" "$tmp/Dockerfile.pf"
 sed -i '/pf-volumed/d' "$tmp/Dockerfile.pf"
 if check_recipe "$tmp/Dockerfile.pf" "$repo/scripts/build-rootfs.sh"; then
     fail "negative control: recipe checker accepted a Dockerfile without pf-volumed"
+fi
+
+rule="$repo/rootfs-overlay/etc/udev/rules.d/73-pocketforge-headphone-jack.rules"
+check_rule() {
+    grep -F -- 'ATTRS{name}=="H616 Audio Codec Headphone Jack"' "$1" >/dev/null \
+        && grep -F -- 'GROUP="audio"' "$1" >/dev/null && grep -F -- 'MODE="0660"' "$1" >/dev/null
+}
+check_rule "$rule" || fail "jack udev rule does not give the codec jack node to the audio group"
+sed 's/GROUP="audio"/GROUP="input"/' "$rule" > "$tmp/jack.rules"
+if check_rule "$tmp/jack.rules"; then
+    fail "negative control: rule checker accepted a jack rule outside the audio group"
 fi
 
 defaults="$repo/device-config/alsa/mixer-defaults.sun4i-codec-7.x"

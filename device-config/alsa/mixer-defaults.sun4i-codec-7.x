@@ -8,6 +8,7 @@
 # Speaker. Do not override those route pins here.
 #
 # 38 is the nearest 0..63 hardware step to the volumeSpeaker default of 60%.
-# pf-volumed reapplies the active output's persisted value after this oneshot.
+# pf-volumed reapplies the persisted value of the route read from the codec jack switch
+# (headphones out = speaker, in = headphones) after this oneshot.
 DAC Playback Volume=38
 Headphone Playback Volume=0
