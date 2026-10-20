@@ -75,8 +75,11 @@ if ! has_package "${SHARED_PACKAGES}" iw; then
 fi
 # Negative control: removing the package from a fixture must fail the exact
 # predicate above, so this gate cannot pass merely because the test is wired.
-without_iw="$(packages "${SHARED_PACKAGES}" | grep -Fxv iw)"
-if printf '%s\n' "${without_iw}" | grep -Fxq iw; then
+fixture_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/mainline-rootfs-packages.XXXXXX")"
+trap 'find "${fixture_dir}" -mindepth 1 -delete; rmdir "${fixture_dir}"' EXIT
+fixture_without_iw="${fixture_dir}/shared-without-iw"
+packages "${SHARED_PACKAGES}" | grep -Fxv iw > "${fixture_without_iw}"
+if has_package "${fixture_without_iw}" iw; then
     echo "FAIL: iw negative control unexpectedly passed" >&2
     exit 1
 fi
