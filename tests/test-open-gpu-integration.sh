@@ -438,6 +438,7 @@ grep -F -- '-lvulkan -lEGL -lGLESv2 -lgbm' "$dockerfile" >/dev/null
 grep -F 'virtio_icd.aarch64.json' "$root/build/package-open-gpu-stack.sh" >/dev/null
 grep -F 'virtio_icd.aarch64.json' "$root/scripts/verify-open-gpu-tools.sh" >/dev/null
 grep -F 'virtio_gpu' "$gate" >/dev/null
+grep -F 'node_device"/virtio*/driver' "$gate" >/dev/null
 grep -F 'branch=virtual backend=virtio_gpu+venus' "$gate" >/dev/null
 grep -F 'driver=venus' "$gate" >/dev/null
 grep -F 'label=virtual' "$gate" >/dev/null
@@ -447,6 +448,9 @@ grep -F '"--venus-readback"' "$probe" >/dev/null
 grep -F '"--gles32-zink-readback"' "$probe" >/dev/null
 grep -F 'VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs' "$probe" >/dev/null
 grep -F 'VIRTGPU_DRM_CAPSET_VENUS' "$probe" >/dev/null
+grep -F 'static int device_has_virtgpu_driver' "$probe" >/dev/null
+grep -F 'link_targets_driver(driver_link, "virtio-mmio")' "$probe" >/dev/null
+grep -F 'strncmp(entry->d_name, "virtio", 6)' "$probe" >/dev/null
 grep -F 'capset=venus' "$probe" >/dev/null
 grep -F 'VK_DRIVER_FILES' "$probe" >/dev/null
 grep -F 'MESA_LOADER_DRIVER_OVERRIDE' "$probe" >/dev/null

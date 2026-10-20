@@ -12,8 +12,21 @@ export PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1
 # below; every other layout (including a physical board and every failure the
 # ordering tests cover) falls through to the unchanged physical branch.
 node_driver=
-if [ -e /dev/dri/renderD128 ] && [ -e /sys/class/drm/renderD128/device/driver ]; then
-    node_driver="$(basename "$(readlink -f /sys/class/drm/renderD128/device/driver)")"
+node_device=/sys/class/drm/renderD128/device
+if [ -e /dev/dri/renderD128 ] && [ -e "$node_device/driver" ]; then
+    node_driver="$(basename "$(readlink -f "$node_device/driver")")"
+    # virtio-mmio is the platform parent of the actual virtio_gpu device on
+    # this machine.  Only that named child can promote the node to virtual;
+    # an arbitrary child or an absent child remains fail-closed.
+    if [ "$node_driver" = virtio-mmio ]; then
+        for child_driver in "$node_device"/virtio*/driver; do
+            [ -e "$child_driver" ] || continue
+            if [ "$(basename "$(readlink -f "$child_driver")")" = virtio_gpu ]; then
+                node_driver=virtio_gpu
+                break
+            fi
+        done
+    fi
 fi
 
 if [ "$node_driver" = virtio_gpu ]; then

@@ -238,6 +238,54 @@ static int virtual_fail(const char *message)
     return 1;
 }
 
+static int link_targets_driver(const char *link, const char *wanted)
+{
+    char resolved[256];
+    ssize_t length = readlink(link, resolved, sizeof(resolved) - 1);
+    const char *base;
+
+    if (length < 0)
+        return 0;
+    resolved[length] = '\0';
+    base = strrchr(resolved, '/');
+    base = base != NULL ? base + 1 : resolved;
+    return strcmp(base, wanted) == 0;
+}
+
+/* The A133 DRM device is a virtio-mmio platform child. */
+static int device_has_virtgpu_driver(const char *device_dir)
+{
+    char driver_link[256];
+    DIR *children;
+    struct dirent *entry;
+    int found = 0;
+
+    if (snprintf(driver_link, sizeof(driver_link), "%s/driver", device_dir)
+            >= (int)sizeof(driver_link))
+        return 0;
+    if (link_targets_driver(driver_link, "virtio_gpu"))
+        return 1;
+    if (!link_targets_driver(driver_link, "virtio-mmio"))
+        return 0;
+
+    children = opendir(device_dir);
+    if (children == NULL)
+        return 0;
+    while ((entry = readdir(children)) != NULL) {
+        if (strncmp(entry->d_name, "virtio", 6) != 0)
+            continue;
+        if (snprintf(driver_link, sizeof(driver_link), "%s/%s/driver",
+                     device_dir, entry->d_name) >= (int)sizeof(driver_link))
+            continue;
+        if (link_targets_driver(driver_link, "virtio_gpu")) {
+            found = 1;
+            break;
+        }
+    }
+    closedir(children);
+    return found;
+}
+
 /* Lowest-numbered render node whose bound kernel driver is virtio_gpu. */
 static int find_virtgpu_render_node(char *path, size_t path_size)
 {
@@ -249,9 +297,8 @@ static int find_virtgpu_render_node(char *path, size_t path_size)
     if (dir == NULL)
         return virtual_fail("cannot open /sys/class/drm");
     while ((entry = readdir(dir)) != NULL) {
-        char driver_link[256], resolved[256];
+        char device_dir[256];
         unsigned long number;
-        ssize_t length;
 
         if (strncmp(entry->d_name, "renderD", 7) != 0)
             continue;
@@ -259,19 +306,11 @@ static int find_virtgpu_render_node(char *path, size_t path_size)
         number = strtoul(entry->d_name + 7, NULL, 10);
         if (errno != 0 || number >= best)
             continue;
-        if (snprintf(driver_link, sizeof(driver_link), "%s/%s/device/driver",
-                     class_dir, entry->d_name) >= (int)sizeof(driver_link))
+        if (snprintf(device_dir, sizeof(device_dir), "%s/%s/device",
+                     class_dir, entry->d_name) >= (int)sizeof(device_dir))
             continue;
-        length = readlink(driver_link, resolved, sizeof(resolved) - 1);
-        if (length < 0)
+        if (!device_has_virtgpu_driver(device_dir))
             continue;
-        resolved[length] = '\0';
-        {
-            const char *base = strrchr(resolved, '/');
-            base = base != NULL ? base + 1 : resolved;
-            if (strcmp(base, "virtio_gpu") != 0)
-                continue;
-        }
         if (snprintf(path, path_size, "/dev/dri/%s", entry->d_name)
                 >= (int)path_size)
             continue;
