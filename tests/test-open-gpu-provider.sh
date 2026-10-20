@@ -4,6 +4,7 @@ set -eu
 root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 packager="$root/build/package-open-gpu-stack.sh"
 verifier="$root/scripts/verify-open-gpu-provider.sh"
+platform_verifier="$root/scripts/verify-open-gpu-probe-platforms.sh"
 control="$root/packages/pocketforge-open-gpu-stack/DEBIAN/control"
 zink_policy="$root/packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf"
 builder="$root/scripts/build-rootfs.sh"
@@ -19,6 +20,10 @@ test -x "$verifier" || {
     echo "FAIL: built-image open GPU provider gate is missing: $verifier" >&2
     exit 1
 }
+test -x "$platform_verifier" || {
+    echo "FAIL: build-time open GPU probe platform gate is missing: $platform_verifier" >&2
+    exit 1
+}
 test "$(grep -Fc 'scripts/verify-open-gpu-provider.sh' "$builder")" -eq 2
 grep -F -- '-Dglvnd=enabled -Dglvnd-vendor-name=mesa' "$dockerfile" >/dev/null
 grep -F -- '-Dglx=dri -Degl=enabled -Dgbm=enabled' "$dockerfile" >/dev/null
@@ -31,6 +36,34 @@ grep -F -- '-Dxmlconfig=enabled' "$dockerfile" >/dev/null
 grep -F 'libexpat1-dev:arm64' "$dockerfile" >/dev/null
 grep -F 'packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf /tmp/10-pocketforge-zink.conf' \
     "$dockerfile" >/dev/null
+grep -F 'scripts/verify-open-gpu-probe-platforms.sh /tmp/verify-open-gpu-probe-platforms.sh' \
+    "$dockerfile" >/dev/null
+grep -F '"/tmp/verify-open-gpu-probe-platforms.sh"' "$dockerfile" >/dev/null
+grep -F '/tmp/open-gpu-probe.c /instroot/usr/local/lib/libEGL_mesa.so.0' \
+    "$dockerfile" >/dev/null
+
+# The producer must prove every EGL platform requested by the shipped probe is
+# represented by the built Mesa vendor, rather than trusting a Meson option.
+platform_probe="$scratch/platform-probe.c"
+platform_vendor="$scratch/libEGL_mesa.so.0.0.0"
+cat >"$platform_probe" <<'EOF'
+display = eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, attrs);
+EOF
+printf '%s\n' 'EGL_MESA_platform_surfaceless' >"$platform_vendor"
+"$platform_verifier" "$platform_probe" "$platform_vendor" >/dev/null
+printf '%s\n' 'EGL vendor without surfaceless support' >"$platform_vendor"
+if "$platform_verifier" "$platform_probe" "$platform_vendor" \
+    >"$scratch/platform-negative.out" 2>"$scratch/platform-negative.err"; then
+    echo 'FAIL: probe-platform negative fixture was accepted' >&2
+    exit 1
+fi
+grep -F 'EGL_PLATFORM_SURFACELESS_MESA requires EGL_MESA_platform_surfaceless' \
+    "$scratch/platform-negative.err" >/dev/null || {
+    cat "$scratch/platform-negative.err" >&2
+    echo 'FAIL: probe-platform negative fixture reported the wrong failure' >&2
+    exit 1
+}
+echo 'open-gpu-probe-platforms-negative=PASS mutation=remove-surfaceless-extension'
 
 # Exercise the production package-list merge in isolation. A package named as
 # an explicit apt root wins over a virtual provider, so the provider-backed

@@ -696,6 +696,7 @@ COPY --from=gpu-um-native-precompilers /opt/mesa-native /opt/mesa-native
 # resource path.  They are generator inputs only, never target headers.
 COPY --from=gpu-um-native-precompilers /usr/lib/llvm-20/lib/clang /usr/lib/llvm-20/lib/clang
 COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
+COPY --from=image-src scripts/verify-open-gpu-probe-platforms.sh /tmp/verify-open-gpu-probe-platforms.sh
 COPY --from=image-src tools/glx-readback-probe.c /tmp/glx-readback-probe.c
 COPY --from=image-src tools/glx-renderer-policy.h /tmp/glx-renderer-policy.h
 COPY --from=image-src build/package-open-gpu-stack.sh /tmp/package-open-gpu-stack.sh
@@ -818,6 +819,9 @@ sha256sum /first-installed-vulkan.so \
   /first-installed-gallium.so \
   /instroot/usr/local/lib/libgallium_dri.so \
   >/src/installed-cross-build-sha256.txt
+chmod 0755 /tmp/verify-open-gpu-probe-platforms.sh
+"/tmp/verify-open-gpu-probe-platforms.sh" \
+  /tmp/open-gpu-probe.c /instroot/usr/local/lib/libEGL_mesa.so.0
 elapsed="$(( $(date +%s) - start ))"
 printf 'two_builds_elapsed_seconds=%s\n' "${elapsed}" >/src/cross-build-time.txt
 install -D -m 0644 /tmp/10-pocketforge-zink.conf \
