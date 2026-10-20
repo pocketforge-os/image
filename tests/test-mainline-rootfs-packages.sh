@@ -12,6 +12,10 @@ packages() {
     grep -v '^\s*#' "$1" | grep -v '^\s*$'
 }
 
+has_package() {
+    packages "$1" | grep -Fxq "$2"
+}
+
 for package in cpufrequtils i2c-tools iperf3 usbutils; do
     packages "${MAINLINE_PACKAGES}" | grep -Fxq "${package}"
     if packages "${SHARED_PACKAGES}" | grep -Fxq "${package}"; then
@@ -63,6 +67,22 @@ done
 # WiFi association remains supplied by the shared Debian runtime package and
 # the pinned PocketForge wpa stage; it must be available to every A133 variant.
 packages "${SHARED_PACKAGES}" | grep -Fxq wpasupplicant
+# `iw` is a shared runtime diagnostic: the open profiles inherit it from the
+# common package list, so it is available to gamer without an open-only fork.
+if ! has_package "${SHARED_PACKAGES}" iw; then
+    echo "FAIL: iw is missing from the shared package list used by open profiles" >&2
+    exit 1
+fi
+# Negative control: removing the package from a fixture must fail the exact
+# predicate above, so this gate cannot pass merely because the test is wired.
+fixture_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/mainline-rootfs-packages.XXXXXX")"
+trap 'find "${fixture_dir}" -mindepth 1 -delete; rmdir "${fixture_dir}"' EXIT
+fixture_without_iw="${fixture_dir}/shared-without-iw"
+packages "${SHARED_PACKAGES}" | grep -Fxv iw > "${fixture_without_iw}"
+if has_package "${fixture_without_iw}" iw; then
+    echo "FAIL: iw negative control unexpectedly passed" >&2
+    exit 1
+fi
 # These are intentionally literal shell fragments in the builder.
 # shellcheck disable=SC2016
 grep -Fq '[ -f "${WPA_DIR}/wpa_supplicant" ]' "${BUILDER}"
