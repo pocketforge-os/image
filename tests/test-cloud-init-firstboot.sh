@@ -88,6 +88,36 @@ grep -Fq 'After=cloud-init-local.service' \
 # generator output is present.
 schema="${repo_dir}/rootfs-overlay/usr/share/pocketforge/prefs.schema.json"
 [ -s "${schema}" ] || fail "pinned pf-prefs seed schema is missing"
+schema_xkb_checker="${repo_dir}/scripts/verify-prefs-schema-xkb.py"
+[ -x "${schema_xkb_checker}" ] || fail "pf-prefs schema XKB checker is missing"
+grep -Fq 'verify-prefs-schema-xkb.py' "${builder}" \
+    || fail "rootfs builder does not validate the schema against shipped XKB"
+grep -Fq '/usr/share/X11/xkb/rules/evdev.xml' "${builder}" \
+    || fail "rootfs builder does not use the installed evdev.xml"
+cat >"${scratch}/evdev.xml" <<'XML'
+<?xml version="1.0"?>
+<xkbConfigRegistry version="1.1">
+  <layoutList>
+    <layout>
+      <configItem><name>us</name></configItem>
+      <variantList>
+        <variant><configItem><name>dvorak</name></configItem></variant>
+      </variantList>
+    </layout>
+  </layoutList>
+</xkbConfigRegistry>
+XML
+cat >"${scratch}/schema.json" <<'JSON'
+{
+  "properties": {"keyboardLayout": {"enum": ["us", "us(dvorak)"]}}
+}
+JSON
+python3 "${schema_xkb_checker}" "${scratch}/evdev.xml" "${scratch}/schema.json" \
+    || fail "schema/XKB compatibility positive control failed"
+sed 's/us(dvorak)/us(qwerty)/' "${scratch}/schema.json" >"${scratch}/bad-schema.json"
+if python3 "${schema_xkb_checker}" "${scratch}/evdev.xml" "${scratch}/bad-schema.json"; then
+    fail "schema/XKB compatibility negative control accepted an unknown variant"
+fi
 grep -Fq 'PREFS_SCHEMA_RUNTIME' "${builder}" \
     || fail "rootfs builder has no runtime-generated schema input"
 grep -Fq 'PREFS_SCHEMA_FALLBACK' "${builder}" \

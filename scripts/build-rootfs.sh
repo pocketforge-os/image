@@ -1475,6 +1475,9 @@ else
     install -D -m 0644 "${PREFS_SCHEMA_FALLBACK}" \
         "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
 fi
+python3 /work/src/scripts/verify-prefs-schema-xkb.py \
+    "${ROOTFS}/usr/share/X11/xkb/rules/evdev.xml" \
+    "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
 echo "[customize] pf-prefs seed schema installed at /usr/share/pocketforge/prefs.schema.json"
 
 # --- W2c preference state authority (tsp-op5a.134) --------------------------
