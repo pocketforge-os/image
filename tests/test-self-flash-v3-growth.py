@@ -13,7 +13,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow"
-STAGE_HELPER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage"
 BUILDER = ROOT / "scripts/build-rootfs.sh"
 CLOUD_OVERRIDE = ROOT / "rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg"
 UNIT = ROOT / "rootfs-overlay/etc/systemd/system/pocketforge-self-flash-v3-grow.service"
@@ -31,7 +30,6 @@ def load_helper(name, path):
 
 
 sf = load_helper("self_flash_v3_grow", HELPER)
-stage = load_helper("self_flash_v3_stage_for_growth_test", STAGE_HELPER)
 
 
 class GrowthGeometryTests(unittest.TestCase):
@@ -139,30 +137,6 @@ class ControlSlotTests(unittest.TestCase):
                 receipt_offset=receipt_offset,
                 sync=lambda: None,
             )
-
-        valid_receipt, _digest = stage._ready_receipt(
-            {
-                "Generation": "a" * 32,
-                "TargetDescriptorSHA256": "b" * 64,
-                "TargetRawSHA256": "c" * 64,
-                "TargetRawBytes": 1024,
-                "CompressedSHA256": "d" * 64,
-                "CompressedBytes": 512,
-            }
-        )
-        preserved = bytearray(before)
-        preserved[arm_offset:receipt_offset] = b"A" * sf.SLOT_BYTES
-        preserved[receipt_offset : receipt_offset + sf.SLOT_BYTES] = valid_receipt
-        preserved_device = io.BytesIO(preserved)
-        disposition = sf.initialize_control_slots(
-            preserved_device,
-            arm_offset=arm_offset,
-            receipt_offset=receipt_offset,
-            sync=lambda: None,
-        )
-        self.assertEqual(disposition, "preserved-valid-receipt")
-        self.assertEqual(preserved_device.getvalue(), preserved)
-
 
 class InstalledPolicyTests(unittest.TestCase):
     def test_root_only_unit_cloud_override_and_packages_are_wired(self):

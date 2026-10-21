@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / "boards/tsp/initrd/self-flash-v3.sh"
 INIT = ROOT / "boards/tsp/initrd/init"
 STAGER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage"
+GROWER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow"
 CONTRACT = ROOT / "docs/SELF-FLASH-V3.md"
 
 loader = SourceFileLoader("self_flash_v3_stage", str(STAGER))
@@ -27,6 +28,12 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 assert spec and spec.loader
 stage = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(stage)
+
+grow_loader = SourceFileLoader("self_flash_v3_grow_for_arm_test", str(GROWER))
+grow_spec = importlib.util.spec_from_loader(grow_loader.name, grow_loader)
+assert grow_spec and grow_spec.loader
+grow = importlib.util.module_from_spec(grow_spec)
+grow_spec.loader.exec_module(grow)
 
 
 class ArmFixture:
@@ -145,18 +152,37 @@ class ArmFixture:
         (part / "size").write_text(f"{sectors}\n", encoding="ascii")
         (part / "dev").write_text(f"{major_minor}\n", encoding="ascii")
 
-    def _receipt(self, state_name: str) -> bytes:
+    def _receipt(self, state_name: str, *, completed: bool = False) -> bytes:
         ready, _digest = stage._ready_receipt(self.request)
         payload = ready.rstrip(b"\0").decode("ascii").splitlines()
+        pass_values = {
+            "XzIntegrity": "pass",
+            "RawStreamSHA256": self.request["TargetRawSHA256"],
+            "RawStreamBytes": str(self.request["TargetRawBytes"]),
+            "RawStreamHashMatch": "pass",
+            "RawStreamCountMatch": "pass",
+            "WriteMethod": "dd-fsync",
+            "WriteResult": "pass",
+            "SeedResult": "pass",
+            "StampResult": "pass",
+        }
         fields = []
         for line in payload[:-2]:
             key, value = line.split("=", 1)
             if key == "State":
                 value = state_name
+            elif completed:
+                value = pass_values.get(key, value)
             fields.append((key, value))
         return stage._ordered_record(fields, "ReceiptRecordSHA256")[0]
 
-    def write_records(self, *, state_name: str = "ready", bad_tail_start: bool = False) -> None:
+    def write_records(
+        self,
+        *,
+        state_name: str = "ready",
+        bad_tail_start: bool = False,
+        completed: bool = False,
+    ) -> None:
         layout = dict(self.layout)
         if bad_tail_start:
             layout["tail_start"] += stage.ALIGNMENT_BYTES
@@ -165,7 +191,18 @@ class ArmFixture:
             card.seek(self.layout["arm_offset"])
             card.write(arm)
             card.seek(self.layout["receipt_offset"])
-            card.write(self._receipt(state_name))
+            card.write(self._receipt(state_name, completed=completed))
+
+    def completed_stamp(self) -> dict[str, str]:
+        receipt = self._receipt("pass", completed=True)
+        return {
+            "Schema": "pocketforge.self-flash-stamp/v3",
+            "Generation": self.generation,
+            "TargetDescriptorSHA256": self.request["TargetDescriptorSHA256"],
+            "TargetRawSHA256": self.request["TargetRawSHA256"],
+            "TargetRawBytes": str(self.request["TargetRawBytes"]),
+            "TailReceiptSHA256": hashlib.sha256(receipt).hexdigest(),
+        }
 
     def run_gate(self) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
@@ -345,6 +382,103 @@ class InitrdArmTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("load=absent\n", result.stderr)
 
+    def test_fresh_image_layout_boots_but_near_capped_drift_refuses(self) -> None:
+        size_file = self.fixture.sys / "card0p5/size"
+        with self.fixture.device.open("r+b", buffering=0) as card:
+            card.seek(self.fixture.layout["arm_offset"])
+            card.write(b"\0" * stage.SLOT_BYTES)
+            card.seek(self.fixture.layout["receipt_offset"])
+            card.write(b"\0" * stage.SLOT_BYTES)
+
+        # A raw-image write leaves partition 5 at its baked size. On the QEMU
+        # acceptance disk this end is well beyond the card-relative tail start;
+        # on the physical 62.5 GB card it is far below it. Neither layout can
+        # have been armed by the typed v3 staging operation, so first boot must
+        # reach the normal root where the capped-growth unit initializes it.
+        size_file.write_text("2611200\n", encoding="ascii")
+        card_size_file = self.fixture.sys / "card0/size"
+        for card_sectors in (self.fixture.sectors, self.fixture.sectors * 2):
+            with self.subTest(card_sectors=card_sectors):
+                card_size_file.write_text(f"{card_sectors}\n", encoding="ascii")
+                fresh = self.fixture.run_gate()
+                self.assertNotEqual(
+                    fresh.returncode, 0, fresh.stdout + fresh.stderr
+                )
+                self.assertIn("load=uninitialized\n", fresh.stderr)
+
+        # Negative control: a sub-alignment change to an otherwise capped live
+        # layout is damage or stale state, not a recognizable fresh image.
+        card_size_file.write_text(f"{self.fixture.sectors}\n", encoding="ascii")
+        size_file.write_text(f"{self.fixture.root_sectors - 1}\n", encoding="ascii")
+        drifted = self.fixture.run_gate()
+        self.assertNotEqual(drifted.returncode, 0, drifted.stdout + drifted.stderr)
+        self.assertIn("load=refused\n", drifted.stderr)
+
+        gate = INIT.read_text(encoding="utf-8")
+        self.assertIn("uninitialized)", gate)
+
+    def test_fresh_layout_rewrite_clears_every_stale_receipt_before_next_boot(self) -> None:
+        size_file = self.fixture.sys / "card0p5/size"
+        for state_name in ("ready", "started", "failed", "pass"):
+            with self.subTest(state=state_name):
+                self.fixture.write_records(state_name=state_name)
+                size_file.write_text("2611200\n", encoding="ascii")
+                fresh = self.fixture.run_gate()
+                self.assertNotEqual(fresh.returncode, 0, fresh.stdout + fresh.stderr)
+                self.assertIn("load=uninitialized\n", fresh.stderr)
+
+                with self.fixture.device.open("r+b", buffering=0) as card:
+                    disposition = grow.initialize_control_slots(
+                        card,
+                        arm_offset=self.fixture.layout["arm_offset"],
+                        receipt_offset=self.fixture.layout["receipt_offset"],
+                        sync=lambda: None,
+                    )
+                self.assertEqual(disposition, "zeroed-and-read-back")
+
+                size_file.write_text(f"{self.fixture.root_sectors}\n", encoding="ascii")
+                next_boot = self.fixture.run_gate()
+                self.assertNotEqual(
+                    next_boot.returncode, 0, next_boot.stdout + next_boot.stderr
+                )
+                self.assertIn("load=absent\n", next_boot.stderr)
+
+    def test_completed_fresh_handoff_is_consumed_before_second_boot(self) -> None:
+        size_file = self.fixture.sys / "card0p5/size"
+        self.fixture.write_records(state_name="pass", completed=True)
+        size_file.write_text("2611200\n", encoding="ascii")
+        first_boot = self.fixture.run_gate()
+        self.assertNotEqual(first_boot.returncode, 0, first_boot.stdout + first_boot.stderr)
+        self.assertIn("load=uninitialized\n", first_boot.stderr)
+
+        with self.fixture.device.open("r+b", buffering=0) as card:
+            disposition = grow.initialize_control_slots(
+                card,
+                arm_offset=self.fixture.layout["arm_offset"],
+                receipt_offset=self.fixture.layout["receipt_offset"],
+                sync=lambda: None,
+                success_stamp=self.fixture.completed_stamp(),
+            )
+        self.assertEqual(disposition, "consumed-completed-handoff")
+
+        size_file.write_text(f"{self.fixture.root_sectors}\n", encoding="ascii")
+        second_boot = self.fixture.run_gate()
+        self.assertNotEqual(second_boot.returncode, 0, second_boot.stdout + second_boot.stderr)
+        self.assertIn("load=absent\n", second_boot.stderr)
+
+        self.fixture.write_records(state_name="pass", completed=True)
+        mismatched_stamp = self.fixture.completed_stamp()
+        mismatched_stamp["TailReceiptSHA256"] = "0" * 64
+        with self.fixture.device.open("r+b", buffering=0) as card:
+            disposition = grow.initialize_control_slots(
+                card,
+                arm_offset=self.fixture.layout["arm_offset"],
+                receipt_offset=self.fixture.layout["receipt_offset"],
+                sync=lambda: None,
+                success_stamp=mismatched_stamp,
+            )
+        self.assertEqual(disposition, "zeroed-and-read-back")
+
     def test_pid1_gate_is_fail_closed_and_watchdog_ordered(self) -> None:
         source = INIT.read_text(encoding="utf-8")
         start = source.index("# BEGIN POCKETFORGE SELF-FLASH V3 GATE")
@@ -481,18 +615,19 @@ class InitrdArmTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((fat / "pocketforge-self-flash-v3").exists())
 
-    def test_complete_transaction_passes_without_full_readback(self) -> None:
+    def test_two_generations_replace_stamp_without_full_readback(self) -> None:
         members = self.fixture.stage_seed()
         raw = (b"PocketForge-v3-target\n" * 128) + b"end\n"
         self.fixture.stage_candidate(raw)
         fat = self.fixture.root / "fat"
         fat.mkdir()
-        result = self.fixture.run_shell(
+        transaction = (
             f'SF_V3_TEST_FAT="{fat}"; '
             'sf_v3_mount_target_fat() { SF_V3_FAT="$SF_V3_TEST_FAT"; }; '
             "sf_v3_unmount_target_fat() { :; }; "
             "sf_v3_load_armed_transaction && sf_v3_run_armed_transaction"
         )
+        result = self.fixture.run_shell(transaction)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         with self.fixture.device.open("rb", buffering=0) as card:
             self.assertEqual(card.read(len(raw)), raw)
@@ -504,6 +639,21 @@ class InitrdArmTests(unittest.TestCase):
             members,
         )
         self.assertTrue((fat / "pocketforge-self-flash-v3").is_file())
+
+        stamp_path = fat / "pocketforge-self-flash-v3"
+        first_stamp = dict(line.split("=", 1) for line in stamp_path.read_text().splitlines())
+        with self.fixture.device.open("r+b", buffering=0) as card:
+            disposition = grow.initialize_control_slots(
+                card, arm_offset=self.fixture.layout["arm_offset"],
+                receipt_offset=self.fixture.layout["receipt_offset"],
+                sync=lambda: None, success_stamp=first_stamp)
+        self.assertEqual(disposition, "consumed-completed-handoff")
+        next_generation = "123456789abcdef0123456789abcdef0"
+        self.fixture.request["Generation"] = next_generation
+        self.fixture.stage_candidate(b"PocketForge-v3-next-target\n" * 128)
+        result = self.fixture.run_shell(transaction)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"Generation={next_generation}\n", stamp_path.read_text())
 
     def test_corrupt_xz_records_failed_and_omits_stamp(self) -> None:
         self.fixture.stage_seed()

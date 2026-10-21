@@ -203,11 +203,14 @@ After all checks, the unit repairs or relocates the secondary GPT only within
 `[ControlEnd, CardBytes)`, changes only partition 5 so its half-open end equals
 `TailStart`, rereads and verifies the table, then grows only that partition's
 ext4 filesystem. Only after those operations pass, it examines the two control
-slots. If the receipt slot contains a complete, self-hash-valid v3 receipt, it
-preserves both slots byte for byte; this is required on the target's first boot
-so the just-completed OTA evidence survives capped growth. Otherwise it
-overwrites exactly the 65,536-byte arm slot and the 65,536-byte receipt slot
-with zeroes and durably reads both back. That initialization is required
+slots. A completed handoff requires a self-hash-valid arm, a self-hash-valid
+`pass` receipt, and a root-owned FAT stamp binding their generation, target
+descriptor, raw identity, byte count and exact padded receipt digest. The unit consumes it by
+overwriting exactly the 65,536-byte arm slot and the 65,536-byte receipt slot
+with zeroes and durably reading both back. The growth receipt records consumption;
+the FAT evidence remains until a later generation atomically replaces it. All
+other slot combinations
+take the same zero-and-read-back path. That initialization is required
 because a card previously used by an unbounded-growth image can contain
 arbitrary old filesystem bytes at the new control offsets. A zero slot is
 unused; after initialization, any later nonzero arm or receipt slot is stale
@@ -220,10 +223,11 @@ sectors, `TailStart`, filesystem size before and after, and an ordered result
 for GPT relocation, partition growth, table reread, ext4 growth, and control
 slot handling. `ControlSlotsInitialized=zeroed-and-read-back` means both exact
 slots were zeroed and read back after the filesystem reached its capped size;
-`ControlSlotsInitialized=preserved-valid-receipt` means a complete v3 receipt
-passed its self-hash and both slots were left byte-identical. Neither value
-authorizes or describes any write to the candidate range. The unit is ordered
-before cloud-init and before SSH admission used by kit windows.
+`ControlSlotsInitialized=consumed-completed-handoff` means a completely bound arm,
+`pass` receipt and FAT stamp were validated before zeroing. Every other combination
+records `zeroed-and-read-back`; neither value describes a candidate-range write.
+The unit is ordered before cloud-init and before SSH admission used by kit
+windows.
 Eligibility requires a valid receipt whose measured after-state still matches
 the live geometry; a receipt alone never authorizes a mismatched card.
 
@@ -349,6 +353,16 @@ The initrd requires this exact file before reading either control slot. It then
 derives the selected SD and every offset from observed immutable card identity,
 the arm record, and these constants. A missing, extended, reordered, or
 digest-mismatched marker is ineligible.
+
+The initrd reads the raw control slots only when live partition 5 ends exactly at
+card-relative `TailStart` and every partition is within that bound. A raw whole-image
+write leaves partition 5 baked. If that end is at least one `A` from `TailStart`, it is
+`uninitialized`, does not read any raw-tail state, and continues to the normal
+root so the capped-growth unit can validate the exact baked geometry and
+initialize the tail. A nonzero mismatch smaller than `A` is near-capped drift
+and remains a terminal refusal. This distinction is required for the first boot
+after FEL recovery and for the target's first boot after self-flash; it cannot
+admit a transaction because typed staging requires exact capped geometry.
 
 ## Seed archive
 
@@ -502,8 +516,8 @@ TailReceiptSHA256=<sha256 of the final padded receipt slot>
 ```
 
 The initrd writes the final `pass` tail receipt first, reads that exact slot
-back, and uses the read-back slot digest in the stamp. It then reads the stamp
-back byte-for-byte, unmounts the FAT, and reboots. The durable non-`ready`
+back, and uses its digest in the stamp. It atomically replaces any prior stamp
+before reboot. The durable non-`ready`
 receipt makes the arm non-retryable without erasing either evidence record. No
 normal-root process writes the stamp. Any failure omits the success stamp,
 writes the most specific bounded failure receipt possible, and stops for FEL
@@ -542,6 +556,8 @@ Implementation acceptance includes paired positive and negative controls for:
   overlap, reserve underflow, stage underflow, control overlap, backup-GPT end
   guard, seed maximum, compressed capacity, and card overflow;
 - a live expanded partition 5 like the retained Build 8 geometry;
+- a fresh baked partition 5 both below and above card-relative `TailStart`,
+  proving normal boot without a tail read, paired with near-capped drift refusal;
 - ineffective cloud-init growth override, capped-growth ordering and receipt,
   exact `TailStart` growth, wrong-device refusal, overgrowth refusal, and
   backup-GPT relocation contained within the end guard;

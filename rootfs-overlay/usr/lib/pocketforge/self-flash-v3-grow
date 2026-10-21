@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -21,6 +22,7 @@ HERE = Path(__file__).resolve().parent
 STAGE_HELPER = HERE / "self-flash-v3-stage"
 MARKER_PATH = Path("/etc/pocketforge-selfflash-v3")
 RECEIPT_PATH = Path("/var/lib/pocketforge/self-flash-v3-growth")
+STAMP_PATH = Path("/boot/pocketforge-self-flash-v3")
 SLOT_BYTES = 65_536
 LOGICAL_SECTOR_BYTES = 512
 RESERVE_BYTES = 1_073_741_824
@@ -71,6 +73,44 @@ RECEIPT_KEYS = (
     "StampEndMonotonicMs",
     "ReceiptWrittenMonotonicMs",
     "ReceiptRecordSHA256",
+)
+ARM_KEYS = (
+    "Schema",
+    "State",
+    "Generation",
+    "BaseDescriptorSHA256",
+    "BaseRawSHA256",
+    "BaseRawBytes",
+    "TargetDescriptorSHA256",
+    "TargetRawSHA256",
+    "TargetRawBytes",
+    "CompressedSHA256",
+    "CompressedBytes",
+    "SeedSHA256",
+    "SeedBytes",
+    "CardController",
+    "CardType",
+    "CardSerial",
+    "CardBytes",
+    "LogicalSectorBytes",
+    "RootPartitionStartSector",
+    "RootPartitionSectors",
+    "PartitionLayoutSHA256",
+    "TailStart",
+    "StageOffset",
+    "SeedOffset",
+    "ArmOffset",
+    "ReceiptOffset",
+    "ReceiptBytes",
+    "ArmRecordSHA256",
+)
+STAMP_KEYS = (
+    "Schema",
+    "Generation",
+    "TargetDescriptorSHA256",
+    "TargetRawSHA256",
+    "TargetRawBytes",
+    "TailReceiptSHA256",
 )
 
 
@@ -163,13 +203,23 @@ def initialize_control_slots(
     arm_offset: int,
     receipt_offset: int,
     sync: Callable[[], None],
+    success_stamp: Mapping[str, str] | None = None,
 ) -> str:
+    device.seek(arm_offset)
+    existing_arm = device.read(SLOT_BYTES)
+    if len(existing_arm) != SLOT_BYTES:
+        raise Refusal("arm_slot_read_short")
     device.seek(receipt_offset)
     existing_receipt = device.read(SLOT_BYTES)
     if len(existing_receipt) != SLOT_BYTES:
         raise Refusal("receipt_slot_read_short")
-    if _valid_receipt_slot(existing_receipt):
-        return "preserved-valid-receipt"
+    completed_handoff = _valid_completed_handoff(
+        existing_arm,
+        existing_receipt,
+        success_stamp,
+        arm_offset=arm_offset,
+        receipt_offset=receipt_offset,
+    )
     zeroes = bytes(SLOT_BYTES)
     for name, offset in (("arm", arm_offset), ("receipt", receipt_offset)):
         if offset < 0 or offset % LOGICAL_SECTOR_BYTES:
@@ -183,41 +233,160 @@ def initialize_control_slots(
         device.seek(offset)
         if device.read(SLOT_BYTES) != zeroes:
             raise Refusal(f"{name}_slot_readback_mismatch")
+    if completed_handoff:
+        return "consumed-completed-handoff"
     return "zeroed-and-read-back"
 
 
-def _valid_receipt_slot(content: bytes) -> bool:
+def _parse_padded_record(
+    content: bytes,
+    *,
+    expected_keys: Sequence[str],
+    digest_key: str,
+) -> dict[str, str] | None:
     if len(content) != SLOT_BYTES:
-        return False
+        return None
     terminator = content.find(b"\n\n")
     if terminator < 0 or any(content[terminator + 2 :]):
-        return False
+        return None
     try:
         lines = content[:terminator].decode("ascii").splitlines()
     except UnicodeDecodeError:
-        return False
+        return None
     pairs: list[tuple[str, str]] = []
     for line in lines:
         if "=" not in line:
-            return False
+            return None
         pairs.append(tuple(line.split("=", 1)))
-    if tuple(key for key, _value in pairs) != RECEIPT_KEYS:
-        return False
+    if tuple(key for key, _value in pairs) != tuple(expected_keys):
+        return None
     record = dict(pairs)
-    if record["Schema"] != "pocketforge.self-flash-receipt/v3":
-        return False
-    if record["State"] not in ("ready", "started", "failed", "pass"):
-        return False
-    generation = record["Generation"]
-    if len(generation) != 32 or any(character not in "0123456789abcdef" for character in generation):
-        return False
-    expected_digest = record["ReceiptRecordSHA256"]
+    expected_digest = record[digest_key]
     if len(expected_digest) != 64 or any(character not in "0123456789abcdef" for character in expected_digest):
-        return False
+        return None
     prefix = "".join(f"{key}={value}\n" for key, value in pairs[:-1]).encode("ascii")
-    import hashlib
+    if hashlib.sha256(prefix).hexdigest() != expected_digest:
+        return None
+    return record
 
-    return hashlib.sha256(prefix).hexdigest() == expected_digest
+
+def _valid_generation(value: str) -> bool:
+    return len(value) == 32 and not any(character not in "0123456789abcdef" for character in value)
+
+
+def _valid_sha256(value: str) -> bool:
+    return len(value) == 64 and not any(character not in "0123456789abcdef" for character in value)
+
+
+def _valid_completed_handoff(
+    arm_content: bytes,
+    receipt_content: bytes,
+    success_stamp: Mapping[str, str] | None,
+    *,
+    arm_offset: int,
+    receipt_offset: int,
+) -> bool:
+    if success_stamp is None or tuple(success_stamp) != STAMP_KEYS:
+        return False
+    arm = _parse_padded_record(
+        arm_content,
+        expected_keys=ARM_KEYS,
+        digest_key="ArmRecordSHA256",
+    )
+    receipt = _parse_padded_record(
+        receipt_content,
+        expected_keys=RECEIPT_KEYS,
+        digest_key="ReceiptRecordSHA256",
+    )
+    if arm is None or receipt is None:
+        return False
+    if arm["Schema"] != "pocketforge.self-flash-arm/v3" or arm["State"] != "armed":
+        return False
+    if receipt["Schema"] != "pocketforge.self-flash-receipt/v3" or receipt["State"] != "pass":
+        return False
+    if success_stamp["Schema"] != "pocketforge.self-flash-stamp/v3":
+        return False
+    if not _valid_generation(arm["Generation"]):
+        return False
+    for key in ("TargetDescriptorSHA256", "TargetRawSHA256"):
+        if not _valid_sha256(arm[key]):
+            return False
+    identity_keys = (
+        "Generation",
+        "TargetDescriptorSHA256",
+        "TargetRawSHA256",
+        "TargetRawBytes",
+    )
+    if any(arm[key] != receipt[key] or arm[key] != success_stamp[key] for key in identity_keys):
+        return False
+    if (
+        arm["CardController"] != "04020000"
+        or arm["CardType"] != "SD"
+        or arm["LogicalSectorBytes"] != str(LOGICAL_SECTOR_BYTES)
+        or arm["ArmOffset"] != str(arm_offset)
+        or arm["ReceiptOffset"] != str(receipt_offset)
+        or arm["ReceiptBytes"] != str(SLOT_BYTES)
+    ):
+        return False
+    required_pass = {
+        "XzIntegrity": "pass",
+        "RawStreamHashMatch": "pass",
+        "RawStreamCountMatch": "pass",
+        "WriteResult": "pass",
+        "SeedResult": "pass",
+        "StampResult": "pass",
+        "FailurePhase": "none",
+        "FailureReason": "none",
+    }
+    if any(receipt[key] != value for key, value in required_pass.items()):
+        return False
+    return (
+        _valid_sha256(success_stamp["TailReceiptSHA256"])
+        and success_stamp["TailReceiptSHA256"] == hashlib.sha256(receipt_content).hexdigest()
+    )
+
+
+def _read_success_stamp(path: Path = STAMP_PATH) -> dict[str, str] | None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_size > 1024:
+            return None
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            content = source.read(1025)
+    finally:
+        os.close(descriptor)
+    try:
+        lines = content.decode("ascii").splitlines(keepends=True)
+    except UnicodeDecodeError:
+        return None
+    if not lines or any(not line.endswith("\n") for line in lines):
+        return None
+    pairs: list[tuple[str, str]] = []
+    for line in lines:
+        text = line[:-1]
+        if "=" not in text:
+            return None
+        pairs.append(tuple(text.split("=", 1)))
+    if tuple(key for key, _value in pairs) != STAMP_KEYS:
+        return None
+    stamp = dict(pairs)
+    if (
+        stamp["Schema"] != "pocketforge.self-flash-stamp/v3"
+        or not _valid_generation(stamp["Generation"])
+        or not _valid_sha256(stamp["TargetDescriptorSHA256"])
+        or not _valid_sha256(stamp["TargetRawSHA256"])
+        or not _valid_sha256(stamp["TailReceiptSHA256"])
+    ):
+        return None
+    try:
+        _positive("stamp_target_raw_bytes", int(stamp["TargetRawBytes"], 10))
+    except (Refusal, ValueError):
+        return None
+    return stamp
 
 
 def build_growth_receipt(
@@ -409,6 +578,7 @@ def grow() -> dict[str, object]:
             arm_offset=int(plan["arm_offset"]),
             receipt_offset=int(plan["receipt_offset"]),
             sync=lambda: os.fsync(device.fileno()),
+            success_stamp=_read_success_stamp(),
         )
 
     receipt = build_growth_receipt(

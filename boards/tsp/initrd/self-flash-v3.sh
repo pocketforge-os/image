@@ -127,6 +127,8 @@ sf_v3_discover_sd() {
     : >"$sf_v3_partition_file" || return 1
     SF_V3_ROOT_START_SECTOR=""
     SF_V3_ROOT_SECTORS=""
+    sf_v3_root_end_bytes=""
+    sf_v3_layout_within_tail=1
     for sf_v3_possible in "$SF_V3_SYS_CLASS_BLOCK"/*; do
         [ -e "$sf_v3_possible/partition" ] || continue
         sf_v3_possible_real="$(readlink -f "$sf_v3_possible" 2>/dev/null)"
@@ -137,17 +139,33 @@ sf_v3_discover_sd() {
         sf_v3_uint "$sf_v3_number" && sf_v3_uint "$sf_v3_start" \
             && sf_v3_uint "$sf_v3_size" || return 1
         sf_v3_end_bytes=$(( (sf_v3_start + sf_v3_size) * 512 ))
-        [ "$sf_v3_end_bytes" -le "$SF_V3_TAIL_START" ] || return 1
+        [ "$sf_v3_end_bytes" -le "$SF_V3_TAIL_START" ] \
+            || sf_v3_layout_within_tail=0
         printf '%s:%s:%s\n' "$sf_v3_number" "$sf_v3_start" "$sf_v3_size" \
             >>"$sf_v3_partition_file" || return 1
         if [ "$sf_v3_number" = 5 ]; then
             [ -z "$SF_V3_ROOT_START_SECTOR" ] || return 1
             SF_V3_ROOT_START_SECTOR="$sf_v3_start"
             SF_V3_ROOT_SECTORS="$sf_v3_size"
-            [ "$sf_v3_end_bytes" -eq "$SF_V3_TAIL_START" ] || return 1
+            sf_v3_root_end_bytes="$sf_v3_end_bytes"
         fi
     done
     [ -n "$SF_V3_ROOT_START_SECTOR" ] || return 1
+    if [ "$sf_v3_root_end_bytes" -ne "$SF_V3_TAIL_START" ]; then
+        sf_v3_root_delta=$((sf_v3_root_end_bytes - SF_V3_TAIL_START))
+        [ "$sf_v3_root_delta" -ge 0 ] \
+            || sf_v3_root_delta=$((-sf_v3_root_delta))
+        if [ "$sf_v3_root_delta" -ge "$SF_V3_ALIGNMENT_BYTES" ]; then
+            # A raw-image write has the baked partition table, not the capped
+            # card-relative geometry required by the typed staging operation.
+            # It cannot be an armed v3 transaction. Do not touch its arbitrary
+            # tail; let the normal-root grow unit validate and initialize it.
+            SF_V3_LOAD_STATE=uninitialized
+            export SF_V3_LOAD_STATE
+        fi
+        return 1
+    fi
+    [ "$sf_v3_layout_within_tail" -eq 1 ] || return 1
     sort -t: -k1,1n "$sf_v3_partition_file" >"$sf_v3_partition_file.sorted" \
         || return 1
     SF_V3_PARTITION_LAYOUT_SHA256="$(sha256sum "$sf_v3_partition_file.sorted" \
@@ -429,7 +447,7 @@ sf_v3_install_stamp() {
     sf_v3_stamp_expected="$SF_V3_WORK/stamp.expected"
     sf_v3_stamp_temporary="$sf_v3_fat/.pocketforge-self-flash-v3-$SF_V3_GENERATION.tmp"
     sf_v3_stamp_final="$sf_v3_fat/pocketforge-self-flash-v3"
-    [ ! -e "$sf_v3_stamp_final" ] && [ ! -e "$sf_v3_stamp_temporary" ] || return 1
+    [ ! -e "$sf_v3_stamp_temporary" ] || return 1
     {
         printf 'Schema=pocketforge.self-flash-stamp/v3\n'
         printf 'Generation=%s\n' "$SF_V3_GENERATION"
@@ -441,7 +459,7 @@ sf_v3_install_stamp() {
     cp "$sf_v3_stamp_expected" "$sf_v3_stamp_temporary" || return 1
     sync || return 1
     cmp -s "$sf_v3_stamp_expected" "$sf_v3_stamp_temporary" || return 1
-    mv "$sf_v3_stamp_temporary" "$sf_v3_stamp_final" || return 1
+    mv -f "$sf_v3_stamp_temporary" "$sf_v3_stamp_final" || return 1
     sync || return 1
     [ -f "$sf_v3_stamp_final" ] && [ ! -L "$sf_v3_stamp_final" ] || return 1
     cmp -s "$sf_v3_stamp_expected" "$sf_v3_stamp_final" || return 1
