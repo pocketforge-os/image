@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static contract for the session-wide controller owner (tsp-ihne1.7)."""
 
+import re
 from pathlib import Path
 
 
@@ -58,6 +59,13 @@ assert "pf-shell-selected.service" in words(broker, "Unit", "Conflicts")
 command = words(broker, "Service", "ExecStart")
 assert command[command.index("--compositor-sock") + 1] == "/run/pocketforge/input/compositor.sock"
 assert "--session-user" not in command
+# The production image must build the broker from the paired runtime head that
+# implements this endpoint, not merely exercise that head in the live fixture.
+dockerfile = (ROOT / "build/Dockerfile.pf").read_text()
+runtime_pins = re.findall(
+    r'^\[ "\$\{PF_RUNTIME_SHA\}" = "([0-9a-f]{40})" \]', dockerfile, flags=re.MULTILINE
+)
+assert runtime_pins == ["a64273cab3a67b2706af502c28412e8435d6df5c"], runtime_pins
 
 # The image's systemd predates RestartMode=direct. The supervisor owns exactly one retry,
 # so successful session churn cannot consume a global systemd start-rate counter.
