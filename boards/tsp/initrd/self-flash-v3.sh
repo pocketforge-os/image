@@ -580,6 +580,109 @@ sf_v3_write_sink() {
         conv=notrunc,fsync status=none
 }
 
+sf_v3_mount_target_fat() {
+    blockdev --rereadpt "$SF_V3_SD" || return 1
+    sf_drop_cache
+    SF_V3_FAT_DEVICE="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
+    [ -n "$SF_V3_FAT_DEVICE" ] \
+        && sf_v2_partition_on_selected_card "$SF_V3_FAT_DEVICE" || return 1
+    SF_V3_FAT=/sf-v3-fat
+    mkdir -p "$SF_V3_FAT" || return 1
+    mount -t vfat -o rw,flush "$SF_V3_FAT_DEVICE" "$SF_V3_FAT" 2>/dev/null
+}
+
+sf_v3_unmount_target_fat() {
+    umount "$SF_V3_FAT" 2>/dev/null
+}
+
+sf_v3_record_failure() {
+    sf_v3_failure_phase="$1"
+    sf_v3_failure_reason="$2"
+    sf_v3_write_receipt failed "$sf_v3_failure_phase" "$sf_v3_failure_reason"
+}
+
+sf_v3_run_armed_transaction() {
+    sf_v3_receipt_defaults || return 1
+    SF_V3_INITRD_START_MS="$(sf_v3_now_ms)"
+    SF_V3_WRITE_START_MS="$(sf_v3_now_ms)"
+    export SF_V3_INITRD_START_MS SF_V3_WRITE_START_MS
+    sf_v3_write_receipt started none none || return 1
+
+    if ! sf_v3_stream_write; then
+        SF_V3_WRITE_END_MS="$(sf_v3_now_ms)"
+        export SF_V3_WRITE_END_MS
+        if ! sf_v3_record_failure xz stream-failed; then
+            printf 'self-flash-v3: failure receipt write failed after stream\n' >&2
+        fi
+        return 1
+    fi
+    SF_V3_WRITE_END_MS="$(sf_v3_now_ms)"
+    export SF_V3_WRITE_END_MS
+
+    if ! sf_v3_mount_target_fat; then
+        if ! sf_v3_record_failure seed fat-mount-failed; then
+            printf 'self-flash-v3: failure receipt write failed after FAT mount\n' >&2
+        fi
+        return 1
+    fi
+    if ! sf_v3_install_seed "$SF_V3_FAT"; then
+        if ! sf_v3_record_failure seed seed-install-failed; then
+            printf 'self-flash-v3: failure receipt write failed after seed\n' >&2
+        fi
+        if ! sf_v3_unmount_target_fat; then
+            printf 'self-flash-v3: FAT cleanup unmount failed after seed\n' >&2
+        fi
+        return 1
+    fi
+
+    # The pass record is deliberately durable before the stamp. StampResult is
+    # optimistic for this short interval; any stamp failure replaces the pass
+    # record with failed, and the runner also requires the receipt-bound stamp.
+    SF_V3_STAMP_RESULT=pass
+    export SF_V3_STAMP_RESULT
+    if ! sf_v3_write_receipt pass none none; then
+        SF_V3_STAMP_RESULT=fail
+        export SF_V3_STAMP_RESULT
+        if ! sf_v3_record_failure receipt pass-receipt-failed; then
+            printf 'self-flash-v3: failure receipt write failed after pass receipt\n' >&2
+        fi
+        if ! sf_v3_unmount_target_fat; then
+            printf 'self-flash-v3: FAT cleanup unmount failed after pass receipt\n' >&2
+        fi
+        return 1
+    fi
+    if ! sf_v3_install_stamp "$SF_V3_FAT"; then
+        rm -f "$SF_V3_FAT/pocketforge-self-flash-v3" \
+            "$SF_V3_FAT/.pocketforge-self-flash-v3-$SF_V3_GENERATION.tmp"
+        if ! sync; then
+            printf 'self-flash-v3: stamp cleanup sync failed\n' >&2
+        fi
+        SF_V3_STAMP_RESULT=fail
+        export SF_V3_STAMP_RESULT
+        if ! sf_v3_record_failure stamp stamp-install-failed; then
+            printf 'self-flash-v3: failure receipt write failed after stamp\n' >&2
+        fi
+        if ! sf_v3_unmount_target_fat; then
+            printf 'self-flash-v3: FAT cleanup unmount failed after stamp\n' >&2
+        fi
+        return 1
+    fi
+    if ! sf_v3_unmount_target_fat; then
+        if ! rm -f "$SF_V3_FAT/pocketforge-self-flash-v3"; then
+            printf 'self-flash-v3: stamp removal failed after FAT unmount\n' >&2
+        fi
+        if ! sync; then
+            printf 'self-flash-v3: stamp removal sync failed after FAT unmount\n' >&2
+        fi
+        SF_V3_STAMP_RESULT=fail
+        export SF_V3_STAMP_RESULT
+        if ! sf_v3_record_failure stamp fat-unmount-failed; then
+            printf 'self-flash-v3: failure receipt write failed after FAT unmount\n' >&2
+        fi
+        return 1
+    fi
+}
+
 sf_v3_clean_work() {
     [ -d "$SF_V3_WORK" ] || return 0
     find "$SF_V3_WORK" -mindepth 1 -delete || return 1
@@ -592,10 +695,12 @@ sf_v3_stream_write() {
     SF_V3_RAW_STREAM_COUNT_MATCH=fail
     SF_V3_RAW_STREAM_HASH_MATCH=fail
     SF_V3_WRITE_RESULT=fail
+    SF_V3_WRITE_METHOD=dd-fsync
     SF_V3_FULL_DEVICE_READBACK=not-performed
     export SF_V3_XZ_RESULT SF_V3_RAW_STREAM_BYTES SF_V3_RAW_STREAM_SHA256
     export SF_V3_RAW_STREAM_COUNT_MATCH SF_V3_RAW_STREAM_HASH_MATCH
     export SF_V3_WRITE_RESULT SF_V3_FULL_DEVICE_READBACK
+    export SF_V3_WRITE_METHOD
 
     sf_v3_require_pipefail || return 1
     set -o pipefail || return 1
