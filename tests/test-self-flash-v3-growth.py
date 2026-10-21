@@ -58,6 +58,7 @@ def write_eligible_receipt(path: Path, boot_id: str = PRIOR_BOOT_ID) -> None:
                 "PartitionGrowth": "pass",
                 "PartitionTableReread": "pass",
                 "Ext4Growth": "pass",
+                "ControlSlotsInitialized": "zeroed-and-read-back",
             }
         ),
         encoding="ascii",

@@ -23,6 +23,7 @@ STAGE_HELPER = HERE / "self-flash-v3-stage"
 MARKER_PATH = Path("/etc/pocketforge-selfflash-v3")
 RECEIPT_PATH = Path("/var/lib/pocketforge/self-flash-v3-growth")
 STAMP_PATH = Path("/boot/pocketforge-self-flash-v3")
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 SLOT_BYTES = 65_536
 LOGICAL_SECTOR_BYTES = 512
 RESERVE_BYTES = 1_073_741_824
@@ -391,6 +392,7 @@ def _read_success_stamp(path: Path = STAMP_PATH) -> dict[str, str] | None:
 
 def build_growth_receipt(
     *,
+    boot_id: str,
     contract_sha256: str,
     card_serial: str,
     card_bytes: int,
@@ -404,6 +406,7 @@ def build_growth_receipt(
 ) -> dict[str, object]:
     return {
         "Schema": "pocketforge.self-flash-growth/v3",
+        "BootID": boot_id,
         "ContractSHA256": contract_sha256,
         "CardController": "04020000",
         "CardType": "SD",
@@ -582,6 +585,7 @@ def _invalidate_receipt() -> None:
 
 
 def grow() -> dict[str, object]:
+    boot_id = BOOT_ID_PATH.read_text(encoding="ascii").strip()
     stage = _load_stage_helper()
     marker = _read_marker()
     selected = stage.select_sd(stage._discover_cards(), root_major_minor=stage._root_major_minor())
@@ -636,6 +640,7 @@ def grow() -> dict[str, object]:
         )
 
     receipt = build_growth_receipt(
+        boot_id=boot_id,
         contract_sha256=marker["ContractSHA256"],
         card_serial=str(selected["serial"]),
         card_bytes=int(selected["bytes"]),

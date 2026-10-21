@@ -218,7 +218,7 @@ state and refuses staging until FEL replaces it.
 
 The unit writes a root-owned receipt at
 `/var/lib/pocketforge/self-flash-v3-growth` containing the schema version,
-contract digest, card identity and size, partition start, before and after end
+current kernel boot ID, contract digest, card identity and size, partition start, before and after end
 sectors, `TailStart`, filesystem size before and after, and an ordered result
 for GPT relocation, partition growth, table reread, ext4 growth, and control
 slot handling. `ControlSlotsInitialized=zeroed-and-read-back` means both exact
@@ -226,15 +226,16 @@ slots were zeroed and read back after the filesystem reached its capped size;
 `ControlSlotsInitialized=consumed-completed-handoff` means a completely bound arm,
 `pass` receipt and FAT stamp were validated before zeroing. Every other combination
 records `zeroed-and-read-back`; neither value describes a candidate-range write.
-Before growth begins, the helper overwrites any earlier receipt with a durable
-`State=degraded`, `FailureReason=receipt_invalidation_started` rejection, then
-unlinks it and syncs the directory. An unlink refusal therefore retains a
-rejected receipt, while a failure after unlink leaves it absent. If validation
-or growth refuses, the helper instead atomically records
+Before growth begins, the helper attempts to retire any earlier receipt. This
+retirement is cleanup, not eligibility evidence: the image-owned staging helper
+accepts a success receipt only when its `BootID` equals the current
+`/proc/sys/kernel/random/boot_id`. A stale success therefore remains ineligible
+even if any open, truncate, write, sync, unlink, or rename in cleanup or receipt
+publication fails. If validation or growth refuses, the helper instead records
 `pocketforge.self-flash-growth-degraded/v3`, `State=degraded`, and a bounded
-`FailureReason`. Failure to write that replacement leaves the authoritative
-receipt absent, so an old success cannot remain eligible. Failure to invalidate
-the old receipt returns nonzero and leaves no eligibility-compatible receipt. The unit
+`FailureReason` when possible. Only a successful growth run can publish positive
+evidence for the current boot. The final staging boundary validates that evidence
+before reading the request or opening any device. The unit
 is ordered ahead of cloud-init and SSH so capped growth and control-slot
 initialization finish before network kit staging can acquire the same SD lock.
 `TimeoutStartSec=90s` bounds that admission barrier. The unit is not a required
@@ -242,8 +243,9 @@ dependency, so after it exits or times out, a failure does not prevent login. A
 known growth refusal returns success after invalidation because capped growth is
 not a boot requirement. A degraded receipt lacks the success fields and
 therefore can never pass the eligibility probe.
-Eligibility requires a valid receipt whose measured after-state still matches
-the live geometry; a receipt alone never authorizes a mismatched card.
+Eligibility requires a valid current-boot receipt whose measured after-state
+still matches the live geometry; a receipt alone never authorizes a mismatched
+card.
 
 ## Eligibility probe
 
