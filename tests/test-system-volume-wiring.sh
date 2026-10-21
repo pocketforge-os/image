@@ -24,6 +24,28 @@ check_recipe() {
     done
 }
 
+check_keys_recipe() {
+    local dockerfile=$1 rootfs=$2 token
+    for token in \
+        '-p pf-volume-keys --bin pf-volume-keys' \
+        'install -D -m 0755 "${VOLUME_KEYS_BIN}" /out/bin/pf-volume-keys' \
+        'systemd/pf-volume-keys.service /out/systemd/pf-volume-keys.service'; do
+        grep -F -- "$token" "$dockerfile" >/dev/null || return 1
+    done
+    for token in \
+        'install -D -m 0755 "${VOLUME_KEYS_BIN}" "${ROOTFS}/usr/bin/pf-volume-keys"' \
+        'multi-user.target.wants/pf-volume-keys.service'; do
+        grep -F -- "$token" "$rootfs" >/dev/null || return 1
+    done
+}
+check_keys_recipe "$repo/build/Dockerfile.pf" "$repo/scripts/build-rootfs.sh" \
+    || fail "runtime recipe does not build, stage, install, and enable pf-volume-keys"
+cp "$repo/build/Dockerfile.pf" "$tmp/Dockerfile.keys"
+sed -i '/pf-volume-keys/d' "$tmp/Dockerfile.keys"
+if check_keys_recipe "$tmp/Dockerfile.keys" "$repo/scripts/build-rootfs.sh"; then
+    fail "negative control: key-handler recipe checker accepted a Dockerfile without pf-volume-keys"
+fi
+
 check_recipe "$repo/build/Dockerfile.pf" "$repo/scripts/build-rootfs.sh" \
     || fail "runtime recipe does not build, stage, install, and enable pf-volumed"
 
