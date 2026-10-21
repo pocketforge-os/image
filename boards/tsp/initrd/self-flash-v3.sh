@@ -437,6 +437,101 @@ sf_v3_read_stage() {
         iflag=skip_bytes,count_bytes,fullblock status=none
 }
 
+sf_v3_read_seed() {
+    dd if="$SF_V3_SD" bs="$SF_V3_TRANSFER_BYTES" \
+        skip="$SF_V3_SEED_OFFSET" count="$SF_V3_SEED_BYTES" \
+        iflag=skip_bytes,count_bytes,fullblock status=none
+}
+
+sf_v3_remove_seed_temporary() {
+    sf_v3_seed_temporary="$1"
+    [ ! -d "$sf_v3_seed_temporary" ] \
+        || { find "$sf_v3_seed_temporary" -mindepth 1 -delete \
+            && rmdir "$sf_v3_seed_temporary"; }
+}
+
+sf_v3_install_seed() {
+    sf_v3_fat="$1"
+    SF_V3_SEED_RESULT=fail
+    SF_V3_SEED_STREAM_BYTES=unknown
+    SF_V3_SEED_STREAM_SHA256=unknown
+    export SF_V3_SEED_RESULT SF_V3_SEED_STREAM_BYTES SF_V3_SEED_STREAM_SHA256
+    [ -d "$sf_v3_fat" ] && [ ! -L "$sf_v3_fat" ] || return 1
+    sf_v3_require_pipefail || return 1
+    set -o pipefail || return 1
+    sf_v3_seed_temporary="$sf_v3_fat/.pf-self-flash-v3-$SF_V3_GENERATION-seed"
+    [ ! -e "$sf_v3_seed_temporary" ] || return 1
+    mkdir "$sf_v3_seed_temporary" || return 1
+    sf_v3_seed_hash_fifo="$SF_V3_WORK/seed-hash.fifo"
+    sf_v3_seed_count_fifo="$SF_V3_WORK/seed-count.fifo"
+    sf_v3_seed_hash_result="$SF_V3_WORK/seed-hash.result"
+    sf_v3_seed_count_result="$SF_V3_WORK/seed-count.result"
+    mkfifo "$sf_v3_seed_hash_fifo" "$sf_v3_seed_count_fifo" \
+        || { sf_v3_remove_seed_temporary "$sf_v3_seed_temporary"; return 1; }
+    sha256sum <"$sf_v3_seed_hash_fifo" >"$sf_v3_seed_hash_result" &
+    sf_v3_seed_hash_pid=$!
+    wc -c <"$sf_v3_seed_count_fifo" >"$sf_v3_seed_count_result" &
+    sf_v3_seed_count_pid=$!
+    if sf_v3_read_seed \
+        | tee "$sf_v3_seed_hash_fifo" "$sf_v3_seed_count_fifo" \
+        | tar -xf - -C "$sf_v3_seed_temporary"; then
+        sf_v3_seed_pipeline_rc=0
+    else
+        sf_v3_seed_pipeline_rc=$?
+    fi
+    if wait "$sf_v3_seed_hash_pid"; then sf_v3_seed_hash_rc=0; \
+        else sf_v3_seed_hash_rc=$?; fi
+    if wait "$sf_v3_seed_count_pid"; then sf_v3_seed_count_rc=0; \
+        else sf_v3_seed_count_rc=$?; fi
+    if [ "$sf_v3_seed_hash_rc" -eq 0 ]; then
+        read -r SF_V3_SEED_STREAM_SHA256 sf_v3_seed_hash_name \
+            <"$sf_v3_seed_hash_result" || SF_V3_SEED_STREAM_SHA256=unknown
+    fi
+    if [ "$sf_v3_seed_count_rc" -eq 0 ]; then
+        read -r SF_V3_SEED_STREAM_BYTES <"$sf_v3_seed_count_result" \
+            || SF_V3_SEED_STREAM_BYTES=unknown
+    fi
+    export SF_V3_SEED_STREAM_BYTES SF_V3_SEED_STREAM_SHA256
+    if [ "$sf_v3_seed_pipeline_rc" -ne 0 ] \
+            || [ "$sf_v3_seed_hash_rc" -ne 0 ] \
+            || [ "$sf_v3_seed_count_rc" -ne 0 ] \
+            || [ "$SF_V3_SEED_STREAM_BYTES" != "$SF_V3_SEED_BYTES" ] \
+            || [ "$SF_V3_SEED_STREAM_SHA256" != "$SF_V3_SEED_SHA256" ]; then
+        sf_v3_remove_seed_temporary "$sf_v3_seed_temporary"
+        return 1
+    fi
+
+    sf_v3_seed_members="$SF_V3_WORK/seed-members"
+    (cd "$sf_v3_seed_temporary" && find . -mindepth 1 -print \
+        | sed 's#^\./##' | sort) >"$sf_v3_seed_members" || return 1
+    printf '%s\n' meta-data network-config user-data \
+        | sort >"$SF_V3_WORK/seed-members.expected" || return 1
+    cmp -s "$sf_v3_seed_members" "$SF_V3_WORK/seed-members.expected" \
+        || { sf_v3_remove_seed_temporary "$sf_v3_seed_temporary"; return 1; }
+    for sf_v3_seed_name in meta-data network-config user-data; do
+        sf_v3_seed_source="$sf_v3_seed_temporary/$sf_v3_seed_name"
+        [ -f "$sf_v3_seed_source" ] && [ ! -L "$sf_v3_seed_source" ] \
+            || { sf_v3_remove_seed_temporary "$sf_v3_seed_temporary"; return 1; }
+        sf_v3_seed_staged="$sf_v3_fat/.pf-self-flash-v3-$SF_V3_GENERATION-$sf_v3_seed_name.tmp"
+        rm -f "$sf_v3_seed_staged" || return 1
+        mv "$sf_v3_seed_source" "$sf_v3_seed_staged" || return 1
+    done
+    rmdir "$sf_v3_seed_temporary" || return 1
+    sync || return 1
+    for sf_v3_seed_name in meta-data network-config user-data; do
+        sf_v3_seed_staged="$sf_v3_fat/.pf-self-flash-v3-$SF_V3_GENERATION-$sf_v3_seed_name.tmp"
+        mv -f "$sf_v3_seed_staged" "$sf_v3_fat/$sf_v3_seed_name" || return 1
+    done
+    sync || return 1
+    for sf_v3_seed_name in meta-data network-config user-data; do
+        [ -f "$sf_v3_fat/$sf_v3_seed_name" ] \
+            && [ ! -L "$sf_v3_fat/$sf_v3_seed_name" ] || return 1
+    done
+    SF_V3_SEED_RESULT=pass
+    SF_V3_SEED_END_MS="$(sf_v3_now_ms)"
+    export SF_V3_SEED_RESULT SF_V3_SEED_END_MS
+}
+
 sf_v3_write_sink() {
     dd of="$SF_V3_SD" bs="$SF_V3_TRANSFER_BYTES" \
         count="$SF_V3_TARGET_RAW_BYTES" iflag=count_bytes,fullblock \
