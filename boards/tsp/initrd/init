@@ -486,6 +486,10 @@ SF_BS=4194304          # 4 MiB transfer block
 # The v3 engine is dev-initrd-only and has no definition-time side effects.
 # Its separate marker is checked again before any tail record is read.
 if [ -f /lib/pocketforge-self-flash-v3.sh ]; then
+    SF_V3_WORK=/run/pocketforge-self-flash-v3
+    mkdir -p "$SF_V3_WORK" \
+        || fail "self-flash v3 work directory initialization failed"
+    export SF_V3_WORK
     . /lib/pocketforge-self-flash-v3.sh
 fi
 
