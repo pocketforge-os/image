@@ -349,6 +349,15 @@ sf_v3_write_receipt() {
     case "$sf_v3_failure_reason" in ''|*[!a-z0-9-]*) return 1 ;; esac
     if [ "$sf_v3_state" = pass ]; then
         [ "$sf_v3_failure_phase:$sf_v3_failure_reason" = none:none ] || return 1
+        [ "$SF_V3_XZ_RESULT" = pass ] \
+            && [ "$SF_V3_RAW_STREAM_SHA256" = "$SF_V3_TARGET_RAW_SHA256" ] \
+            && [ "$SF_V3_RAW_STREAM_BYTES" = "$SF_V3_TARGET_RAW_BYTES" ] \
+            && [ "$SF_V3_RAW_STREAM_HASH_MATCH" = pass ] \
+            && [ "$SF_V3_RAW_STREAM_COUNT_MATCH" = pass ] \
+            && [ "$SF_V3_WRITE_RESULT" = pass ] \
+            && [ "$SF_V3_SEED_RESULT" = pass ] \
+            && [ "$SF_V3_STAMP_RESULT" = pass ] || return 1
+        case "$SF_V3_WRITE_METHOD" in dd-direct-fsync|dd-fsync) ;; *) return 1 ;; esac
     fi
 
     sf_v3_receipt_written_ms="$(sf_v3_now_ms)"
@@ -405,6 +414,39 @@ sf_v3_write_receipt() {
         || return 1
     sf_v3_read_slot "$SF_V3_RECEIPT_OFFSET" "$sf_v3_receipt_readback" || return 1
     cmp -s "$sf_v3_receipt_slot" "$sf_v3_receipt_readback" || return 1
+}
+
+sf_v3_install_stamp() {
+    sf_v3_fat="$1"
+    [ -d "$sf_v3_fat" ] && [ ! -L "$sf_v3_fat" ] || return 1
+    [ -f "$SF_V3_WORK/receipt-write.slot" ] || return 1
+    sf_v3_fresh_receipt="$SF_V3_WORK/receipt-stamp.readback"
+    sf_v3_read_slot "$SF_V3_RECEIPT_OFFSET" "$sf_v3_fresh_receipt" || return 1
+    cmp -s "$SF_V3_WORK/receipt-write.slot" "$sf_v3_fresh_receipt" || return 1
+    SF_V3_RECEIPT_PADDED_SHA256="$(sha256sum "$sf_v3_fresh_receipt" \
+        | awk '{print $1}')"
+    sf_v3_sha "$SF_V3_RECEIPT_PADDED_SHA256" || return 1
+    sf_v3_stamp_expected="$SF_V3_WORK/stamp.expected"
+    sf_v3_stamp_temporary="$sf_v3_fat/.pocketforge-self-flash-v3-$SF_V3_GENERATION.tmp"
+    sf_v3_stamp_final="$sf_v3_fat/pocketforge-self-flash-v3"
+    [ ! -e "$sf_v3_stamp_final" ] && [ ! -e "$sf_v3_stamp_temporary" ] || return 1
+    {
+        printf 'Schema=pocketforge.self-flash-stamp/v3\n'
+        printf 'Generation=%s\n' "$SF_V3_GENERATION"
+        printf 'TargetDescriptorSHA256=%s\n' "$SF_V3_TARGET_DESCRIPTOR_SHA256"
+        printf 'TargetRawSHA256=%s\n' "$SF_V3_TARGET_RAW_SHA256"
+        printf 'TargetRawBytes=%s\n' "$SF_V3_TARGET_RAW_BYTES"
+        printf 'TailReceiptSHA256=%s\n' "$SF_V3_RECEIPT_PADDED_SHA256"
+    } >"$sf_v3_stamp_expected" || return 1
+    cp "$sf_v3_stamp_expected" "$sf_v3_stamp_temporary" || return 1
+    sync || return 1
+    cmp -s "$sf_v3_stamp_expected" "$sf_v3_stamp_temporary" || return 1
+    mv "$sf_v3_stamp_temporary" "$sf_v3_stamp_final" || return 1
+    sync || return 1
+    [ -f "$sf_v3_stamp_final" ] && [ ! -L "$sf_v3_stamp_final" ] || return 1
+    cmp -s "$sf_v3_stamp_expected" "$sf_v3_stamp_final" || return 1
+    SF_V3_STAMP_END_MS="$(sf_v3_now_ms)"
+    export SF_V3_RECEIPT_PADDED_SHA256 SF_V3_STAMP_END_MS
 }
 
 sf_v3_load_armed_transaction() {
