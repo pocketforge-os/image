@@ -169,23 +169,29 @@ class SurfaceTests(unittest.TestCase):
                     }
                 )
             )
-            for invocation_id, result, accepted in (
-                ("1" * 32, "success", True),
-                ("2" * 32, "success", False),
-                ("1" * 32, "failed", False),
+            for invocation_id, result, active_state, refusal in (
+                ("1" * 32, "success", "inactive", None),
+                ("2" * 32, "success", "inactive", "growth_receipt_invocation_mismatch"),
+                ("1" * 32, "failed", "inactive", "growth_unit_not_successful"),
+                ("1" * 32, "success", "activating", "growth_pending"),
+                ("", "success", "inactive", "growth_pending"),
             ):
-                with self.subTest(invocation_id=invocation_id, result=result):
-                    self._fake_systemctl(systemctl_path, invocation_id, result, "inactive")
+                with self.subTest(
+                    invocation_id=invocation_id,
+                    result=result,
+                    active_state=active_state,
+                ):
+                    self._fake_systemctl(systemctl_path, invocation_id, result, active_state)
                     patches = (
                         mock.patch.object(sf, "GROWTH_RECEIPT_PATH", receipt_path, create=True),
                         mock.patch.object(sf, "BOOT_ID_PATH", boot_id_path, create=True),
                         mock.patch.object(sf, "SYSTEMCTL_PATH", systemctl_path, create=True),
                     )
                     with patches[0], patches[1], patches[2]:
-                        if accepted:
+                        if refusal is None:
                             sf._require_current_growth_receipt()
                         else:
-                            with self.assertRaises(sf.Refusal):
+                            with self.assertRaisesRegex(sf.Refusal, f"^{refusal}$"):
                                 sf._require_current_growth_receipt()
 
             self._fake_systemctl(systemctl_path, "1" * 32, "success", "inactive")

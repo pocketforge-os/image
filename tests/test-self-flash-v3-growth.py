@@ -201,7 +201,9 @@ class InstalledPolicyTests(unittest.TestCase):
         self.assertEqual(cloud, "growpart:\n  mode: off\nresize_rootfs: false\n")
 
         unit = UNIT.read_text(encoding="utf-8")
-        self.assertIn("Before=cloud-init-local.service cloud-init.service ssh.service", unit)
+        self.assertIn("After=local-fs.target", unit)
+        self.assertNotIn("Before=cloud-init", unit)
+        self.assertNotIn("Before=ssh.service", unit)
         self.assertIn("ExecStart=/usr/lib/pocketforge/self-flash-v3-grow", unit)
         self.assertIn("TimeoutStartSec=90s", unit)
         self.assertIn("ConditionPathExists=/etc/pocketforge-selfflash-v3", unit)
