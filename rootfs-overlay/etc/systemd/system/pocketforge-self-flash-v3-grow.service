@@ -1,0 +1,13 @@
+[Unit]
+Description=Cap PocketForge root growth below the self-flash v3 reserve
+ConditionPathExists=/etc/pocketforge-selfflash-v3
+After=local-fs.target
+Before=cloud-init-local.service cloud-init.service ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/pocketforge/self-flash-v3-grow
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
