@@ -5,6 +5,7 @@ After=systemd-udev-trigger.service
 [Service]
 Type=oneshot
 User=root
+ConditionPathExists=/sys/class/power_supply/axp20x-battery
 ExecStart=/usr/lib/pocketforge/low-battery-shutdown.sh
 RuntimeDirectory=pocketforge-low-battery-shutdown
 RuntimeDirectoryMode=0700
