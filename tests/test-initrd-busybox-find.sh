@@ -33,6 +33,9 @@ exec /usr/bin/find "$@"
 EOF
 chmod 0755 "$fakebin/find"
 
+PATH="$fakebin:$PATH"
+export PATH
+
 SF_V3_WORK="$work"
 export SF_V3_WORK
 # shellcheck source=/dev/null
