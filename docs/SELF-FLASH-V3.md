@@ -59,36 +59,78 @@ reports:
 - current-boot witnesses that both growpart and resizefs ran; and
 - a second-boot growpart dry run returning `NOCHANGE`.
 
-Therefore a booted current development image has no usable unpartitioned tail.
-Self-flash v3 images MUST disable root growth rather than infer free space from
-card capacity. The image installs an effective cloud-init override with
-`growpart.mode: off` and `resize_rootfs: false`. The built configuration,
-cloud-init schema result, and a first-boot test must prove that override. An
-image that has already grown partition 5 is permanently ineligible for v3.
+The growth replacement must also leave enough normal-root space for test kits.
+The following measurements settle that requirement:
+
+- **[MEASURED]** Build 27 descriptor
+  `51ba983870c85bd7714f86a821497938a36053186c8c0261f4d9067aa1bfdd9e`
+  names raw image SHA-256
+  `cdba7f7f458130608114c922ae28f82fd2c380c2ca148df351faa24fdd2f0597`
+  and 1,465,929,728 raw bytes. Its partition 5 starts at sector 251,904
+  and contains a 1,336,934,400-byte ext4 filesystem. Read-only `dumpe2fs`
+  reports 326,400 4,096-byte blocks, of which 70,155 are free: only
+  287,354,880 free bytes (274.04 MiB) before first-boot growth.
+- **[MEASURED]** The current Build 26 CTS GLES kit carries a 39,107,575-byte
+  archive (SHA-256
+  `544702ae2b495908bac41546c2d2768c4858ecc40bcb41a3120c32829d7e4c86`)
+  containing 255,148,604 bytes in 1,201 regular files. Its sealed setup copies
+  the archive to its persistent `/var/tmp/pf-glesproof/<generation>` root and
+  extracts those files there.
+- **[DERIVED]** That kit therefore needs at least 294,256,179 persistent bytes
+  before ext4 allocation overhead, logs, or results. This exceeds the
+  non-grown Build 27 free space by 6,901,299 bytes. During setup the runner's
+  separate disk-backed input contributes another archive copy, making the
+  observable peak lower bound 333,363,754 bytes (317.92 MiB).
+- **[MEASURED]** Among retained Build 10 through Build 27 publication
+  receipts, the largest compressed image is Build 26 CTS at 278,275,448 bytes
+  (`/home/matt/recovery/gpu14/build26-cts-publish/receipt-39504470351.json`).
+
+Therefore disabling all root growth is unsafe. Self-flash v3 development
+images MUST disable cloud-init's unbounded `growpart` and `resizefs` behavior
+and replace it with capped growth. The contract reserve `R` is 1,073,741,824
+bytes (1 GiB) at the physical end of the card. A first-boot unit relocates the
+backup GPT within the protected end guard, grows partition 5 and its ext4
+filesystem to the calculated `TailStart`, and records the before/after
+geometry. It runs before cloud-init and before disk-backed kit staging becomes
+available. The built configuration, cloud-init schema result, unit ordering,
+and first-boot test must prove the cap. An image that has already grown any
+partition past `TailStart` is permanently ineligible for v3.
+
+On the measured 62,534,975,488-byte card, the cap leaves a 61,330,161,664-byte
+(57.12 GiB) partition 5. **[DERIVED]** The tail's conservative maximum
+compressed payload is 1,044,377,601 bytes after its guards, control zone,
+maximum seed, and alignment allowance. That is 3.75 times the largest
+**[MEASURED]** retained compressed image and leaves 766,102,153 bytes of
+headroom. A future artifact larger than this capacity fails closed; changing
+`R` requires a new contract version.
 
 ## Units and raw-tail layout
 
 All byte values are unsigned decimal integers. All SHA-256 values are 64
 lowercase hexadecimal characters. `LogicalSectorBytes` MUST equal 512. The
-alignment constant `A` is 4,194,304 bytes (4 MiB), the guard constant `G` is
-4,194,304 bytes, the control-zone size `C` is 4,194,304 bytes, and each control
-slot is 65,536 bytes.
+alignment constant `A` is 4,194,304 bytes (4 MiB), the reserve constant `R` is
+1,073,741,824 bytes (1 GiB), the guard constant `G` is 4,194,304 bytes, the
+control-zone size `C` is 4,194,304 bytes, the maximum seed size `S` is
+16,777,216 bytes, and each control slot is 65,536 bytes.
 
 `align_up(x, a)` is the smallest multiple of `a` greater than or equal to `x`.
 All additions and multiplications are checked for overflow before any write.
+`align_down(x, a)` is the greatest multiple of `a` less than or equal to `x`.
 For card size `CardBytes`, base raw size `BaseRawBytes`, and target raw size
 `TargetRawBytes`, the exact layout is:
 
 ```text
 ImageFloor        = align_up(max(BaseRawBytes, TargetRawBytes), A)
-StageOffset       = ImageFloor + G
+TailStart         = align_down(CardBytes - R, A)
+StageOffset       = TailStart + G
 StageEnd          = StageOffset + CompressedBytes
 SeedOffset        = align_up(StageEnd, 4096)
 SeedEnd           = SeedOffset + SeedBytes
-ControlOffset     = CardBytes - C
+EndGuardStart     = align_down(CardBytes - G, A)
+ControlOffset     = EndGuardStart - C
 ArmOffset         = ControlOffset
 ReceiptOffset     = ControlOffset + 65,536
-ControlEnd        = CardBytes
+ControlEnd        = EndGuardStart
 ```
 
 The half-open ranges are:
@@ -99,23 +141,57 @@ The half-open ranges are:
 [ArmOffset, ArmOffset+65536)  arm record
 [ReceiptOffset, ReceiptOffset+65536)  tail receipt
 [ReceiptOffset+65536, ControlEnd)     reserved; MUST remain unwritten
+[ControlEnd, CardBytes)       end guard and backup GPT; MUST remain unwritten
 ```
 
 The bytes between the named ranges are guards or alignment padding and MUST
 remain unwritten. `CardBytes` and every offset MUST be a multiple of 512.
-`StageOffset` MUST be at or above `ImageFloor + G`, never merely at
-`ImageFloor`. `SeedEnd` MUST be less than or equal to `ControlOffset`.
+`ImageFloor` MUST be less than or equal to `TailStart`. `StageOffset` MUST
+equal `TailStart + G`. `SeedBytes` MUST be less than or equal to `S`, and
+`SeedEnd` MUST be less than or equal to `ControlOffset`. Conservatively, before
+opening an artifact, the runner requires:
 
-The runner and DUT independently require all live partition ends to be less
-than or equal to `BaseRawBytes` and strictly below `StageOffset`. The target
-descriptor requires every target partition end to be less than or equal to
-`TargetRawBytes`. Every named range must fit within `CardBytes`, must not
-overlap another named range, and must not overlap any partition. Missing or
-partially readable geometry is a refusal, not an unknown result that may pass.
+```text
+CompressedBytes <= ControlOffset - StageOffset - 4095 - S
+```
 
-The 4 MiB control zone is located from the observed end of the validated card,
-so the initrd can find it without scanning or trusting a filesystem. An exact
-card-size and identity match protects that addressing across the reboot.
+The final exact check still uses `align_up(StageEnd, 4096) + SeedBytes`.
+
+The runner and DUT independently require every live partition end to be less
+than or equal to `TailStart` and strictly below `StageOffset`; live partition
+5 ends exactly at `TailStart`. The baked base and target descriptor partition
+tables each end at or below their respective raw-image byte count. Every named
+range must fit within the reserve, must not overlap another named range, and
+must not overlap any partition. Missing or partially readable geometry is a
+refusal, not an unknown result that may pass.
+
+The reserve is located from the observed end of the validated card, so the
+initrd can find it without scanning or trusting a filesystem. `ControlEnd` is
+aligned below a separate end guard; the control zone never overwrites the
+backup GPT at the physical end of the card. An exact card-size and identity
+match protects all derived addressing across the reboot.
+
+## Capped root growth
+
+The v3 image disables the generic cloud-init grow and resize modules. Its
+root-owned first-boot unit instead selects the root-backed whole SD by the same
+controller, type, uniqueness, and partition-5 rules used by the eligibility
+probe. It accepts only either the descriptor's baked partition-5 end (work to
+do) or the exact calculated `TailStart` (idempotent completion). Any other end,
+any partition already crossing `TailStart`, or any device ambiguity fails
+closed without changing the table.
+
+After all checks, the unit repairs or relocates the secondary GPT only within
+`[ControlEnd, CardBytes)`, changes only partition 5 so its half-open end equals
+`TailStart`, rereads and verifies the table, then grows only that partition's
+ext4 filesystem. It writes a root-owned receipt at
+`/var/lib/pocketforge/self-flash-v3-growth` containing the schema version,
+contract digest, card identity and size, partition start, before and after end
+sectors, `TailStart`, filesystem size before and after, and an ordered result
+for GPT relocation, partition growth, table reread, and ext4 growth. The unit
+is ordered before cloud-init and before SSH admission used by kit windows.
+Eligibility requires a valid receipt whose measured after-state still matches
+the live geometry; a receipt alone never authorizes a mismatched card.
 
 ## Eligibility probe
 
@@ -136,11 +212,13 @@ the artifact or invoking the writer. Every item is required:
 5. The base identity stamp names the base descriptor and raw SHA-256. Base and
    target raw SHA-256 values MUST differ.
 6. Effective cloud-init configuration proves `growpart.mode: off` and
-   `resize_rootfs: false`. The v3 first-boot receipt proves neither module grew
-   or resized partition 5.
-7. Live partition 5 start and end sectors exactly equal the base descriptor's
-   declared values. Every other live partition start/end equals its base
-   descriptor entry. The maximum live end is at or below `BaseRawBytes`.
+   `resize_rootfs: false`. The capped-growth unit receipt proves that only the
+   validated SD's partition 5 and ext4 filesystem were extended and that its
+   half-open end is exactly `TailStart`.
+7. Live partition 5 start equals the baked base descriptor value and its end
+   equals the value derived from the observed `CardBytes`, `R`, and `A`. Every
+   other live partition start/end equals its base descriptor entry. No live
+   partition end exceeds `TailStart`.
 8. The target descriptor declares every partition start/end and passes the
    equivalent bound against `TargetRawBytes`.
 9. The calculated stage, seed, arm, receipt, guard, and reserved ranges pass
@@ -165,8 +243,8 @@ the eligibility geometry checks immediately before the first write.
 The writer refuses unless the selected device is the validated SD. In
 particular, it refuses eMMC; a non-`04020000` controller; a non-SD card; an
 identity or size change; a root other than partition 5 of that card; an offset
-below `StageOffset`; a range below `ImageFloor + G`; any partition overlap; or
-any range ending after `CardBytes`. These are independent hermetic refusal
+below `StageOffset`; a range below `TailStart + G`; any partition overlap; or
+any range ending after `ControlEnd`. These are independent hermetic refusal
 tests, with a valid SD/layout as the positive control in the same invocation.
 
 The helper writes exactly `CompressedBytes`, durably completes that raw range,
@@ -210,7 +288,8 @@ CardBytes=<decimal>
 LogicalSectorBytes=512
 RootPartitionStartSector=<decimal>
 RootPartitionSectors=<decimal>
-PartitionLayoutSHA256=<sha256 of canonical descriptor partition table>
+PartitionLayoutSHA256=<sha256 of canonical live partition table>
+TailStart=<decimal>
 StageOffset=<decimal>
 SeedOffset=<decimal>
 ArmOffset=<decimal>
@@ -336,9 +415,12 @@ Implementation acceptance includes paired positive and negative controls for:
 - zero, one, and multiple candidate devices;
 - card identity/size changes across arm and initrd boot;
 - logical sector size, overflow, alignment, image floor, guard, partition
-  overlap, stage underflow, control overlap, and card overflow;
+  overlap, reserve underflow, stage underflow, control overlap, backup-GPT end
+  guard, seed maximum, compressed capacity, and card overflow;
 - a live expanded partition 5 like the retained Build 8 geometry;
-- ineffective cloud-init growth override and a valid first-boot no-growth case;
+- ineffective cloud-init growth override, capped-growth ordering and receipt,
+  exact `TailStart` growth, wrong-device refusal, overgrowth refusal, and
+  backup-GPT relocation contained within the end guard;
 - missing/wrong rootfs marker, initrd marker, initrd hash, base stamp, and target
   descriptor;
 - equal base/target identities;
