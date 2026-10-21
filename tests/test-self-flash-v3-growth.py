@@ -37,23 +37,35 @@ sf = load_helper("self_flash_v3_grow", HELPER)
 stage = load_helper("self_flash_v3_stage_for_growth", STAGE_HELPER)
 CURRENT_BOOT_ID = "11111111-2222-4333-8444-555555555555"
 PRIOR_BOOT_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+CURRENT_INVOCATION_ID = "1" * 32
+PRIOR_INVOCATION_ID = "2" * 32
 
 
-def receipt_is_eligible(path: Path, boot_id: str = CURRENT_BOOT_ID) -> bool:
+def receipt_is_eligible(
+    path: Path,
+    boot_id: str = CURRENT_BOOT_ID,
+    invocation_id: str = CURRENT_INVOCATION_ID,
+    result: str = "success",
+) -> bool:
     try:
         receipt = json.loads(path.read_text(encoding="ascii"))
-        stage.validate_growth_receipt(receipt, boot_id)
-    except (OSError, ValueError, stage.Refusal):
+        stage.validate_growth_receipt(receipt, boot_id, invocation_id, result, "inactive")
+    except (OSError, TypeError, ValueError, stage.Refusal):
         return False
     return True
 
 
-def write_eligible_receipt(path: Path, boot_id: str = PRIOR_BOOT_ID) -> None:
+def write_eligible_receipt(
+    path: Path,
+    boot_id: str = PRIOR_BOOT_ID,
+    invocation_id: str = PRIOR_INVOCATION_ID,
+) -> None:
     path.write_text(
         json.dumps(
             {
                 "Schema": "pocketforge.self-flash-growth/v3",
                 "BootID": boot_id,
+                "InvocationID": invocation_id,
                 "GPTRelocation": "pass",
                 "PartitionGrowth": "pass",
                 "PartitionTableReread": "pass",
@@ -226,6 +238,7 @@ class InstalledPolicyTests(unittest.TestCase):
     def test_receipt_truthfully_records_control_initialization(self):
         receipt = sf.build_growth_receipt(
             boot_id=CURRENT_BOOT_ID,
+            invocation_id=CURRENT_INVOCATION_ID,
             contract_sha256="a" * 64,
             card_serial="0x1234abcd",
             card_bytes=62_534_975_488,
@@ -241,9 +254,22 @@ class InstalledPolicyTests(unittest.TestCase):
         self.assertEqual(receipt["ControlSlotsInitialized"], "zeroed-and-read-back")
         self.assertEqual(receipt["GPTRelocation"], "pass")
 
-        stage.validate_growth_receipt(receipt, CURRENT_BOOT_ID)
+        self.assertEqual(receipt["InvocationID"], CURRENT_INVOCATION_ID)
+        stage.validate_growth_receipt(
+            receipt, CURRENT_BOOT_ID, CURRENT_INVOCATION_ID, "success", "inactive"
+        )
         with self.assertRaises(stage.Refusal):
-            stage.validate_growth_receipt(receipt, PRIOR_BOOT_ID)
+            stage.validate_growth_receipt(
+                receipt, PRIOR_BOOT_ID, CURRENT_INVOCATION_ID, "success", "inactive"
+            )
+        with self.assertRaises(stage.Refusal):
+            stage.validate_growth_receipt(
+                receipt, CURRENT_BOOT_ID, PRIOR_INVOCATION_ID, "success", "inactive"
+            )
+        with self.assertRaises(stage.Refusal):
+            stage.validate_growth_receipt(
+                receipt, CURRENT_BOOT_ID, CURRENT_INVOCATION_ID, "failed", "inactive"
+            )
 
     def test_known_growth_refusal_degrades_and_records_reason(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -258,7 +284,7 @@ class InstalledPolicyTests(unittest.TestCase):
                 mock.patch.object(sf.os, "geteuid", return_value=0),
                 mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
             ):
-                self.assertEqual(sf.main(), 0)
+                self.assertEqual(sf.main(), 2)
 
             receipt = json.loads(receipt_path.read_text(encoding="ascii"))
             self.assertEqual(receipt["Schema"], "pocketforge.self-flash-growth-degraded/v3")
@@ -368,8 +394,17 @@ class InstalledPolicyTests(unittest.TestCase):
         for phase in ("open", "ftruncate", "write", "fsync", "unlink"):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
                 receipt_path = Path(directory) / "self-flash-v3-growth"
-                write_eligible_receipt(receipt_path)
-                self.assertTrue(receipt_is_eligible(receipt_path, PRIOR_BOOT_ID))
+                write_eligible_receipt(
+                    receipt_path,
+                    boot_id=CURRENT_BOOT_ID,
+                    invocation_id=PRIOR_INVOCATION_ID,
+                )
+                self.assertTrue(
+                    receipt_is_eligible(
+                        receipt_path,
+                        invocation_id=PRIOR_INVOCATION_ID,
+                    )
+                )
                 real_open, real_ftruncate = sf.os.open, sf.os.ftruncate
                 real_write, real_fsync, real_unlink = sf.os.write, sf.os.fsync, Path.unlink
 
@@ -412,7 +447,12 @@ class InstalledPolicyTests(unittest.TestCase):
                 ):
                     self.assertEqual(sf.main(), 2)
                 grow.assert_not_called()
-                self.assertFalse(receipt_is_eligible(receipt_path))
+                self.assertFalse(
+                    receipt_is_eligible(
+                        receipt_path,
+                        invocation_id=CURRENT_INVOCATION_ID,
+                    )
+                )
 
     def test_grow_rename_failure_rejects_stale_boot_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -423,10 +463,12 @@ class InstalledPolicyTests(unittest.TestCase):
                 candidate = {
                     "Schema": "pocketforge.self-flash-growth/v3",
                     "BootID": CURRENT_BOOT_ID,
+                    "InvocationID": CURRENT_INVOCATION_ID,
                     "GPTRelocation": "pass",
                     "PartitionGrowth": "pass",
                     "PartitionTableReread": "pass",
                     "Ext4Growth": "pass",
+                    "ControlSlotsInitialized": "zeroed-and-read-back",
                 }
                 sf._write_receipt(candidate)
                 return candidate
@@ -439,7 +481,13 @@ class InstalledPolicyTests(unittest.TestCase):
                 mock.patch.object(sf.os, "replace", side_effect=OSError("injected rename failure")),
             ):
                 self.assertEqual(sf.main(), 0)
-            self.assertFalse(receipt_is_eligible(receipt_path))
+            self.assertFalse(
+                receipt_is_eligible(
+                    receipt_path,
+                    invocation_id=CURRENT_INVOCATION_ID,
+                    result="failed",
+                )
+            )
 
     def test_pass_directory_sync_then_degraded_write_failure_leaves_no_receipt(self):
         with tempfile.TemporaryDirectory() as directory:

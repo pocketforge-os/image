@@ -139,26 +139,63 @@ class ExactStreamTests(unittest.TestCase):
 
 
 class SurfaceTests(unittest.TestCase):
-    def test_stale_boot_growth_receipt_refuses_before_request_or_device_access(self):
+    @staticmethod
+    def _fake_systemctl(path: Path, invocation_id: str, result: str, active_state: str) -> None:
+        path.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' 'InvocationID={invocation_id}' "
+            f"'Result={result}' 'ActiveState={active_state}'\n",
+            encoding="ascii",
+        )
+        path.chmod(0o755)
+
+    def test_growth_receipt_requires_current_successful_systemd_activation(self):
         with tempfile.TemporaryDirectory() as directory:
             receipt_path = Path(directory) / "growth"
             boot_id_path = Path(directory) / "boot_id"
+            systemctl_path = Path(directory) / "systemctl"
             boot_id_path.write_text("11111111-2222-4333-8444-555555555555\n")
             receipt_path.write_text(
                 json.dumps(
                     {
                         "Schema": "pocketforge.self-flash-growth/v3",
-                        "BootID": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                        "BootID": "11111111-2222-4333-8444-555555555555",
+                        "InvocationID": "1" * 32,
                         "GPTRelocation": "pass",
                         "PartitionGrowth": "pass",
                         "PartitionTableReread": "pass",
                         "Ext4Growth": "pass",
+                        "ControlSlotsInitialized": "zeroed-and-read-back",
                     }
                 )
             )
+            for invocation_id, result, accepted in (
+                ("1" * 32, "success", True),
+                ("2" * 32, "success", False),
+                ("1" * 32, "failed", False),
+            ):
+                with self.subTest(invocation_id=invocation_id, result=result):
+                    self._fake_systemctl(systemctl_path, invocation_id, result, "inactive")
+                    patches = (
+                        mock.patch.object(sf, "GROWTH_RECEIPT_PATH", receipt_path, create=True),
+                        mock.patch.object(sf, "BOOT_ID_PATH", boot_id_path, create=True),
+                        mock.patch.object(sf, "SYSTEMCTL_PATH", systemctl_path, create=True),
+                    )
+                    with patches[0], patches[1], patches[2]:
+                        if accepted:
+                            sf._require_current_growth_receipt()
+                        else:
+                            with self.assertRaises(sf.Refusal):
+                                sf._require_current_growth_receipt()
+
+            self._fake_systemctl(systemctl_path, "1" * 32, "success", "inactive")
+            receipt = json.loads(receipt_path.read_text(encoding="ascii"))
+            receipt["BootID"] = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+            receipt_path.write_text(json.dumps(receipt), encoding="ascii")
             with (
                 mock.patch.object(sf, "GROWTH_RECEIPT_PATH", receipt_path, create=True),
                 mock.patch.object(sf, "BOOT_ID_PATH", boot_id_path, create=True),
+                mock.patch.object(sf, "SYSTEMCTL_PATH", systemctl_path, create=True),
                 mock.patch.object(sf, "_load_request") as load_request,
                 self.assertRaises(sf.Refusal),
             ):
