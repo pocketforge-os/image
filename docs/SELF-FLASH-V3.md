@@ -242,7 +242,10 @@ the artifact or invoking the writer. Every item is required:
 3. `/etc/pocketforge-selfflash-v3` is a regular root-owned file with the exact
    version and image-contract digest from the base descriptor.
 4. The effective `/boot/initrd.gz` SHA-256 equals the base descriptor's
-   `InitrdSHA256`, and that initrd contains the same v3 contract marker.
+   `InitrdSHA256`, and that initrd contains the exact initrd capability marker
+   below. Its `ContractSHA256` equals the normal-root marker's digest; the two
+   marker files are deliberately not byte-identical because final partition-5
+   geometry is known only after the initrd has already been assembled.
 5. The base identity stamp names the base descriptor and raw SHA-256. Base and
    target raw SHA-256 values MUST differ.
 6. Effective cloud-init configuration proves `growpart.mode: off` and
@@ -322,6 +325,49 @@ Lane SSH may exercise the typed operation through the window runner, but it
 cannot supply an arbitrary offset or target device to the helper. Installing a
 general-purpose raw writer or a sudo rule exposing seek/offset control violates
 this contract.
+
+## Initrd capability marker
+
+Development initrds contain `/etc/pocketforge-selfflash-v3` with exactly these
+ordered fields; release initrds omit it. The marker is assembled before the
+root filesystem's final ext4 byte length is known, so it binds the immutable
+contract and constants but carries no baked partition geometry:
+
+```text
+Schema=pocketforge.self-flash-initrd-capability/v3
+ContractSHA256=<sha256 of this document>
+CardController=04020000
+AlignmentBytes=4194304
+ReserveBytes=1073741824
+GuardBytes=4194304
+ControlBytes=4194304
+SeedMaxBytes=16777216
+SlotBytes=65536
+```
+
+The initrd requires this exact file before reading either control slot. It then
+derives the selected SD and every offset from observed immutable card identity,
+the arm record, and these constants. A missing, extended, reordered, or
+digest-mismatched marker is ineligible.
+
+## Seed archive
+
+The seed range is one uncompressed POSIX ustar archive. It contains exactly
+three top-level regular files named `meta-data`, `network-config`, and
+`user-data`, with no directory entries, links, absolute paths, `..` components,
+device nodes, pax extensions, or additional members. All headers use uid/gid 0,
+an empty owner/group name, and mode 0600; archive padding is included in
+`SeedBytes` and `SeedSHA256`. The runner constructs and validates that canonical
+member set before staging.
+
+The initrd never copies the archive to tmpfs. After the target write, it reads
+exactly `[SeedOffset, SeedOffset+SeedBytes)` from the raw tail, tees that stream
+through a byte counter and SHA-256 process, and feeds BusyBox `tar` on standard
+input into a newly mounted target FAT directory owned by the initrd. All
+producer, tee, hash, count, and tar statuses are checked. It requires the
+observed byte count and digest to equal the arm record, then verifies the three
+installed regular files and refuses any extra extracted entry before atomically
+placing them at the FAT root.
 
 ## Arm record
 
@@ -443,11 +489,25 @@ waits. Success requires all of the following:
 - the seed and success stamp are written, read back, and verified; and
 - the `pass` tail receipt is durably written before the target reboot.
 
-The stamp names the target descriptor, target raw SHA-256, generation, and tail
-receipt digest. The initrd then marks the arm consumed or otherwise makes the
-non-retry state durable without erasing the receipt. No normal-root process
-writes the stamp. Any failure omits the success stamp, writes the most specific
-bounded failure receipt possible, and stops for FEL recovery.
+The success stamp is `/pocketforge-self-flash-v3` on the FAT and has exactly
+these ordered fields, followed by one newline and no additional bytes:
+
+```text
+Schema=pocketforge.self-flash-stamp/v3
+Generation=<32 lowercase hex>
+TargetDescriptorSHA256=<sha256>
+TargetRawSHA256=<sha256>
+TargetRawBytes=<decimal>
+TailReceiptSHA256=<sha256 of the final padded receipt slot>
+```
+
+The initrd writes the final `pass` tail receipt first, reads that exact slot
+back, and uses the read-back slot digest in the stamp. It then reads the stamp
+back byte-for-byte, unmounts the FAT, and reboots. The durable non-`ready`
+receipt makes the arm non-retryable without erasing either evidence record. No
+normal-root process writes the stamp. Any failure omits the success stamp,
+writes the most specific bounded failure receipt possible, and stops for FEL
+recovery.
 
 ## Truthful final runner receipt
 
