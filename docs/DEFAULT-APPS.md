@@ -965,8 +965,7 @@ PartOf=pocketforge-gamescope-session.target
 OnFailure=pocketforge-gamescope-fallback.service
 After=pf-input-decode.service pf-prefsd.service
 Conflicts=pf-shell-selected.service
-StartLimitIntervalSec=30s
-StartLimitBurst=2
+StartLimitIntervalSec=0
 ConditionPathExists=
 
 [Service]
@@ -976,11 +975,10 @@ ExecStartPre=/usr/bin/test -e /dev/uinput
 Group=gamer
 UMask=0007
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
-Restart=on-failure
-RestartSec=0
-RestartMode=direct
+Restart=no
+NotifyAccess=all
 ExecStart=
-ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/device/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/system-menu.sock --compositor-sock /run/pocketforge/input/compositor.sock
+ExecStart=/usr/lib/pocketforge/pf-input-broker-supervisor /usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/device/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/system-menu.sock --compositor-sock /run/pocketforge/input/compositor.sock
 ```
 
 `ConditionPathExists=` followed by `ExecStartPre=/usr/bin/test -e /dev/uinput` is a B4
@@ -993,11 +991,13 @@ would not keep the app active beside a skipped broker either. The pre-start comm
 failure, so the app is never invoked (harness
 `broker_start_failure`).
 
-`Restart=on-failure`, `RestartMode=direct`, and `StartLimitBurst=2` implement the bounded
-session-router recovery policy. The first failure restarts immediately without firing
-`OnFailure=`. If that replacement also fails inside the 30-second interval, the start limit
-makes the failure terminal and activates the fallback. This permits one transient recovery
-without the unbounded shell/broker ping-pong seen in the earlier per-app design.
+`pf-input-broker-supervisor` implements the bounded session-router recovery policy. It starts
+the broker at most twice and returns failure only if both attempts fail, so `OnFailure=` runs
+once after the terminal failure. `Restart=no` prevents systemd from adding another retry.
+Unlike a systemd start-rate limit, this count is local to one session invocation: clean rapid
+session churn cannot consume a later session's recovery allowance. `NotifyAccess=all` lets the
+broker child retain the runtime unit's `Type=notify` readiness contract on the image's systemd,
+which predates `RestartMode=direct`.
 
 `OnFailure=` also covers a failed `/dev/uinput` pre-start, which can leave the compositor
   target active even though the app never became a live pin. The broker never entered active,

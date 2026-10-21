@@ -18,6 +18,7 @@ owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.t
 resident_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-resident.service"
 authorization_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-x11-authorize.service"
 broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
+broker_supervisor="${root}/rootfs-overlay/usr/lib/pocketforge/pf-input-broker-supervisor"
 shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
 containerfile="${fixtures}/Containerfile"
 gamescope_tmpfiles="${root}/rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf"
@@ -32,7 +33,7 @@ app_unit_sha256=0dd9419bdf68da46ea542b2acbbc574b28b8f9d8d788f210029e90eef73383f0
 # from this image tree. These pins make the real-systemd fixture test the same
 # unit contract as the related runtime PR instead of silently exercising v2.
 broker_unit_sha256=e6834f966ed070b5bb2cab9ed1464d5cdd55c78e7587b9931149a43ed9631f66
-broker_dropin_sha256=f8fd11584ce2a057efa3e2e1fc3a3c5ccef7f72b723f760463a5b6db812df987
+broker_dropin_sha256=6d21df3c084dbb5cf27d1f1a22d86cb3663ef88c649288c5e4536f8ce7c403cc
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
@@ -711,6 +712,7 @@ install -m 0644 "${fixtures}/pf-shell-selected.service" \
     "${context}/pf-shell-selected.service"
 install -m 0644 "${fixtures}/pf-prefsd.service" "${context}/pf-prefsd.service"
 install -m 0644 "${broker_dropin}" "${context}/10-app-session.conf"
+install -m 0755 "${broker_supervisor}" "${context}/pf-input-broker-supervisor"
 install -m 0644 "${shell_dropin}" "${context}/10-input-broker.conf"
 install -m 0755 "${fixtures}/fake-input-broker" "${context}/fake-input-broker"
 install -m 0755 "${fixtures}/fake-prefsd" "${context}/fake-prefsd"

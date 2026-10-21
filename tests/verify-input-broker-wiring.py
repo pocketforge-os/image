@@ -116,15 +116,14 @@ assert 'chroot "$ROOTFS" groupadd --system pf-pref-writer' in rootfs_builder
 assert not re.search(r"usermod[^\n]*pf-pref-writer[^\n]*gamer", rootfs_builder)
 assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
 
-# Broker drop-in: one holder for the complete gamescope session, immediate direct retry,
-# and terminal fallback after the second failed start.
+# Broker drop-in: one holder for the complete gamescope session, one supervisor-owned retry,
+# and terminal fallback after the second failed attempt.
 assert broker == [
     ("Unit", "PartOf", "pocketforge-gamescope-session.target"),
     ("Unit", "OnFailure", "pocketforge-gamescope-fallback.service"),
     ("Unit", "After", "pf-input-decode.service pf-prefsd.service"),
     ("Unit", "Conflicts", "pf-shell-selected.service"),
-    ("Unit", "StartLimitIntervalSec", "30s"),
-    ("Unit", "StartLimitBurst", "2"),
+    ("Unit", "StartLimitIntervalSec", "0"),
     ("Unit", "ConditionPathExists", ""),
     ("Service", "Slice", "pfsession.slice"),
     ("Service", "OOMScoreAdjust", "-900"),
@@ -132,18 +131,22 @@ assert broker == [
     ("Service", "Group", "gamer"),
     ("Service", "UMask", "0007"),
     ("Service", "Environment", "PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock"),
-    ("Service", "Restart", "on-failure"),
-    ("Service", "RestartSec", "0"),
-    ("Service", "RestartMode", "direct"),
+    ("Service", "Restart", "no"),
+    ("Service", "NotifyAccess", "all"),
     ("Service", "ExecStart", ""),
-    ("Service", "ExecStart", "/usr/bin/pf-input-broker --descriptor " + DESCRIPTOR
+    ("Service", "ExecStart", "/usr/lib/pocketforge/pf-input-broker-supervisor "
+     + "/usr/bin/pf-input-broker --descriptor " + DESCRIPTOR
      + " --acquire-sock " + BROKER_SOCK + " --source /dev/input/pf-gamepad"
      + " --safe-return-sock " + AUTHORITY_SOCK
      + " --system-menu-sock " + SYSTEM_MENU_SOCK
      + " --compositor-sock /run/pocketforge/input/compositor.sock"),
 ], broker
 exec_start = values(broker, "Service", "ExecStart")
-flags = dict(zip(exec_start[1::2], exec_start[2::2]))
+assert exec_start[:2] == [
+    "/usr/lib/pocketforge/pf-input-broker-supervisor",
+    "/usr/bin/pf-input-broker",
+]
+flags = dict(zip(exec_start[2::2], exec_start[3::2]))
 assert flags["--descriptor"] == DESCRIPTOR == environment[environment.index(f"PF_DESCRIPTOR={DESCRIPTOR}")].split("=", 1)[1]
 assert flags["--acquire-sock"] == BROKER_SOCK
 assert flags["--safe-return-sock"] == values(app, "Service", "InaccessiblePaths")[0].lstrip("-")
@@ -169,8 +172,8 @@ def effective_restart(dropin_dir: Path, base: str = "on-failure") -> str:
     return value
 
 
-# Session router restarts once; RestartMode=direct defers OnFailure until the second failure.
-assert effective_restart(BROKER_DROPIN.parent) == "on-failure", effective_restart(BROKER_DROPIN.parent)
+# The supervisor retries once; systemd observes only the final result.
+assert effective_restart(BROKER_DROPIN.parent) == "no", effective_restart(BROKER_DROPIN.parent)
 # Negative control in the same run: a later drop-in that restores on-failure must be seen.
 import tempfile  # noqa: E402
 

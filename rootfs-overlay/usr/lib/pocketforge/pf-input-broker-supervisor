@@ -1,0 +1,43 @@
+#!/bin/sh
+# Run one session-wide broker with exactly one retry. A clean stop never consumes
+# a future session's retry allowance; only two failures in this invocation make
+# the unit fail and activate its OnFailure fallback.
+set -u
+
+if [ "$#" -lt 1 ]; then
+    echo 'usage: pf-input-broker-supervisor <broker> [args...]' >&2
+    exit 2
+fi
+
+broker="$1"
+shift
+stopping=0
+child_pid=
+
+forward_stop() {
+    stopping=1
+    if [ -n "${child_pid}" ] && ! kill -TERM "${child_pid}" 2>/dev/null; then
+        echo "pf-input-broker-supervisor: broker ${child_pid} already stopped" >&2
+    fi
+}
+trap forward_stop TERM INT
+
+attempt=1
+while [ "${attempt}" -le 2 ]; do
+    "${broker}" "$@" &
+    child_pid=$!
+    wait "${child_pid}"
+    result=$?
+
+    if [ "${stopping}" -eq 1 ]; then
+        # A session stop is intentional even if wait was interrupted by SIGTERM.
+        exit 0
+    fi
+    if [ "${result}" -eq 0 ]; then
+        exit 0
+    fi
+
+    attempt=$((attempt + 1))
+done
+
+exit "${result}"

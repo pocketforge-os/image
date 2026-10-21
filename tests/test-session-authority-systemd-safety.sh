@@ -1332,6 +1332,7 @@ grep -Fqx 'COPY runtime/crates/pf-input-broker/systemd/pf-input-broker.service /
 grep -Fqx 'COPY 10-app-session.conf /etc/systemd/system/pf-input-broker.service.d/10-app-session.conf' "${recipe}" || exit 1
 grep -Fqx 'COPY 10-input-broker.conf /etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf' "${recipe}" || exit 1
 grep -Fqx 'COPY fake-input-broker /usr/bin/pf-input-broker' "${recipe}" || exit 1
+grep -Fqx 'COPY pf-input-broker-supervisor /usr/lib/pocketforge/pf-input-broker-supervisor' "${recipe}" || exit 1
 grep -Fqx 'COPY pf-prefsd.service /etc/systemd/system/pf-prefsd.service' "${recipe}" || exit 1
 grep -Fqx 'COPY fake-prefsd /usr/local/libexec/fake-prefsd' "${recipe}" || exit 1
 prefsd_self_test="$(python3 "${root}/tests/session-authority-systemd/fake-prefsd" --self-test)"

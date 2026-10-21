@@ -42,6 +42,7 @@ shell_dropin="${systemd_source}/pf-shell-selected.service.d/10-input-broker.conf
 cursor_dropin="${systemd_source}/pf-app@.service.d/30-cursor-theme.conf"
 input_sysusers="${overlay}/usr/lib/sysusers.d/pf-input.conf"
 input_tmpfiles="${overlay}/usr/lib/tmpfiles.d/pf-input.conf"
+broker_supervisor="${overlay}/usr/lib/pocketforge/pf-input-broker-supervisor"
 
 if [ "${gpu_model}" != open ]; then
     for forbidden in "${helper}" "${authority}" "${sampler}" "${platform}" "${shell}" \
@@ -58,7 +59,8 @@ fi
 for required in "${helper}" "${authority}" "${sampler}" "${platform}" "${shell}" "${unit}" \
     "${broker}" "${broker_unit}" "${library}" "${descriptor}" \
     "${neutral_descriptor}" "${broker_dropin}" "${shell_dropin}" \
-    "${cursor_dropin}" "${input_sysusers}" "${input_tmpfiles}"; do
+    "${cursor_dropin}" "${input_sysusers}" "${input_tmpfiles}" \
+    "${broker_supervisor}"; do
     [ -f "${required}" ] || {
         echo "FATAL: A133-open default-app artifact is missing: ${required}" >&2
         exit 1
@@ -114,6 +116,8 @@ install -D -m 0644 "${input_sysusers}" \
     "${rootfs}/usr/lib/sysusers.d/pf-input.conf"
 install -D -m 0644 "${input_tmpfiles}" \
     "${rootfs}/usr/lib/tmpfiles.d/pf-input.conf"
+install -D -m 0755 "${broker_supervisor}" \
+    "${rootfs}/usr/lib/pocketforge/pf-input-broker-supervisor"
 install -D -m 0644 "${library}" "${rootfs}/usr/lib/aarch64-linux-gnu/libpocketforge.so.1"
 install -D -m 0644 "${descriptor}" \
     "${rootfs}/usr/share/pocketforge/devices/${descriptor_id}/capabilities.toml"

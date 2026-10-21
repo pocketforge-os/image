@@ -153,6 +153,9 @@ cmp "${root}/rootfs-overlay/usr/lib/sysusers.d/pf-input.conf" \
     "${rootfs}/usr/lib/sysusers.d/pf-input.conf"
 cmp "${root}/rootfs-overlay/usr/lib/tmpfiles.d/pf-input.conf" \
     "${rootfs}/usr/lib/tmpfiles.d/pf-input.conf"
+cmp "${root}/rootfs-overlay/usr/lib/pocketforge/pf-input-broker-supervisor" \
+    "${rootfs}/usr/lib/pocketforge/pf-input-broker-supervisor"
+test -x "${rootfs}/usr/lib/pocketforge/pf-input-broker-supervisor"
 cmp "${runtime}/lib/libpocketforge.so.1" \
     "${rootfs}/usr/lib/aarch64-linux-gnu/libpocketforge.so.1"
 cmp "${runtime}/share/devices/a133/capabilities.toml" \

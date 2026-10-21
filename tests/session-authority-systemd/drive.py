@@ -1037,7 +1037,7 @@ def watch_units(seconds: float) -> dict[str, Any]:
 def assert_broker_exit_before_ready_never_traps() -> str:
     """(a) The broker starts, then exits 1 before READY=1 (the .215 source refusal).
 
-    The broker retries directly once. The second failure exhausts the two-start budget,
+    The supervisor retries the broker once. Its second failure makes the unit fail,
     so the app job fails as a dependency and OnFailure returns the shell. The shell is
     back within 10 s and stays up, with no shell/broker ping-pong, for 30 s.
     """
@@ -1087,10 +1087,10 @@ def assert_broker_exit_before_ready_never_traps() -> str:
         f"grab_violations={len(violations)} authority_phase={phase_name} rung={payload.get('rung')} "
         f"receipt={compact(receipt)}"
     )
-    require(restart_policy == "on-failure",
-            f"effective broker Restart={restart_policy!r}, want 'on-failure'")
-    require(attempts == 2 and nrestarts == "1",
-            f"broker did not stop after one direct restart: attempts={attempts} NRestarts={nrestarts}")
+    require(restart_policy == "no",
+            f"effective broker Restart={restart_policy!r}, want 'no'")
+    require(attempts == 2 and nrestarts == "0",
+            f"supervisor did not stop after one retry: attempts={attempts} NRestarts={nrestarts}")
     require(broker_state == "failed" and broker_result in ("exit-code", "start-limit-hit"),
             f"broker did not fail terminally after two starts: {broker_state}/{broker_result}")
     require(invocation_count() == before_invocations, "app started although its broker exited before READY")
@@ -1121,8 +1121,8 @@ def assert_broker_exit_before_ready_never_traps() -> str:
 def assert_broker_exit_mid_session_never_traps(order: GrabOrder) -> str:
     """(b) The broker exits 1 mid-session, after READY=1, while the app runs.
 
-    The broker retries once; that retry is forced to fail before READY. The exhausted
-    start budget invokes the fallback, releases the session target and its PartOf app,
+    The supervisor retries once; that retry is forced to fail before READY. Its terminal
+    result invokes the fallback, releases the session target and its PartOf app,
     and returns the shell. The authority records one terminal receipt.
     """
     command("systemctl", "reset-failed", APP_UNIT, BROKER_UNIT, check=False)
@@ -1152,7 +1152,8 @@ def assert_broker_exit_mid_session_never_traps(order: GrabOrder) -> str:
     except TestFailure:
         restored = False
     restore_s = time.monotonic() - crashed
-    # The runtime unit's RestartSec=2: wait past it so a restart would be visible.
+    # Wait past the runtime unit's inherited RestartSec=2 so an accidental systemd restart
+    # would be visible even though the image drop-in requires Restart=no.
     time.sleep(max(0.0, crashed + 3.0 - time.monotonic()))
     nrestarts = property_value(BROKER_UNIT, "NRestarts")
     attempts = broker_attempts() - before_attempts
@@ -1175,8 +1176,8 @@ def assert_broker_exit_mid_session_never_traps(order: GrabOrder) -> str:
         f"receipt={compact(receipt)}"
     )
     require(app_stopped and app_state != "active", f"user trapped: app still {app_state} after its broker exited")
-    require(attempts == 1 and nrestarts == "1",
-            f"broker did not make exactly one direct restart: attempts={attempts} NRestarts={nrestarts}")
+    require(attempts == 1 and nrestarts == "0",
+            f"supervisor did not make exactly one retry: attempts={attempts} NRestarts={nrestarts}")
     require(broker_state == "failed" and broker_result in ("exit-code", "start-limit-hit"),
             f"broker did not fail terminally after the retry: {broker_state}/{broker_result}")
     require(invocation_count() == before_invocations, "app was restarted after its broker exited")
@@ -1207,7 +1208,9 @@ def control_restart_on_failure_reproduces_trap() -> str:
     require(phase_summary()[0] == "Idle", f"authority busy before the control: {authority_state()['phase']}")
     command("systemctl", "reset-failed", APP_UNIT, BROKER_UNIT, check=False)
     CONTROL_DROPIN.parent.mkdir(parents=True, exist_ok=True)
-    CONTROL_DROPIN.write_text("[Unit]\nStartLimitIntervalSec=0\n")
+    CONTROL_DROPIN.write_text(
+        "[Unit]\nStartLimitIntervalSec=0\n[Service]\nRestart=on-failure\n"
+    )
     command("systemctl", "daemon-reload")
     restart_policy = property_value(BROKER_UNIT, "Restart")
     require(restart_policy == "on-failure", f"control changed Restart={restart_policy!r}")

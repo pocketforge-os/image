@@ -59,13 +59,17 @@ command = words(broker, "Service", "ExecStart")
 assert command[command.index("--compositor-sock") + 1] == "/run/pocketforge/input/compositor.sock"
 assert "--session-user" not in command
 
-# Restart immediately once. RestartMode=direct suppresses OnFailure during that retry;
-# StartLimitBurst=2 makes the second failure terminal and activates the shell fallback.
-assert words(broker, "Service", "Restart") == ["on-failure"]
-assert words(broker, "Service", "RestartSec") == ["0"]
-assert words(broker, "Service", "RestartMode") == ["direct"]
-assert words(broker, "Unit", "StartLimitBurst") == ["2"]
+# The image's systemd predates RestartMode=direct. The supervisor owns exactly one retry,
+# so successful session churn cannot consume a global systemd start-rate counter.
+assert words(broker, "Service", "Restart") == ["no"]
+assert words(broker, "Service", "NotifyAccess") == ["all"]
+assert words(broker, "Unit", "StartLimitIntervalSec") == ["0"]
+assert words(broker, "Unit", "StartLimitBurst") == []
 assert words(broker, "Unit", "OnFailure") == ["pocketforge-gamescope-fallback.service"]
+assert command[:2] == [
+    "/usr/lib/pocketforge/pf-input-broker-supervisor",
+    "/usr/bin/pf-input-broker",
+]
 
 # The exact in-ipc endpoints are created beneath a non-app-traversable parent.
 tmpfiles = (ROOT / "rootfs-overlay/usr/lib/tmpfiles.d/pf-input.conf").read_text()
