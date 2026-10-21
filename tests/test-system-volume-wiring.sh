@@ -50,6 +50,20 @@ fi
 check_recipe "$repo/build/Dockerfile.pf" "$repo/scripts/build-rootfs.sh" \
     || fail "runtime recipe does not build, stage, install, and enable pf-volumed"
 
+# The jack input node exists only on kernel-sunxi-7.x (kernel#42); the rule install is gated to it.
+jack_install_gated() {
+    awk '/\[ "\$\{PF_KERNEL_REPO\}" = kernel-sunxi-7\.x \]/ { gate=1 }
+         /73-pocketforge-headphone-jack\.rules/ && /install/ { if (!gate) bad=1 }
+         /^    fi$/ { gate=0 }
+         END { exit bad }' "$1"
+}
+jack_install_gated "$repo/scripts/build-rootfs.sh" \
+    || fail "jack udev rule install is not gated to kernel-sunxi-7.x"
+sed 's/\[ "${PF_KERNEL_REPO}" = kernel-sunxi-7\.x \]/true/' "$repo/scripts/build-rootfs.sh" > "$tmp/rootfs-ungated.sh"
+if jack_install_gated "$tmp/rootfs-ungated.sh"; then
+    fail "negative control: gate checker accepted an ungated jack rule install"
+fi
+
 cp "$repo/build/Dockerfile.pf" "$tmp/Dockerfile.pf"
 sed -i '/pf-volumed/d' "$tmp/Dockerfile.pf"
 if check_recipe "$tmp/Dockerfile.pf" "$repo/scripts/build-rootfs.sh"; then
