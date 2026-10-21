@@ -100,6 +100,8 @@ def validate_growth_receipt(
     active_state: str,
 ) -> None:
     """Accept only positive evidence from this boot's successful activation."""
+    if active_state in ("activating", "reloading") or invocation_id == "":
+        raise Refusal("growth_pending")
     if not _valid_boot_id(boot_id):
         raise Refusal("boot_id_invalid")
     if not _valid_invocation_id(invocation_id):
@@ -157,6 +159,9 @@ def _growth_unit_state() -> tuple[str, str, str]:
 
 
 def _require_current_growth_receipt() -> None:
+    invocation_id, result, active_state = _growth_unit_state()
+    if active_state in ("activating", "reloading") or invocation_id == "":
+        raise Refusal("growth_pending")
     try:
         boot_id = BOOT_ID_PATH.read_text(encoding="ascii").strip()
         receipt = json.loads(GROWTH_RECEIPT_PATH.read_text(encoding="ascii"))
@@ -164,7 +169,6 @@ def _require_current_growth_receipt() -> None:
         raise Refusal("growth_receipt_unreadable") from error
     if not isinstance(receipt, dict):
         raise Refusal("growth_receipt_invalid")
-    invocation_id, result, active_state = _growth_unit_state()
     validate_growth_receipt(receipt, boot_id, invocation_id, result, active_state)
 
 

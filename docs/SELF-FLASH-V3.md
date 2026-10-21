@@ -91,10 +91,12 @@ and replace it with capped growth. The contract reserve `R` is 1,073,741,824
 bytes (1 GiB) at the physical end of the card. A first-boot unit relocates the
 backup GPT within the protected end guard, grows partition 5 and its ext4
 filesystem to the calculated `TailStart`, and records the before/after
-geometry. It runs before cloud-init and before disk-backed kit staging becomes
-available. The built configuration, cloud-init schema result, unit ordering,
-and first-boot test must prove the cap. An image that has already grown any
-partition past `TailStart` is permanently ineligible for v3.
+geometry. It runs after local filesystems become available, without ordering
+cloud-init or SSH behind this best-effort work. Typed disk-backed kit staging
+returns `growth_pending` without waiting until the current activation produces
+positive evidence. The built configuration, cloud-init schema result, unit
+policy, and first-boot test must prove the cap. An image that has already grown
+any partition past `TailStart` is permanently ineligible for v3.
 
 On the measured 62,534,975,488-byte card, the cap leaves a 61,330,161,664-byte
 (57.12 GiB) partition 5. **[DERIVED]** The tail's conservative maximum
@@ -241,10 +243,15 @@ a caught failure has a nonsuccess result. If validation or growth refuses, the h
 successful activation can publish positive evidence; its durable pass receipt is
 the activation's last fallible operation. The final staging boundary validates that evidence
 before reading the request or opening any device. The unit
-is ordered ahead of cloud-init and SSH so capped growth and control-slot
-initialization finish before network kit staging can acquire the same SD lock.
-`TimeoutStartSec=90s` bounds that admission barrier. The unit is not a required
-dependency, so after it exits or times out, a failure does not prevent login. A
+does not order cloud-init or SSH behind capped growth. Instead, kit staging
+fails closed with `growth_pending` while the unit is activating or has not run
+in the current boot, and the caller may retry. `TimeoutStartSec=90s` is the
+**[BOUNDED]** maximum permitted duration for the complete background
+partition-table, filesystem, and control-slot operation, rather than a measured
+latency claim. Work that cannot finish within 90 seconds is less safe than a
+retry or recovery, so systemd fails that activation and its receipt cannot pass
+eligibility. The unit is not a required dependency, so a failure or timeout
+does not prevent login. A
 known growth refusal returns success after invalidation because capped growth is
 not a boot requirement. A degraded receipt lacks the success fields and
 therefore can never pass the eligibility probe.
@@ -579,7 +586,7 @@ Implementation acceptance includes paired positive and negative controls for:
 - a live expanded partition 5 like the retained Build 8 geometry;
 - a fresh baked partition 5 both below and above card-relative `TailStart`,
   proving normal boot without a tail read, paired with near-capped drift refusal;
-- ineffective cloud-init growth override, capped-growth ordering and receipt,
+- ineffective cloud-init growth override, nonblocking capped-growth policy and receipt,
   exact `TailStart` growth, wrong-device refusal, overgrowth refusal, and
   backup-GPT relocation contained within the end guard;
 - missing/wrong rootfs marker, initrd marker, initrd hash, base stamp, and target
