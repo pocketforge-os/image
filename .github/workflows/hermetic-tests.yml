@@ -126,9 +126,14 @@ jobs:
             tests/test-gamescope-pvr-cache.sh
             tests/test-gamescope-kms-select.sh
             tests/test-gamescope-session-supervisor.sh
+            tests/test-hermetic-test-dispatch.sh
             tests/test-hwprobe-variant-stage.sh
             tests/test-initrd-selfflash-watchdog.sh
             tests/test-initrd-selfflash-v2.sh
+            tests/test-initrd-selfflash-v3.sh
+            tests/test-initrd-selfflash-v3-arm.py
+            tests/test-self-flash-v3-growth.py
+            tests/test-self-flash-v3-stage.py
             tests/test-initrd-volatile-root.sh
             tests/test-kbd-layout-env.sh
             tests/test-input-harness-selftest.sh
@@ -143,6 +148,7 @@ jobs:
             tests/test-open-gpu-integration.sh
             tests/test-open-gpu-gate-ordering.sh
             tests/test-open-gpu-gate-virtual.sh
+            tests/test-open-gpu-probe-render-only.sh
             tests/test-open-gpu-probe-spirv.sh
             tests/test-open-gpu-provider.sh
             tests/test-open-gpu-tools.sh
@@ -175,7 +181,17 @@ jobs:
           failed=0
           for t in "${tests[@]}"; do
             echo "::group::${t}"
-            if bash "${t}"; then
+            case "${t}" in
+              *.py) runner=(env PYTHONDONTWRITEBYTECODE=1 python3 "${t}") ;;
+              *.sh) runner=(bash "${t}") ;;
+              *)
+                echo "FAIL ${t}: unsupported test file type" >&2
+                failed=1
+                echo "::endgroup::"
+                continue
+                ;;
+            esac
+            if "${runner[@]}"; then
               echo "PASS ${t}"
             else
               echo "FAIL ${t}" >&2

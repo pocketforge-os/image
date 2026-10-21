@@ -396,4 +396,54 @@ fi
 grep -F 'missing producer: /run/pocketforge/session/environment' \
     "${scratch}/missing-session.out" >/dev/null
 
+# Free-text unit keys are not shell words. systemd reads an apostrophe in Description= as plain
+# text, so a valid unit must not fail the audit; the keys the audit does read stay fail-closed.
+# (build 29 / producer-audit: "cannot parse pf-volume-keys.service: No closing quotation")
+textroot="${scratch}/text-root"
+mkdir -p "${textroot}/etc/systemd/system" "${textroot}/usr/share/pocketforge"
+cp "${fixture}/usr/share/pocketforge/runtime-path-producers.json" \
+    "${textroot}/usr/share/pocketforge/runtime-path-producers.json"
+for u in pf-prefsd.service pf-input-broker.service; do cp "${fixture}/etc/systemd/system/${u}" "${textroot}/etc/systemd/system/"; done
+printf "[Unit]\nDescription=Doesn't quote: the output's level \"x\n[Service]\nExecStart=/bin/true\nEnvironment=NAME=it's\n" \
+    > "${textroot}/etc/systemd/system/apostrophe.service"
+"${checker}" \
+    --root "${textroot}" \
+    --inventory "${scratch}/devices-only.json" \
+    --producers "${textroot}/usr/share/pocketforge/runtime-path-producers.json"
+for malformed in 'ReadWritePaths="/run/unclosed' "ListenStream='/run/unclosed" 'RuntimeDirectory="unclosed'; do
+    printf '[Service]\nExecStart=/bin/true\n%s\n' "${malformed}" \
+        > "${textroot}/etc/systemd/system/apostrophe.service"
+    if "${checker}" --root "${textroot}" --inventory "${scratch}/devices-only.json" \
+        --producers "${textroot}/usr/share/pocketforge/runtime-path-producers.json" \
+        > "${scratch}/malformed.out" 2>&1; then
+        fail "audit accepted a malformed audited key: ${malformed}"
+    fi
+    grep -F 'cannot parse' "${scratch}/malformed.out" >/dev/null \
+        || fail "malformed audited key failed for the wrong reason: ${malformed}"
+done
+
+# The units the runtime really ships must pass the same audit. The pair job points
+# PF_RUNTIME_UNITS_DIR at the pinned runtime checkout's systemd/ directory; the hermetic job has
+# no runtime checkout and skips this block.
+if [ -n "${PF_RUNTIME_UNITS_DIR:-}" ]; then
+    shippedroot="${scratch}/shipped-root"
+    mkdir -p "${shippedroot}/etc/systemd/system" "${shippedroot}/usr/share/pocketforge"
+    cp "${fixture}/usr/share/pocketforge/runtime-path-producers.json" \
+        "${shippedroot}/usr/share/pocketforge/runtime-path-producers.json"
+    # Units the manifest names that the runtime does not ship itself come from the fixture.
+    for u in pf-prefsd.service pf-input-broker.service; do cp "${fixture}/etc/systemd/system/${u}" "${shippedroot}/etc/systemd/system/"; done
+    units=0
+    for unit in "${PF_RUNTIME_UNITS_DIR}"/*.service; do
+        cp "${unit}" "${shippedroot}/etc/systemd/system/"
+        units=$((units + 1))
+    done
+    [ "${units}" -gt 0 ] || fail "no runtime units under ${PF_RUNTIME_UNITS_DIR}"
+    grep -Fq 'pf-volume-keys.service' <(ls "${shippedroot}/etc/systemd/system") \
+        || fail "pinned runtime does not ship pf-volume-keys.service"
+    "${checker}" \
+        --root "${shippedroot}" \
+        --inventory "${scratch}/devices-only.json" \
+        --producers "${shippedroot}/usr/share/pocketforge/runtime-path-producers.json"
+fi
+
 echo 'PASS: runtime resource and systemd path producers are complete'

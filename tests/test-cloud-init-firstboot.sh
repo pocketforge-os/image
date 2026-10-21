@@ -83,6 +83,88 @@ grep -Fq 'After=cloud-init-local.service' \
     "${repo_dir}/rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-firstboot.conf" \
     || fail "wpa_supplicant is not ordered after seed installation"
 
+# The runtime generator owns this artifact. The overlay copy is the pinned
+# pre-frA fallback and must stay semantically identical when a runtime-stage
+# generator output is present.
+schema="${repo_dir}/rootfs-overlay/usr/share/pocketforge/prefs.schema.json"
+[ -s "${schema}" ] || fail "pinned pf-prefs seed schema is missing"
+schema_xkb_checker="${repo_dir}/scripts/verify-prefs-schema-xkb.py"
+[ -x "${schema_xkb_checker}" ] || fail "pf-prefs schema XKB checker is missing"
+grep -Fq 'verify-prefs-schema-xkb.py' "${builder}" \
+    || fail "rootfs builder does not validate the schema against shipped XKB"
+grep -Fq '/usr/share/X11/xkb/rules/evdev.xml' "${builder}" \
+    || fail "rootfs builder does not use the installed evdev.xml"
+grep -Fq 'PF_DISPLAY_PIPELINE}' "${builder}" \
+    || fail "rootfs builder does not classify headless XKB omission"
+cat >"${scratch}/evdev.xml" <<'XML'
+<?xml version="1.0"?>
+<xkbConfigRegistry version="1.1">
+  <layoutList>
+    <layout>
+      <configItem><name>us</name></configItem>
+      <variantList>
+        <variant><configItem><name>dvorak</name></configItem></variant>
+      </variantList>
+    </layout>
+  </layoutList>
+</xkbConfigRegistry>
+XML
+cat >"${scratch}/schema.json" <<'JSON'
+{
+  "properties": {"keyboardLayout": {"enum": ["us", "us(dvorak)"]}}
+}
+JSON
+python3 "${schema_xkb_checker}" "${scratch}/evdev.xml" "${scratch}/schema.json" \
+    || fail "schema/XKB compatibility positive control failed"
+sed 's/us(dvorak)/us(qwerty)/' "${scratch}/schema.json" >"${scratch}/bad-schema.json"
+if python3 "${schema_xkb_checker}" "${scratch}/evdev.xml" "${scratch}/bad-schema.json"; then
+    fail "schema/XKB compatibility negative control accepted an unknown variant"
+fi
+grep -Fq 'PREFS_SCHEMA_RUNTIME' "${builder}" \
+    || fail "rootfs builder has no runtime-generated schema input"
+grep -Fq 'PREFS_SCHEMA_FALLBACK' "${builder}" \
+    || fail "rootfs builder has no pinned schema fallback"
+grep -Fq '/usr/share/pocketforge/prefs.schema.json' "${builder}" \
+    || fail "rootfs builder does not install the contract schema path"
+python3 - "${schema}" "${PF_TEST_RUNTIME_SCHEMA:-}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+fallback = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert fallback["type"] == "object"
+assert fallback["additionalProperties"] is False
+assert fallback["$id"] == "pocketforge-prefs.schema.json"
+properties = fallback["properties"]
+expected = {
+    "appearance": ("string", None),
+    "textScale": ("string", None),
+    "keyboardLayout": ("string", None),
+    "highContrast": ("boolean", None),
+    "reduceFlashing": ("boolean", None),
+    "reduceMotion": ("boolean", None),
+    "hapticsEnabled": ("boolean", None),
+    "monoAudio": ("boolean", None),
+    "brightness": ("integer", (0, 100)),
+    "volumeSpeaker": ("integer", (0, 100)),
+    "volumeHeadphones": ("integer", (0, 100)),
+    "muted": ("boolean", None),
+    "auto_rotate": ("boolean", None),
+    "user_rotation": ("string", None),
+}
+assert set(properties) == set(expected), sorted(set(properties) ^ set(expected))
+for key, (kind, bounds) in expected.items():
+    assert properties[key]["type"] == kind, key
+    if bounds:
+        assert (properties[key]["minimum"], properties[key]["maximum"]) == bounds, key
+    assert "default" in properties[key], key
+
+runtime = sys.argv[2]
+if runtime:
+    runtime_value = json.loads(Path(runtime).read_text(encoding="utf-8"))
+    assert runtime_value == fallback, "runtime-generated schema drifted from pinned fallback"
+PY
+
 sshd_config="${repo_dir}/rootfs-overlay/etc/ssh/sshd_config.d/00-pocketforge.conf"
 for directive in \
     'PermitRootLogin no' \
@@ -98,6 +180,61 @@ grep -Fq 'After=cloud-init-network.service ssh-keygen-firstboot.service' "${ssh_
     || fail "ssh is not ordered after accepted user-data"
 grep -Fq 'ConditionPathExists=/home/gamer/.ssh/authorized_keys' "${ssh_dropin}" \
     || fail "ssh can listen without an accepted gamer key"
+
+graph_fixture="${scratch}/cloud-init-unit-graph"
+mkdir -p "${graph_fixture}/pf-prefsd.service.d"
+cp "${repo_dir}/rootfs-overlay/etc/systemd/system/pf-kbd-layout-env.service" \
+    "${graph_fixture}/pf-kbd-layout-env.service"
+cp "${repo_dir}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service" \
+    "${graph_fixture}/pf-shell-selected.service"
+cat >"${graph_fixture}/pf-prefsd.service" <<'EOF'
+[Unit]
+Description=fixture pf-prefsd
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+EOF
+cp "${repo_dir}/rootfs-overlay/etc/systemd/system/pf-prefsd.service.d/10-cloud-init-firstboot.conf" \
+    "${graph_fixture}/pf-prefsd.service.d/10-cloud-init-firstboot.conf"
+
+assert_cloud_init_first() {
+    local root="$1" unit="$2"
+    local combined="${root}/${unit}.combined"
+    {
+        cat "${root}/${unit}"
+        if [ -d "${root}/${unit}.d" ]; then
+            cat "${root}/${unit}.d"/*
+        fi
+    } >"${combined}"
+    grep -Eq '^Wants=(.*[[:space:]])?cloud-config\.service([[:space:]]|$)' "${combined}" \
+        || return 1
+    grep -Eq '^After=(.*[[:space:]])?cloud-config\.service([[:space:]]|$)' "${combined}" \
+        || return 1
+    ! grep -Eq '^Requires=(.*[[:space:]])?cloud-config\.service([[:space:]]|$)' "${combined}"
+}
+
+for unit in pf-prefsd.service pf-kbd-layout-env.service pf-shell-selected.service; do
+    assert_cloud_init_first "${graph_fixture}" "${unit}" \
+        || fail "${unit} is not ordered after cloud-config.service fail-open"
+done
+grep -Fxq 'Restart=on-failure' \
+    "${repo_dir}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service" \
+    || fail "pf-shell-selected lost its restart-on-failure policy"
+
+# Negative control: changing Wants= to Requires= must be rejected by the same
+# unit-graph assertion, proving failed/missing cloud-init remains non-blocking.
+negative_graph="${scratch}/cloud-init-unit-graph-negative"
+cp -a "${graph_fixture}" "${negative_graph}"
+sed -i 's/^Wants=cloud-config\.service$/Requires=cloud-config.service/' \
+    "${negative_graph}/pf-prefsd.service.d/10-cloud-init-firstboot.conf"
+if assert_cloud_init_first "${negative_graph}" pf-prefsd.service; then
+    fail "negative control accepted Requires=cloud-config.service"
+fi
+
+grep -Fq '10-cloud-init-firstboot.conf' "${builder}" \
+    || fail "rootfs builder does not install pf-prefsd cloud-init ordering drop-in"
 
 # In the package stage PF_CLOUD_INIT_TREE points at the exact source context.
 # The static half above still runs in image-only PR CI, while a real image build

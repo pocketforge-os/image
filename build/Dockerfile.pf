@@ -696,6 +696,7 @@ COPY --from=gpu-um-native-precompilers /opt/mesa-native /opt/mesa-native
 # resource path.  They are generator inputs only, never target headers.
 COPY --from=gpu-um-native-precompilers /usr/lib/llvm-20/lib/clang /usr/lib/llvm-20/lib/clang
 COPY --from=image-src tools/open-gpu-probe.c /tmp/open-gpu-probe.c
+COPY --from=image-src scripts/verify-open-gpu-probe-platforms.sh /tmp/verify-open-gpu-probe-platforms.sh
 COPY --from=image-src tools/glx-readback-probe.c /tmp/glx-readback-probe.c
 COPY --from=image-src tools/glx-renderer-policy.h /tmp/glx-renderer-policy.h
 COPY --from=image-src build/package-open-gpu-stack.sh /tmp/package-open-gpu-stack.sh
@@ -818,6 +819,9 @@ sha256sum /first-installed-vulkan.so \
   /first-installed-gallium.so \
   /instroot/usr/local/lib/libgallium_dri.so \
   >/src/installed-cross-build-sha256.txt
+chmod 0755 /tmp/verify-open-gpu-probe-platforms.sh
+"/tmp/verify-open-gpu-probe-platforms.sh" \
+  /tmp/open-gpu-probe.c /instroot/usr/local/lib/libEGL_mesa.so.0
 elapsed="$(( $(date +%s) - start ))"
 printf 'two_builds_elapsed_seconds=%s\n' "${elapsed}" >/src/cross-build-time.txt
 install -D -m 0644 /tmp/10-pocketforge-zink.conf \
@@ -825,7 +829,7 @@ install -D -m 0644 /tmp/10-pocketforge-zink.conf \
 meson introspect --buildoptions build-cross >/instroot/.pf-gpu-um-build-options.json
 aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
   /tmp/open-gpu-probe.c -o /tmp/open-gpu-probe \
-  -lvulkan -lEGL -lGLESv2 -lgbm
+  -lvulkan -lEGL -lGLESv2
 readelf -h /tmp/open-gpu-probe | grep -Eq 'Machine:[[:space:]]+AArch64'
 install -D -m 0755 /tmp/open-gpu-probe /probe/usr/lib/pocketforge/open-gpu-probe
 aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
@@ -1211,12 +1215,17 @@ COPY --from=image-src build/Dockerfile.pf /work/image/build/Dockerfile.pf
 COPY --from=image-src scripts/build-rootfs.sh /work/image/scripts/build-rootfs.sh
 COPY --from=image-src scripts/build-sd-image.sh /work/image/scripts/build-sd-image.sh
 COPY --from=image-src scripts/generate-build-id.sh /work/image/scripts/generate-build-id.sh
+COPY --from=image-src scripts/verify-prefs-schema-xkb.py /work/image/scripts/verify-prefs-schema-xkb.py
 COPY --from=image-src Makefile /work/image/Makefile
 COPY --from=image-src rootfs-packages.txt /work/image/rootfs-packages.txt
 COPY --from=image-src boards/tsp/boot-resource /work/image/boards/tsp/boot-resource
 COPY --from=image-src rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-firstboot.conf /work/image/rootfs-overlay/etc/systemd/system/wpa_supplicant@wlan0.service.d/pocketforge-firstboot.conf
 COPY --from=image-src rootfs-overlay/etc/ssh/sshd_config.d/00-pocketforge.conf /work/image/rootfs-overlay/etc/ssh/sshd_config.d/00-pocketforge.conf
 COPY --from=image-src rootfs-overlay/etc/systemd/system/ssh.service.d/pocketforge-firstboot.conf /work/image/rootfs-overlay/etc/systemd/system/ssh.service.d/pocketforge-firstboot.conf
+COPY --from=image-src rootfs-overlay/usr/share/pocketforge/prefs.schema.json /work/image/rootfs-overlay/usr/share/pocketforge/prefs.schema.json
+COPY --from=image-src rootfs-overlay/etc/systemd/system/pf-kbd-layout-env.service /work/image/rootfs-overlay/etc/systemd/system/pf-kbd-layout-env.service
+COPY --from=image-src rootfs-overlay/etc/systemd/system/pf-shell-selected.service /work/image/rootfs-overlay/etc/systemd/system/pf-shell-selected.service
+COPY --from=image-src rootfs-overlay/etc/systemd/system/pf-prefsd.service.d/10-cloud-init-firstboot.conf /work/image/rootfs-overlay/etc/systemd/system/pf-prefsd.service.d/10-cloud-init-firstboot.conf
 RUN <<'CLOUD_INIT'
 set -eux
 : "${PF_CLOUD_INIT_SHA:?}"
@@ -1328,7 +1337,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "3c90482c3933002528b35ea032e0249ec279066e" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "43eb64914d44ae905aa69b20205b436083c8d72e" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # files exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml plus the byte-identical device-neutral
@@ -1420,18 +1429,23 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-volumed --bin pf-volumed
   CARGO_NET_LOCKED=1 \
   RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
+  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-volume-keys --bin pf-volume-keys
+  CARGO_NET_LOCKED=1 \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-app-launch --bin pf-app-launch
   AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
   HANG_SAMPLER_BIN="target/${PF_RUNTIME_TARGET}/release/pf-hang-sampler"
   PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
   POWERD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-powerd"
   VOLUMED_BIN="target/${PF_RUNTIME_TARGET}/release/pf-volumed"
+  VOLUME_KEYS_BIN="target/${PF_RUNTIME_TARGET}/release/pf-volume-keys"
   APP_LAUNCH_BIN="target/${PF_RUNTIME_TARGET}/release/pf-app-launch"
   [ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
   [ -f "${HANG_SAMPLER_BIN}" ] || { echo "FATAL: pf-hang-sampler not built at ${HANG_SAMPLER_BIN}"; exit 1; }
   [ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-prefsd not built at ${PREFSD_BIN}"; exit 1; }
   [ -f "${POWERD_BIN}" ] || { echo "FATAL: pf-powerd not built at ${POWERD_BIN}"; exit 1; }
   [ -f "${VOLUMED_BIN}" ] || { echo "FATAL: pf-volumed not built at ${VOLUMED_BIN}"; exit 1; }
+  [ -f "${VOLUME_KEYS_BIN}" ] || { echo "FATAL: pf-volume-keys not built at ${VOLUME_KEYS_BIN}"; exit 1; }
   [ -f "${APP_LAUNCH_BIN}" ] || { echo "FATAL: pf-app-launch not built at ${APP_LAUNCH_BIN}"; exit 1; }
   AUTHORITY_EM="$(od -An -tx1 -j18 -N2 "${AUTHORITY_BIN}" | tr -d ' ')"
   [ "${AUTHORITY_EM}" = "b700" ] || { echo "FATAL: pf-session-authorityd is not aarch64 (e_machine=${AUTHORITY_EM}, want b700)"; exit 1; }
@@ -1448,6 +1462,9 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   VOLUMED_EM="$(od -An -tx1 -j18 -N2 "${VOLUMED_BIN}" | tr -d ' ')"
   [ "${VOLUMED_EM}" = "b700" ] || { echo "FATAL: pf-volumed is not aarch64 (e_machine=${VOLUMED_EM}, want b700)"; exit 1; }
   if grep -qa 'ld-musl\|ld-linux' "${VOLUMED_BIN}"; then echo "FATAL: pf-volumed is dynamically linked (expected static musl)"; exit 1; fi
+  VOLUME_KEYS_EM="$(od -An -tx1 -j18 -N2 "${VOLUME_KEYS_BIN}" | tr -d ' ')"
+  [ "${VOLUME_KEYS_EM}" = "b700" ] || { echo "FATAL: pf-volume-keys is not aarch64 (e_machine=${VOLUME_KEYS_EM}, want b700)"; exit 1; }
+  if grep -qa 'ld-musl\|ld-linux' "${VOLUME_KEYS_BIN}"; then echo "FATAL: pf-volume-keys is dynamically linked (expected static musl)"; exit 1; fi
   APP_LAUNCH_EM="$(od -An -tx1 -j18 -N2 "${APP_LAUNCH_BIN}" | tr -d ' ')"
   [ "${APP_LAUNCH_EM}" = "b700" ] || { echo "FATAL: pf-app-launch is not aarch64 (e_machine=${APP_LAUNCH_EM}, want b700)"; exit 1; }
   if grep -qa 'ld-musl\|ld-linux' "${APP_LAUNCH_BIN}"; then echo "FATAL: pf-app-launch is dynamically linked (expected static musl)"; exit 1; fi
@@ -1456,11 +1473,13 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   install -D -m 0755 "${PREFSD_BIN}" /out/bin/pf-prefsd
   install -D -m 0755 "${POWERD_BIN}" /out/bin/pf-powerd
   install -D -m 0755 "${VOLUMED_BIN}" /out/bin/pf-volumed
+  install -D -m 0755 "${VOLUME_KEYS_BIN}" /out/bin/pf-volume-keys
   install -D -m 0755 "${APP_LAUNCH_BIN}" /out/bin/pf-app-launch
   install -D -m 0644 systemd/pf-session-authorityd.service /out/systemd/pf-session-authorityd.service
   install -D -m 0644 systemd/pf-prefsd.service /out/systemd/pf-prefsd.service
   install -D -m 0644 systemd/pf-powerd.service /out/systemd/pf-powerd.service
   install -D -m 0644 systemd/pf-volumed.service /out/systemd/pf-volumed.service
+  install -D -m 0644 systemd/pf-volume-keys.service /out/systemd/pf-volume-keys.service
   install -D -m 0644 systemd/pocketforge.conf /out/tmpfiles.d/pocketforge.conf
   # Build-time-only wrapper around the same pf-app-manifest Resolver used by
   # authority and pf-app-launch. Poolsuite consumes it before installation; it
@@ -1546,6 +1565,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     printf '  pf-prefsd sha256=%s\n' "$(sha256sum /out/bin/pf-prefsd | cut -d' ' -f1)"
     printf '  pf-powerd sha256=%s\n' "$(sha256sum /out/bin/pf-powerd | cut -d' ' -f1)"
     printf '  pf-volumed sha256=%s\n' "$(sha256sum /out/bin/pf-volumed | cut -d' ' -f1)"
+    printf '  pf-volume-keys sha256=%s\n' "$(sha256sum /out/bin/pf-volume-keys | cut -d' ' -f1)"
     printf '  pf-app-launch sha256=%s\n' "$(sha256sum /out/bin/pf-app-launch | cut -d' ' -f1)"
     printf '  pf-input-broker sha256=%s\n' "$(sha256sum /out/bin/pf-input-broker | cut -d' ' -f1)"
     printf '  libpocketforge.so.1 sha256=%s\n' "$(sha256sum /out/lib/libpocketforge.so.1 | cut -d' ' -f1)"
@@ -2097,7 +2117,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "c11bc89b8df758f22cdc8df73e6688c854266e17" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "deac3cf621ec5eebec05e2811c960cd890f7c5c7" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fifteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.

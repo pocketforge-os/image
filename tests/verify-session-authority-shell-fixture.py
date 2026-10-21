@@ -47,6 +47,8 @@ NOT_MODELLED = {
     "dev-fb0.device": "the harness's /dev/fb0 is a tmpfiles regular file; no device unit",
     "pf-input-decode.service": "the gamepad decoder; the harness feeds input through the fake broker",
     "pf-powerd.service": "the power authority has no foreground or session ownership role",
+    "cloud-config.service": "cloud-init first-boot ordering is covered by test-cloud-init-firstboot.sh; "
+                            "the session-authority harness does not run cloud-init",
     "pocketforge-boot-animator.service": "boot splash, stopped by ExecStartPre before ExecStart; "
                                          "it never grabs input (bd tsp-3rd3.12)",
     "pocketforge-menu.service": "an alternative panel owner, never enabled with the shell",

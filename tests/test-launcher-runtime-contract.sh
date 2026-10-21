@@ -19,9 +19,13 @@ grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 # The paired runtime adds the system-volume preference contract and the paired
 # launcher vendors that exact generation. Reject every older or crossed source
 # generation, including the immediately preceding matched pair.
-expected_runtime=3c90482c3933002528b35ea032e0249ec279066e
-preceding_runtime=4dbadfd36f5c08098f45d64fa0d8cbbaa8a9d074
-expected_launcher=c11bc89b8df758f22cdc8df73e6688c854266e17
+expected_runtime=43eb64914d44ae905aa69b20205b436083c8d72e
+pre168_runtime=196fd1e235916f6d30204b4ee178c62d50631c41
+preceding_runtime=3c90482c3933002528b35ea032e0249ec279066e
+pre167_runtime=4dbadfd36f5c08098f45d64fa0d8cbbaa8a9d074
+expected_launcher=deac3cf621ec5eebec05e2811c960cd890f7c5c7
+pre176_launcher=3c67ac7c30741fa9e5d9675b34de12592a0e19dd
+pre175_launcher=c11bc89b8df758f22cdc8df73e6688c854266e17
 pr_head_launcher=8bc5ca7b79c6cf90012e4cc9ae4fcfc5085e34e6
 prior_runtime=e1aa7e373e39efb48bd4cf0c7a74b310beddf70e
 prior_launcher=f26bfd66ab739d06caf4e5347fc4150e2777c1ab
@@ -49,8 +53,12 @@ test "$(grep -Fc "$expected_runtime" "$pair_workflow")" -eq 2
 test "$(grep -Fc "$expected_launcher" "$pair_workflow")" -eq 2
 test "$(grep -Fc "$prior_runtime" "$pair_workflow")" -eq 0
 test "$(grep -Fc "$preceding_runtime" "$pair_workflow")" -eq 0
+test "$(grep -Fc "$pre167_runtime" "$pair_workflow")" -eq 0
+test "$(grep -Fc "$pre168_runtime" "$pair_workflow")" -eq 0
+test "$(grep -Fc "$pre176_launcher" "$pair_workflow")" -eq 0
 test "$(grep -Fc "$prior_launcher" "$pair_workflow")" -eq 0
 test "$(grep -Fc "$pr_head_launcher" "$pair_workflow")" -eq 0
+test "$(grep -Fc "$pre175_launcher" "$pair_workflow")" -eq 0
 
 new_guard_accepts() {
     test "$1" = "$runtime_guard" && test "$2" = "$launcher_guard"
@@ -67,9 +75,13 @@ reject_guard_pair() {
 new_guard_accepts "$expected_runtime" "$expected_launcher"
 reject_guard_pair "$prior_runtime" "$prior_launcher"
 reject_guard_pair "$expected_runtime" "$pr_head_launcher"
+reject_guard_pair "$expected_runtime" "$pre175_launcher"
 reject_guard_pair "$expected_runtime" "$old_launcher"
 reject_guard_pair "$expected_runtime" "$older_launcher"
 reject_guard_pair "$preceding_runtime" "$expected_launcher"
+reject_guard_pair "$pre167_runtime" "$expected_launcher"
+reject_guard_pair "$pre168_runtime" "$expected_launcher"
+reject_guard_pair "$expected_runtime" "$pre176_launcher"
 reject_guard_pair "$older_runtime" "$expected_launcher"
 reject_guard_pair "$oldest_runtime" "$expected_launcher"
 reject_guard_pair "$expected_runtime" "$pre149_launcher"
