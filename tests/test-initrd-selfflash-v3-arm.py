@@ -18,6 +18,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / "boards/tsp/initrd/self-flash-v3.sh"
+INIT = ROOT / "boards/tsp/initrd/init"
 STAGER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage"
 CONTRACT = ROOT / "docs/SELF-FLASH-V3.md"
 
@@ -183,7 +184,8 @@ class ArmFixture:
             "if sf_v3_load_armed_transaction; then "
             'printf "generation=%s\\nsd=%s\\nreceipt=%s\\n" '
             '"$SF_V3_GENERATION" "$SF_V3_SD" "$SF_V3_RECEIPT_STATE"; '
-            "else exit $?; fi"
+            'else rc=$?; printf "load=%s\\n" "${SF_V3_LOAD_STATE:-unknown}" >&2; '
+            "exit $rc; fi"
         )
         return subprocess.run(
             ["/usr/bin/bash", "-c", command],
@@ -329,7 +331,33 @@ class InitrdArmTests(unittest.TestCase):
         for state_name in ("started", "failed", "pass"):
             with self.subTest(state=state_name):
                 self.fixture.write_records(state_name=state_name)
-                self.assert_refused()
+                result = self.fixture.run_gate()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("load=stale\n", result.stderr)
+
+    def test_zero_control_slots_report_absent(self) -> None:
+        with self.fixture.device.open("r+b", buffering=0) as card:
+            card.seek(self.fixture.layout["arm_offset"])
+            card.write(b"\0" * stage.SLOT_BYTES)
+            card.seek(self.fixture.layout["receipt_offset"])
+            card.write(b"\0" * stage.SLOT_BYTES)
+        result = self.fixture.run_gate()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("load=absent\n", result.stderr)
+
+    def test_pid1_gate_is_fail_closed_and_watchdog_ordered(self) -> None:
+        source = INIT.read_text(encoding="utf-8")
+        start = source.index("# BEGIN POCKETFORGE SELF-FLASH V3 GATE")
+        end = source.index("# END POCKETFORGE SELF-FLASH V3 GATE")
+        gate = source[start:end]
+        self.assertIn("sf_v3_load_armed_transaction", gate)
+        self.assertIn("SF_V3_LOAD_STATE", gate)
+        self.assertIn("sf_v3_terminal_recovery", gate)
+        self.assertIn("watchdog_disarm_for_selfflash\n", gate)
+        disarm = gate.index("watchdog_disarm_for_selfflash\n")
+        execute = gate.index("sf_v3_run_armed_transaction", disarm)
+        self.assertLess(disarm, execute)
+        self.assertNotIn("return 1", gate[execute:])
 
     def test_started_receipt_is_durable_and_self_hashed(self) -> None:
         result = self.fixture.run_shell(
