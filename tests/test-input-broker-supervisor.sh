@@ -29,6 +29,11 @@ case "${PF_TEST_MODE}" in
     clean) exit 0 ;;
     retry) [ "${count}" -eq 2 ] && exit 0; exit 23 ;;
     fail) exit 23 ;;
+    stop)
+        trap 'sleep 1; printf "%s\n" released >"${PF_TEST_RELEASE}"; exit 0' TERM INT
+        printf '%s\n' "$$" >"${PF_TEST_CHILD_PID}"
+        while :; do sleep 1; done
+        ;;
     *) exit 99 ;;
 esac
 EOF
@@ -50,4 +55,35 @@ run_case clean 0 1
 run_case retry 0 2
 run_case fail 23 2
 
-echo 'input-broker-supervisor: PASS clean=1 retry=2 terminal_failures=2'
+stop_count="${scratch}/stop.count"
+stop_release="${scratch}/stop.release"
+stop_child_pid="${scratch}/stop.pid"
+PF_TEST_MODE=stop PF_TEST_COUNT="${stop_count}" PF_TEST_RELEASE="${stop_release}" \
+    PF_TEST_CHILD_PID="${stop_child_pid}" "${supervisor}" "${scratch}/broker" &
+supervisor_pid=$!
+attempt=0
+while [ ! -s "${stop_child_pid}" ] && [ "${attempt}" -lt 50 ]; do
+    sleep 0.02
+    attempt=$((attempt + 1))
+done
+[ -s "${stop_child_pid}" ]
+kill -TERM "${supervisor_pid}"
+wait "${supervisor_pid}"
+released_before_supervisor_exit=no
+if [ -s "${stop_release}" ]; then
+    released_before_supervisor_exit=yes
+fi
+# Let the deliberately delayed child finish even when exercising the broken supervisor,
+# so the negative control never leaves an orphan behind.
+attempt=0
+while [ ! -s "${stop_release}" ] && [ "${attempt}" -lt 150 ]; do
+    sleep 0.02
+    attempt=$((attempt + 1))
+done
+[ -s "${stop_release}" ]
+if [ "${released_before_supervisor_exit}" != yes ]; then
+    echo 'input-broker-supervisor: FAIL supervisor exited before broker release completed' >&2
+    exit 1
+fi
+
+echo 'input-broker-supervisor: PASS clean=1 retry=2 terminal_failures=2 stop_waited_for_child=yes'

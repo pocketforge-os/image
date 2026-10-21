@@ -30,7 +30,14 @@ while [ "${attempt}" -le 2 ]; do
     result=$?
 
     if [ "${stopping}" -eq 1 ]; then
-        # A session stop is intentional even if wait was interrupted by SIGTERM.
+        # The first wait can be interrupted by our SIGTERM trap while the broker is
+        # still releasing its evdev grab and sockets. Do not let systemd complete the
+        # unit (and start the shell) until that child has actually exited.
+        while kill -0 "${child_pid}" 2>/dev/null; do
+            wait "${child_pid}"
+            result=$?
+        done
+        # A session stop is intentional regardless of the child's TERM status.
         exit 0
     fi
     if [ "${result}" -eq 0 ]; then
