@@ -7,11 +7,13 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -137,6 +139,75 @@ class ExactStreamTests(unittest.TestCase):
 
 
 class SurfaceTests(unittest.TestCase):
+    @staticmethod
+    def _fake_systemctl(path: Path, invocation_id: str, result: str, active_state: str) -> None:
+        path.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' 'InvocationID={invocation_id}' "
+            f"'Result={result}' 'ActiveState={active_state}'\n",
+            encoding="ascii",
+        )
+        path.chmod(0o755)
+
+    def test_growth_receipt_requires_current_successful_systemd_activation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / "growth"
+            boot_id_path = Path(directory) / "boot_id"
+            systemctl_path = Path(directory) / "systemctl"
+            boot_id_path.write_text("11111111-2222-4333-8444-555555555555\n")
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "Schema": "pocketforge.self-flash-growth/v3",
+                        "BootID": "11111111-2222-4333-8444-555555555555",
+                        "InvocationID": "1" * 32,
+                        "GPTRelocation": "pass",
+                        "PartitionGrowth": "pass",
+                        "PartitionTableReread": "pass",
+                        "Ext4Growth": "pass",
+                        "ControlSlotsInitialized": "zeroed-and-read-back",
+                    }
+                )
+            )
+            for invocation_id, result, active_state, refusal in (
+                ("1" * 32, "success", "inactive", None),
+                ("2" * 32, "success", "inactive", "growth_receipt_invocation_mismatch"),
+                ("1" * 32, "failed", "inactive", "growth_unit_not_successful"),
+                ("1" * 32, "success", "activating", "growth_pending"),
+                ("", "success", "inactive", "growth_pending"),
+            ):
+                with self.subTest(
+                    invocation_id=invocation_id,
+                    result=result,
+                    active_state=active_state,
+                ):
+                    self._fake_systemctl(systemctl_path, invocation_id, result, active_state)
+                    patches = (
+                        mock.patch.object(sf, "GROWTH_RECEIPT_PATH", receipt_path, create=True),
+                        mock.patch.object(sf, "BOOT_ID_PATH", boot_id_path, create=True),
+                        mock.patch.object(sf, "SYSTEMCTL_PATH", systemctl_path, create=True),
+                    )
+                    with patches[0], patches[1], patches[2]:
+                        if refusal is None:
+                            sf._require_current_growth_receipt()
+                        else:
+                            with self.assertRaisesRegex(sf.Refusal, f"^{refusal}$"):
+                                sf._require_current_growth_receipt()
+
+            self._fake_systemctl(systemctl_path, "1" * 32, "success", "inactive")
+            receipt = json.loads(receipt_path.read_text(encoding="ascii"))
+            receipt["BootID"] = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+            receipt_path.write_text(json.dumps(receipt), encoding="ascii")
+            with (
+                mock.patch.object(sf, "GROWTH_RECEIPT_PATH", receipt_path, create=True),
+                mock.patch.object(sf, "BOOT_ID_PATH", boot_id_path, create=True),
+                mock.patch.object(sf, "SYSTEMCTL_PATH", systemctl_path, create=True),
+                mock.patch.object(sf, "_load_request") as load_request,
+                self.assertRaises(sf.Refusal),
+            ):
+                sf.stage(Path("unused"), Path("unused"), io.BytesIO())
+            load_request.assert_not_called()
+
     def test_cli_has_no_device_or_offset_authority(self):
         parser = sf.make_argument_parser()
         option_strings = {

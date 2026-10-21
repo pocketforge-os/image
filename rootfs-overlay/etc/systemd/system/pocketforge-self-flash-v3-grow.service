@@ -2,11 +2,13 @@
 Description=Cap PocketForge root growth below the self-flash v3 reserve
 ConditionPathExists=/etc/pocketforge-selfflash-v3
 After=local-fs.target
-Before=cloud-init-local.service cloud-init.service ssh.service
 
 [Service]
 Type=oneshot
+# Bound the best-effort background mutation window. SSH and cloud-init are not
+# ordered behind growth; typed staging fails closed while this unit is pending.
 ExecStart=/usr/lib/pocketforge/self-flash-v3-grow
+TimeoutStartSec=90s
 RemainAfterExit=yes
 
 [Install]

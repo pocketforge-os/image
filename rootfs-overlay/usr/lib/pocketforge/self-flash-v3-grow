@@ -23,6 +23,7 @@ STAGE_HELPER = HERE / "self-flash-v3-stage"
 MARKER_PATH = Path("/etc/pocketforge-selfflash-v3")
 RECEIPT_PATH = Path("/var/lib/pocketforge/self-flash-v3-growth")
 STAMP_PATH = Path("/boot/pocketforge-self-flash-v3")
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 SLOT_BYTES = 65_536
 LOGICAL_SECTOR_BYTES = 512
 RESERVE_BYTES = 1_073_741_824
@@ -134,6 +135,14 @@ def _positive(name: str, value: object) -> int:
     if value > (1 << 63) - 1:
         raise Refusal(f"{name}_overflow")
     return value
+
+
+def _valid_invocation_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 32
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _tail_start(card_bytes: int) -> int:
@@ -391,6 +400,8 @@ def _read_success_stamp(path: Path = STAMP_PATH) -> dict[str, str] | None:
 
 def build_growth_receipt(
     *,
+    boot_id: str,
+    invocation_id: str,
     contract_sha256: str,
     card_serial: str,
     card_bytes: int,
@@ -404,6 +415,8 @@ def build_growth_receipt(
 ) -> dict[str, object]:
     return {
         "Schema": "pocketforge.self-flash-growth/v3",
+        "BootID": boot_id,
+        "InvocationID": invocation_id,
         "ContractSHA256": contract_sha256,
         "CardController": "04020000",
         "CardType": "SD",
@@ -421,6 +434,19 @@ def build_growth_receipt(
         "PartitionTableReread": "pass",
         "Ext4Growth": "pass",
         "ControlSlotsInitialized": control_slots_initialized,
+    }
+
+
+def build_degraded_receipt(reason: str) -> dict[str, str]:
+    """Record a bounded refusal without pretending capped growth succeeded."""
+    if not reason or len(reason) > 96 or any(
+        character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in reason
+    ):
+        reason = "unclassified_failure"
+    return {
+        "Schema": "pocketforge.self-flash-growth-degraded/v3",
+        "State": "degraded",
+        "FailureReason": reason,
     }
 
 
@@ -527,7 +553,52 @@ def _write_receipt(receipt: Mapping[str, object]) -> None:
         raise
 
 
+def _invalidate_receipt() -> None:
+    """Reject, then remove, any prior success before attempting growth.
+
+    Replacing success with a rejection before unlink makes an unlink refusal
+    fail closed.  A short/failed write after truncation is also deliberately
+    non-JSON, which the staging eligibility parser rejects.
+    """
+    rejection = (
+        json.dumps(
+            build_degraded_receipt("receipt_invalidation_started"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("ascii")
+    try:
+        descriptor = os.open(RECEIPT_PATH, os.O_WRONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return
+    try:
+        os.ftruncate(descriptor, 0)
+        position = 0
+        while position < len(rejection):
+            written = os.write(descriptor, rejection[position:])
+            if written <= 0:
+                raise OSError("receipt rejection write made no progress")
+            position += written
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        RECEIPT_PATH.unlink()
+    except FileNotFoundError:
+        pass
+    directory = os.open(RECEIPT_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def grow() -> dict[str, object]:
+    boot_id = BOOT_ID_PATH.read_text(encoding="ascii").strip()
+    invocation_id = os.environ.get("INVOCATION_ID", "")
+    if not _valid_invocation_id(invocation_id):
+        raise Refusal("invocation_id_invalid")
     stage = _load_stage_helper()
     marker = _read_marker()
     selected = stage.select_sd(stage._discover_cards(), root_major_minor=stage._root_major_minor())
@@ -582,6 +653,8 @@ def grow() -> dict[str, object]:
         )
 
     receipt = build_growth_receipt(
+        boot_id=boot_id,
+        invocation_id=invocation_id,
         contract_sha256=marker["ContractSHA256"],
         card_serial=str(selected["serial"]),
         card_bytes=int(selected["bytes"]),
@@ -607,13 +680,44 @@ def main() -> int:
         print("PF_SELF_FLASH_V3_GROW state=REFUSED reason=not_root", file=sys.stderr)
         return 2
     try:
+        _invalidate_receipt()
+    except OSError:
+        print(
+            "PF_SELF_FLASH_V3_GROW state=FAILED "
+            "reason=receipt_invalidation_failed",
+            file=sys.stderr,
+        )
+        return 2
+    try:
         receipt = grow()
     except (OSError, Refusal, ValueError) as error:
         reason = str(error) if isinstance(error, Refusal) else "io_or_value_error"
-        print(f"PF_SELF_FLASH_V3_GROW state=REFUSED reason={reason}", file=sys.stderr)
+        # grow() can install a pass receipt and then fail while syncing its
+        # parent directory. Revoke that receipt before attempting to publish
+        # degraded state, so a second write failure cannot expose stale pass.
+        try:
+            _invalidate_receipt()
+        except OSError:
+            print(
+                "PF_SELF_FLASH_V3_GROW state=FAILED "
+                "reason=receipt_invalidation_failed",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            _write_receipt(build_degraded_receipt(reason))
+        except OSError:
+            print(
+                "PF_SELF_FLASH_V3_GROW state=DEGRADED "
+                f"reason={reason} receipt=write_failed",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"PF_SELF_FLASH_V3_GROW state=DEGRADED reason={reason} receipt=recorded",
+                file=sys.stderr,
+            )
         return 2
-    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-    print("PF_SELF_FLASH_V3_GROW state=PASS")
     return 0
 
 
