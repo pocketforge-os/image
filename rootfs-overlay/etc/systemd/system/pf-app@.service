@@ -1,8 +1,8 @@
 [Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-gamescope-session.target
-BindsTo=pf-input-broker.service pf-prefsd.service
-After=local-fs.target pocketforge-gamescope-session.target pf-input-broker.service pf-prefsd.service
+BindsTo=pf-prefsd.service
+After=local-fs.target pocketforge-gamescope-session.target pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
 
@@ -16,7 +16,7 @@ Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml
-Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
+Environment=PF_BROKER_SOCK=/run/pocketforge/input/sdk.sock
 EnvironmentFile=/run/pocketforge/session/environment
 ExecStartPre=/usr/bin/test -S /run/pocketforge/session/wayland-0
 ExecStart=/usr/bin/pf-app-launch %i

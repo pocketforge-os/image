@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contract for default-app input delivery (bd: tsp-f3fm.202.1.4, B4).
+"""Static contract for session-wide input delivery (bd: tsp-ihne1.7).
 
 Checks the unit wiring the ruling fixed, the cross-file path agreements (descriptor,
 acquire socket, System Menu provider socket, SafeReturn fallback socket), the
@@ -19,15 +19,17 @@ SELECTED_UNIT = SYSTEMD / "pf-shell-selected.service"
 FOREGROUND_UNIT = SYSTEMD / "pf-foreground@.service"
 BROKER_DROPIN = SYSTEMD / "pf-input-broker.service.d/10-app-session.conf"
 SHELL_DROPIN = SYSTEMD / "pf-shell-selected.service.d/10-input-broker.conf"
+SESSION_TARGET = SYSTEMD / "pocketforge-gamescope-session.target"
+GAMESCOPE_UNIT = SYSTEMD / "pocketforge-gamescope.service"
 DOC = ROOT / "docs/DEFAULT-APPS.md"
 DOCKERFILE = ROOT / "build/Dockerfile.pf"
 
 DESCRIPTOR = "/usr/share/pocketforge/device/capabilities.toml"
-BROKER_SOCK = "/run/pocketforge/input-broker.sock"
+BROKER_SOCK = "/run/pocketforge/input/sdk.sock"
 AUTHORITY_SOCK = "/run/pocketforge/session-authority.sock"
 PREFSD_SOCK = "/run/pocketforge/prefsd.sock"
 PREF_WRITER_GROUP = "pf-pref-writer"
-SYSTEM_MENU_SOCK = "/run/pocketforge/system-menu.sock"
+SYSTEM_MENU_SOCK = "/run/pocketforge/input/menu.sock"
 
 
 def directives(text: str) -> list[tuple[str, str, str]]:
@@ -72,17 +74,13 @@ selected = directives(SELECTED_UNIT.read_text())
 foreground = directives(FOREGROUND_UNIT.read_text())
 broker = directives(BROKER_DROPIN.read_text())
 shell = directives(SHELL_DROPIN.read_text())
+session = directives(SESSION_TARGET.read_text())
+gamescope = directives(GAMESCOPE_UNIT.read_text())
 
-# pf-app@: the session pulls the broker in and gets the facade environment.
-# BindsTo=, not Requires= (bd: tsp-f3fm.202.1.6): Requires= does not stop the app when
-# the broker exits by itself mid-session, and the app would keep the panel with no
-# Menu intake (real-systemd harness, case (b)).
-assert values(app, "Unit", "BindsTo") == [
-    "pf-input-broker.service",
-    "pf-prefsd.service",
-], "pf-app@ must follow both security authorities"
-assert "pf-input-broker.service" not in values(app, "Unit", "Requires"), "broker belongs in BindsTo=, not Requires="
-assert "pf-input-broker.service" in values(app, "Unit", "After"), "pf-app@ must order After the broker"
+# pf-app@: the session target, not one app, owns the router lifetime.
+assert values(app, "Unit", "BindsTo") == ["pf-prefsd.service"]
+assert "pf-input-broker.service" not in values(app, "Unit", "Requires")
+assert "pf-input-broker.service" not in values(app, "Unit", "After")
 assert "pf-prefsd.service" in values(app, "Unit", "After"), "pf-app@ must order After prefsd"
 assert values(app, "Unit", "Requires") == ["pocketforge-gamescope-session.target"]
 assert "pocketforge-foreground.target" not in values(app, "Unit", "After")
@@ -117,14 +115,15 @@ assert 'chroot "$ROOTFS" groupadd --system pf-pref-writer' in rootfs_builder
 assert not re.search(r"usermod[^\n]*pf-pref-writer[^\n]*gamer", rootfs_builder)
 assert not re.search(r"usermod[^\n]*gamer[^\n]*pf-pref-writer", rootfs_builder)
 
-# Broker drop-in: exactly the ruling's directives, the Condition->Assert fix,
-# and the protected-session memory policy.
+# Broker drop-in: one holder for the complete gamescope session, immediate direct retry,
+# and terminal fallback after the second failed start.
 assert broker == [
-    ("Unit", "StopWhenUnneeded", "yes"),
+    ("Unit", "PartOf", "pocketforge-gamescope-session.target"),
     ("Unit", "OnFailure", "pocketforge-gamescope-fallback.service"),
-    ("Unit", "Wants", "pocketforge-gamescope-session.target"),
-    ("Unit", "After", "pocketforge-gamescope-session.target pf-input-decode.service pf-prefsd.service"),
+    ("Unit", "After", "pf-input-decode.service pf-prefsd.service"),
     ("Unit", "Conflicts", "pf-shell-selected.service"),
+    ("Unit", "StartLimitIntervalSec", "30s"),
+    ("Unit", "StartLimitBurst", "2"),
     ("Unit", "ConditionPathExists", ""),
     ("Service", "Slice", "pfsession.slice"),
     ("Service", "OOMScoreAdjust", "-900"),
@@ -132,7 +131,9 @@ assert broker == [
     ("Service", "Group", "gamer"),
     ("Service", "UMask", "0007"),
     ("Service", "Environment", "PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock"),
-    ("Service", "Restart", "no"),
+    ("Service", "Restart", "on-failure"),
+    ("Service", "RestartSec", "0"),
+    ("Service", "RestartMode", "direct"),
     ("Service", "ExecStart", ""),
     ("Service", "ExecStart", "/usr/bin/pf-input-broker --descriptor " + DESCRIPTOR
      + " --acquire-sock " + BROKER_SOCK + " --source /dev/input/pf-gamepad"
@@ -147,6 +148,9 @@ assert flags["--safe-return-sock"] == values(app, "Service", "InaccessiblePaths"
 assert flags["--system-menu-sock"] == SYSTEM_MENU_SOCK
 assert flags["--system-menu-sock"] not in (flags["--acquire-sock"], flags["--safe-return-sock"])
 assert shell == [("Unit", "After", "pf-input-broker.service")], shell
+assert "pf-input-broker.service" in values(session, "Unit", "Requires")
+assert "pf-input-broker.service" in values(session, "Unit", "After")
+assert "pf-input-broker.service" in values(gamescope, "Unit", "After")
 
 
 def effective_restart(dropin_dir: Path, base: str = "on-failure") -> str:
@@ -161,17 +165,16 @@ def effective_restart(dropin_dir: Path, base: str = "on-failure") -> str:
     return value
 
 
-# App-session broker must fail ONCE (bd: tsp-f3fm.202.1.6): an auto-restart re-applies
-# Conflicts=pf-shell-selected.service on every start and keeps the launcher down.
-assert effective_restart(BROKER_DROPIN.parent) == "no", effective_restart(BROKER_DROPIN.parent)
+# Session router restarts once; RestartMode=direct defers OnFailure until the second failure.
+assert effective_restart(BROKER_DROPIN.parent) == "on-failure", effective_restart(BROKER_DROPIN.parent)
 # Negative control in the same run: a later drop-in that restores on-failure must be seen.
 import tempfile  # noqa: E402
 
 with tempfile.TemporaryDirectory() as scratch:
     control = Path(scratch)
     (control / BROKER_DROPIN.name).write_text(BROKER_DROPIN.read_text())
-    (control / "20-later.conf").write_text("[Service]\nRestart=on-failure\n")
-    assert effective_restart(control) == "on-failure", "effective_restart missed a later drop-in"
+    (control / "20-later.conf").write_text("[Service]\nRestart=no\n")
+    assert effective_restart(control) == "no", "effective_restart missed a later drop-in"
     (control / "20-later.conf").unlink()
     (control / BROKER_DROPIN.name).write_text(BROKER_DROPIN.read_text().replace("Restart=no\n", ""))
     assert effective_restart(control) == "on-failure", "effective_restart missed the inherited value"

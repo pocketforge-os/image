@@ -345,8 +345,8 @@ The image-owned template is:
 [Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-gamescope-session.target
-BindsTo=pf-input-broker.service pf-prefsd.service
-After=local-fs.target pocketforge-gamescope-session.target pf-input-broker.service pf-prefsd.service
+BindsTo=pf-prefsd.service
+After=local-fs.target pocketforge-gamescope-session.target pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
 
@@ -360,7 +360,7 @@ Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml
-Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
+Environment=PF_BROKER_SOCK=/run/pocketforge/input/sdk.sock
 EnvironmentFile=/run/pocketforge/session/environment
 ExecStartPre=/usr/bin/test -S /run/pocketforge/session/wayland-0
 ExecStart=/usr/bin/pf-app-launch %i
@@ -957,11 +957,12 @@ the comments are omitted here and the directives are verbatim:
 
 ```ini
 [Unit]
-StopWhenUnneeded=yes
+PartOf=pocketforge-gamescope-session.target
 OnFailure=pocketforge-gamescope-fallback.service
-Wants=pocketforge-gamescope-session.target
-After=pocketforge-gamescope-session.target pf-input-decode.service pf-prefsd.service
+After=pf-input-decode.service pf-prefsd.service
 Conflicts=pf-shell-selected.service
+StartLimitIntervalSec=30s
+StartLimitBurst=2
 ConditionPathExists=
 
 [Service]
@@ -971,9 +972,11 @@ ExecStartPre=/usr/bin/test -e /dev/uinput
 Group=gamer
 UMask=0007
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
-Restart=no
+Restart=on-failure
+RestartSec=0
+RestartMode=direct
 ExecStart=
-ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/device/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/system-menu.sock
+ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/device/capabilities.toml --acquire-sock /run/pocketforge/input/sdk.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/input/menu.sock
 ```
 
 `ConditionPathExists=` followed by `ExecStartPre=/usr/bin/test -e /dev/uinput` is a B4
