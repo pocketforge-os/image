@@ -366,7 +366,56 @@ class InitrdArmTests(unittest.TestCase):
             f'sf_v3_load_armed_transaction && sf_v3_install_seed "{fat}"'
         )
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(any(path.name in ("meta-data", "network-config", "user-data") for path in fat.iterdir()))
+        self.assertFalse(
+            any(
+                path.name in ("meta-data", "network-config", "user-data")
+                for path in fat.iterdir()
+            )
+        )
+
+    def test_stamp_binds_read_back_padded_pass_receipt(self) -> None:
+        fat = self.fixture.root / "fat"
+        fat.mkdir()
+        result = self.fixture.run_shell(
+            "sf_v3_load_armed_transaction && sf_v3_receipt_defaults && "
+            "SF_V3_XZ_RESULT=pass && SF_V3_RAW_STREAM_SHA256=$SF_V3_TARGET_RAW_SHA256 && "
+            "SF_V3_RAW_STREAM_BYTES=$SF_V3_TARGET_RAW_BYTES && "
+            "SF_V3_RAW_STREAM_HASH_MATCH=pass && SF_V3_RAW_STREAM_COUNT_MATCH=pass && "
+            "SF_V3_WRITE_METHOD=dd-fsync && SF_V3_WRITE_RESULT=pass && "
+            "SF_V3_SEED_RESULT=pass && SF_V3_STAMP_RESULT=pass && "
+            "sf_v3_write_receipt pass none none && "
+            f'sf_v3_install_stamp "{fat}"'
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt_sha = hashlib.sha256(self.fixture.read_receipt()).hexdigest()
+        expected = (
+            "Schema=pocketforge.self-flash-stamp/v3\n"
+            f"Generation={self.fixture.generation}\n"
+            f"TargetDescriptorSHA256={self.fixture.request['TargetDescriptorSHA256']}\n"
+            f"TargetRawSHA256={self.fixture.request['TargetRawSHA256']}\n"
+            f"TargetRawBytes={self.fixture.request['TargetRawBytes']}\n"
+            f"TailReceiptSHA256={receipt_sha}\n"
+        ).encode("ascii")
+        self.assertEqual((fat / "pocketforge-self-flash-v3").read_bytes(), expected)
+
+    def test_stamp_refuses_receipt_changed_after_readback(self) -> None:
+        fat = self.fixture.root / "fat"
+        fat.mkdir()
+        command = (
+            "sf_v3_load_armed_transaction && sf_v3_receipt_defaults && "
+            "SF_V3_XZ_RESULT=pass && SF_V3_RAW_STREAM_SHA256=$SF_V3_TARGET_RAW_SHA256 && "
+            "SF_V3_RAW_STREAM_BYTES=$SF_V3_TARGET_RAW_BYTES && "
+            "SF_V3_RAW_STREAM_HASH_MATCH=pass && SF_V3_RAW_STREAM_COUNT_MATCH=pass && "
+            "SF_V3_WRITE_METHOD=dd-fsync && SF_V3_WRITE_RESULT=pass && "
+            "SF_V3_SEED_RESULT=pass && SF_V3_STAMP_RESULT=pass && "
+            "sf_v3_write_receipt pass none none && "
+            'printf X | dd of="$SF_V3_SD" bs=1 seek="$SF_V3_RECEIPT_OFFSET" '
+            "conv=notrunc status=none && "
+            f'sf_v3_install_stamp "{fat}"'
+        )
+        result = self.fixture.run_shell(command)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((fat / "pocketforge-self-flash-v3").exists())
 
 
 if __name__ == "__main__":
