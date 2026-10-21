@@ -1,11 +1,11 @@
 [Unit]
 Description=PocketForge low-battery orderly shutdown policy
 After=systemd-udev-trigger.service
+ConditionPathExists=/sys/class/power_supply/axp20x-battery
 
 [Service]
 Type=oneshot
 User=root
-ConditionPathExists=/sys/class/power_supply/axp20x-battery
 ExecStart=/usr/lib/pocketforge/low-battery-shutdown.sh
 RuntimeDirectory=pocketforge-low-battery-shutdown
 RuntimeDirectoryMode=0700
