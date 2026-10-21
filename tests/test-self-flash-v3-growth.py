@@ -35,6 +35,32 @@ def load_helper(name, path):
 sf = load_helper("self_flash_v3_grow", HELPER)
 
 
+def receipt_is_eligible(path: Path) -> bool:
+    try:
+        receipt = json.loads(path.read_text(encoding="ascii"))
+    except (OSError, ValueError):
+        return False
+    return all(
+        receipt.get(field) == "pass"
+        for field in ("GPTRelocation", "PartitionGrowth", "PartitionTableReread", "Ext4Growth")
+    )
+
+
+def write_eligible_receipt(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "State": "pass",
+                "GPTRelocation": "pass",
+                "PartitionGrowth": "pass",
+                "PartitionTableReread": "pass",
+                "Ext4Growth": "pass",
+            }
+        ),
+        encoding="ascii",
+    )
+
+
 class GrowthGeometryTests(unittest.TestCase):
     def setUp(self):
         self.card_bytes = 62_534_975_488
@@ -333,24 +359,90 @@ class InstalledPolicyTests(unittest.TestCase):
                     prior,
                 )
 
-    def test_receipt_invalidation_failure_is_visible_and_not_ignored(self):
+    def test_initial_pre_unlink_failure_rejects_prior_pass_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
             receipt_path = Path(directory) / "self-flash-v3-growth"
-            receipt_path.write_text('{"State":"pass"}\n', encoding="ascii")
+            write_eligible_receipt(receipt_path)
+            self.assertTrue(receipt_is_eligible(receipt_path))
+            real_unlink = Path.unlink
+
+            def fail_receipt_unlink(path, *args, **kwargs):
+                if path == receipt_path:
+                    raise OSError("injected pre-unlink failure")
+                return real_unlink(path, *args, **kwargs)
+
             with (
                 mock.patch.object(sf, "RECEIPT_PATH", receipt_path),
-                mock.patch.object(
-                    sf,
-                    "_invalidate_receipt",
-                    side_effect=OSError("injected invalidation failure"),
-                    create=True,
-                ),
                 mock.patch.object(sf, "grow") as grow,
                 mock.patch.object(sf.os, "geteuid", return_value=0),
                 mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
+                mock.patch.object(Path, "unlink", fail_receipt_unlink),
             ):
                 self.assertEqual(sf.main(), 2)
             grow.assert_not_called()
+            self.assertFalse(receipt_is_eligible(receipt_path))
+
+    def test_catch_path_pre_unlink_failure_rejects_new_pass_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / "self-flash-v3-growth"
+            write_eligible_receipt(receipt_path)
+            real_unlink = Path.unlink
+            receipt_unlinks = 0
+
+            def fail_second_receipt_unlink(path, *args, **kwargs):
+                nonlocal receipt_unlinks
+                if path == receipt_path:
+                    receipt_unlinks += 1
+                    if receipt_unlinks == 2:
+                        raise OSError("injected catch-path pre-unlink failure")
+                return real_unlink(path, *args, **kwargs)
+
+            def install_pass_then_fail():
+                write_eligible_receipt(receipt_path)
+                raise OSError("injected post-pass failure")
+
+            with (
+                mock.patch.object(sf, "RECEIPT_PATH", receipt_path),
+                mock.patch.object(sf, "grow", side_effect=install_pass_then_fail),
+                mock.patch.object(sf.os, "geteuid", return_value=0),
+                mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
+                mock.patch.object(Path, "unlink", fail_second_receipt_unlink),
+            ):
+                self.assertEqual(sf.main(), 2)
+            self.assertEqual(receipt_unlinks, 2)
+            self.assertFalse(receipt_is_eligible(receipt_path))
+
+    def test_post_unlink_directory_sync_failure_leaves_receipt_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / "self-flash-v3-growth"
+            write_eligible_receipt(receipt_path)
+            real_fsync = sf.os.fsync
+            real_unlink = Path.unlink
+            receipt_unlinked = False
+
+            def observe_receipt_unlink(path, *args, **kwargs):
+                nonlocal receipt_unlinked
+                result = real_unlink(path, *args, **kwargs)
+                if path == receipt_path:
+                    receipt_unlinked = True
+                return result
+
+            def fail_directory_sync(descriptor):
+                if receipt_unlinked:
+                    raise OSError("injected post-unlink directory sync failure")
+                return real_fsync(descriptor)
+
+            with (
+                mock.patch.object(sf, "RECEIPT_PATH", receipt_path),
+                mock.patch.object(sf, "grow") as grow,
+                mock.patch.object(sf.os, "geteuid", return_value=0),
+                mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
+                mock.patch.object(Path, "unlink", observe_receipt_unlink),
+                mock.patch.object(sf.os, "fsync", fail_directory_sync),
+            ):
+                self.assertEqual(sf.main(), 2)
+            grow.assert_not_called()
+            self.assertFalse(receipt_is_eligible(receipt_path))
 
     def test_pass_directory_sync_then_degraded_write_failure_leaves_no_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
