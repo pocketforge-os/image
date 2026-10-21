@@ -1,8 +1,9 @@
 [Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-gamescope-session.target
-BindsTo=pf-input-broker.service pf-prefsd.service
-After=local-fs.target pocketforge-gamescope-session.target pf-input-broker.service pf-prefsd.service
+PartOf=pocketforge-gamescope-session.target
+BindsTo=pf-prefsd.service
+After=local-fs.target pocketforge-gamescope-session.target pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
 

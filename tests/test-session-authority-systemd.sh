@@ -18,22 +18,22 @@ owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.t
 resident_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-resident.service"
 authorization_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-x11-authorize.service"
 broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
+broker_supervisor="${root}/rootfs-overlay/usr/lib/pocketforge/pf-input-broker-supervisor"
 shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
 containerfile="${fixtures}/Containerfile"
 gamescope_tmpfiles="${root}/rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf"
 ephemeral_marker=/etc/pocketforge/ephemeral-runner.conf
 run_label_key=org.pocketforge.session-authority-run
 
-runtime_sha=0b36a9e880d7294677e899b2f6db03262cdc7774
+runtime_sha=a64273cab3a67b2706af502c28412e8435d6df5c
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=bb64af66d1b3fc4097898e485a3c4c139154a75af507351106d0756f39489c59
-# B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
-# is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
-# The input-broker unit is unchanged through 511109df (runtime#141); the later
-# runtime changes are confined to the session authority, so the broker unit
-# digest is unchanged.
-broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=6e4084a8e422b4dbccb5cc72eb501da69d8714c493d93f0fe004c21e1d63ef41
+app_unit_sha256=0dd9419bdf68da46ea542b2acbbc574b28b8f9d8d788f210029e90eef73383f0
+# tsp-ihne1.7: the session-wide broker wiring under test. The runtime unit
+# is taken verbatim from the paired runtime router head; the two drop-ins come
+# from this image tree. These pins make the real-systemd fixture test the same
+# unit contract as the related runtime PR instead of silently exercising v2.
+broker_unit_sha256=e6834f966ed070b5bb2cab9ed1464d5cdd55c78e7587b9931149a43ed9631f66
+broker_dropin_sha256=03891f234b39b1e62dd944aa890295b05e81dbb3a22849d83a6833714a0bac47
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
@@ -712,6 +712,7 @@ install -m 0644 "${fixtures}/pf-shell-selected.service" \
     "${context}/pf-shell-selected.service"
 install -m 0644 "${fixtures}/pf-prefsd.service" "${context}/pf-prefsd.service"
 install -m 0644 "${broker_dropin}" "${context}/10-app-session.conf"
+install -m 0755 "${broker_supervisor}" "${context}/pf-input-broker-supervisor"
 install -m 0644 "${shell_dropin}" "${context}/10-input-broker.conf"
 install -m 0755 "${fixtures}/fake-input-broker" "${context}/fake-input-broker"
 install -m 0755 "${fixtures}/fake-prefsd" "${context}/fake-prefsd"

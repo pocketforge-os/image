@@ -22,8 +22,7 @@ grep -F 'tests/test-pf-app-session-graph.sh' "${workflow}" >/dev/null \
     || fail "hermetic workflow does not run the pf-app session graph test"
 
 # Validate the production directives, then prove that the same validator rejects
-# each old half-graph. Moving only pf-app or only the broker would ask systemd to
-# start both compositor ownership targets, which conflict with each other.
+# the former per-app graph and a partially converted session-owner graph.
 python3 - "${app}" "${broker}" <<'PY'
 from pathlib import Path
 import sys
@@ -59,6 +58,7 @@ def validate(app_text: str, broker_text: str) -> None:
     foreground = "pocketforge-foreground.target"
 
     assert words(app, "Unit", "Requires") == [session]
+    assert words(app, "Unit", "PartOf") == [session]
     assert session in words(app, "Unit", "After")
     assert foreground not in words(app, "Unit", "Requires")
     assert foreground not in words(app, "Unit", "After")
@@ -71,8 +71,11 @@ def validate(app_text: str, broker_text: str) -> None:
     ]
     assert words(app, "Service", "SupplementaryGroups") == ["pf-session"]
 
-    assert words(broker, "Unit", "Wants") == [session]
-    assert session in words(broker, "Unit", "After")
+    assert words(broker, "Unit", "PartOf") == [session]
+    assert words(broker, "Unit", "Wants") == []
+    assert words(broker, "Unit", "After") == [
+        "pf-input-decode.service", "pf-prefsd.service"
+    ]
     assert words(broker, "Unit", "OnFailure") == [
         "pocketforge-gamescope-fallback.service"
     ]
@@ -94,14 +97,21 @@ controls = {
         "Requires=pocketforge-foreground.target",
     ),
     "broker-old-foreground-edge": broker_text.replace(
-        "Wants=pocketforge-gamescope-session.target",
-        "Wants=pocketforge-foreground.target",
+        "PartOf=pocketforge-gamescope-session.target",
+        "PartOf=pocketforge-foreground.target",
+    ),
+    "broker-old-app-owned-edge": broker_text.replace(
+        "PartOf=pocketforge-gamescope-session.target",
+        "Wants=pocketforge-gamescope-session.target\nAfter=pocketforge-gamescope-session.target",
     ),
     "broker-missing-failure-fallback": broker_text.replace(
         "OnFailure=pocketforge-gamescope-fallback.service\n", ""
     ),
     "broker-missing-uinput-precheck": broker_text.replace(
         "ExecStartPre=/usr/bin/test -e /dev/uinput\n", ""
+    ),
+    "app-missing-session-stop-edge": app_text.replace(
+        "PartOf=pocketforge-gamescope-session.target\n", ""
     ),
 }
 for name, candidate in controls.items():

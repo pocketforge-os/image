@@ -97,9 +97,12 @@ verify_session_producer_fixture() {
         grep -Fqx "${directive}" "${real_gamescope_unit}" || return 1
         grep -Fqx "${directive}" "${test_gamescope}" || return 1
     done
-    grep -Fq 'Requires=pocketforge-gamescope.service pocketforge-session-publisher.service' \
+    grep -Fq \
+            'Requires=pf-input-broker.service pocketforge-gamescope.service pocketforge-session-publisher.service' \
             "${test_target}" \
-        && grep -Fqx 'After=pocketforge-session-publisher.service' "${test_target}" \
+        && grep -Fqx \
+            'After=pf-input-broker.service pocketforge-session-publisher.service' \
+            "${test_target}" \
         && grep -Fqx 'Type=notify' "${test_gamescope}" \
         && grep -Fqx 'ExecStart=/usr/local/libexec/fake-gamescope' "${test_gamescope}" \
         && grep -Fq 'WAYLAND = Path("/run/pocketforge/gamescope/gamescope-0")' \
@@ -168,19 +171,32 @@ verify_broker_session_state_fixture() {
         "${test_broker}" \
         && grep -Fq '"session_target": unit_state("pocketforge-gamescope-session.target")' \
             "${test_broker}" \
+        && grep -Fq '"pocketforge-gamescope-session.target"' "${test_broker}" \
+        && grep -Fq '"session_target_start_job": unit_has_start_job(' "${test_broker}" \
         && grep -Fq 'start["foreground_target"] == "inactive"' "${test_driver}" \
-        && grep -Fq 'start["session_target"] == "active"' "${test_driver}"
+        && grep -Fq 'start["session_target_start_job"] is True' "${test_driver}" \
+        && grep -Fq '"--acquire-sock": "/run/pocketforge/input-broker.sock"' \
+            "${test_broker}" \
+        && grep -Fq '"--system-menu-sock": "/run/pocketforge/system-menu.sock"' \
+            "${test_broker}" \
+        && grep -Fq \
+            '"--compositor-sock": "/run/pocketforge/input/compositor.sock"' \
+            "${test_broker}" \
+        && grep -Fq 'BROKER_SOCKET = Path("/run/pocketforge/input-broker.sock")' \
+            "${test_driver}" \
+        && grep -Fq 'SYSTEM_MENU_SOCKET = Path("/run/pocketforge/system-menu.sock")' \
+            "${test_driver}"
 }
 
 # A Gamescope session conflicts with the fb0 foreground target. The broker may
-# grab only after that owner is inactive and the Gamescope session target has
-# reached active. Keep the two target identities explicit, then prove a probe
-# which aliases the session state to the foreground target is rejected.
+# grab only after that owner is inactive and while the Gamescope session target's
+# start transaction is pending on the broker's READY notification. Keep the two
+# target identities explicit, then prove an aliased job probe is rejected.
 verify_broker_session_state_fixture "${fake_broker}" "${driver}" || {
     echo 'session-authority systemd-safety: FAIL: broker session-state probe is incomplete' >&2
     exit 1
 }
-sed 's/unit_state("pocketforge-gamescope-session.target")/unit_state("pocketforge-foreground.target")/' \
+sed 's/pocketforge-gamescope-session.target/pocketforge-foreground.target/g' \
     "${fake_broker}" >"${tmp}/broker-with-aliased-targets"
 if verify_broker_session_state_fixture "${tmp}/broker-with-aliased-targets" "${driver}"; then
     echo 'session-authority systemd-safety: FAIL: broker probe with aliased targets passed' >&2
@@ -328,10 +344,16 @@ verify_session_producer_fixture "${session_target}" "${fake_gamescope_unit}" || 
     echo 'session-authority systemd-safety: FAIL: Gamescope session producer fixture is incomplete' >&2
     exit 1
 }
-sed '/^After=pocketforge-session-publisher.service$/d' \
+sed 's/ pocketforge-session-publisher.service$//' \
     "${session_target}" >"${tmp}/unordered-session.target"
 if verify_session_producer_fixture "${tmp}/unordered-session.target" "${fake_gamescope_unit}"; then
     echo 'session-authority systemd-safety: FAIL: unordered session publisher passed' >&2
+    exit 1
+fi
+sed 's/^Requires=pf-input-broker.service /Requires=/' \
+    "${session_target}" >"${tmp}/session-without-router.target"
+if verify_session_producer_fixture "${tmp}/session-without-router.target" "${fake_gamescope_unit}"; then
+    echo 'session-authority systemd-safety: FAIL: session target without router passed' >&2
     exit 1
 fi
 sed '/^OnSuccess=pocketforge-gamescope-fallback.service$/d' \
@@ -1312,16 +1334,31 @@ grep -Fqx 'COPY runtime/crates/pf-input-broker/systemd/pf-input-broker.service /
 grep -Fqx 'COPY 10-app-session.conf /etc/systemd/system/pf-input-broker.service.d/10-app-session.conf' "${recipe}" || exit 1
 grep -Fqx 'COPY 10-input-broker.conf /etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf' "${recipe}" || exit 1
 grep -Fqx 'COPY fake-input-broker /usr/bin/pf-input-broker' "${recipe}" || exit 1
+grep -Fqx 'COPY pf-input-broker-supervisor /usr/lib/pocketforge/pf-input-broker-supervisor' "${recipe}" || exit 1
 grep -Fqx 'COPY pf-prefsd.service /etc/systemd/system/pf-prefsd.service' "${recipe}" || exit 1
 grep -Fqx 'COPY fake-prefsd /usr/local/libexec/fake-prefsd' "${recipe}" || exit 1
 prefsd_self_test="$(python3 "${root}/tests/session-authority-systemd/fake-prefsd" --self-test)"
 grep -Fqx 'fake-prefsd self-test: PASS defaults=2 unknown=refused' \
     <<<"${prefsd_self_test}" || exit 1
 grep -Fq 'pf-input-broker.service | grep -q .' "${recipe}" || exit 1
+
+# A failed required start job cancels the session target and therefore also cancels
+# systemd's queued service restart. Do not emulate the old Restart=on-failure policy
+# inside this topology: the wiring verifier below owns that deterministic mutation
+# control, while the live fixture proves the effective policy and bounded attempts.
+if grep -Fq 'control_restart_on_failure_reproduces_trap' "${driver}"; then
+    echo 'session-authority systemd-safety: FAIL: obsolete live restart mutation control remains' >&2
+    exit 1
+fi
+grep -Fq 'assert effective_restart(BROKER_DROPIN.parent) == "no"' \
+    "${root}/tests/verify-input-broker-wiring.py" || exit 1
+grep -Fq 'assert effective_restart(control) == "on-failure"' \
+    "${root}/tests/verify-input-broker-wiring.py" || exit 1
+
 for b4_check in 'R4 GATE FAILED' 'def assert_grab_timeline' 'def assert_broker_failure_never_traps' \
     'grab_lock_is_held()' 'systemctl_stop_exit_after_sigkill=' '"--reuid=gamer"' \
     'def assert_broker_exit_before_ready_never_traps' 'def assert_broker_exit_mid_session_never_traps' \
-    'def control_restart_on_failure_reproduces_trap' 'watch_units(30.0)' \
+    'watch_units(30.0)' \
     'broker_result == "exit-code"' 'broker uinput pre-start did not fail' \
     'probe["prefsd_connect"] != "ok"' 'prefsd_outside_sandbox=ok'; do
     grep -Fq -- "${b4_check}" "${driver}" || {

@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
-RUNTIME_SHA = "43eb64914d44ae905aa69b20205b436083c8d72e"
+RUNTIME_SHA = "a64273cab3a67b2706af502c28412e8435d6df5c"
 LAUNCHER_SHA = "deac3cf621ec5eebec05e2811c960cd890f7c5c7"
 
 

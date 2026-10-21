@@ -136,6 +136,7 @@ jobs:
             tests/test-self-flash-v3-stage.py
             tests/test-initrd-volatile-root.sh
             tests/test-kbd-layout-env.sh
+            tests/test-input-broker-supervisor.sh
             tests/test-input-harness-selftest.sh
             tests/test-kernel-build-identity.sh
             tests/test-kernel-module-form.sh
