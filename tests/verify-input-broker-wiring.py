@@ -139,8 +139,7 @@ assert broker == [
      + " --acquire-sock " + BROKER_SOCK + " --source /dev/input/pf-gamepad"
      + " --safe-return-sock " + AUTHORITY_SOCK
      + " --system-menu-sock " + SYSTEM_MENU_SOCK
-     + " --compositor-sock /run/pocketforge/input/compositor.sock"
-     + " --session-user gamer"),
+     + " --compositor-sock /run/pocketforge/input/compositor.sock"),
 ], broker
 exec_start = values(broker, "Service", "ExecStart")
 flags = dict(zip(exec_start[1::2], exec_start[2::2]))
@@ -149,7 +148,7 @@ assert flags["--acquire-sock"] == BROKER_SOCK
 assert flags["--safe-return-sock"] == values(app, "Service", "InaccessiblePaths")[0].lstrip("-")
 assert flags["--system-menu-sock"] == SYSTEM_MENU_SOCK
 assert flags["--compositor-sock"] == "/run/pocketforge/input/compositor.sock"
-assert flags["--session-user"] == "gamer"
+assert "--session-user" not in exec_start
 assert flags["--system-menu-sock"] not in (flags["--acquire-sock"], flags["--safe-return-sock"])
 assert shell == [("Unit", "After", "pf-input-broker.service")], shell
 assert "pf-input-broker.service" in values(session, "Unit", "Requires")

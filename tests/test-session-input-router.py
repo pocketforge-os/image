@@ -52,11 +52,11 @@ assert "pf-input-broker.service" in words(gamescope, "Unit", "After")
 assert words(shell, "Unit", "After") == ["pf-input-broker.service"]
 assert "pf-shell-selected.service" in words(broker, "Unit", "Conflicts")
 
-# Gamescope registers on the frozen compositor endpoint. The router derives its session uid from
-# the configured account and authenticates the exact gamescope unit plus role group at accept.
+# Gamescope registers on the frozen compositor endpoint. Trusted roles use their schema-pinned
+# service users, groups and units; the app/session uid is never a fallback authority.
 command = words(broker, "Service", "ExecStart")
 assert command[command.index("--compositor-sock") + 1] == "/run/pocketforge/input/compositor.sock"
-assert command[command.index("--session-user") + 1] == "gamer"
+assert "--session-user" not in command
 
 # Restart immediately once. RestartMode=direct suppresses OnFailure during that retry;
 # StartLimitBurst=2 makes the second failure terminal and activates the shell fallback.
@@ -73,5 +73,11 @@ sysusers = (ROOT / "rootfs-overlay/usr/lib/sysusers.d/pf-input.conf").read_text(
 for group in ("pf-input", "pf-input-compositor", "pf-input-keyboard", "pf-input-menu"):
     assert f"g {group} -" in sysusers
 assert "m gamer pf-input" not in sysusers
+assert "m pf-gamescope pf-input-compositor" in sysusers
+assert "m pf-ime pf-input-keyboard" in sysusers
+# The menu UI/unit belongs to tsp-ihne1.17. Until it lands, this image must not create an
+# identity that could accidentally authorize a different process as the system menu.
+assert "pf-menu" not in sysusers
+assert not (SYSTEMD / "pf-system-menu.service").exists()
 
 print("session input router wiring: PASS owner=session restart_failures=2 app_controls_lifetime=no")
