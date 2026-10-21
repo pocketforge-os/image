@@ -510,8 +510,7 @@ sf_v3_read_seed() {
 sf_v3_remove_seed_temporary() {
     sf_v3_seed_temporary="$1"
     [ ! -d "$sf_v3_seed_temporary" ] \
-        || { find "$sf_v3_seed_temporary" -mindepth 1 -delete \
-            && rmdir "$sf_v3_seed_temporary"; }
+        || rm -r "$sf_v3_seed_temporary"
 }
 
 sf_v3_install_seed() {
@@ -707,7 +706,8 @@ sf_v3_run_armed_transaction() {
 
 sf_v3_clean_work() {
     [ -d "$SF_V3_WORK" ] || return 0
-    find "$SF_V3_WORK" -mindepth 1 -delete || return 1
+    rm -r "$SF_V3_WORK" || return 1
+    mkdir -p "$SF_V3_WORK" || return 1
 }
 
 sf_v3_stream_write() {

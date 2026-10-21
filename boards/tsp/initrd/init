@@ -615,7 +615,9 @@ sf_v2_stage_ram() {
     SF_STAGED_XZ="$SF_RAM_ROOT/sf-staged.xz"
     SF_SEED_RAM="$SF_RAM_ROOT/sf-seed"
     rm -f "$SF_STAGED_XZ" "$SF_RAM_ROOT/sf-phase.log"
-    [ ! -d "$SF_SEED_RAM" ] || { find "$SF_SEED_RAM" -mindepth 1 -delete; rmdir "$SF_SEED_RAM"; }
+    if [ -d "$SF_SEED_RAM" ]; then
+        rm -r "$SF_SEED_RAM" || return 1
+    fi
     mkdir -p "$SF_SEED_RAM" || return 1
     sf_v2_phase ram_copy_start
     sf_v2_src_xz="$sf_v2_mnt$SF_XZ_FILE"
@@ -839,8 +841,7 @@ selfflash_recover() {
         watchdog_ping
         mount -o remount,rw "$MNT" 2>/dev/null
         rm -f "$MNT/var/tmp/pf-selfflash.flag" "$SRC"
-        find "$MNT$SF_SEED_DIR" -mindepth 1 -delete 2>/dev/null
-        rmdir "$MNT$SF_SEED_DIR" 2>/dev/null
+        rm -r "$MNT$SF_SEED_DIR" 2>/dev/null || :
         sync
         watchdog_ping
         return 1
