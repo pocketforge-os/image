@@ -181,15 +181,44 @@ do) or the exact calculated `TailStart` (idempotent completion). Any other end,
 any partition already crossing `TailStart`, or any device ambiguity fails
 closed without changing the table.
 
+The root-owned `/etc/pocketforge-selfflash-v3` capability marker has exactly
+these ordered fields. The two baked geometry values are determined from the
+assembled image, not from live device state:
+
+```text
+Schema=pocketforge.self-flash-capability/v3
+ContractSHA256=<sha256 of this document>
+CardController=04020000
+AlignmentBytes=4194304
+ReserveBytes=1073741824
+GuardBytes=4194304
+ControlBytes=4194304
+SeedMaxBytes=16777216
+SlotBytes=65536
+BakedRootPartitionStartSector=<decimal>
+BakedRootPartitionSectors=<decimal>
+```
+
 After all checks, the unit repairs or relocates the secondary GPT only within
 `[ControlEnd, CardBytes)`, changes only partition 5 so its half-open end equals
 `TailStart`, rereads and verifies the table, then grows only that partition's
-ext4 filesystem. It writes a root-owned receipt at
+ext4 filesystem. Only after those operations pass, it overwrites exactly the
+65,536-byte arm slot and the 65,536-byte receipt slot with zeroes, durably
+reads both slots back, and leaves every other byte in the reserve unchanged.
+This one-time initialization is required because a card previously used by an
+unbounded-growth image can contain arbitrary old filesystem bytes at the new
+control offsets. A zero slot is unused; after initialization, any nonzero arm
+or receipt slot is stale state and refuses staging until FEL replaces it.
+
+The unit writes a root-owned receipt at
 `/var/lib/pocketforge/self-flash-v3-growth` containing the schema version,
 contract digest, card identity and size, partition start, before and after end
 sectors, `TailStart`, filesystem size before and after, and an ordered result
-for GPT relocation, partition growth, table reread, and ext4 growth. The unit
-is ordered before cloud-init and before SSH admission used by kit windows.
+for GPT relocation, partition growth, table reread, ext4 growth, and control
+slot initialization. `ControlSlotsInitialized=pass` means both exact slots
+were zeroed and read back after the filesystem reached its capped size; it
+does not authorize or describe any write to the candidate range. The unit is
+ordered before cloud-init and before SSH admission used by kit windows.
 Eligibility requires a valid receipt whose measured after-state still matches
 the live geometry; a receipt alone never authorizes a mismatched card.
 
@@ -234,11 +263,41 @@ card on which current cloud-init has expanded partition 5.
 ## Tail-writer authority and request
 
 The normal-root writer is a root-owned helper used only by the typed runner
-operation. Its command line accepts no device, controller, partition, offset,
-seek, or skip option. It accepts a generation-bound request containing the
-descriptor identities and exact byte counts, then reads the compressed bytes
-from standard input. It derives the block device and layout itself and repeats
-the eligibility geometry checks immediately before the first write.
+operation. Its command line is exactly `self-flash-v3-stage --request FILE
+--seed FILE`; it accepts no device, controller, partition, offset, seek, or
+skip option. The request and seed are regular, root-owned files that are not
+group- or world-writable. The compressed stream arrives on standard input.
+The helper derives the block device and layout itself and repeats the
+eligibility geometry checks immediately before the first write.
+
+The request is a JSON object with exactly these keys and no extensions:
+
+```text
+Schema=pocketforge.self-flash-stage-request/v3
+Generation=<32 lowercase hex>
+ContractSHA256=<sha256>
+BaseDescriptorSHA256=<sha256>
+BaseRawSHA256=<sha256>
+BaseRawBytes=<decimal JSON integer>
+TargetDescriptorSHA256=<sha256>
+TargetRawSHA256=<sha256>
+TargetRawBytes=<decimal JSON integer>
+CompressedSHA256=<sha256>
+CompressedBytes=<decimal JSON integer>
+SeedSHA256=<sha256>
+SeedBytes=<decimal JSON integer>
+CardSerial=<nonempty normalized value>
+CardBytes=<decimal JSON integer>
+RootPartitionStartSector=<decimal JSON integer>
+PartitionLayoutSHA256=<sha256>
+```
+
+`PartitionLayoutSHA256` hashes the ASCII concatenation of
+`<number>:<start_sector>:<sector_count>\n` for every live partition in
+ascending partition-number order. All JSON integers are positive and at most
+2^63-1. The request's contract digest must equal the installed marker, its
+card identity and partition digest must equal a fresh observation, and its
+base and target raw identities must differ.
 
 The writer refuses unless the selected device is the validated SD. In
 particular, it refuses eMMC; a non-`04020000` controller; a non-SD card; an
