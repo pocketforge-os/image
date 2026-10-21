@@ -25,11 +25,11 @@ DOC = ROOT / "docs/DEFAULT-APPS.md"
 DOCKERFILE = ROOT / "build/Dockerfile.pf"
 
 DESCRIPTOR = "/usr/share/pocketforge/device/capabilities.toml"
-BROKER_SOCK = "/run/pocketforge/input/sdk.sock"
+BROKER_SOCK = "/run/pocketforge/input-broker.sock"
 AUTHORITY_SOCK = "/run/pocketforge/session-authority.sock"
 PREFSD_SOCK = "/run/pocketforge/prefsd.sock"
 PREF_WRITER_GROUP = "pf-pref-writer"
-SYSTEM_MENU_SOCK = "/run/pocketforge/input/menu.sock"
+SYSTEM_MENU_SOCK = "/run/pocketforge/system-menu.sock"
 
 
 def directives(text: str) -> list[tuple[str, str, str]]:
@@ -276,4 +276,4 @@ assert "rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-b
 assert "      - rootfs-overlay/etc/systemd/system/pf-shell-selected.service\n" in workflow
 assert "tests/verify-session-authority-shell-fixture.py" in workflow
 
-print("PASS default-app input wiring (units, cross-file paths, broker Restart=no, open-only Dockerfile, doc drift)")
+print("PASS session input wiring (units, cross-file paths, broker restart budget, open-only Dockerfile, doc drift)")

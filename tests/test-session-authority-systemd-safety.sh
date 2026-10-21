@@ -97,9 +97,12 @@ verify_session_producer_fixture() {
         grep -Fqx "${directive}" "${real_gamescope_unit}" || return 1
         grep -Fqx "${directive}" "${test_gamescope}" || return 1
     done
-    grep -Fq 'Requires=pocketforge-gamescope.service pocketforge-session-publisher.service' \
+    grep -Fq \
+            'Requires=pf-input-broker.service pocketforge-gamescope.service pocketforge-session-publisher.service' \
             "${test_target}" \
-        && grep -Fqx 'After=pocketforge-session-publisher.service' "${test_target}" \
+        && grep -Fqx \
+            'After=pf-input-broker.service pocketforge-session-publisher.service' \
+            "${test_target}" \
         && grep -Fqx 'Type=notify' "${test_gamescope}" \
         && grep -Fqx 'ExecStart=/usr/local/libexec/fake-gamescope' "${test_gamescope}" \
         && grep -Fq 'WAYLAND = Path("/run/pocketforge/gamescope/gamescope-0")' \
@@ -169,7 +172,18 @@ verify_broker_session_state_fixture() {
         && grep -Fq '"session_target": unit_state("pocketforge-gamescope-session.target")' \
             "${test_broker}" \
         && grep -Fq 'start["foreground_target"] == "inactive"' "${test_driver}" \
-        && grep -Fq 'start["session_target"] == "active"' "${test_driver}"
+        && grep -Fq 'start["session_target"] == "active"' "${test_driver}" \
+        && grep -Fq '"--acquire-sock": "/run/pocketforge/input-broker.sock"' \
+            "${test_broker}" \
+        && grep -Fq '"--system-menu-sock": "/run/pocketforge/system-menu.sock"' \
+            "${test_broker}" \
+        && grep -Fq \
+            '"--compositor-sock": "/run/pocketforge/input/compositor.sock"' \
+            "${test_broker}" \
+        && grep -Fq 'BROKER_SOCKET = Path("/run/pocketforge/input-broker.sock")' \
+            "${test_driver}" \
+        && grep -Fq 'SYSTEM_MENU_SOCKET = Path("/run/pocketforge/system-menu.sock")' \
+            "${test_driver}"
 }
 
 # A Gamescope session conflicts with the fb0 foreground target. The broker may
@@ -328,10 +342,16 @@ verify_session_producer_fixture "${session_target}" "${fake_gamescope_unit}" || 
     echo 'session-authority systemd-safety: FAIL: Gamescope session producer fixture is incomplete' >&2
     exit 1
 }
-sed '/^After=pocketforge-session-publisher.service$/d' \
+sed 's/ pocketforge-session-publisher.service$//' \
     "${session_target}" >"${tmp}/unordered-session.target"
 if verify_session_producer_fixture "${tmp}/unordered-session.target" "${fake_gamescope_unit}"; then
     echo 'session-authority systemd-safety: FAIL: unordered session publisher passed' >&2
+    exit 1
+fi
+sed 's/^Requires=pf-input-broker.service /Requires=/' \
+    "${session_target}" >"${tmp}/session-without-router.target"
+if verify_session_producer_fixture "${tmp}/session-without-router.target" "${fake_gamescope_unit}"; then
+    echo 'session-authority systemd-safety: FAIL: session target without router passed' >&2
     exit 1
 fi
 sed '/^OnSuccess=pocketforge-gamescope-fallback.service$/d' \

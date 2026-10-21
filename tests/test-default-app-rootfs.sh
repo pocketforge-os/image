@@ -32,7 +32,7 @@ Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml
-Environment=PF_BROKER_SOCK=/run/pocketforge/input/sdk.sock
+Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
 EnvironmentFile=/run/pocketforge/session/environment
 ExecStartPre=/usr/bin/test -S /run/pocketforge/session/wayland-0
 ExecStart=/usr/bin/pf-app-launch %i

@@ -24,16 +24,15 @@ gamescope_tmpfiles="${root}/rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-gamesc
 ephemeral_marker=/etc/pocketforge/ephemeral-runner.conf
 run_label_key=org.pocketforge.session-authority-run
 
-runtime_sha=0b36a9e880d7294677e899b2f6db03262cdc7774
+runtime_sha=a64273cab3a67b2706af502c28412e8435d6df5c
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=63b7602881b7b02eb9bc687dc31b271ee4a160fd0dcefac2380c29b9dfa853ed
+app_unit_sha256=7603c860d691464a0856e3590febf7143ca48d62e5040f1ddcaf55c526006705
 # tsp-ihne1.7: the session-wide broker wiring under test. The runtime unit
-# is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
-# The input-broker unit is unchanged through 511109df (runtime#141); the later
-# runtime changes are confined to the session authority, so the broker unit
-# digest is unchanged.
-broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=a8111b55653da0ae7e2d7ad95c29fbbe9b84e86e680a12860bd2f9cf8a7585ee
+# is taken verbatim from the paired runtime router head; the two drop-ins come
+# from this image tree. These pins make the real-systemd fixture test the same
+# unit contract as the related runtime PR instead of silently exercising v2.
+broker_unit_sha256=e6834f966ed070b5bb2cab9ed1464d5cdd55c78e7587b9931149a43ed9631f66
+broker_dropin_sha256=f8fd11584ce2a057efa3e2e1fc3a3c5ccef7f72b723f760463a5b6db812df987
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))

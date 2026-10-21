@@ -44,6 +44,7 @@ EXPECTED = {
     "--source": "/dev/input/pf-gamepad",
     "--safe-return-sock": "/run/pocketforge/session-authority.sock",
     "--system-menu-sock": "/run/pocketforge/system-menu.sock",
+    "--compositor-sock": "/run/pocketforge/input/compositor.sock",
 }
 stop = threading.Event()
 
