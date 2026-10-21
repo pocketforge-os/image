@@ -1895,6 +1895,30 @@ install_low_battery_shutdown "${ROOTFS}" "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}" 
     "${ROOTFS}" "${PF_KERNEL_REPO}" "${PF_DEVICE_ID}" /work/src
 
 if [ "${VARIANT}" = "dev" ]; then
+    case "${PF_DEVICE_ID}" in
+        trimui-smart-pro-a133|a133-open-7x|a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
+            SELF_FLASH_V3_CONTRACT_SHA="$({ sha256sum \
+                /work/src/docs/SELF-FLASH-V3.md; } | awk '{print $1}')"
+            install -D -o root -g root -m 0700 \
+                /work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage \
+                "${ROOTFS}/usr/lib/pocketforge/self-flash-v3-stage"
+            cat >"${ROOTFS}/etc/pocketforge-selfflash-v3" <<EOF
+Schema=pocketforge.self-flash-capability/v3
+ContractSHA256=${SELF_FLASH_V3_CONTRACT_SHA}
+CardController=04020000
+AlignmentBytes=4194304
+ReserveBytes=1073741824
+GuardBytes=4194304
+ControlBytes=4194304
+SeedMaxBytes=16777216
+SlotBytes=65536
+EOF
+            chown root:root "${ROOTFS}/etc/pocketforge-selfflash-v3"
+            chmod 0644 "${ROOTFS}/etc/pocketforge-selfflash-v3"
+            echo "[customize] dev: self-flash v3 root helper and hashed capability installed"
+            ;;
+    esac
+
     # Dev: persistent journald (logs survive reboots for bug-report capture)
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/journald.conf.d/pocketforge-dev.conf" \
         "${ROOTFS}/etc/systemd/journald.conf.d/pocketforge.conf"

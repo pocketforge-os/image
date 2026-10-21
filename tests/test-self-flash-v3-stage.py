@@ -9,12 +9,14 @@ import importlib.util
 import io
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage"
+sys.dont_write_bytecode = True
 
 
 def load_helper():
@@ -146,6 +148,17 @@ class SurfaceTests(unittest.TestCase):
         source = HELPER.read_text(encoding="utf-8")
         for forbidden in ("/run/", "/dev/shm", "--device", "--offset", "--seek", "--skip"):
             self.assertNotIn(forbidden, source)
+
+    def test_dev_rootfs_installs_root_only_helper_and_hashed_marker(self):
+        builder = (ROOT / "scripts/build-rootfs.sh").read_text(encoding="utf-8")
+        self.assertIn("self-flash-v3-stage", builder)
+        self.assertIn("-m 0700", builder)
+        self.assertIn("sha256sum", builder)
+        self.assertIn("/work/src/docs/SELF-FLASH-V3.md", builder)
+        self.assertIn("Schema=pocketforge.self-flash-capability/v3", builder)
+        dev_block = builder.split('if [ "${VARIANT}" = "dev" ]; then', 1)[1]
+        release_block = dev_block.split('elif [ "${VARIANT}" = "release" ]', 1)[0]
+        self.assertIn("self-flash-v3-stage", release_block)
 
 
 if __name__ == "__main__":
