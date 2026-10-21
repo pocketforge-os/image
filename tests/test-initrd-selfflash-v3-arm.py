@@ -7,6 +7,7 @@ import hashlib
 import io
 from importlib.machinery import SourceFileLoader
 import importlib.util
+import lzma
 import os
 from pathlib import Path
 import subprocess
@@ -257,6 +258,26 @@ class ArmFixture:
             card.write(payload)
         return members
 
+    def stage_candidate(self, raw: bytes, *, corrupt: bool = False) -> None:
+        compressed = lzma.compress(raw, format=lzma.FORMAT_XZ)
+        if corrupt:
+            compressed = compressed[:-8]
+        self.request["TargetRawBytes"] = len(raw)
+        self.request["TargetRawSHA256"] = hashlib.sha256(raw).hexdigest()
+        self.request["CompressedBytes"] = len(compressed)
+        self.request["CompressedSHA256"] = hashlib.sha256(compressed).hexdigest()
+        self.layout = stage.derive_layout(
+            card_bytes=self.card_bytes,
+            base_raw_bytes=self.request["BaseRawBytes"],
+            target_raw_bytes=self.request["TargetRawBytes"],
+            compressed_bytes=self.request["CompressedBytes"],
+            seed_bytes=self.request["SeedBytes"],
+        )
+        self.write_records()
+        with self.device.open("r+b", buffering=0) as card:
+            card.seek(self.layout["stage_offset"])
+            card.write(compressed)
+
 
 class InitrdArmTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -415,6 +436,47 @@ class InitrdArmTests(unittest.TestCase):
         )
         result = self.fixture.run_shell(command)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((fat / "pocketforge-self-flash-v3").exists())
+
+    def test_complete_transaction_passes_without_full_readback(self) -> None:
+        members = self.fixture.stage_seed()
+        raw = (b"PocketForge-v3-target\n" * 128) + b"end\n"
+        self.fixture.stage_candidate(raw)
+        fat = self.fixture.root / "fat"
+        fat.mkdir()
+        result = self.fixture.run_shell(
+            f'SF_V3_TEST_FAT="{fat}"; '
+            'sf_v3_mount_target_fat() { SF_V3_FAT="$SF_V3_TEST_FAT"; }; '
+            "sf_v3_unmount_target_fat() { :; }; "
+            "sf_v3_load_armed_transaction && sf_v3_run_armed_transaction"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with self.fixture.device.open("rb", buffering=0) as card:
+            self.assertEqual(card.read(len(raw)), raw)
+        receipt = self.fixture.read_receipt().rstrip(b"\0")
+        self.assertIn(b"State=pass\n", receipt)
+        self.assertIn(b"FullDeviceReadback=not-performed\n", receipt)
+        self.assertEqual(
+            {path.name: path.read_bytes() for path in fat.iterdir() if path.name != "pocketforge-self-flash-v3"},
+            members,
+        )
+        self.assertTrue((fat / "pocketforge-self-flash-v3").is_file())
+
+    def test_corrupt_xz_records_failed_and_omits_stamp(self) -> None:
+        self.fixture.stage_seed()
+        self.fixture.stage_candidate(b"target bytes\n" * 64, corrupt=True)
+        fat = self.fixture.root / "fat"
+        fat.mkdir()
+        result = self.fixture.run_shell(
+            f'SF_V3_TEST_FAT="{fat}"; '
+            'sf_v3_mount_target_fat() { SF_V3_FAT="$SF_V3_TEST_FAT"; }; '
+            "sf_v3_unmount_target_fat() { :; }; "
+            "sf_v3_load_armed_transaction && sf_v3_run_armed_transaction"
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = self.fixture.read_receipt().rstrip(b"\0")
+        self.assertIn(b"State=failed\n", receipt)
+        self.assertNotIn(b"State=ready\n", receipt)
         self.assertFalse((fat / "pocketforge-self-flash-v3").exists())
 
 
