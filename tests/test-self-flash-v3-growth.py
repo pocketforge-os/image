@@ -159,8 +159,11 @@ class InstalledPolicyTests(unittest.TestCase):
         self.assertEqual(cloud, "growpart:\n  mode: off\nresize_rootfs: false\n")
 
         unit = UNIT.read_text(encoding="utf-8")
-        self.assertIn("Before=cloud-init-local.service cloud-init.service ssh.service", unit)
-        self.assertIn("ExecStart=-/usr/lib/pocketforge/self-flash-v3-grow", unit)
+        self.assertNotIn("Before=cloud-init-local.service", unit)
+        self.assertNotIn("Before=cloud-init.service", unit)
+        self.assertNotIn("Before=ssh.service", unit)
+        self.assertIn("ExecStart=/usr/lib/pocketforge/self-flash-v3-grow", unit)
+        self.assertIn("TimeoutStartSec=90s", unit)
         self.assertIn("ConditionPathExists=/etc/pocketforge-selfflash-v3", unit)
         self.assertIn("WantedBy=multi-user.target", unit)
         self.assertNotIn("Requires=", unit)
@@ -227,6 +230,129 @@ class InstalledPolicyTests(unittest.TestCase):
             self.assertEqual(receipt["Schema"], "pocketforge.self-flash-growth-degraded/v3")
             self.assertEqual(receipt["State"], "degraded")
             self.assertEqual(receipt["FailureReason"], "reserve_too_small_for_baked_root")
+
+    def test_refusal_invalidates_prior_success_before_each_receipt_write_failure(self):
+        class FailingOutput:
+            def __init__(self, output, phase):
+                self.output = output
+                self.phase = phase
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                self.output.close()
+                return False
+
+            def write(self, data):
+                if self.phase == "temp_write":
+                    raise OSError("injected temp write failure")
+                return self.output.write(data)
+
+            def flush(self):
+                if self.phase == "temp_flush":
+                    raise OSError("injected temp flush failure")
+                return self.output.flush()
+
+            def fileno(self):
+                return self.output.fileno()
+
+        phases = (
+            "parent_creation",
+            "preexisting_new",
+            "temp_creation",
+            "temp_write",
+            "temp_flush",
+            "temp_fsync",
+            "replace",
+        )
+        for phase in phases:
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                receipt_path = Path(directory) / "state" / "self-flash-v3-growth"
+                receipt_path.parent.mkdir()
+                prior = b'{"GPTRelocation":"pass","State":"pass"}\n'
+                receipt_path.write_bytes(prior)
+                temporary = receipt_path.with_name(receipt_path.name + ".new")
+                if phase == "preexisting_new":
+                    temporary.write_bytes(b"stale temporary\n")
+
+                real_mkdir = Path.mkdir
+                real_open = sf.os.open
+                real_fdopen = sf.os.fdopen
+                real_fsync = sf.os.fsync
+
+                def maybe_fail_mkdir(path, *args, **kwargs):
+                    if phase == "parent_creation" and path == receipt_path.parent:
+                        raise OSError("injected parent creation failure")
+                    return real_mkdir(path, *args, **kwargs)
+
+                def maybe_fail_open(path, flags, *args, **kwargs):
+                    if phase == "temp_creation" and Path(path) == temporary:
+                        raise OSError("injected temp creation failure")
+                    return real_open(path, flags, *args, **kwargs)
+
+                def maybe_fail_fdopen(descriptor, *args, **kwargs):
+                    output = real_fdopen(descriptor, *args, **kwargs)
+                    if phase in ("temp_write", "temp_flush"):
+                        return FailingOutput(output, phase)
+                    return output
+
+                fsync_calls = 0
+
+                def maybe_fail_fsync(descriptor):
+                    nonlocal fsync_calls
+                    fsync_calls += 1
+                    # The first fsync persists invalidation; the second is the
+                    # temporary receipt file before its atomic replacement.
+                    if phase == "temp_fsync" and fsync_calls == 2:
+                        raise OSError("injected temp fsync failure")
+                    return real_fsync(descriptor)
+
+                replace = sf.os.replace
+                if phase == "replace":
+                    replace = mock.Mock(side_effect=OSError("injected replace failure"))
+
+                with (
+                    mock.patch.object(sf, "RECEIPT_PATH", receipt_path),
+                    mock.patch.object(
+                        sf,
+                        "grow",
+                        side_effect=sf.Refusal("reserve_too_small_for_baked_root"),
+                    ),
+                    mock.patch.object(sf.os, "geteuid", return_value=0),
+                    mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
+                    mock.patch.object(Path, "mkdir", maybe_fail_mkdir),
+                    mock.patch.object(sf.os, "open", maybe_fail_open),
+                    mock.patch.object(sf.os, "fdopen", maybe_fail_fdopen),
+                    mock.patch.object(sf.os, "fsync", maybe_fail_fsync),
+                    mock.patch.object(sf.os, "replace", replace),
+                ):
+                    self.assertEqual(sf.main(), 0)
+
+                self.assertFalse(receipt_path.exists())
+                self.assertNotEqual(
+                    receipt_path.read_bytes() if receipt_path.exists() else None,
+                    prior,
+                )
+
+    def test_receipt_invalidation_failure_is_visible_and_not_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / "self-flash-v3-growth"
+            receipt_path.write_text('{"State":"pass"}\n', encoding="ascii")
+            with (
+                mock.patch.object(sf, "RECEIPT_PATH", receipt_path),
+                mock.patch.object(
+                    sf,
+                    "_invalidate_receipt",
+                    side_effect=OSError("injected invalidation failure"),
+                    create=True,
+                ),
+                mock.patch.object(sf, "grow") as grow,
+                mock.patch.object(sf.os, "geteuid", return_value=0),
+                mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
+            ):
+                self.assertEqual(sf.main(), 2)
+            grow.assert_not_called()
 
 
 if __name__ == "__main__":
