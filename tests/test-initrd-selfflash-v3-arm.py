@@ -615,18 +615,19 @@ class InitrdArmTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((fat / "pocketforge-self-flash-v3").exists())
 
-    def test_complete_transaction_passes_without_full_readback(self) -> None:
+    def test_two_generations_replace_stamp_without_full_readback(self) -> None:
         members = self.fixture.stage_seed()
         raw = (b"PocketForge-v3-target\n" * 128) + b"end\n"
         self.fixture.stage_candidate(raw)
         fat = self.fixture.root / "fat"
         fat.mkdir()
-        result = self.fixture.run_shell(
+        transaction = (
             f'SF_V3_TEST_FAT="{fat}"; '
             'sf_v3_mount_target_fat() { SF_V3_FAT="$SF_V3_TEST_FAT"; }; '
             "sf_v3_unmount_target_fat() { :; }; "
             "sf_v3_load_armed_transaction && sf_v3_run_armed_transaction"
         )
+        result = self.fixture.run_shell(transaction)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         with self.fixture.device.open("rb", buffering=0) as card:
             self.assertEqual(card.read(len(raw)), raw)
@@ -638,6 +639,21 @@ class InitrdArmTests(unittest.TestCase):
             members,
         )
         self.assertTrue((fat / "pocketforge-self-flash-v3").is_file())
+
+        stamp_path = fat / "pocketforge-self-flash-v3"
+        first_stamp = dict(line.split("=", 1) for line in stamp_path.read_text().splitlines())
+        with self.fixture.device.open("r+b", buffering=0) as card:
+            disposition = grow.initialize_control_slots(
+                card, arm_offset=self.fixture.layout["arm_offset"],
+                receipt_offset=self.fixture.layout["receipt_offset"],
+                sync=lambda: None, success_stamp=first_stamp)
+        self.assertEqual(disposition, "consumed-completed-handoff")
+        next_generation = "123456789abcdef0123456789abcdef0"
+        self.fixture.request["Generation"] = next_generation
+        self.fixture.stage_candidate(b"PocketForge-v3-next-target\n" * 128)
+        result = self.fixture.run_shell(transaction)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"Generation={next_generation}\n", stamp_path.read_text())
 
     def test_corrupt_xz_records_failed_and_omits_stamp(self) -> None:
         self.fixture.stage_seed()

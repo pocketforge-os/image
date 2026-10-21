@@ -447,7 +447,7 @@ sf_v3_install_stamp() {
     sf_v3_stamp_expected="$SF_V3_WORK/stamp.expected"
     sf_v3_stamp_temporary="$sf_v3_fat/.pocketforge-self-flash-v3-$SF_V3_GENERATION.tmp"
     sf_v3_stamp_final="$sf_v3_fat/pocketforge-self-flash-v3"
-    [ ! -e "$sf_v3_stamp_final" ] && [ ! -e "$sf_v3_stamp_temporary" ] || return 1
+    [ ! -e "$sf_v3_stamp_temporary" ] || return 1
     {
         printf 'Schema=pocketforge.self-flash-stamp/v3\n'
         printf 'Generation=%s\n' "$SF_V3_GENERATION"
@@ -459,7 +459,7 @@ sf_v3_install_stamp() {
     cp "$sf_v3_stamp_expected" "$sf_v3_stamp_temporary" || return 1
     sync || return 1
     cmp -s "$sf_v3_stamp_expected" "$sf_v3_stamp_temporary" || return 1
-    mv "$sf_v3_stamp_temporary" "$sf_v3_stamp_final" || return 1
+    mv -f "$sf_v3_stamp_temporary" "$sf_v3_stamp_final" || return 1
     sync || return 1
     [ -f "$sf_v3_stamp_final" ] && [ ! -L "$sf_v3_stamp_final" ] || return 1
     cmp -s "$sf_v3_stamp_expected" "$sf_v3_stamp_final" || return 1
