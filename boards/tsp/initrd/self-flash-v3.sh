@@ -450,6 +450,8 @@ sf_v3_install_stamp() {
 }
 
 sf_v3_load_armed_transaction() {
+    SF_V3_LOAD_STATE=refused
+    export SF_V3_LOAD_STATE
     mkdir -p "$SF_V3_WORK" || return 1
     sf_v3_clean_work || return 1
     sf_v3_validate_marker || { sf_v3_clean_work; return 1; }
@@ -459,14 +461,34 @@ sf_v3_load_armed_transaction() {
     sf_v3_arm_record="$SF_V3_WORK/arm.record"
     sf_v3_receipt_record="$SF_V3_WORK/receipt.record"
     sf_v3_read_slot "$SF_V3_ARM_OFFSET" "$sf_v3_arm_slot" \
-        && sf_v3_decode_slot "$sf_v3_arm_slot" "$sf_v3_arm_record" 27 ArmRecordSHA256 \
+        || { sf_v3_clean_work; return 1; }
+    if [ "$(tr -d '\000' <"$sf_v3_arm_slot" | wc -c)" -eq 0 ]; then
+        SF_V3_LOAD_STATE=absent
+        export SF_V3_LOAD_STATE
+        sf_v3_clean_work
+        return 1
+    fi
+    sf_v3_decode_slot "$sf_v3_arm_slot" "$sf_v3_arm_record" 27 ArmRecordSHA256 \
         && sf_v3_validate_arm "$sf_v3_arm_record" \
-        && sf_v3_read_slot "$SF_V3_RECEIPT_OFFSET" "$sf_v3_receipt_slot" \
+        || { sf_v3_clean_work; return 1; }
+    sf_v3_read_slot "$SF_V3_RECEIPT_OFFSET" "$sf_v3_receipt_slot" \
         && sf_v3_decode_slot "$sf_v3_receipt_slot" "$sf_v3_receipt_record" 29 ReceiptRecordSHA256 \
-        && sf_v3_validate_ready_receipt "$sf_v3_receipt_record"
-    sf_v3_load_rc=$?
-    sf_v3_clean_work || return 1
-    return "$sf_v3_load_rc"
+        || { sf_v3_clean_work; return 1; }
+    SF_V3_RECEIPT_STATE="$(sf_v3_get_line "$sf_v3_receipt_record" 2)"
+    if [ "$SF_V3_RECEIPT_STATE" != ready ]; then
+        case "$SF_V3_RECEIPT_STATE" in
+            started|failed|pass) SF_V3_LOAD_STATE=stale ;;
+            *) SF_V3_LOAD_STATE=refused ;;
+        esac
+        export SF_V3_LOAD_STATE
+        sf_v3_clean_work
+        return 1
+    fi
+    sf_v3_validate_ready_receipt "$sf_v3_receipt_record" \
+        || { sf_v3_clean_work; return 1; }
+    SF_V3_LOAD_STATE=ready
+    export SF_V3_LOAD_STATE
+    sf_v3_clean_work
 }
 
 sf_v3_require_pipefail() {
