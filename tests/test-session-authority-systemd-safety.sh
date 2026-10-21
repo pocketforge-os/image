@@ -1343,18 +1343,19 @@ grep -Fqx 'fake-prefsd self-test: PASS defaults=2 unknown=refused' \
 grep -Fq 'pf-input-broker.service | grep -q .' "${recipe}" || exit 1
 
 # The destructive restart negative control runs last. OnFailure dependencies cannot
-# be reset from a drop-in on the fixture's systemd, so the control must runtime-mask
-# the shell fallback before demonstrating the unbounded Restart=on-failure trap.
+# be reset from a drop-in and runtime masking is ineffective for this already-loaded
+# fixture unit, so the control must replace the fallback's shell-start commands.
 verify_restart_control_isolation() {
-    grep -Fq 'command("systemctl", "mask", "--runtime", FALLBACK_UNIT)' "$1" \
-        && grep -Fq 'property_value(FALLBACK_UNIT, "LoadState") == "masked"' "$1" \
+    grep -Fq 'FALLBACK_CONTROL_DROPIN.write_text(' "$1" \
+        && grep -Fq '"[Unit]\nStartLimitIntervalSec=0\n[Service]\nExecStart=\nExecStart=/usr/bin/true\n"' "$1" \
+        && grep -Fq '"/usr/bin/true" in fallback_command' "$1" \
         && grep -Fq '"[Unit]\nStartLimitIntervalSec=0\n[Service]\nRestart=on-failure\n"' "$1"
 }
 verify_restart_control_isolation "${driver}" || {
-    echo 'session-authority systemd-safety: FAIL: restart control does not mask the production fallback' >&2
+    echo 'session-authority systemd-safety: FAIL: restart control does not neutralize the production fallback' >&2
     exit 1
 }
-sed 's/"mask", "--runtime"/"unmask", "--runtime"/' \
+sed 's#ExecStart=/usr/bin/true#ExecStart=/usr/bin/systemctl start --no-block pf-shell-selected.service#' \
     "${driver}" >"${tmp}/restart-control-with-fallback.py"
 if verify_restart_control_isolation "${tmp}/restart-control-with-fallback.py"; then
     echo 'session-authority systemd-safety: FAIL: restart control isolation negative control passed' >&2
