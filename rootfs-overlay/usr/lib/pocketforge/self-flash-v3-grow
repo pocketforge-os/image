@@ -541,11 +541,39 @@ def _write_receipt(receipt: Mapping[str, object]) -> None:
 
 
 def _invalidate_receipt() -> None:
-    """Remove any prior success before this boot can attempt new growth."""
+    """Reject, then remove, any prior success before attempting growth.
+
+    Replacing success with a rejection before unlink makes an unlink refusal
+    fail closed.  A short/failed write after truncation is also deliberately
+    non-JSON, which the staging eligibility parser rejects.
+    """
+    rejection = (
+        json.dumps(
+            build_degraded_receipt("receipt_invalidation_started"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("ascii")
+    try:
+        descriptor = os.open(RECEIPT_PATH, os.O_WRONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return
+    try:
+        os.ftruncate(descriptor, 0)
+        position = 0
+        while position < len(rejection):
+            written = os.write(descriptor, rejection[position:])
+            if written <= 0:
+                raise OSError("receipt rejection write made no progress")
+            position += written
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
     try:
         RECEIPT_PATH.unlink()
     except FileNotFoundError:
-        return
+        pass
     directory = os.open(RECEIPT_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(directory)

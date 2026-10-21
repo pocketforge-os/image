@@ -226,12 +226,15 @@ slots were zeroed and read back after the filesystem reached its capped size;
 `ControlSlotsInitialized=consumed-completed-handoff` means a completely bound arm,
 `pass` receipt and FAT stamp were validated before zeroing. Every other combination
 records `zeroed-and-read-back`; neither value describes a candidate-range write.
-Before growth begins, the helper durably removes any receipt from an earlier
-invocation. If validation or growth refuses, it instead atomically records
+Before growth begins, the helper overwrites any earlier receipt with a durable
+`State=degraded`, `FailureReason=receipt_invalidation_started` rejection, then
+unlinks it and syncs the directory. An unlink refusal therefore retains a
+rejected receipt, while a failure after unlink leaves it absent. If validation
+or growth refuses, the helper instead atomically records
 `pocketforge.self-flash-growth-degraded/v3`, `State=degraded`, and a bounded
 `FailureReason`. Failure to write that replacement leaves the authoritative
 receipt absent, so an old success cannot remain eligible. Failure to invalidate
-the old receipt returns nonzero and remains visible as a failed unit. The unit
+the old receipt returns nonzero and leaves no eligibility-compatible receipt. The unit
 is ordered ahead of cloud-init and SSH so capped growth and control-slot
 initialization finish before network kit staging can acquire the same SD lock.
 `TimeoutStartSec=90s` bounds that admission barrier. The unit is not a required

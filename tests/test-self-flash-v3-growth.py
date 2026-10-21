@@ -321,14 +321,9 @@ class InstalledPolicyTests(unittest.TestCase):
                         return FailingOutput(output, phase)
                     return output
 
-                fsync_calls = 0
-
                 def maybe_fail_fsync(descriptor):
-                    nonlocal fsync_calls
-                    fsync_calls += 1
-                    # The first fsync persists invalidation; the second is the
-                    # temporary receipt file before its atomic replacement.
-                    if phase == "temp_fsync" and fsync_calls == 2:
+                    open_path = Path(f"/proc/self/fd/{descriptor}").resolve()
+                    if phase == "temp_fsync" and open_path == temporary:
                         raise OSError("injected temp fsync failure")
                     return real_fsync(descriptor)
 
