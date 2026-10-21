@@ -976,7 +976,7 @@ Restart=on-failure
 RestartSec=0
 RestartMode=direct
 ExecStart=
-ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/device/capabilities.toml --acquire-sock /run/pocketforge/input/sdk.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/input/menu.sock
+ExecStart=/usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/device/capabilities.toml --acquire-sock /run/pocketforge/input/sdk.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/input/menu.sock --compositor-sock /run/pocketforge/input/compositor.sock --session-user gamer
 ```
 
 `ConditionPathExists=` followed by `ExecStartPre=/usr/bin/test -e /dev/uinput` is a B4
