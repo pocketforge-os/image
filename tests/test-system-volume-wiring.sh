@@ -19,7 +19,8 @@ check_recipe() {
     for token in \
         'install -D -m 0755 "${VOLUMED_BIN}" "${ROOTFS}/usr/bin/pf-volumed"' \
         '"${RUNTIME_DIR}/systemd/pf-volumed.service"' \
-        'multi-user.target.wants/pf-volumed.service'; do
+        'multi-user.target.wants/pf-volumed.service' \
+        '73-pocketforge-headphone-jack.rules'; do
         grep -F -- "$token" "$rootfs" >/dev/null || return 1
     done
 }
@@ -49,10 +50,35 @@ fi
 check_recipe "$repo/build/Dockerfile.pf" "$repo/scripts/build-rootfs.sh" \
     || fail "runtime recipe does not build, stage, install, and enable pf-volumed"
 
+# The jack input node exists only on kernel-sunxi-7.x (kernel#42); the rule install is gated to it.
+jack_install_gated() {
+    awk '/\[ "\$\{PF_KERNEL_REPO\}" = kernel-sunxi-7\.x \]/ { gate=1 }
+         /73-pocketforge-headphone-jack\.rules/ && /install/ { if (!gate) bad=1 }
+         /^    fi$/ { gate=0 }
+         END { exit bad }' "$1"
+}
+jack_install_gated "$repo/scripts/build-rootfs.sh" \
+    || fail "jack udev rule install is not gated to kernel-sunxi-7.x"
+sed 's/\[ "${PF_KERNEL_REPO}" = kernel-sunxi-7\.x \]/true/' "$repo/scripts/build-rootfs.sh" > "$tmp/rootfs-ungated.sh"
+if jack_install_gated "$tmp/rootfs-ungated.sh"; then
+    fail "negative control: gate checker accepted an ungated jack rule install"
+fi
+
 cp "$repo/build/Dockerfile.pf" "$tmp/Dockerfile.pf"
 sed -i '/pf-volumed/d' "$tmp/Dockerfile.pf"
 if check_recipe "$tmp/Dockerfile.pf" "$repo/scripts/build-rootfs.sh"; then
     fail "negative control: recipe checker accepted a Dockerfile without pf-volumed"
+fi
+
+rule="$repo/rootfs-overlay/etc/udev/rules.d/73-pocketforge-headphone-jack.rules"
+check_rule() {
+    grep -F -- 'ATTRS{name}=="H616 Audio Codec Headphone Jack"' "$1" >/dev/null \
+        && grep -F -- 'GROUP="audio"' "$1" >/dev/null && grep -F -- 'MODE="0660"' "$1" >/dev/null
+}
+check_rule "$rule" || fail "jack udev rule does not give the codec jack node to the audio group"
+sed 's/GROUP="audio"/GROUP="input"/' "$rule" > "$tmp/jack.rules"
+if check_rule "$tmp/jack.rules"; then
+    fail "negative control: rule checker accepted a jack rule outside the audio group"
 fi
 
 defaults="$repo/device-config/alsa/mixer-defaults.sun4i-codec-7.x"
