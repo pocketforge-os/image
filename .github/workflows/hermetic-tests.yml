@@ -182,7 +182,7 @@ jobs:
           for t in "${tests[@]}"; do
             echo "::group::${t}"
             case "${t}" in
-              *.py) runner=(python3 "${t}") ;;
+              *.py) runner=(env PYTHONDONTWRITEBYTECODE=1 python3 "${t}") ;;
               *.sh) runner=(bash "${t}") ;;
               *)
                 echo "FAIL ${t}: unsupported test file type" >&2
