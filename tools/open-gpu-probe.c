@@ -801,6 +801,15 @@ static int probe_gles32_zink_readback(void)
         return virtual_fail("cannot pin VK_DRIVER_FILES");
     if (setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1) != 0)
         return virtual_fail("cannot pin the zink loader override");
+    /*
+     * The render-only Venus device has no DRM identity that Mesa's Zink
+     * surfaceless DRM path can match to a Vulkan physical device.  Force
+     * Mesa's software surfaceless path, which passes fd=-1 to Zink and lets
+     * the pinned Venus ICD select its llvmpipe-backed render server device.
+     * The renderer check below still rejects a fallback to llvmpipe GL.
+     */
+    if (setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1) != 0)
+        return virtual_fail("cannot force software surfaceless Zink");
 
     /*
      * The QEMU Venus device is intentionally render-only: KMS is disabled
