@@ -28,6 +28,7 @@ SESSION_TARGET = "pocketforge-gamescope-session.target"
 RESIDENT_UNIT = "pocketforge-gamescope-resident.service"
 GAMESCOPE_UNIT = "pocketforge-gamescope.service"
 BROKER_UNIT = "pf-input-broker.service"
+FALLBACK_UNIT = "pocketforge-gamescope-fallback.service"
 SOCKET = Path("/run/pocketforge/session-authority.sock")
 BROKER_SOCKET = Path("/run/pocketforge/input-broker.sock")
 PREFSD_SOCKET = Path("/run/pocketforge/prefsd.sock")
@@ -1197,28 +1198,34 @@ def assert_broker_exit_mid_session_never_traps(order: GrabOrder) -> str:
 
 
 def control_restart_on_failure_reproduces_trap() -> str:
-    """Negative control, run LAST: suppress terminal fallback and replace the
-    two-start limit with Restart=on-failure. The same exit-before-READY broker
-    must then restart repeatedly.
+    """Negative control, run LAST: mask terminal fallback and replace the two-start
+    limit with Restart=on-failure. The same exit-before-READY broker must then
+    restart repeatedly.
 
     This proves that case (a)'s broker_attempts, NRestarts and watch readings can see
-    the .215 trap. OnFailure must be empty in this control: the production fallback
-    deliberately stops the session target after the supervisor's terminal failure,
-    which cancels a systemd restart and makes the old trap impossible. The launch RPC
-    may block because the authority's systemctl start waits on the restarting broker.
-    The authority is left mid-launch, and nothing runs after this.
+    the .215 trap. OnFailure dependencies cannot be cleared from a drop-in on this
+    systemd version, so the control runtime-masks the production fallback instead.
+    Otherwise that fallback stops the session target after the supervisor's terminal
+    failure and cancels the systemd restart. The launch RPC may block because the
+    authority's systemctl start waits on the restarting broker. The authority is left
+    mid-launch, and nothing runs after this.
     """
     require(phase_summary()[0] == "Idle", f"authority busy before the control: {authority_state()['phase']}")
     command("systemctl", "reset-failed", APP_UNIT, BROKER_UNIT, check=False)
+    command("systemctl", "mask", "--runtime", FALLBACK_UNIT)
     CONTROL_DROPIN.parent.mkdir(parents=True, exist_ok=True)
     CONTROL_DROPIN.write_text(
-        "[Unit]\nOnFailure=\nStartLimitIntervalSec=0\n[Service]\nRestart=on-failure\n"
+        "[Unit]\nStartLimitIntervalSec=0\n[Service]\nRestart=on-failure\n"
     )
     command("systemctl", "daemon-reload")
     restart_policy = property_value(BROKER_UNIT, "Restart")
     fallback_policy = property_value(BROKER_UNIT, "OnFailure")
     require(restart_policy == "on-failure", f"control changed Restart={restart_policy!r}")
-    require(not fallback_policy, f"control retained OnFailure={fallback_policy!r}")
+    require(FALLBACK_UNIT in fallback_policy, f"control lost OnFailure={fallback_policy!r}")
+    require(
+        property_value(FALLBACK_UNIT, "LoadState") == "masked",
+        f"control fallback is not masked: {property_value(FALLBACK_UNIT, 'LoadState')!r}",
+    )
     MODE.write_text("hold\n")
     before_attempts = broker_attempts()
     before_invocations = invocation_count()
@@ -1238,7 +1245,7 @@ def control_restart_on_failure_reproduces_trap() -> str:
     phase_name, payload = phase_summary()
     line = (
         f"control_restart_on_failure broker_restart={restart_policy} broker_attempts={attempts} "
-        "broker_on_failure=none "
+        "broker_on_failure=masked-fallback "
         f"broker_nrestarts={nrestarts} app_invocations={invocation_count() - before_invocations} "
         f"launch_rpc={launch_rpc} owner_inactive_samples={watch['owner_inactive']}/{watch['samples']} "
         f"broker_up_samples={watch['broker_up']}/{watch['samples']} authority_phase={phase_name} "
