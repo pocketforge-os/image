@@ -209,6 +209,12 @@ echo "mutation skip-voltage-floor: caught"
 
 # Deployment wiring: root-owned oneshot, enabled at boot, and explicitly
 # retriggered on every battery change notification.
+awk '
+    $0 == "[Unit]" { in_unit = 1; next }
+    $0 ~ /^\[/ { in_unit = 0 }
+    in_unit && $0 == "ConditionPathExists=/sys/class/power_supply/axp20x-battery" { found = 1 }
+    END { exit(found ? 0 : 1) }
+' "${unit}" || fail "unit does not skip hosts without an AXP717 battery"
 grep -Fx 'User=root' "${unit}" >/dev/null || fail "unit is not explicitly root-owned"
 grep -Fx 'Type=oneshot' "${unit}" >/dev/null || fail "unit is not oneshot"
 grep -Fx 'RuntimeDirectory=pocketforge-low-battery-shutdown' "${unit}" >/dev/null \

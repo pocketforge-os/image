@@ -1,6 +1,7 @@
 [Unit]
 Description=PocketForge low-battery orderly shutdown policy
 After=systemd-udev-trigger.service
+ConditionPathExists=/sys/class/power_supply/axp20x-battery
 
 [Service]
 Type=oneshot

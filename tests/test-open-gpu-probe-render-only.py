@@ -42,6 +42,7 @@ def check_contract(source: str) -> None:
         "EGL_PBUFFER_BIT",
         "eglCreatePbufferSurface",
         'setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1)',
+        'setenv("ZINK_DEBUG", "tbo_rgb32", 1)',
     )
     forbidden = (
         "gbm_create_device",
