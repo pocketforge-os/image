@@ -1897,25 +1897,22 @@ install_low_battery_shutdown "${ROOTFS}" "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}" 
 if [ "${VARIANT}" = "dev" ]; then
     case "${PF_DEVICE_ID}" in
         trimui-smart-pro-a133|a133-open-7x|a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
-            SELF_FLASH_V3_CONTRACT_SHA="$({ sha256sum \
-                /work/src/docs/SELF-FLASH-V3.md; } | awk '{print $1}')"
             install -D -o root -g root -m 0700 \
                 /work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage \
                 "${ROOTFS}/usr/lib/pocketforge/self-flash-v3-stage"
-            cat >"${ROOTFS}/etc/pocketforge-selfflash-v3" <<EOF
-Schema=pocketforge.self-flash-capability/v3
-ContractSHA256=${SELF_FLASH_V3_CONTRACT_SHA}
-CardController=04020000
-AlignmentBytes=4194304
-ReserveBytes=1073741824
-GuardBytes=4194304
-ControlBytes=4194304
-SeedMaxBytes=16777216
-SlotBytes=65536
-EOF
-            chown root:root "${ROOTFS}/etc/pocketforge-selfflash-v3"
-            chmod 0644 "${ROOTFS}/etc/pocketforge-selfflash-v3"
-            echo "[customize] dev: self-flash v3 root helper and hashed capability installed"
+            install -D -o root -g root -m 0700 \
+                /work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow \
+                "${ROOTFS}/usr/lib/pocketforge/self-flash-v3-grow"
+            install -D -o root -g root -m 0644 \
+                /work/src/rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg \
+                "${ROOTFS}/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg"
+            install -D -o root -g root -m 0644 \
+                /work/src/rootfs-overlay/etc/systemd/system/pocketforge-self-flash-v3-grow.service \
+                "${ROOTFS}/etc/systemd/system/pocketforge-self-flash-v3-grow.service"
+            install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+            ln -sf /etc/systemd/system/pocketforge-self-flash-v3-grow.service \
+                "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-self-flash-v3-grow.service"
+            echo "[customize] dev: self-flash v3 root helpers and capped-growth policy installed"
             ;;
     esac
 
@@ -2301,6 +2298,30 @@ if [ "${ROOTFS_DU}" -gt 768 ]; then
 fi
 EXT4_SIZE_BLOCKS=$(( EXT4_SIZE_MB * 1024 ))   # 1K blocks for mke2fs
 echo "  ext4 target: ${EXT4_SIZE_MB} MiB (${EXT4_SIZE_BLOCKS} x 1K blocks)"
+
+# The marker binds the contract to the baked partition-5 geometry. genimage's
+# fixed layout starts userdata at sector 251904; its sectors equal the exact
+# ext4 byte length assembled below. Emit this only when the dev-only helper was
+# installed, after sizing is final and before the ext4 is created.
+if [ -x "${ROOTFS_EXTRACTED}/usr/lib/pocketforge/self-flash-v3-stage" ]; then
+    SELF_FLASH_V3_CONTRACT_SHA="$(sha256sum "${SRC_DIR}/docs/SELF-FLASH-V3.md" | awk '{print $1}')"
+    SELF_FLASH_V3_BAKED_ROOT_SECTORS=$(( EXT4_SIZE_MB * 2048 ))
+    cat >"${ROOTFS_EXTRACTED}/etc/pocketforge-selfflash-v3" <<EOF
+Schema=pocketforge.self-flash-capability/v3
+ContractSHA256=${SELF_FLASH_V3_CONTRACT_SHA}
+CardController=04020000
+AlignmentBytes=4194304
+ReserveBytes=1073741824
+GuardBytes=4194304
+ControlBytes=4194304
+SeedMaxBytes=16777216
+SlotBytes=65536
+BakedRootPartitionStartSector=251904
+BakedRootPartitionSectors=${SELF_FLASH_V3_BAKED_ROOT_SECTORS}
+EOF
+    chown root:root "${ROOTFS_EXTRACTED}/etc/pocketforge-selfflash-v3"
+    chmod 0644 "${ROOTFS_EXTRACTED}/etc/pocketforge-selfflash-v3"
+fi
 
 # Pre-stage: clamp mtimes for reproducibility (Reproducible-Builds recipe).
 # We operate on the extracted directory tree directly — mke2fs -d <directory>

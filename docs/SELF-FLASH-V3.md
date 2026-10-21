@@ -202,23 +202,28 @@ BakedRootPartitionSectors=<decimal>
 After all checks, the unit repairs or relocates the secondary GPT only within
 `[ControlEnd, CardBytes)`, changes only partition 5 so its half-open end equals
 `TailStart`, rereads and verifies the table, then grows only that partition's
-ext4 filesystem. Only after those operations pass, it overwrites exactly the
-65,536-byte arm slot and the 65,536-byte receipt slot with zeroes, durably
-reads both slots back, and leaves every other byte in the reserve unchanged.
-This one-time initialization is required because a card previously used by an
-unbounded-growth image can contain arbitrary old filesystem bytes at the new
-control offsets. A zero slot is unused; after initialization, any nonzero arm
-or receipt slot is stale state and refuses staging until FEL replaces it.
+ext4 filesystem. Only after those operations pass, it examines the two control
+slots. If the receipt slot contains a complete, self-hash-valid v3 receipt, it
+preserves both slots byte for byte; this is required on the target's first boot
+so the just-completed OTA evidence survives capped growth. Otherwise it
+overwrites exactly the 65,536-byte arm slot and the 65,536-byte receipt slot
+with zeroes and durably reads both back. That initialization is required
+because a card previously used by an unbounded-growth image can contain
+arbitrary old filesystem bytes at the new control offsets. A zero slot is
+unused; after initialization, any later nonzero arm or receipt slot is stale
+state and refuses staging until FEL replaces it.
 
 The unit writes a root-owned receipt at
 `/var/lib/pocketforge/self-flash-v3-growth` containing the schema version,
 contract digest, card identity and size, partition start, before and after end
 sectors, `TailStart`, filesystem size before and after, and an ordered result
 for GPT relocation, partition growth, table reread, ext4 growth, and control
-slot initialization. `ControlSlotsInitialized=pass` means both exact slots
-were zeroed and read back after the filesystem reached its capped size; it
-does not authorize or describe any write to the candidate range. The unit is
-ordered before cloud-init and before SSH admission used by kit windows.
+slot handling. `ControlSlotsInitialized=zeroed-and-read-back` means both exact
+slots were zeroed and read back after the filesystem reached its capped size;
+`ControlSlotsInitialized=preserved-valid-receipt` means a complete v3 receipt
+passed its self-hash and both slots were left byte-identical. Neither value
+authorizes or describes any write to the candidate range. The unit is ordered
+before cloud-init and before SSH admission used by kit windows.
 Eligibility requires a valid receipt whose measured after-state still matches
 the live geometry; a receipt alone never authorizes a mismatched card.
 

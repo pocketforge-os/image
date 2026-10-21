@@ -259,19 +259,46 @@ def _read_marker(contract_sha256: str) -> None:
     info = MARKER_PATH.lstat()
     if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
         raise Refusal("marker_not_root_owned")
-    expected = (
-        "Schema=pocketforge.self-flash-capability/v3\n"
-        f"ContractSHA256={contract_sha256}\n"
-        f"CardController={CONTROLLER}\n"
-        f"AlignmentBytes={ALIGNMENT_BYTES}\n"
-        f"ReserveBytes={RESERVE_BYTES}\n"
-        f"GuardBytes={GUARD_BYTES}\n"
-        f"ControlBytes={CONTROL_BYTES}\n"
-        f"SeedMaxBytes={SEED_MAX_BYTES}\n"
-        f"SlotBytes={SLOT_BYTES}\n"
+    lines = MARKER_PATH.read_text(encoding="ascii").splitlines()
+    fields: list[tuple[str, str]] = []
+    for line in lines:
+        if "=" not in line:
+            raise Refusal("marker_mismatch")
+        fields.append(tuple(line.split("=", 1)))
+    expected_keys = (
+        "Schema",
+        "ContractSHA256",
+        "CardController",
+        "AlignmentBytes",
+        "ReserveBytes",
+        "GuardBytes",
+        "ControlBytes",
+        "SeedMaxBytes",
+        "SlotBytes",
+        "BakedRootPartitionStartSector",
+        "BakedRootPartitionSectors",
     )
-    if MARKER_PATH.read_text(encoding="ascii") != expected:
+    if tuple(key for key, _value in fields) != expected_keys:
         raise Refusal("marker_mismatch")
+    marker = dict(fields)
+    expected = {
+        "Schema": "pocketforge.self-flash-capability/v3",
+        "ContractSHA256": contract_sha256,
+        "CardController": CONTROLLER,
+        "AlignmentBytes": str(ALIGNMENT_BYTES),
+        "ReserveBytes": str(RESERVE_BYTES),
+        "GuardBytes": str(GUARD_BYTES),
+        "ControlBytes": str(CONTROL_BYTES),
+        "SeedMaxBytes": str(SEED_MAX_BYTES),
+        "SlotBytes": str(SLOT_BYTES),
+    }
+    if any(marker.get(key) != value for key, value in expected.items()):
+        raise Refusal("marker_mismatch")
+    try:
+        _uint("baked_root_partition_start", int(marker["BakedRootPartitionStartSector"], 10))
+        _uint("baked_root_partition_sectors", int(marker["BakedRootPartitionSectors"], 10))
+    except ValueError as error:
+        raise Refusal("marker_mismatch") from error
 
 
 def _controller(real_device_path: str) -> str | None:

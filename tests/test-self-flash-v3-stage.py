@@ -154,7 +154,7 @@ class SurfaceTests(unittest.TestCase):
         self.assertIn("self-flash-v3-stage", builder)
         self.assertIn("-m 0700", builder)
         self.assertIn("sha256sum", builder)
-        self.assertIn("/work/src/docs/SELF-FLASH-V3.md", builder)
+        self.assertIn('${SRC_DIR}/docs/SELF-FLASH-V3.md', builder)
         self.assertIn("Schema=pocketforge.self-flash-capability/v3", builder)
         dev_block = builder.split('if [ "${VARIANT}" = "dev" ]; then', 1)[1]
         release_block = dev_block.split('elif [ "${VARIANT}" = "release" ]', 1)[0]

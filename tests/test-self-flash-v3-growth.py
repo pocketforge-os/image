@@ -13,14 +13,15 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow"
+STAGE_HELPER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage"
 BUILDER = ROOT / "scripts/build-rootfs.sh"
 CLOUD_OVERRIDE = ROOT / "rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg"
 UNIT = ROOT / "rootfs-overlay/etc/systemd/system/pocketforge-self-flash-v3-grow.service"
 sys.dont_write_bytecode = True
 
 
-def load_helper():
-    loader = importlib.machinery.SourceFileLoader("self_flash_v3_grow", str(HELPER))
+def load_helper(name, path):
+    loader = importlib.machinery.SourceFileLoader(name, str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     if spec is None:
         raise RuntimeError("could not create helper import spec")
@@ -29,7 +30,8 @@ def load_helper():
     return module
 
 
-sf = load_helper()
+sf = load_helper("self_flash_v3_grow", HELPER)
+stage = load_helper("self_flash_v3_stage_for_growth_test", STAGE_HELPER)
 
 
 class GrowthGeometryTests(unittest.TestCase):
@@ -107,12 +109,13 @@ class ControlSlotTests(unittest.TestCase):
         before = b"Q" * (receipt_offset + sf.SLOT_BYTES + 4096)
         device = io.BytesIO(before)
 
-        sf.initialize_control_slots(
+        disposition = sf.initialize_control_slots(
             device,
             arm_offset=arm_offset,
             receipt_offset=receipt_offset,
             sync=lambda: None,
         )
+        self.assertEqual(disposition, "zeroed-and-read-back")
         after = device.getvalue()
         self.assertEqual(after[:arm_offset], before[:arm_offset])
         self.assertEqual(after[arm_offset:receipt_offset], bytes(sf.SLOT_BYTES))
@@ -136,6 +139,29 @@ class ControlSlotTests(unittest.TestCase):
                 receipt_offset=receipt_offset,
                 sync=lambda: None,
             )
+
+        valid_receipt, _digest = stage._ready_receipt(
+            {
+                "Generation": "a" * 32,
+                "TargetDescriptorSHA256": "b" * 64,
+                "TargetRawSHA256": "c" * 64,
+                "TargetRawBytes": 1024,
+                "CompressedSHA256": "d" * 64,
+                "CompressedBytes": 512,
+            }
+        )
+        preserved = bytearray(before)
+        preserved[arm_offset:receipt_offset] = b"A" * sf.SLOT_BYTES
+        preserved[receipt_offset : receipt_offset + sf.SLOT_BYTES] = valid_receipt
+        preserved_device = io.BytesIO(preserved)
+        disposition = sf.initialize_control_slots(
+            preserved_device,
+            arm_offset=arm_offset,
+            receipt_offset=receipt_offset,
+            sync=lambda: None,
+        )
+        self.assertEqual(disposition, "preserved-valid-receipt")
+        self.assertEqual(preserved_device.getvalue(), preserved)
 
 
 class InstalledPolicyTests(unittest.TestCase):
@@ -187,7 +213,7 @@ class InstalledPolicyTests(unittest.TestCase):
             filesystem_bytes_after=61_330_161_664,
         )
         self.assertEqual(receipt["Schema"], "pocketforge.self-flash-growth/v3")
-        self.assertEqual(receipt["ControlSlotsInitialized"], "pass")
+        self.assertEqual(receipt["ControlSlotsInitialized"], "zeroed-and-read-back")
         self.assertEqual(receipt["GPTRelocation"], "pass")
 
 
