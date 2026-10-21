@@ -133,6 +133,7 @@ assert broker == [
     ("Service", "Environment", "PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock"),
     ("Service", "Restart", "no"),
     ("Service", "NotifyAccess", "all"),
+    ("Service", "KillMode", "mixed"),
     ("Service", "ExecStart", ""),
     ("Service", "ExecStart", "/usr/lib/pocketforge/pf-input-broker-supervisor "
      + "/usr/bin/pf-input-broker --descriptor " + DESCRIPTOR

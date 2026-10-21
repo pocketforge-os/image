@@ -977,6 +977,7 @@ UMask=0007
 Environment=PF_PREFSD_SOCK=/run/pocketforge/prefsd.sock
 Restart=no
 NotifyAccess=all
+KillMode=mixed
 ExecStart=
 ExecStart=/usr/lib/pocketforge/pf-input-broker-supervisor /usr/bin/pf-input-broker --descriptor /usr/share/pocketforge/device/capabilities.toml --acquire-sock /run/pocketforge/input-broker.sock --source /dev/input/pf-gamepad --safe-return-sock /run/pocketforge/session-authority.sock --system-menu-sock /run/pocketforge/system-menu.sock --compositor-sock /run/pocketforge/input/compositor.sock
 ```
@@ -997,9 +998,11 @@ once after the terminal failure. `Restart=no` prevents systemd from adding anoth
 Unlike a systemd start-rate limit, this count is local to one session invocation: clean rapid
 session churn cannot consume a later session's recovery allowance. `NotifyAccess=all` lets the
 broker child retain the runtime unit's `Type=notify` readiness contract on the image's systemd,
-which predates `RestartMode=direct`. On a clean session stop, the supervisor forwards SIGTERM
-and waits until the broker child has actually exited before it returns, so systemd cannot start
-the shell while the broker is still releasing its evdev grab and private endpoint sockets.
+which predates `RestartMode=direct`. `KillMode=mixed` sends the normal SIGTERM only to the
+supervisor; it forwards exactly one SIGTERM and waits until the broker child has actually exited
+before returning, so systemd cannot start the shell while the broker is still releasing its evdev
+grab and private endpoint sockets. A stop that exceeds `TimeoutStopSec=5` retains mixed mode's
+group-wide SIGKILL backstop.
 
 `OnFailure=` also covers a failed `/dev/uinput` pre-start, which can leave the compositor
   target active even though the app never became a live pin. The broker never entered active,

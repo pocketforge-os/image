@@ -63,6 +63,9 @@ assert "--session-user" not in command
 # so successful session churn cannot consume a global systemd start-rate counter.
 assert words(broker, "Service", "Restart") == ["no"]
 assert words(broker, "Service", "NotifyAccess") == ["all"]
+# systemd must signal only the supervisor on a normal stop. The supervisor forwards one
+# TERM and waits for the broker's evdev/socket release; SIGKILL remains group-wide on timeout.
+assert words(broker, "Service", "KillMode") == ["mixed"]
 assert words(broker, "Unit", "StartLimitIntervalSec") == ["0"]
 assert words(broker, "Unit", "StartLimitBurst") == []
 assert words(broker, "Unit", "OnFailure") == ["pocketforge-gamescope-fallback.service"]
