@@ -126,6 +126,7 @@ jobs:
             tests/test-gamescope-pvr-cache.sh
             tests/test-gamescope-kms-select.sh
             tests/test-gamescope-session-supervisor.sh
+            tests/test-hermetic-test-dispatch.sh
             tests/test-hwprobe-variant-stage.sh
             tests/test-initrd-selfflash-watchdog.sh
             tests/test-initrd-selfflash-v2.sh
