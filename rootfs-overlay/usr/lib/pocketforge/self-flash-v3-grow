@@ -645,6 +645,18 @@ def main() -> int:
         receipt = grow()
     except (OSError, Refusal, ValueError) as error:
         reason = str(error) if isinstance(error, Refusal) else "io_or_value_error"
+        # grow() can install a pass receipt and then fail while syncing its
+        # parent directory. Revoke that receipt before attempting to publish
+        # degraded state, so a second write failure cannot expose stale pass.
+        try:
+            _invalidate_receipt()
+        except OSError:
+            print(
+                "PF_SELF_FLASH_V3_GROW state=FAILED "
+                "reason=receipt_invalidation_failed",
+                file=sys.stderr,
+            )
+            return 2
         try:
             _write_receipt(build_degraded_receipt(reason))
         except OSError:

@@ -232,11 +232,13 @@ invocation. If validation or growth refuses, it instead atomically records
 `FailureReason`. Failure to write that replacement leaves the authoritative
 receipt absent, so an old success cannot remain eligible. Failure to invalidate
 the old receipt returns nonzero and remains visible as a failed unit. The unit
-is a bounded, best-effort multi-user job and is not ordered ahead of cloud-init,
-networking, SSH, or login; `TimeoutStartSec=90s` bounds slow storage. A known
-growth refusal returns success after invalidation because capped growth is not
-a boot requirement. A degraded receipt lacks the success fields and therefore
-can never pass the eligibility probe.
+is ordered ahead of cloud-init and SSH so capped growth and control-slot
+initialization finish before network kit staging can acquire the same SD lock.
+`TimeoutStartSec=90s` bounds that admission barrier. The unit is not a required
+dependency, so after it exits or times out, a failure does not prevent login. A
+known growth refusal returns success after invalidation because capped growth is
+not a boot requirement. A degraded receipt lacks the success fields and
+therefore can never pass the eligibility probe.
 Eligibility requires a valid receipt whose measured after-state still matches
 the live geometry; a receipt alone never authorizes a mismatched card.
 

@@ -2,11 +2,12 @@
 Description=Cap PocketForge root growth below the self-flash v3 reserve
 ConditionPathExists=/etc/pocketforge-selfflash-v3
 After=local-fs.target
+Before=cloud-init-local.service cloud-init.service ssh.service
 
 [Service]
 Type=oneshot
-# A growth refusal leaves OTA eligibility fail-closed and visible without
-# placing this best-effort job on the cloud-init, network, or login path.
+# Serialize control-slot initialization before SSH-based kit admission. The
+# timeout bounds that barrier; failure is visible but is not a requirement.
 ExecStart=/usr/lib/pocketforge/self-flash-v3-grow
 TimeoutStartSec=90s
 RemainAfterExit=yes
