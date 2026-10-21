@@ -181,7 +181,17 @@ jobs:
           failed=0
           for t in "${tests[@]}"; do
             echo "::group::${t}"
-            if bash "${t}"; then
+            case "${t}" in
+              *.py) runner=(python3 "${t}") ;;
+              *.sh) runner=(bash "${t}") ;;
+              *)
+                echo "FAIL ${t}: unsupported test file type" >&2
+                failed=1
+                echo "::endgroup::"
+                continue
+                ;;
+            esac
+            if "${runner[@]}"; then
               echo "PASS ${t}"
             else
               echo "FAIL ${t}" >&2
