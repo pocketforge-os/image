@@ -345,6 +345,41 @@ class InitrdArmTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("load=absent\n", result.stderr)
 
+    def test_fresh_image_layout_boots_but_near_capped_drift_refuses(self) -> None:
+        size_file = self.fixture.sys / "card0p5/size"
+        with self.fixture.device.open("r+b", buffering=0) as card:
+            card.seek(self.fixture.layout["arm_offset"])
+            card.write(b"\0" * stage.SLOT_BYTES)
+            card.seek(self.fixture.layout["receipt_offset"])
+            card.write(b"\0" * stage.SLOT_BYTES)
+
+        # A raw-image write leaves partition 5 at its baked size. On the QEMU
+        # acceptance disk this end is well beyond the card-relative tail start;
+        # on the physical 62.5 GB card it is far below it. Neither layout can
+        # have been armed by the typed v3 staging operation, so first boot must
+        # reach the normal root where the capped-growth unit initializes it.
+        size_file.write_text("2611200\n", encoding="ascii")
+        card_size_file = self.fixture.sys / "card0/size"
+        for card_sectors in (self.fixture.sectors, self.fixture.sectors * 2):
+            with self.subTest(card_sectors=card_sectors):
+                card_size_file.write_text(f"{card_sectors}\n", encoding="ascii")
+                fresh = self.fixture.run_gate()
+                self.assertNotEqual(
+                    fresh.returncode, 0, fresh.stdout + fresh.stderr
+                )
+                self.assertIn("load=uninitialized\n", fresh.stderr)
+
+        # Negative control: a sub-alignment change to an otherwise capped live
+        # layout is damage or stale state, not a recognizable fresh image.
+        card_size_file.write_text(f"{self.fixture.sectors}\n", encoding="ascii")
+        size_file.write_text(f"{self.fixture.root_sectors - 1}\n", encoding="ascii")
+        drifted = self.fixture.run_gate()
+        self.assertNotEqual(drifted.returncode, 0, drifted.stdout + drifted.stderr)
+        self.assertIn("load=refused\n", drifted.stderr)
+
+        gate = INIT.read_text(encoding="utf-8")
+        self.assertIn("uninitialized)", gate)
+
     def test_pid1_gate_is_fail_closed_and_watchdog_ordered(self) -> None:
         source = INIT.read_text(encoding="utf-8")
         start = source.index("# BEGIN POCKETFORGE SELF-FLASH V3 GATE")

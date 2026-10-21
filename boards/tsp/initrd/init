@@ -766,9 +766,11 @@ sf_v2_selected_card_unmounted() {
 sf_drop_cache() { sync 2>/dev/null; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; }
 
 # BEGIN POCKETFORGE SELF-FLASH V3 GATE
-# A zero arm slot is the normal no-op state. Any nonzero malformed arm, or a
-# valid arm paired with a non-ready receipt, is terminal: it must never fall
-# through to a normal root mount or retry a destructive transaction.
+# A zero arm slot is the normal no-op state. A clearly uninitialized baked-image
+# partition layout also continues to normal root without reading the raw tail;
+# the first-boot grow unit owns its exact validation and initialization. Any
+# near-capped drift, nonzero malformed arm, or valid arm paired with a non-ready
+# receipt is terminal: it must never fall through or retry a transaction.
 sf_v3_terminal_recovery() {
     log "selfflash-v3: TERMINAL recovery state — $*; host FEL recovery required"
     sync 2>/dev/null
@@ -805,6 +807,9 @@ if [ "$PF_ROOT_MODE" != volatile ] \
         case "$SF_V3_LOAD_STATE" in
             absent)
                 log "STAGE: self-flash v3 gate — no arm record — normal boot"
+                ;;
+            uninitialized)
+                log "STAGE: self-flash v3 gate — fresh image layout — normal boot for capped growth"
                 ;;
             *)
                 sf_v3_terminal_recovery "arm/receipt state refused ($SF_V3_LOAD_STATE)"

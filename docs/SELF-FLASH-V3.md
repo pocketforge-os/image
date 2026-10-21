@@ -350,6 +350,17 @@ derives the selected SD and every offset from observed immutable card identity,
 the arm record, and these constants. A missing, extended, reordered, or
 digest-mismatched marker is ineligible.
 
+The initrd reads the raw control slots only when live partition 5 ends exactly
+at the card-relative `TailStart` and every partition is within that bound. A raw
+whole-image write instead leaves partition 5 at its baked size. If that end is
+at least one `A` away from `TailStart`, the initrd classifies the layout as
+`uninitialized`, does not read any raw-tail state, and continues to the normal
+root so the capped-growth unit can validate the exact baked geometry and
+initialize the tail. A nonzero mismatch smaller than `A` is near-capped drift
+and remains a terminal refusal. This distinction is required for the first boot
+after FEL recovery and for the target's first boot after self-flash; it cannot
+admit a transaction because typed staging requires exact capped geometry.
+
 ## Seed archive
 
 The seed range is one uncompressed POSIX ustar archive. It contains exactly
@@ -542,6 +553,8 @@ Implementation acceptance includes paired positive and negative controls for:
   overlap, reserve underflow, stage underflow, control overlap, backup-GPT end
   guard, seed maximum, compressed capacity, and card overflow;
 - a live expanded partition 5 like the retained Build 8 geometry;
+- a fresh baked partition 5 both below and above card-relative `TailStart`,
+  proving normal boot without a tail read, paired with near-capped drift refusal;
 - ineffective cloud-init growth override, capped-growth ordering and receipt,
   exact `TailStart` growth, wrong-device refusal, overgrowth refusal, and
   backup-GPT relocation contained within the end guard;
