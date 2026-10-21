@@ -6,9 +6,12 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import io
+import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,6 +102,18 @@ class GrowthGeometryTests(unittest.TestCase):
                 baked_sectors=self.baked_sectors,
             )
 
+    def test_build33_qemu_two_gib_media_reproduces_reserve_refusal(self):
+        # Build 33's published image is 1,466,978,304 bytes. Its real baked p5
+        # ends at byte 1,466,909,696, but the acceptance harness expands the
+        # medium to only 2 GiB. A 1 GiB tail reserve therefore starts below p5.
+        with self.assertRaisesRegex(sf.Refusal, "reserve_too_small_for_baked_root"):
+            sf.derive_growth_plan(
+                card_bytes=2_147_483_648,
+                partitions=self.partitions,
+                baked_start_sector=self.start_sector,
+                baked_sectors=self.baked_sectors,
+            )
+
 
 class ControlSlotTests(unittest.TestCase):
     def test_only_two_control_slots_are_zeroed_and_read_back(self):
@@ -145,8 +160,11 @@ class InstalledPolicyTests(unittest.TestCase):
 
         unit = UNIT.read_text(encoding="utf-8")
         self.assertIn("Before=cloud-init-local.service cloud-init.service ssh.service", unit)
-        self.assertIn("ExecStart=/usr/lib/pocketforge/self-flash-v3-grow", unit)
+        self.assertIn("ExecStart=-/usr/lib/pocketforge/self-flash-v3-grow", unit)
         self.assertIn("ConditionPathExists=/etc/pocketforge-selfflash-v3", unit)
+        self.assertIn("WantedBy=multi-user.target", unit)
+        self.assertNotIn("Requires=", unit)
+        self.assertNotIn("RequiredBy=", unit)
 
         packages = (ROOT / "rootfs-packages-dev.txt").read_text(encoding="utf-8").splitlines()
         for package in ("e2fsprogs", "fdisk", "util-linux"):
@@ -189,6 +207,26 @@ class InstalledPolicyTests(unittest.TestCase):
         self.assertEqual(receipt["Schema"], "pocketforge.self-flash-growth/v3")
         self.assertEqual(receipt["ControlSlotsInitialized"], "zeroed-and-read-back")
         self.assertEqual(receipt["GPTRelocation"], "pass")
+
+    def test_known_growth_refusal_degrades_and_records_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / "self-flash-v3-growth"
+            with (
+                mock.patch.object(sf, "RECEIPT_PATH", receipt_path),
+                mock.patch.object(
+                    sf,
+                    "grow",
+                    side_effect=sf.Refusal("reserve_too_small_for_baked_root"),
+                ),
+                mock.patch.object(sf.os, "geteuid", return_value=0),
+                mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
+            ):
+                self.assertEqual(sf.main(), 0)
+
+            receipt = json.loads(receipt_path.read_text(encoding="ascii"))
+            self.assertEqual(receipt["Schema"], "pocketforge.self-flash-growth-degraded/v3")
+            self.assertEqual(receipt["State"], "degraded")
+            self.assertEqual(receipt["FailureReason"], "reserve_too_small_for_baked_root")
 
 
 if __name__ == "__main__":
