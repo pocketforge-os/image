@@ -6,6 +6,321 @@
 # contract before populating the SF_V3_* values consumed here.
 
 SF_V3_TRANSFER_BYTES=4194304
+SF_V3_ALIGNMENT_BYTES=4194304
+SF_V3_RESERVE_BYTES=1073741824
+SF_V3_GUARD_BYTES=4194304
+SF_V3_CONTROL_BYTES=4194304
+SF_V3_SEED_MAX_BYTES=16777216
+SF_V3_SLOT_BYTES=65536
+SF_V3_LOGICAL_SECTOR_BYTES=512
+SF_V3_CONTROLLER=04020000
+SF_V3_SYS_CLASS_BLOCK="${SF_V3_SYS_CLASS_BLOCK:-/sys/class/block}"
+SF_V3_DEV_ROOT="${SF_V3_DEV_ROOT:-/dev}"
+SF_V3_MARKER="${SF_V3_MARKER:-/etc/pocketforge-selfflash-v3}"
+SF_V3_EXPECTED_CONTRACT_SHA256="${SF_V3_EXPECTED_CONTRACT_SHA256:-@SELF_FLASH_V3_CONTRACT_SHA256@}"
+
+sf_v3_sha() {
+    [ "${#1}" -eq 64 ] || return 1
+    case "$1" in *[!0-9a-f]*) return 1 ;; esac
+}
+
+sf_v3_uint() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -gt 0 ] 2>/dev/null
+}
+
+sf_v3_get_line() {
+    sed -n "${2}s/^[^=]*=//p" "$1"
+}
+
+sf_v3_controller_path() {
+    case "$1" in
+        *'/4020000.mmc/'*|*'/04020000.mmc/'*|*'/sdmmc@04020000/'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+sf_v3_validate_marker() {
+    [ -f "$SF_V3_MARKER" ] && [ ! -L "$SF_V3_MARKER" ] || return 1
+    [ "$(wc -l <"$SF_V3_MARKER")" -eq 9 ] || return 1
+    [ "$(sf_v3_get_line "$SF_V3_MARKER" 1)" = pocketforge.self-flash-initrd-capability/v3 ] \
+        || return 1
+    SF_V3_CONTRACT_SHA256="$(sf_v3_get_line "$SF_V3_MARKER" 2)"
+    sf_v3_sha "$SF_V3_CONTRACT_SHA256" || return 1
+    [ "$SF_V3_CONTRACT_SHA256" = "$SF_V3_EXPECTED_CONTRACT_SHA256" ] || return 1
+    [ "$(sf_v3_get_line "$SF_V3_MARKER" 3)" = "$SF_V3_CONTROLLER" ] || return 1
+    [ "$(sf_v3_get_line "$SF_V3_MARKER" 4)" = "$SF_V3_ALIGNMENT_BYTES" ] || return 1
+    [ "$(sf_v3_get_line "$SF_V3_MARKER" 5)" = "$SF_V3_RESERVE_BYTES" ] || return 1
+    [ "$(sf_v3_get_line "$SF_V3_MARKER" 6)" = "$SF_V3_GUARD_BYTES" ] || return 1
+    [ "$(sf_v3_get_line "$SF_V3_MARKER" 7)" = "$SF_V3_CONTROL_BYTES" ] || return 1
+    [ "$(sf_v3_get_line "$SF_V3_MARKER" 8)" = "$SF_V3_SEED_MAX_BYTES" ] || return 1
+    [ "$(sf_v3_get_line "$SF_V3_MARKER" 9)" = "$SF_V3_SLOT_BYTES" ] || return 1
+    SF_V3_MARKER_KEYS="$(sed 's/=.*//' "$SF_V3_MARKER")"
+    SF_V3_EXPECTED_MARKER_KEYS="$(printf '%s\n' \
+        Schema ContractSHA256 CardController AlignmentBytes ReserveBytes \
+        GuardBytes ControlBytes SeedMaxBytes SlotBytes)"
+    [ "$SF_V3_MARKER_KEYS" = "$SF_V3_EXPECTED_MARKER_KEYS" ] || return 1
+}
+
+sf_v3_discover_sd() {
+    sf_v3_root_major_minor="${SF_V3_ROOT_MAJOR_MINOR:-}"
+    if [ -z "$sf_v3_root_major_minor" ] && [ -n "${SF_ROOTPART:-}" ]; then
+        sf_v3_root_major_minor="$(cat "$SF_V3_SYS_CLASS_BLOCK/${SF_ROOTPART##*/}/dev" 2>/dev/null)"
+    fi
+    [ -n "$sf_v3_root_major_minor" ] || return 1
+    sf_v3_match_count=0
+    SF_V3_SD=""
+    for sf_v3_entry in "$SF_V3_SYS_CLASS_BLOCK"/*; do
+        [ -e "$sf_v3_entry" ] || continue
+        [ -e "$sf_v3_entry/device" ] || continue
+        [ ! -e "$sf_v3_entry/partition" ] || continue
+        sf_v3_physical="$(readlink -f "$sf_v3_entry/device" 2>/dev/null)"
+        sf_v3_controller_path "$sf_v3_physical" || continue
+        [ "$(cat "$sf_v3_entry/device/type" 2>/dev/null)" = SD ] || continue
+        sf_v3_serial="$(cat "$sf_v3_entry/device/serial" 2>/dev/null)"
+        sf_v3_sectors="$(cat "$sf_v3_entry/size" 2>/dev/null)"
+        sf_v3_logical="$(cat "$sf_v3_entry/queue/logical_block_size" 2>/dev/null)"
+        sf_v3_uint "$sf_v3_sectors" && [ "$sf_v3_logical" = 512 ] \
+            && [ -n "$sf_v3_serial" ] || continue
+        sf_v3_whole_real="$(readlink -f "$sf_v3_entry" 2>/dev/null)"
+        sf_v3_has_root=0
+        for sf_v3_possible in "$SF_V3_SYS_CLASS_BLOCK"/*; do
+            [ -e "$sf_v3_possible/partition" ] || continue
+            sf_v3_possible_real="$(readlink -f "$sf_v3_possible" 2>/dev/null)"
+            case "$sf_v3_possible_real" in
+                "$sf_v3_whole_real"/*) ;;
+                *) continue ;;
+            esac
+            [ "$(cat "$sf_v3_possible/partition" 2>/dev/null)" = 5 ] || continue
+            [ "$(cat "$sf_v3_possible/dev" 2>/dev/null)" = "$sf_v3_root_major_minor" ] \
+                || continue
+            sf_v3_has_root=1
+        done
+        [ "$sf_v3_has_root" -eq 1 ] || continue
+        sf_v3_device="$SF_V3_DEV_ROOT/${sf_v3_entry##*/}"
+        if [ "$SF_V3_DEV_ROOT" = /dev ]; then
+            [ -b "$sf_v3_device" ] || continue
+        else
+            [ -f "$sf_v3_device" ] || continue
+        fi
+        sf_v3_match_count=$((sf_v3_match_count + 1))
+        SF_V3_SD="$sf_v3_device"
+        SF_V3_SD_SYS="$sf_v3_entry"
+        SF_V3_CARD_SERIAL="$sf_v3_serial"
+        SF_V3_CARD_BYTES=$((sf_v3_sectors * sf_v3_logical))
+    done
+    [ "$sf_v3_match_count" -eq 1 ] || return 1
+
+    SF_V3_TAIL_START=$(( (SF_V3_CARD_BYTES - SF_V3_RESERVE_BYTES) \
+        / SF_V3_ALIGNMENT_BYTES * SF_V3_ALIGNMENT_BYTES ))
+    SF_V3_CONTROL_END=$(( (SF_V3_CARD_BYTES - SF_V3_GUARD_BYTES) \
+        / SF_V3_ALIGNMENT_BYTES * SF_V3_ALIGNMENT_BYTES ))
+    SF_V3_ARM_OFFSET=$((SF_V3_CONTROL_END - SF_V3_CONTROL_BYTES))
+    SF_V3_RECEIPT_OFFSET=$((SF_V3_ARM_OFFSET + SF_V3_SLOT_BYTES))
+    [ "$SF_V3_TAIL_START" -gt 0 ] && [ "$SF_V3_ARM_OFFSET" -gt "$SF_V3_TAIL_START" ] \
+        && [ $((SF_V3_RECEIPT_OFFSET + SF_V3_SLOT_BYTES)) -le "$SF_V3_CONTROL_END" ] \
+        || return 1
+
+    sf_v3_whole_real="$(readlink -f "$SF_V3_SD_SYS" 2>/dev/null)"
+    sf_v3_partition_file="$SF_V3_WORK/live-partitions"
+    : >"$sf_v3_partition_file" || return 1
+    SF_V3_ROOT_START_SECTOR=""
+    SF_V3_ROOT_SECTORS=""
+    for sf_v3_possible in "$SF_V3_SYS_CLASS_BLOCK"/*; do
+        [ -e "$sf_v3_possible/partition" ] || continue
+        sf_v3_possible_real="$(readlink -f "$sf_v3_possible" 2>/dev/null)"
+        case "$sf_v3_possible_real" in "$sf_v3_whole_real"/*) ;; *) continue ;; esac
+        sf_v3_number="$(cat "$sf_v3_possible/partition" 2>/dev/null)"
+        sf_v3_start="$(cat "$sf_v3_possible/start" 2>/dev/null)"
+        sf_v3_size="$(cat "$sf_v3_possible/size" 2>/dev/null)"
+        sf_v3_uint "$sf_v3_number" && sf_v3_uint "$sf_v3_start" \
+            && sf_v3_uint "$sf_v3_size" || return 1
+        sf_v3_end_bytes=$(( (sf_v3_start + sf_v3_size) * 512 ))
+        [ "$sf_v3_end_bytes" -le "$SF_V3_TAIL_START" ] || return 1
+        printf '%s:%s:%s\n' "$sf_v3_number" "$sf_v3_start" "$sf_v3_size" \
+            >>"$sf_v3_partition_file" || return 1
+        if [ "$sf_v3_number" = 5 ]; then
+            [ -z "$SF_V3_ROOT_START_SECTOR" ] || return 1
+            SF_V3_ROOT_START_SECTOR="$sf_v3_start"
+            SF_V3_ROOT_SECTORS="$sf_v3_size"
+            [ "$sf_v3_end_bytes" -eq "$SF_V3_TAIL_START" ] || return 1
+        fi
+    done
+    [ -n "$SF_V3_ROOT_START_SECTOR" ] || return 1
+    sort -t: -k1,1n "$sf_v3_partition_file" >"$sf_v3_partition_file.sorted" \
+        || return 1
+    SF_V3_PARTITION_LAYOUT_SHA256="$(sha256sum "$sf_v3_partition_file.sorted" \
+        | awk '{print $1}')"
+}
+
+sf_v3_read_slot() {
+    dd if="$SF_V3_SD" of="$2" bs="$SF_V3_TRANSFER_BYTES" \
+        skip="$1" count="$SF_V3_SLOT_BYTES" \
+        iflag=skip_bytes,count_bytes,fullblock status=none \
+        || return 1
+    [ "$(stat -c %s "$2" 2>/dev/null)" = "$SF_V3_SLOT_BYTES" ]
+}
+
+sf_v3_decode_slot() {
+    sf_v3_slot="$1"
+    sf_v3_record="$2"
+    sf_v3_prefix_lines="$3"
+    sf_v3_digest_key="$4"
+    tr -d '\000' <"$sf_v3_slot" >"$sf_v3_record" || return 1
+    sf_v3_record_bytes="$(wc -c <"$sf_v3_record")"
+    [ "$sf_v3_record_bytes" -gt 2 ] \
+        && [ "$sf_v3_record_bytes" -lt "$SF_V3_SLOT_BYTES" ] || return 1
+    dd if="$sf_v3_slot" bs=1 count="$sf_v3_record_bytes" status=none \
+        | cmp -s - "$sf_v3_record" || return 1
+    sf_v3_nonzero_padding="$(dd if="$sf_v3_slot" bs=1 skip="$sf_v3_record_bytes" \
+        status=none | tr -d '\000' | wc -c)"
+    [ "$sf_v3_nonzero_padding" -eq 0 ] || return 1
+    [ "$(wc -l <"$sf_v3_record")" -eq $((sf_v3_prefix_lines + 2)) ] || return 1
+    sf_v3_newline_sha="$(tail -c 2 "$sf_v3_record" | sha256sum | awk '{print $1}')"
+    sf_v3_expected_newline_sha="$(printf '\n\n' | sha256sum | awk '{print $1}')"
+    [ "$sf_v3_newline_sha" = "$sf_v3_expected_newline_sha" ] || return 1
+    sf_v3_stored_digest="$(sf_v3_get_line "$sf_v3_record" $((sf_v3_prefix_lines + 1)))"
+    sf_v3_digest_name="$(sed -n "$((sf_v3_prefix_lines + 1))s/=.*//p" "$sf_v3_record")"
+    [ "$sf_v3_digest_name" = "$sf_v3_digest_key" ] \
+        && sf_v3_sha "$sf_v3_stored_digest" || return 1
+    sf_v3_calculated_digest="$(head -n "$sf_v3_prefix_lines" "$sf_v3_record" \
+        | sha256sum | awk '{print $1}')"
+    [ "$sf_v3_stored_digest" = "$sf_v3_calculated_digest" ] || return 1
+}
+
+sf_v3_validate_arm() {
+    sf_v3_arm="$1"
+    SF_V3_ARM_KEYS="$(head -n 27 "$sf_v3_arm" | sed 's/=.*//')"
+    SF_V3_EXPECTED_ARM_KEYS="$(printf '%s\n' Schema State Generation \
+        BaseDescriptorSHA256 BaseRawSHA256 BaseRawBytes TargetDescriptorSHA256 \
+        TargetRawSHA256 TargetRawBytes CompressedSHA256 CompressedBytes \
+        SeedSHA256 SeedBytes CardController CardType CardSerial CardBytes \
+        LogicalSectorBytes RootPartitionStartSector RootPartitionSectors \
+        PartitionLayoutSHA256 TailStart StageOffset SeedOffset ArmOffset \
+        ReceiptOffset ReceiptBytes)"
+    [ "$SF_V3_ARM_KEYS" = "$SF_V3_EXPECTED_ARM_KEYS" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 1)" = pocketforge.self-flash-arm/v3 ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 2)" = armed ] || return 1
+    SF_V3_GENERATION="$(sf_v3_get_line "$sf_v3_arm" 3)"
+    [ "${#SF_V3_GENERATION}" -eq 32 ] || return 1
+    case "$SF_V3_GENERATION" in *[!0-9a-f]*) return 1 ;; esac
+    SF_V3_BASE_DESCRIPTOR_SHA256="$(sf_v3_get_line "$sf_v3_arm" 4)"
+    SF_V3_BASE_RAW_SHA256="$(sf_v3_get_line "$sf_v3_arm" 5)"
+    SF_V3_BASE_RAW_BYTES="$(sf_v3_get_line "$sf_v3_arm" 6)"
+    SF_V3_TARGET_DESCRIPTOR_SHA256="$(sf_v3_get_line "$sf_v3_arm" 7)"
+    SF_V3_TARGET_RAW_SHA256="$(sf_v3_get_line "$sf_v3_arm" 8)"
+    SF_V3_TARGET_RAW_BYTES="$(sf_v3_get_line "$sf_v3_arm" 9)"
+    SF_V3_COMPRESSED_SHA256="$(sf_v3_get_line "$sf_v3_arm" 10)"
+    SF_V3_COMPRESSED_BYTES="$(sf_v3_get_line "$sf_v3_arm" 11)"
+    SF_V3_SEED_SHA256="$(sf_v3_get_line "$sf_v3_arm" 12)"
+    SF_V3_SEED_BYTES="$(sf_v3_get_line "$sf_v3_arm" 13)"
+    for sf_v3_value in "$SF_V3_BASE_DESCRIPTOR_SHA256" "$SF_V3_BASE_RAW_SHA256" \
+            "$SF_V3_TARGET_DESCRIPTOR_SHA256" "$SF_V3_TARGET_RAW_SHA256" \
+            "$SF_V3_COMPRESSED_SHA256" "$SF_V3_SEED_SHA256"; do
+        sf_v3_sha "$sf_v3_value" || return 1
+    done
+    for sf_v3_value in "$SF_V3_BASE_RAW_BYTES" "$SF_V3_TARGET_RAW_BYTES" \
+            "$SF_V3_COMPRESSED_BYTES" "$SF_V3_SEED_BYTES"; do
+        sf_v3_uint "$sf_v3_value" || return 1
+    done
+    [ "$SF_V3_BASE_RAW_SHA256" != "$SF_V3_TARGET_RAW_SHA256" ] || return 1
+    [ "$SF_V3_SEED_BYTES" -le "$SF_V3_SEED_MAX_BYTES" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 14)" = "$SF_V3_CONTROLLER" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 15)" = SD ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 16)" = "$SF_V3_CARD_SERIAL" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 17)" = "$SF_V3_CARD_BYTES" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 18)" = 512 ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 19)" = "$SF_V3_ROOT_START_SECTOR" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 20)" = "$SF_V3_ROOT_SECTORS" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 21)" = "$SF_V3_PARTITION_LAYOUT_SHA256" ] \
+        || return 1
+    SF_V3_STAGE_OFFSET=$((SF_V3_TAIL_START + SF_V3_GUARD_BYTES))
+    SF_V3_STAGE_END=$((SF_V3_STAGE_OFFSET + SF_V3_COMPRESSED_BYTES))
+    SF_V3_SEED_OFFSET=$(( (SF_V3_STAGE_END + 4095) / 4096 * 4096 ))
+    SF_V3_SEED_END=$((SF_V3_SEED_OFFSET + SF_V3_SEED_BYTES))
+    [ "$SF_V3_SEED_END" -le "$SF_V3_ARM_OFFSET" ] || return 1
+    sf_v3_image_max="$SF_V3_BASE_RAW_BYTES"
+    [ "$SF_V3_TARGET_RAW_BYTES" -le "$sf_v3_image_max" ] \
+        || sf_v3_image_max="$SF_V3_TARGET_RAW_BYTES"
+    sf_v3_image_floor=$(( (sf_v3_image_max + SF_V3_ALIGNMENT_BYTES - 1) \
+        / SF_V3_ALIGNMENT_BYTES * SF_V3_ALIGNMENT_BYTES ))
+    [ "$sf_v3_image_floor" -le "$SF_V3_TAIL_START" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 22)" = "$SF_V3_TAIL_START" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 23)" = "$SF_V3_STAGE_OFFSET" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 24)" = "$SF_V3_SEED_OFFSET" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 25)" = "$SF_V3_ARM_OFFSET" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 26)" = "$SF_V3_RECEIPT_OFFSET" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_arm" 27)" = "$SF_V3_SLOT_BYTES" ] || return 1
+}
+
+sf_v3_validate_ready_receipt() {
+    sf_v3_receipt="$1"
+    SF_V3_RECEIPT_KEYS="$(head -n 29 "$sf_v3_receipt" | sed 's/=.*//')"
+    SF_V3_EXPECTED_RECEIPT_KEYS="$(printf '%s\n' Schema State Generation \
+        TargetDescriptorSHA256 TargetRawSHA256 TargetRawBytes \
+        CompressedExpectedSHA256 CompressedExpectedBytes CompressedVerifiedHost \
+        CompressedHostVerification DUTCompressedHash XzIntegrity RawStreamSHA256 \
+        RawStreamBytes RawStreamHashMatch RawStreamCountMatch WriteMethod \
+        WriteResult FullDeviceReadback SeedResult StampResult FailurePhase \
+        FailureReason InitrdStartMonotonicMs WriteStartMonotonicMs \
+        WriteEndMonotonicMs SeedEndMonotonicMs StampEndMonotonicMs \
+        ReceiptWrittenMonotonicMs)"
+    [ "$SF_V3_RECEIPT_KEYS" = "$SF_V3_EXPECTED_RECEIPT_KEYS" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 1)" = pocketforge.self-flash-receipt/v3 ] \
+        || return 1
+    SF_V3_RECEIPT_STATE="$(sf_v3_get_line "$sf_v3_receipt" 2)"
+    [ "$SF_V3_RECEIPT_STATE" = ready ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 3)" = "$SF_V3_GENERATION" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 4)" = "$SF_V3_TARGET_DESCRIPTOR_SHA256" ] \
+        || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 5)" = "$SF_V3_TARGET_RAW_SHA256" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 6)" = "$SF_V3_TARGET_RAW_BYTES" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 7)" = "$SF_V3_COMPRESSED_SHA256" ] \
+        || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 8)" = "$SF_V3_COMPRESSED_BYTES" ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 9)" = matt-laptop ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 10)" = sha256-and-byte-count-before-arm ] \
+        || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 11)" = not-performed ] || return 1
+    sf_v3_line=12
+    while [ "$sf_v3_line" -le 21 ]; do
+        case "$sf_v3_line" in
+            14) sf_v3_expected=unknown ;;
+            19) sf_v3_expected=not-performed ;;
+            *) sf_v3_expected=not-run ;;
+        esac
+        [ "$(sf_v3_get_line "$sf_v3_receipt" "$sf_v3_line")" = "$sf_v3_expected" ] \
+            || return 1
+        sf_v3_line=$((sf_v3_line + 1))
+    done
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 22)" = none ] || return 1
+    [ "$(sf_v3_get_line "$sf_v3_receipt" 23)" = none ] || return 1
+    sf_v3_line=24
+    while [ "$sf_v3_line" -le 29 ]; do
+        [ "$(sf_v3_get_line "$sf_v3_receipt" "$sf_v3_line")" = unknown ] || return 1
+        sf_v3_line=$((sf_v3_line + 1))
+    done
+}
+
+sf_v3_load_armed_transaction() {
+    mkdir -p "$SF_V3_WORK" || return 1
+    sf_v3_clean_work || return 1
+    sf_v3_validate_marker || { sf_v3_clean_work; return 1; }
+    sf_v3_discover_sd || { sf_v3_clean_work; return 1; }
+    sf_v3_arm_slot="$SF_V3_WORK/arm.slot"
+    sf_v3_receipt_slot="$SF_V3_WORK/receipt.slot"
+    sf_v3_arm_record="$SF_V3_WORK/arm.record"
+    sf_v3_receipt_record="$SF_V3_WORK/receipt.record"
+    sf_v3_read_slot "$SF_V3_ARM_OFFSET" "$sf_v3_arm_slot" \
+        && sf_v3_decode_slot "$sf_v3_arm_slot" "$sf_v3_arm_record" 27 ArmRecordSHA256 \
+        && sf_v3_validate_arm "$sf_v3_arm_record" \
+        && sf_v3_read_slot "$SF_V3_RECEIPT_OFFSET" "$sf_v3_receipt_slot" \
+        && sf_v3_decode_slot "$sf_v3_receipt_slot" "$sf_v3_receipt_record" 29 ReceiptRecordSHA256 \
+        && sf_v3_validate_ready_receipt "$sf_v3_receipt_record"
+    sf_v3_load_rc=$?
+    sf_v3_clean_work || return 1
+    return "$sf_v3_load_rc"
+}
 
 sf_v3_require_pipefail() {
     (set -o pipefail) >/dev/null 2>&1

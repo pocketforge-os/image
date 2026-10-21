@@ -145,7 +145,7 @@ class ArmFixture:
         ready, _digest = stage._ready_receipt(self.request)
         payload = ready.rstrip(b"\0").decode("ascii").splitlines()
         fields = []
-        for line in payload[:-1]:
+        for line in payload[:-2]:
             key, value = line.split("=", 1)
             if key == "State":
                 value = state_name
@@ -170,6 +170,7 @@ class ArmFixture:
                 "SF_V3_SYS_CLASS_BLOCK": str(self.sys),
                 "SF_V3_DEV_ROOT": str(self.dev),
                 "SF_V3_MARKER": str(self.marker),
+                "SF_V3_EXPECTED_CONTRACT_SHA256": self.contract_sha,
                 "SF_V3_ROOT_MAJOR_MINOR": "179:5",
                 "SF_V3_WORK": str(self.work),
             }

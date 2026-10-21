@@ -291,7 +291,7 @@ echo "=== verifying busybox provides initrd applets ==="
 BB_APPLETS="$("${STAGING}/bin/busybox" --list 2>/dev/null || true)"
 if [ -n "$BB_APPLETS" ]; then
     for ap in awk blockdev grep unxz sha256sum dd findfs head sed tr reboot mount umount sync \
-            tee wc mkfifo tar; do
+            tee wc mkfifo tar sort cmp stat readlink; do
         printf '%s\n' "$BB_APPLETS" | grep -qx "$ap" \
             || { echo "FATAL: busybox lacks applet '$ap' (needed by /init)" >&2; exit 1; }
     done
@@ -432,6 +432,11 @@ SlotBytes=65536
 EOF
     install -D -m 0644 "${INITRD_SRC}/self-flash-v3.sh" \
         "${STAGING}/lib/pocketforge-self-flash-v3.sh"
+    sed -i "s/@SELF_FLASH_V3_CONTRACT_SHA256@/${SELF_FLASH_V3_CONTRACT_SHA}/g" \
+        "${STAGING}/lib/pocketforge-self-flash-v3.sh"
+    grep -Fq "SF_V3_EXPECTED_CONTRACT_SHA256=\"\${SF_V3_EXPECTED_CONTRACT_SHA256:-${SELF_FLASH_V3_CONTRACT_SHA}}\"" \
+        "${STAGING}/lib/pocketforge-self-flash-v3.sh" \
+        || { echo "FATAL: self-flash v3 contract substitution failed" >&2; exit 1; }
     chmod 0644 "${STAGING}/etc/pocketforge-selfflash"
     chmod 0644 "${STAGING}/etc/pocketforge-selfflash-v2"
     chmod 0644 "${STAGING}/etc/pocketforge-selfflash-v3"
