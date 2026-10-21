@@ -37,6 +37,7 @@ def check_contract(source: str) -> None:
         "EGL_PLATFORM_SURFACELESS_MESA",
         "EGL_PBUFFER_BIT",
         "eglCreatePbufferSurface",
+        'setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1)',
     )
     forbidden = (
         "gbm_create_device",
@@ -63,7 +64,7 @@ def main() -> int:
         "EGL_PLATFORM_SURFACELESS_MESA", "EGL_PLATFORM_GBM_KHR"
     ).replace("EGL_PBUFFER_BIT", "EGL_WINDOW_BIT").replace(
         "eglCreatePbufferSurface", "eglCreateWindowSurface"
-    )
+    ).replace('setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);', "")
     try:
         check_contract(old_source)
     except AssertionError:
