@@ -17,6 +17,7 @@ SF_V3_CONTROLLER=04020000
 SF_V3_SYS_CLASS_BLOCK="${SF_V3_SYS_CLASS_BLOCK:-/sys/class/block}"
 SF_V3_DEV_ROOT="${SF_V3_DEV_ROOT:-/dev}"
 SF_V3_MARKER="${SF_V3_MARKER:-/etc/pocketforge-selfflash-v3}"
+SF_V3_UPTIME="${SF_V3_UPTIME:-/proc/uptime}"
 SF_V3_EXPECTED_CONTRACT_SHA256="${SF_V3_EXPECTED_CONTRACT_SHA256:-@SELF_FLASH_V3_CONTRACT_SHA256@}"
 
 sf_v3_sha() {
@@ -300,6 +301,110 @@ sf_v3_validate_ready_receipt() {
         [ "$(sf_v3_get_line "$sf_v3_receipt" "$sf_v3_line")" = unknown ] || return 1
         sf_v3_line=$((sf_v3_line + 1))
     done
+}
+
+sf_v3_now_ms() {
+    sf_v3_milliseconds="$(awk '
+        NR == 1 {
+            split($1, value, ".")
+            fraction = value[2] "000"
+            printf "%s%s\n", value[1], substr(fraction, 1, 3)
+            exit
+        }
+    ' "$SF_V3_UPTIME" 2>/dev/null)"
+    case "$sf_v3_milliseconds" in
+        ''|*[!0-9]*) printf '%s\n' unknown ;;
+        *) printf '%s\n' "$sf_v3_milliseconds" ;;
+    esac
+}
+
+sf_v3_receipt_defaults() {
+    SF_V3_XZ_RESULT=not-run
+    SF_V3_RAW_STREAM_SHA256=not-run
+    SF_V3_RAW_STREAM_BYTES=unknown
+    SF_V3_RAW_STREAM_HASH_MATCH=not-run
+    SF_V3_RAW_STREAM_COUNT_MATCH=not-run
+    SF_V3_WRITE_METHOD=not-run
+    SF_V3_WRITE_RESULT=not-run
+    SF_V3_FULL_DEVICE_READBACK=not-performed
+    SF_V3_SEED_RESULT=not-run
+    SF_V3_STAMP_RESULT=not-run
+    SF_V3_INITRD_START_MS=unknown
+    SF_V3_WRITE_START_MS=unknown
+    SF_V3_WRITE_END_MS=unknown
+    SF_V3_SEED_END_MS=unknown
+    SF_V3_STAMP_END_MS=unknown
+}
+
+sf_v3_write_receipt() {
+    sf_v3_state="$1"
+    sf_v3_failure_phase="$2"
+    sf_v3_failure_reason="$3"
+    case "$sf_v3_state" in started|failed|pass) ;; *) return 1 ;; esac
+    case "$sf_v3_failure_phase" in
+        none|eligibility|arm|xz|raw-count|raw-hash|write|seed|stamp|receipt) ;;
+        *) return 1 ;;
+    esac
+    [ "${#sf_v3_failure_reason}" -le 64 ] || return 1
+    case "$sf_v3_failure_reason" in ''|*[!a-z0-9-]*) return 1 ;; esac
+    if [ "$sf_v3_state" = pass ]; then
+        [ "$sf_v3_failure_phase:$sf_v3_failure_reason" = none:none ] || return 1
+    fi
+
+    sf_v3_receipt_written_ms="$(sf_v3_now_ms)"
+    sf_v3_receipt_prefix="$SF_V3_WORK/receipt-write.prefix"
+    sf_v3_receipt_record="$SF_V3_WORK/receipt-write.record"
+    sf_v3_receipt_slot="$SF_V3_WORK/receipt-write.slot"
+    sf_v3_receipt_readback="$SF_V3_WORK/receipt-write.readback"
+    {
+        printf 'Schema=pocketforge.self-flash-receipt/v3\n'
+        printf 'State=%s\n' "$sf_v3_state"
+        printf 'Generation=%s\n' "$SF_V3_GENERATION"
+        printf 'TargetDescriptorSHA256=%s\n' "$SF_V3_TARGET_DESCRIPTOR_SHA256"
+        printf 'TargetRawSHA256=%s\n' "$SF_V3_TARGET_RAW_SHA256"
+        printf 'TargetRawBytes=%s\n' "$SF_V3_TARGET_RAW_BYTES"
+        printf 'CompressedExpectedSHA256=%s\n' "$SF_V3_COMPRESSED_SHA256"
+        printf 'CompressedExpectedBytes=%s\n' "$SF_V3_COMPRESSED_BYTES"
+        printf 'CompressedVerifiedHost=matt-laptop\n'
+        printf 'CompressedHostVerification=sha256-and-byte-count-before-arm\n'
+        printf 'DUTCompressedHash=not-performed\n'
+        printf 'XzIntegrity=%s\n' "$SF_V3_XZ_RESULT"
+        printf 'RawStreamSHA256=%s\n' "$SF_V3_RAW_STREAM_SHA256"
+        printf 'RawStreamBytes=%s\n' "$SF_V3_RAW_STREAM_BYTES"
+        printf 'RawStreamHashMatch=%s\n' "$SF_V3_RAW_STREAM_HASH_MATCH"
+        printf 'RawStreamCountMatch=%s\n' "$SF_V3_RAW_STREAM_COUNT_MATCH"
+        printf 'WriteMethod=%s\n' "$SF_V3_WRITE_METHOD"
+        printf 'WriteResult=%s\n' "$SF_V3_WRITE_RESULT"
+        printf 'FullDeviceReadback=%s\n' "$SF_V3_FULL_DEVICE_READBACK"
+        printf 'SeedResult=%s\n' "$SF_V3_SEED_RESULT"
+        printf 'StampResult=%s\n' "$SF_V3_STAMP_RESULT"
+        printf 'FailurePhase=%s\n' "$sf_v3_failure_phase"
+        printf 'FailureReason=%s\n' "$sf_v3_failure_reason"
+        printf 'InitrdStartMonotonicMs=%s\n' "$SF_V3_INITRD_START_MS"
+        printf 'WriteStartMonotonicMs=%s\n' "$SF_V3_WRITE_START_MS"
+        printf 'WriteEndMonotonicMs=%s\n' "$SF_V3_WRITE_END_MS"
+        printf 'SeedEndMonotonicMs=%s\n' "$SF_V3_SEED_END_MS"
+        printf 'StampEndMonotonicMs=%s\n' "$SF_V3_STAMP_END_MS"
+        printf 'ReceiptWrittenMonotonicMs=%s\n' "$sf_v3_receipt_written_ms"
+    } >"$sf_v3_receipt_prefix" || return 1
+    SF_V3_RECEIPT_RECORD_SHA256="$(sha256sum "$sf_v3_receipt_prefix" \
+        | awk '{print $1}')"
+    {
+        cat "$sf_v3_receipt_prefix"
+        printf 'ReceiptRecordSHA256=%s\n\n' "$SF_V3_RECEIPT_RECORD_SHA256"
+    } >"$sf_v3_receipt_record" || return 1
+    [ "$(stat -c %s "$sf_v3_receipt_record" 2>/dev/null)" -lt "$SF_V3_SLOT_BYTES" ] \
+        || return 1
+    dd if=/dev/zero of="$sf_v3_receipt_slot" bs="$SF_V3_SLOT_BYTES" count=1 \
+        status=none || return 1
+    dd if="$sf_v3_receipt_record" of="$sf_v3_receipt_slot" conv=notrunc \
+        status=none || return 1
+    dd if="$sf_v3_receipt_slot" of="$SF_V3_SD" bs="$SF_V3_TRANSFER_BYTES" \
+        seek="$SF_V3_RECEIPT_OFFSET" count="$SF_V3_SLOT_BYTES" \
+        iflag=count_bytes,fullblock oflag=seek_bytes conv=notrunc,fsync status=none \
+        || return 1
+    sf_v3_read_slot "$SF_V3_RECEIPT_OFFSET" "$sf_v3_receipt_readback" || return 1
+    cmp -s "$sf_v3_receipt_slot" "$sf_v3_receipt_readback" || return 1
 }
 
 sf_v3_load_armed_transaction() {

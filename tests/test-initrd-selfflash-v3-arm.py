@@ -289,8 +289,8 @@ class InitrdArmTests(unittest.TestCase):
         self.assertIn(b"WriteStartMonotonicMs=12345\n", record)
         self.assertTrue(record.endswith(b"\n\n"))
         lines = record.decode("ascii").splitlines()
-        stored = lines[-1].split("=", 1)[1]
-        prefix = "\n".join(lines[:-1]).encode("ascii") + b"\n"
+        stored = lines[-2].split("=", 1)[1]
+        prefix = "\n".join(lines[:-2]).encode("ascii") + b"\n"
         self.assertEqual(stored, hashlib.sha256(prefix).hexdigest())
 
     def test_invalid_receipt_state_cannot_mutate_slot(self) -> None:
