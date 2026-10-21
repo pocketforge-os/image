@@ -1519,10 +1519,33 @@ if [ -f "${VOLUMED_BIN}" ]; then
     install -D -m 0755 "${VOLUMED_BIN}" "${ROOTFS}/usr/bin/pf-volumed"
     install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-volumed.service" \
         "${ROOTFS}/etc/systemd/system/pf-volumed.service"
+    # pf-volumed learns the physical route from the codec's headphone-jack input switch, which
+    # only kernel-sunxi-7.x exposes (kernel#42); this rule gives that one node to the audio group
+    # (the unit's group) instead of widening to `input`.
+    if [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ]; then
+        install -D -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/73-pocketforge-headphone-jack.rules" \
+            "${ROOTFS}/etc/udev/rules.d/73-pocketforge-headphone-jack.rules"
+    fi
     install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
     ln -sf /etc/systemd/system/pf-volumed.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-volumed.service"
     echo "[customize] pf-volumed installed and enabled as the per-output volume applier"
+fi
+
+# Hardware volume keys: always-on (the input broker only runs inside an app session), so the
+# keys work under the shell, the first-run sheet and menus too (tsp-ihne1.63).
+VOLUME_KEYS_BIN="${RUNTIME_DIR}/bin/pf-volume-keys"
+if [ -f "${VOLUME_KEYS_BIN}" ]; then
+    [ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-volume-keys staged without pf-prefsd" >&2; exit 1; }
+    volume_keys_em="$(od -An -tx1 -j18 -N2 "${VOLUME_KEYS_BIN}" | tr -d ' ')"
+    [ "${volume_keys_em}" = "b700" ] || { echo "FATAL: ${VOLUME_KEYS_BIN} is not an aarch64 ELF (e_machine=${volume_keys_em}, want b700)" >&2; exit 1; }
+    install -D -m 0755 "${VOLUME_KEYS_BIN}" "${ROOTFS}/usr/bin/pf-volume-keys"
+    install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-volume-keys.service" \
+        "${ROOTFS}/etc/systemd/system/pf-volume-keys.service"
+    install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+    ln -sf /etc/systemd/system/pf-volume-keys.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-volume-keys.service"
+    echo "[customize] pf-volume-keys installed and enabled as the hardware volume-key handler"
 fi
 
 # --- authenticated power action authority (tsp-mc9m.60.29.31) -------------
