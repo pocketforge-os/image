@@ -81,4 +81,5 @@ jobs:
           tests/test-app-runtime-root.sh
           tests/test-steamlink-app-policy.sh "$PF_APP_POLICY_RENDER"
           tests/test-default-app-platform.sh
-          tests/test-runtime-path-producers.sh
+          PF_RUNTIME_UNITS_DIR="$GITHUB_WORKSPACE/runtime-pair/systemd" \
+            tests/test-runtime-path-producers.sh
