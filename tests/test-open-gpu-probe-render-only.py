@@ -57,6 +57,21 @@ def check_contract(source: str) -> None:
 def main() -> int:
     source = SOURCE.read_text(encoding="utf-8")
     check_contract(source)
+    diagnostics = (
+        "venus_vulkan_features=",
+        "egl_config=",
+        "zink_gles_version=",
+        "EGL_CONFIG_ID",
+        "EGL_RENDERABLE_TYPE",
+        "EGL_SURFACE_TYPE",
+        "EGL_CONTEXT_MINOR_VERSION_KHR, 1",
+    )
+    missing_diagnostics = [token for token in diagnostics if token not in source]
+    if missing_diagnostics:
+        raise AssertionError(
+            "GLES failure diagnostics are incomplete: "
+            f"missing={missing_diagnostics}"
+        )
 
     # The old GBM/window implementation is an explicit negative control.  It
     # must remain rejected if this test is later weakened accidentally.
