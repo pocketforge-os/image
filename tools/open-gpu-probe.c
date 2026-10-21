@@ -990,6 +990,13 @@ static int probe_gles32_zink_readback(void)
     if (setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1) != 0)
         return virtual_fail("cannot pin the zink loader override");
     /*
+     * Mesa's Venus Zink path needs its private RGB32 texture-buffer
+     * lowering to expose the GLES 3.2 texture-buffer extension.  Keep this
+     * scoped to the render-only probe; it is not a global image setting.
+     */
+    if (setenv("ZINK_DEBUG", "tbo_rgb32", 1) != 0)
+        return virtual_fail("cannot enable Zink RGB32 texture-buffer lowering");
+    /*
      * The render-only Venus device has no DRM identity that Mesa's Zink
      * surfaceless DRM path can match to a Vulkan physical device.  Force
      * Mesa's software surfaceless path, which passes fd=-1 to Zink and lets
