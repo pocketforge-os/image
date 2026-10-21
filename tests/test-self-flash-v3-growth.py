@@ -159,9 +159,7 @@ class InstalledPolicyTests(unittest.TestCase):
         self.assertEqual(cloud, "growpart:\n  mode: off\nresize_rootfs: false\n")
 
         unit = UNIT.read_text(encoding="utf-8")
-        self.assertNotIn("Before=cloud-init-local.service", unit)
-        self.assertNotIn("Before=cloud-init.service", unit)
-        self.assertNotIn("Before=ssh.service", unit)
+        self.assertIn("Before=cloud-init-local.service cloud-init.service ssh.service", unit)
         self.assertIn("ExecStart=/usr/lib/pocketforge/self-flash-v3-grow", unit)
         self.assertIn("TimeoutStartSec=90s", unit)
         self.assertIn("ConditionPathExists=/etc/pocketforge-selfflash-v3", unit)
@@ -353,6 +351,51 @@ class InstalledPolicyTests(unittest.TestCase):
             ):
                 self.assertEqual(sf.main(), 2)
             grow.assert_not_called()
+
+    def test_pass_directory_sync_then_degraded_write_failure_leaves_no_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / "self-flash-v3-growth"
+            receipt_path.write_text('{"State":"pass","old":true}\n', encoding="ascii")
+            temporary = receipt_path.with_name(receipt_path.name + ".new")
+            real_open = sf.os.open
+            real_fsync = sf.os.fsync
+            temporary_opens = 0
+            fsync_calls = 0
+
+            def fail_second_temporary_open(path, flags, *args, **kwargs):
+                nonlocal temporary_opens
+                if Path(path) == temporary:
+                    temporary_opens += 1
+                    if temporary_opens == 2:
+                        raise OSError("injected degraded temp creation failure")
+                return real_open(path, flags, *args, **kwargs)
+
+            def fail_pass_directory_sync(descriptor):
+                nonlocal fsync_calls
+                fsync_calls += 1
+                # initial invalidation, pass temp file, then pass directory
+                if fsync_calls == 3:
+                    raise OSError("injected pass directory sync failure")
+                return real_fsync(descriptor)
+
+            def replace_pass_then_fail_sync():
+                receipt = sf.build_degraded_receipt("fixture")
+                receipt["State"] = "pass"
+                sf._write_receipt(receipt)
+                return receipt
+
+            with (
+                mock.patch.object(sf, "RECEIPT_PATH", receipt_path),
+                mock.patch.object(sf, "grow", side_effect=replace_pass_then_fail_sync),
+                mock.patch.object(sf.os, "geteuid", return_value=0),
+                mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
+                mock.patch.object(sf.os, "open", fail_second_temporary_open),
+                mock.patch.object(sf.os, "fsync", fail_pass_directory_sync),
+            ):
+                self.assertEqual(sf.main(), 0)
+
+            self.assertEqual(temporary_opens, 2)
+            self.assertFalse(receipt_path.exists())
 
 
 if __name__ == "__main__":
