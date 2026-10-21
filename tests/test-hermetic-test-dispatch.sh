@@ -12,8 +12,8 @@ grep -Fq 'case "${t}" in' "${workflow}" || {
     echo 'FAIL: hermetic test loop does not dispatch by file type' >&2
     exit 1
 }
-grep -Fq '*.py) runner=(python3 "${t}") ;;' "${workflow}" || {
-    echo 'FAIL: hermetic test loop does not run Python rows with python3' >&2
+grep -Fq '*.py) runner=(env PYTHONDONTWRITEBYTECODE=1 python3 "${t}") ;;' "${workflow}" || {
+    echo 'FAIL: hermetic Python rows can leave bytecode in the source overlay' >&2
     exit 1
 }
 grep -Fq '*.sh) runner=(bash "${t}") ;;' "${workflow}" || {
