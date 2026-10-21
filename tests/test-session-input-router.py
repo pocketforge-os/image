@@ -45,6 +45,7 @@ assert "pocketforge-gamescope-session.target" in words(broker, "Unit", "PartOf")
 assert words(broker, "Unit", "StopWhenUnneeded") == []
 assert "pf-input-broker.service" not in words(app, "Unit", "BindsTo")
 assert "pf-input-broker.service" not in words(app, "Unit", "After")
+assert words(app, "Unit", "PartOf") == ["pocketforge-gamescope-session.target"]
 
 # The physical pad has one holder throughout the session. Gamescope only receives the
 # broker's private virtual devices; the selected shell can start only after broker teardown.

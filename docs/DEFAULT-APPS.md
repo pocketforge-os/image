@@ -345,6 +345,7 @@ The image-owned template is:
 [Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-gamescope-session.target
+PartOf=pocketforge-gamescope-session.target
 BindsTo=pf-prefsd.service
 After=local-fs.target pocketforge-gamescope-session.target pf-prefsd.service
 Conflicts=shutdown.target
@@ -813,7 +814,7 @@ How it is staged and checked:
 `/dev/input/pf-gamepad` (`TRIMUI Player1`). While the shell owns the panel, `pf-shell`
 EVIOCGRABs it.
 
-While a default app owns the panel, `pf-input-broker` EVIOCGRABs it instead:
+While a Gamescope session owns the panel, `pf-input-broker` EVIOCGRABs it instead:
 
 - It re-emits a descriptor-canonical stream on its own uinput device
   `PocketForge Input (a133)`. The `pf-gamepad` udev rule does not match that device.
@@ -837,15 +838,17 @@ While a default app owns the panel, `pf-input-broker` EVIOCGRABs it instead:
     - `DT_NEEDED` stays within libc6/libgcc-s1;
     - every frozen v1 ABI symbol and every symbol `ps-platform` resolves is defined.
 
-**Lifetime.** The broker is scoped to an app session:
+**Lifetime.** The broker is scoped to the complete Gamescope session:
 
 - The runtime's `pf-input-broker.service` ships verbatim and is **never enabled**. Its
   `WantedBy=multi-user.target` would grab the pad at boot, under the shell.
-- `pf-app@.service` has `BindsTo=`/`After=pf-input-broker.service`, and the broker has
-  `StopWhenUnneeded=yes`, so it lives exactly as long as one `pf-app@<id>` does. `BindsTo=`
-  also works in the other direction: if the broker dies, the app is stopped.
-- In an app session the broker fails once and is never restarted (`Restart=no`); see
-  [Updated units](#updated-units).
+- `pocketforge-gamescope-session.target` requires and orders the broker. The broker has
+  `PartOf=` that target, so one broker survives app churn and stops only when the compositor
+  session ends. Apps neither start nor stop it.
+- `pf-app@.service` has `PartOf=pocketforge-gamescope-session.target`, so terminal session
+  failure still stops the app even though there is deliberately no app-to-broker `BindsTo=`.
+- A failed broker restarts directly once. A second failure inside 30 seconds exhausts the
+  two-start budget and activates the reusable shell fallback; see [Updated units](#updated-units).
 - The broker is also the protected Menu intake; see the next section.
 
 **Grab timeline.** Each step is an ordered systemd job. At no instant are the shell and the
@@ -857,15 +860,16 @@ launch: the authority runs `systemctl start pf-app@<id>.service` (one transactio
   1. pf-shell-selected stop     Conflicts= from the target drop-in and from the broker
                                 drop-in; pf-shell exits and the kernel drops its EVIOCGRAB
   2. Gamescope session start    compositor publishes the canonical Wayland session
-  3. pf-input-broker start      After=session target; EVIOCGRAB pf-gamepad, create the re-emit
+  3. pf-input-broker start      Required by the session target; EVIOCGRAB pf-gamepad, create the re-emit
                                 device, bind the acquire socket, then READY=1 (Type=notify)
-  4. pf-app@<id> start          After=broker; the app acquires the re-emit fd
-return: Menu (below), the app exits by itself, or the broker fails (BindsTo= stops the app)
-  5. pf-app@<id> inactive       StopWhenUnneeded= queues a stop for the broker
-  6. pf-input-broker stop       ordered behind the session start (it is After= the target);
-                                its exit drops the grab and removes the re-emit device
-  7. session lifetime           an independently opted-in target remains active; if this
-                                transaction was its only pin, its one-shot fallback owns exit
+  4. pf-app@<id> start          After=session target; the app acquires the re-emit fd
+app churn:
+  5. pf-app@<id> inactive       a resident session keeps the same broker PID and grab
+  6. pf-app@<next> start        the next app uses the already-active session router
+return: Menu (below), the last nonresident app exits, or the broker fails twice
+  7. session target stop        PartOf= stops the broker and any still-running app
+  8. pf-input-broker stop       its exit drops the grab and removes the re-emit devices
+  9. shell start                ordered after broker teardown; it reacquires the physical pad
 ```
 
 The real-systemd harness checks this ordering in every session with two independent
@@ -989,29 +993,19 @@ would not keep the app active beside a skipped broker either. The pre-start comm
 failure, so the app is never invoked (harness
 `broker_start_failure`).
 
-`Restart=no`, `OnFailure=pocketforge-gamescope-fallback.service`, and
-`Wants=pocketforge-gamescope-session.target` retain the
-`tsp-f3fm.202.1.6` fail-once semantics for a
-broker that starts and then exits. On the .215 bench, the broker refused its source and exited 1
-right after start:
+`Restart=on-failure`, `RestartMode=direct`, and `StartLimitBurst=2` implement the bounded
+session-router recovery policy. The first failure restarts immediately without firing
+`OnFailure=`. If that replacement also fails inside the 30-second interval, the start limit
+makes the failure terminal and activates the fallback. This permits one transient recovery
+without the unbounded shell/broker ping-pong seen in the earlier per-app design.
 
-- **`Restart=no`.** The runtime unit's `Restart=on-failure`/`RestartSec=2` restarted it every
-  2 s (NRestarts 19 to 66). Each start re-applied `Conflicts=pf-shell-selected.service`, and the
-  launcher stayed down. In an app session the broker must fail once:
-  - before READY, the start job fails and so does the dependent app job;
-  - after READY, `pf-app@`'s `BindsTo=` stops the app.
-- **`Wants=`.** systemd re-checks a `StopWhenUnneeded=` unit only when a unit that pulls it in
-  changes state. A broker that exits before READY fails the app's start job, but the app unit
-  itself never changes state. Without this line, the foreground target stayed active, its
-  `OnSuccess=` never fired, and the authority waited at rung `TargetReleased` with no shell.
-  With `Wants=`, the broker's own failed transition rechecks the compositor
-  target, which stops only when no independent opt-in or app job pins it.
-- **`OnFailure=`.** A failed `/dev/uinput` pre-start can leave the compositor
+`OnFailure=` also covers a failed `/dev/uinput` pre-start, which can leave the compositor
   target active even though the app never became a live pin. The broker never entered active,
   so there is no later broker inactive transition to recheck `StopWhenUnneeded=`. The failure
   unit starts the reusable fallback; its shell start conflicts with and stops the transient
   session target, after which runtime can observe `TargetReleased`. It does not run for a clean
-  broker stop.
+  broker stop. `PartOf=` then stops any app which was already running when the terminal broker
+  failure released the target.
 
 The shell drop-in is `/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf`:
 
@@ -1026,8 +1020,8 @@ After=pf-input-broker.service
 |---|---|---|
 | Broker enabled at boot | It would stop the shell at boot through `Conflicts=` and grab the pad | Image: the installer removes and then refuses any `*.wants/pf-input-broker.service`. Harness: `is-enabled` is `disabled` and the broker is inactive at boot |
 | Broker cannot start (no `/dev/uinput`) | The pre-start check fails the broker job, the app job fails as a dependency, and broker `OnFailure=` runs the reusable shell fallback. Starting the shell conflicts with and stops the orphaned transient session target; the authority records `Crash` (`systemd_start_failed`) and the panel returns | Harness `broker_start_failure`: no app invocation, no broker grab, broker result `exit-code`, target inactive, owner re-activated, `Crash` receipt |
-| Broker exits before READY (bad source or descriptor; the .215 trap) | It fails once (`Restart=no`) and the app is never invoked. Broker `OnFailure=` starts the fallback, which releases the target and restores the shell; it stays up. The receipt is `Crash` (`systemd_start_failed`). Before the fix, the runtime unit's `Restart=on-failure` restarted the broker every 2 s, and each start stopped the shell again through `Conflicts=` | Harness `broker_exit_before_ready`: NRestarts 0, one start attempt, shell back within 10 s, one shell PID and zero broker activity over 30 s, no grab conflicts. Negative control `control_restart_on_failure`: the same broker with `Restart=on-failure` restored must restart |
-| Broker exits mid-session, after READY | It fails once (`Restart=no`). `BindsTo=` stops the app (SIGTERM, `Result=success`), the target is released, and the shell returns. The authority treats it as the app exiting, so the receipt is `Returned`. Under `Requires=` alone, the app kept running with no broker, no shell and no Menu intake | Harness `broker_exit_mid_session`, with grab order checked; B6 `kill -9` fault case on the target systemd |
+| Broker exits before READY (bad source or descriptor) | It restarts directly once. The second failed start reaches the limit, the app is never invoked, and `OnFailure=` releases the target and restores the shell. The receipt is `Crash` (`systemd_start_failed`) | Harness `broker_exit_before_ready`: NRestarts 1, two start attempts, stable shell for 30 s, no grab conflicts. Negative control removes the start limit and observes repeated restarts |
+| Broker exits mid-session, after READY | It restarts directly once. If the replacement also fails, `OnFailure=` releases the target, `PartOf=` stops the app, and the shell returns without a process continuing beside a dead router | Harness `broker_exit_mid_session`: exactly one restart, app and target stopped, shell restored, one terminal receipt, grab order checked |
 | App ignores SIGTERM | Authority escalates after 1500 ms; SIGKILL is bounded by `TimeoutStopSec=2s`; receipt `ForcedClose` | Harness `r4_sigkill`, plus the direct `systemctl stop` exit probe |
 | App SIGSTOPped, then Menu | systemd sends SIGCONT with SIGTERM, then SIGKILL at 2 s; the receipt is as above | B6 fault case |
 | Shell and broker hold the pad at once | Prevented by `Conflicts=` plus ordering | Harness grab model plus timestamp checkpoints in every session |

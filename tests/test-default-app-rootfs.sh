@@ -17,6 +17,7 @@ from pathlib import Path
 expected = """[Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-gamescope-session.target
+PartOf=pocketforge-gamescope-session.target
 BindsTo=pf-prefsd.service
 After=local-fs.target pocketforge-gamescope-session.target pf-prefsd.service
 Conflicts=shutdown.target
@@ -148,6 +149,10 @@ cmp "${overlay}/pf-input-broker.service.d/10-app-session.conf" \
     "${rootfs}/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 cmp "${overlay}/pf-shell-selected.service.d/10-input-broker.conf" \
     "${rootfs}/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
+cmp "${root}/rootfs-overlay/usr/lib/sysusers.d/pf-input.conf" \
+    "${rootfs}/usr/lib/sysusers.d/pf-input.conf"
+cmp "${root}/rootfs-overlay/usr/lib/tmpfiles.d/pf-input.conf" \
+    "${rootfs}/usr/lib/tmpfiles.d/pf-input.conf"
 cmp "${runtime}/lib/libpocketforge.so.1" \
     "${rootfs}/usr/lib/aarch64-linux-gnu/libpocketforge.so.1"
 cmp "${runtime}/share/devices/a133/capabilities.toml" \

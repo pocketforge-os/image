@@ -81,6 +81,7 @@ gamescope = directives(GAMESCOPE_UNIT.read_text())
 assert values(app, "Unit", "BindsTo") == ["pf-prefsd.service"]
 assert "pf-input-broker.service" not in values(app, "Unit", "Requires")
 assert "pf-input-broker.service" not in values(app, "Unit", "After")
+assert values(app, "Unit", "PartOf") == ["pocketforge-gamescope-session.target"]
 assert "pf-prefsd.service" in values(app, "Unit", "After"), "pf-app@ must order After prefsd"
 assert values(app, "Unit", "Requires") == ["pocketforge-gamescope-session.target"]
 assert "pocketforge-foreground.target" not in values(app, "Unit", "After")
