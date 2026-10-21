@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / "boards/tsp/initrd/self-flash-v3.sh"
 INIT = ROOT / "boards/tsp/initrd/init"
 STAGER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage"
+GROWER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow"
 CONTRACT = ROOT / "docs/SELF-FLASH-V3.md"
 
 loader = SourceFileLoader("self_flash_v3_stage", str(STAGER))
@@ -27,6 +28,12 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 assert spec and spec.loader
 stage = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(stage)
+
+grow_loader = SourceFileLoader("self_flash_v3_grow_for_arm_test", str(GROWER))
+grow_spec = importlib.util.spec_from_loader(grow_loader.name, grow_loader)
+assert grow_spec and grow_spec.loader
+grow = importlib.util.module_from_spec(grow_spec)
+grow_spec.loader.exec_module(grow)
 
 
 class ArmFixture:
@@ -379,6 +386,32 @@ class InitrdArmTests(unittest.TestCase):
 
         gate = INIT.read_text(encoding="utf-8")
         self.assertIn("uninitialized)", gate)
+
+    def test_fresh_layout_rewrite_clears_every_stale_receipt_before_next_boot(self) -> None:
+        size_file = self.fixture.sys / "card0p5/size"
+        for state_name in ("ready", "started", "failed", "pass"):
+            with self.subTest(state=state_name):
+                self.fixture.write_records(state_name=state_name)
+                size_file.write_text("2611200\n", encoding="ascii")
+                fresh = self.fixture.run_gate()
+                self.assertNotEqual(fresh.returncode, 0, fresh.stdout + fresh.stderr)
+                self.assertIn("load=uninitialized\n", fresh.stderr)
+
+                with self.fixture.device.open("r+b", buffering=0) as card:
+                    disposition = grow.initialize_control_slots(
+                        card,
+                        arm_offset=self.fixture.layout["arm_offset"],
+                        receipt_offset=self.fixture.layout["receipt_offset"],
+                        sync=lambda: None,
+                    )
+                self.assertEqual(disposition, "zeroed-and-read-back")
+
+                size_file.write_text(f"{self.fixture.root_sectors}\n", encoding="ascii")
+                next_boot = self.fixture.run_gate()
+                self.assertNotEqual(
+                    next_boot.returncode, 0, next_boot.stdout + next_boot.stderr
+                )
+                self.assertIn("load=absent\n", next_boot.stderr)
 
     def test_pid1_gate_is_fail_closed_and_watchdog_ordered(self) -> None:
         source = INIT.read_text(encoding="utf-8")
