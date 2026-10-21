@@ -52,6 +52,12 @@ assert "pf-input-broker.service" in words(gamescope, "Unit", "After")
 assert words(shell, "Unit", "After") == ["pf-input-broker.service"]
 assert "pf-shell-selected.service" in words(broker, "Unit", "Conflicts")
 
+# Gamescope registers on the frozen compositor endpoint. The router derives its session uid from
+# the configured account and authenticates the exact gamescope unit plus role group at accept.
+command = words(broker, "Service", "ExecStart")
+assert command[command.index("--compositor-sock") + 1] == "/run/pocketforge/input/compositor.sock"
+assert command[command.index("--session-user") + 1] == "gamer"
+
 # Restart immediately once. RestartMode=direct suppresses OnFailure during that retry;
 # StartLimitBurst=2 makes the second failure terminal and activates the shell fallback.
 assert words(broker, "Service", "Restart") == ["on-failure"]
