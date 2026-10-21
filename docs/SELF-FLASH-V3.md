@@ -226,14 +226,17 @@ slots were zeroed and read back after the filesystem reached its capped size;
 `ControlSlotsInitialized=consumed-completed-handoff` means a completely bound arm,
 `pass` receipt and FAT stamp were validated before zeroing. Every other combination
 records `zeroed-and-read-back`; neither value describes a candidate-range write.
-If validation or growth refuses, the helper instead atomically records
+Before growth begins, the helper durably removes any receipt from an earlier
+invocation. If validation or growth refuses, it instead atomically records
 `pocketforge.self-flash-growth-degraded/v3`, `State=degraded`, and a bounded
-`FailureReason`. The unit is ordered before cloud-init and before SSH admission
-used by kit windows, but is only wanted by `multi-user.target`; it is not a
-requirement of cloud-init, networking, SSH, or login. Its command failure is
-ignored as a final safety net, so a failure degrades OTA eligibility without
-blocking login. A degraded receipt lacks the success fields and therefore can
-never pass the eligibility probe.
+`FailureReason`. Failure to write that replacement leaves the authoritative
+receipt absent, so an old success cannot remain eligible. Failure to invalidate
+the old receipt returns nonzero and remains visible as a failed unit. The unit
+is a bounded, best-effort multi-user job and is not ordered ahead of cloud-init,
+networking, SSH, or login; `TimeoutStartSec=90s` bounds slow storage. A known
+growth refusal returns success after invalidation because capped growth is not
+a boot requirement. A degraded receipt lacks the success fields and therefore
+can never pass the eligibility probe.
 Eligibility requires a valid receipt whose measured after-state still matches
 the live geometry; a receipt alone never authorizes a mismatched card.
 

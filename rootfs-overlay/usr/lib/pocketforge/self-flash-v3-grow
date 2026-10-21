@@ -540,6 +540,19 @@ def _write_receipt(receipt: Mapping[str, object]) -> None:
         raise
 
 
+def _invalidate_receipt() -> None:
+    """Remove any prior success before this boot can attempt new growth."""
+    try:
+        RECEIPT_PATH.unlink()
+    except FileNotFoundError:
+        return
+    directory = os.open(RECEIPT_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def grow() -> dict[str, object]:
     stage = _load_stage_helper()
     marker = _read_marker()
@@ -618,6 +631,15 @@ def main() -> int:
     make_argument_parser().parse_args()
     if os.geteuid() != 0:
         print("PF_SELF_FLASH_V3_GROW state=REFUSED reason=not_root", file=sys.stderr)
+        return 2
+    try:
+        _invalidate_receipt()
+    except OSError:
+        print(
+            "PF_SELF_FLASH_V3_GROW state=FAILED "
+            "reason=receipt_invalidation_failed",
+            file=sys.stderr,
+        )
         return 2
     try:
         receipt = grow()
