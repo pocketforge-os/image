@@ -108,8 +108,10 @@ class SelfFlashOrderingTests(unittest.TestCase):
         self.assertIsNone(find_cycle(self.graph(grow)))
 
     def test_old_before_edge_is_a_negative_control(self):
-        old = GROW.read_text(encoding="utf-8") + (
-            "\nBefore=cloud-init-local.service cloud-init.service ssh.service\n"
+        old = GROW.read_text(encoding="utf-8").replace(
+            "[Unit]\n",
+            "[Unit]\nBefore=cloud-init-local.service cloud-init.service ssh.service\n",
+            1,
         )
         cycle = find_cycle(self.graph(old))
         self.assertIsNotNone(cycle)
