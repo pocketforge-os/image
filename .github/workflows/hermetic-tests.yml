@@ -130,6 +130,7 @@ jobs:
             tests/test-initrd-selfflash-watchdog.sh
             tests/test-initrd-selfflash-v2.sh
             tests/test-initrd-selfflash-v3.sh
+            tests/test-initrd-selfflash-v3-arm.py
             tests/test-self-flash-v3-growth.py
             tests/test-self-flash-v3-stage.py
             tests/test-initrd-volatile-root.sh
