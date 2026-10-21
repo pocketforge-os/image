@@ -65,7 +65,7 @@ dockerfile = (ROOT / "build/Dockerfile.pf").read_text()
 runtime_pins = re.findall(
     r'^\[ "\$\{PF_RUNTIME_SHA\}" = "([0-9a-f]{40})" \]', dockerfile, flags=re.MULTILINE
 )
-assert runtime_pins == ["1a6871707b5f9c1ec5fdfbd438b75c8b775ded70"], runtime_pins
+assert runtime_pins == ["611fb74f19959b3b8cfe4044d1ae19082bc95f1d"], runtime_pins
 
 # The image's systemd predates RestartMode=direct. The supervisor owns exactly one retry,
 # so successful session churn cannot consume a global systemd start-rate counter.

@@ -25,7 +25,7 @@ gamescope_tmpfiles="${root}/rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-gamesc
 ephemeral_marker=/etc/pocketforge/ephemeral-runner.conf
 run_label_key=org.pocketforge.session-authority-run
 
-runtime_sha=1a6871707b5f9c1ec5fdfbd438b75c8b775ded70
+runtime_sha=611fb74f19959b3b8cfe4044d1ae19082bc95f1d
 runtime_repository=https://github.com/pocketforge-os/runtime.git
 app_unit_sha256=0dd9419bdf68da46ea542b2acbbc574b28b8f9d8d788f210029e90eef73383f0
 # tsp-ihne1.7: the session-wide broker wiring under test. The runtime unit
