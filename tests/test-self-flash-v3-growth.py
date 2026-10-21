@@ -382,7 +382,7 @@ class InstalledPolicyTests(unittest.TestCase):
                     mock.patch.object(sf.os, "fsync", maybe_fail_fsync),
                     mock.patch.object(sf.os, "replace", replace),
                 ):
-                    self.assertEqual(sf.main(), 0)
+                    self.assertEqual(sf.main(), 2)
 
                 self.assertFalse(receipt_path.exists())
                 self.assertNotEqual(
@@ -480,7 +480,7 @@ class InstalledPolicyTests(unittest.TestCase):
                 mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
                 mock.patch.object(sf.os, "replace", side_effect=OSError("injected rename failure")),
             ):
-                self.assertEqual(sf.main(), 0)
+                self.assertEqual(sf.main(), 2)
             self.assertFalse(
                 receipt_is_eligible(
                     receipt_path,
@@ -529,7 +529,7 @@ class InstalledPolicyTests(unittest.TestCase):
                 mock.patch.object(sf.os, "open", fail_second_temporary_open),
                 mock.patch.object(sf.os, "fsync", fail_pass_directory_sync),
             ):
-                self.assertEqual(sf.main(), 0)
+                self.assertEqual(sf.main(), 2)
 
             self.assertEqual(temporary_opens, 2)
             self.assertFalse(receipt_path.exists())

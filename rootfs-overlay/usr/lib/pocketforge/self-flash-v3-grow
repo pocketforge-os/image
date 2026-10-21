@@ -137,6 +137,14 @@ def _positive(name: str, value: object) -> int:
     return value
 
 
+def _valid_invocation_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 32
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def _tail_start(card_bytes: int) -> int:
     card_bytes = _positive("card_bytes", card_bytes)
     if card_bytes % LOGICAL_SECTOR_BYTES or card_bytes <= RESERVE_BYTES:
@@ -393,6 +401,7 @@ def _read_success_stamp(path: Path = STAMP_PATH) -> dict[str, str] | None:
 def build_growth_receipt(
     *,
     boot_id: str,
+    invocation_id: str,
     contract_sha256: str,
     card_serial: str,
     card_bytes: int,
@@ -407,6 +416,7 @@ def build_growth_receipt(
     return {
         "Schema": "pocketforge.self-flash-growth/v3",
         "BootID": boot_id,
+        "InvocationID": invocation_id,
         "ContractSHA256": contract_sha256,
         "CardController": "04020000",
         "CardType": "SD",
@@ -586,6 +596,9 @@ def _invalidate_receipt() -> None:
 
 def grow() -> dict[str, object]:
     boot_id = BOOT_ID_PATH.read_text(encoding="ascii").strip()
+    invocation_id = os.environ.get("INVOCATION_ID", "")
+    if not _valid_invocation_id(invocation_id):
+        raise Refusal("invocation_id_invalid")
     stage = _load_stage_helper()
     marker = _read_marker()
     selected = stage.select_sd(stage._discover_cards(), root_major_minor=stage._root_major_minor())
@@ -641,6 +654,7 @@ def grow() -> dict[str, object]:
 
     receipt = build_growth_receipt(
         boot_id=boot_id,
+        invocation_id=invocation_id,
         contract_sha256=marker["ContractSHA256"],
         card_serial=str(selected["serial"]),
         card_bytes=int(selected["bytes"]),
@@ -703,9 +717,7 @@ def main() -> int:
                 f"PF_SELF_FLASH_V3_GROW state=DEGRADED reason={reason} receipt=recorded",
                 file=sys.stderr,
             )
-        return 0
-    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-    print("PF_SELF_FLASH_V3_GROW state=PASS")
+        return 2
     return 0
 
 

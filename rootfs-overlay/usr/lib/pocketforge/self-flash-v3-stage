@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 from typing import BinaryIO, Iterable, Mapping, Sequence
 
@@ -35,6 +36,8 @@ SYS_BLOCK = Path("/sys/class/block")
 DEV_ROOT = Path("/dev")
 GROWTH_RECEIPT_PATH = Path("/var/lib/pocketforge/self-flash-v3-growth")
 BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
+SYSTEMCTL_PATH = Path("/usr/bin/systemctl")
+GROWTH_UNIT = "pocketforge-self-flash-v3-grow.service"
 GROWTH_PASS_FIELDS = (
     "GPTRelocation",
     "PartitionGrowth",
@@ -81,14 +84,34 @@ def _valid_boot_id(value: object) -> bool:
     )
 
 
-def validate_growth_receipt(receipt: Mapping[str, object], boot_id: str) -> None:
-    """Accept only positive capped-growth evidence produced by this boot."""
+def _valid_invocation_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 32
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def validate_growth_receipt(
+    receipt: Mapping[str, object],
+    boot_id: str,
+    invocation_id: str,
+    result: str,
+    active_state: str,
+) -> None:
+    """Accept only positive evidence from this boot's successful activation."""
     if not _valid_boot_id(boot_id):
         raise Refusal("boot_id_invalid")
+    if not _valid_invocation_id(invocation_id):
+        raise Refusal("growth_invocation_id_invalid")
+    if result != "success" or active_state not in ("active", "inactive"):
+        raise Refusal("growth_unit_not_successful")
     if receipt.get("Schema") != "pocketforge.self-flash-growth/v3":
         raise Refusal("growth_receipt_schema_invalid")
     if receipt.get("BootID") != boot_id:
         raise Refusal("growth_receipt_boot_mismatch")
+    if receipt.get("InvocationID") != invocation_id:
+        raise Refusal("growth_receipt_invocation_mismatch")
     if any(receipt.get(field) != "pass" for field in GROWTH_PASS_FIELDS[:-1]):
         raise Refusal("growth_receipt_not_pass")
     if receipt.get("ControlSlotsInitialized") not in (
@@ -96,6 +119,41 @@ def validate_growth_receipt(receipt: Mapping[str, object], boot_id: str) -> None
         "consumed-completed-handoff",
     ):
         raise Refusal("growth_receipt_not_pass")
+
+
+def _growth_unit_state() -> tuple[str, str, str]:
+    try:
+        completed = subprocess.run(
+            [
+                str(SYSTEMCTL_PATH),
+                "show",
+                "--property=InvocationID",
+                "--property=Result",
+                "--property=ActiveState",
+                GROWTH_UNIT,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=5,
+            encoding="ascii",
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError) as error:
+        raise Refusal("growth_unit_state_unreadable") from error
+    if completed.returncode != 0 or len(completed.stdout) > 1024:
+        raise Refusal("growth_unit_state_unreadable")
+    fields: dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        if "=" not in line:
+            raise Refusal("growth_unit_state_invalid")
+        key, value = line.split("=", 1)
+        if key in fields or key not in ("InvocationID", "Result", "ActiveState"):
+            raise Refusal("growth_unit_state_invalid")
+        fields[key] = value
+    if set(fields) != {"InvocationID", "Result", "ActiveState"}:
+        raise Refusal("growth_unit_state_invalid")
+    return fields["InvocationID"], fields["Result"], fields["ActiveState"]
 
 
 def _require_current_growth_receipt() -> None:
@@ -106,7 +164,8 @@ def _require_current_growth_receipt() -> None:
         raise Refusal("growth_receipt_unreadable") from error
     if not isinstance(receipt, dict):
         raise Refusal("growth_receipt_invalid")
-    validate_growth_receipt(receipt, boot_id)
+    invocation_id, result, active_state = _growth_unit_state()
+    validate_growth_receipt(receipt, boot_id, invocation_id, result, active_state)
 
 
 def _uint(name: str, value: object, *, nonzero: bool = True) -> int:
