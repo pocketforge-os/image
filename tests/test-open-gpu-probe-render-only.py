@@ -17,8 +17,8 @@ SOURCE = ROOT / "tools/open-gpu-probe.c"
 FUNCTION = "static int probe_gles32_zink_readback(void)"
 
 
-def function_text(source: str) -> str:
-    start = source.index(FUNCTION)
+def block_text(source: str, marker: str) -> str:
+    start = source.index(marker)
     brace = source.index("{", start)
     depth = 0
     for index in range(brace, len(source)):
@@ -29,6 +29,10 @@ def function_text(source: str) -> str:
             if depth == 0:
                 return source[start : index + 1]
     raise AssertionError("Zink probe function has unbalanced braces")
+
+
+def function_text(source: str) -> str:
+    return block_text(source, FUNCTION)
 
 
 def check_contract(source: str) -> None:
@@ -52,12 +56,24 @@ def check_contract(source: str) -> None:
             "render-only Zink EGL contract failed: "
             f"missing={missing} forbidden={present}"
         )
+    if "#define EGL_CONTEXT_MAJOR_VERSION_KHR 0x3098" not in source:
+        raise AssertionError("EGL_CONTEXT_MAJOR_VERSION_KHR fallback is incorrect")
 
-
-def main() -> int:
-    source = SOURCE.read_text(encoding="utf-8")
-    check_contract(source)
     diagnostics = (
+        "print_venus_vulkan_features(icd);",
+        "print_egl_config_diagnostics(display, config);",
+        "print_zink_gles_version(display, config, surface_attributes);",
+    )
+    missing_diagnostics = [token for token in diagnostics if token not in body]
+    if missing_diagnostics:
+        raise AssertionError(
+            "GLES failure diagnostics are not called by the probe: "
+            f"missing={missing_diagnostics}"
+        )
+    failure_branch = block_text(body, "if (context == EGL_NO_CONTEXT)")
+    if "print_zink_gles_version(display, config, surface_attributes);" not in failure_branch:
+        raise AssertionError("ES 3.2 failure branch omits the fallback Zink diagnostic")
+    for token in (
         "venus_vulkan_features=",
         "egl_config=",
         "zink_gles_version=",
@@ -65,13 +81,14 @@ def main() -> int:
         "EGL_RENDERABLE_TYPE",
         "EGL_SURFACE_TYPE",
         "EGL_CONTEXT_MINOR_VERSION_KHR, 1",
-    )
-    missing_diagnostics = [token for token in diagnostics if token not in source]
-    if missing_diagnostics:
-        raise AssertionError(
-            "GLES failure diagnostics are incomplete: "
-            f"missing={missing_diagnostics}"
-        )
+    ):
+        if token not in source:
+            raise AssertionError(f"GLES diagnostic implementation omits {token}")
+
+
+def main() -> int:
+    source = SOURCE.read_text(encoding="utf-8")
+    check_contract(source)
 
     # The old GBM/window implementation is an explicit negative control.  It
     # must remain rejected if this test is later weakened accidentally.
