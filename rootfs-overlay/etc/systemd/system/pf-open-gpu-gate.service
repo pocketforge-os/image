@@ -18,7 +18,10 @@ Type=oneshot
 RemainAfterExit=yes
 Environment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1
 ExecStart=/usr/lib/pocketforge/open-gpu-gate.sh
-TimeoutStartSec=35s
+# The virtual branch runs bounded probes sequentially: Venus (30 s), then
+# GLES/Zink (60 s). Keep 15 s for setup, validation and a named failure after
+# either inner timeout. The outer deadline still catches non-probe hangs.
+TimeoutStartSec=105s
 StandardOutput=journal+console
 StandardError=journal+console
 
