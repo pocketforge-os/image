@@ -1342,30 +1342,23 @@ grep -Fqx 'fake-prefsd self-test: PASS defaults=2 unknown=refused' \
     <<<"${prefsd_self_test}" || exit 1
 grep -Fq 'pf-input-broker.service | grep -q .' "${recipe}" || exit 1
 
-# The destructive restart negative control runs last. OnFailure dependencies cannot
-# be reset from a drop-in and runtime masking is ineffective for this already-loaded
-# fixture unit, so the control must replace the fallback's shell-start commands.
-verify_restart_control_isolation() {
-    grep -Fq 'FALLBACK_CONTROL_DROPIN.write_text(' "$1" \
-        && grep -Fq '"[Unit]\nStartLimitIntervalSec=0\n[Service]\nExecStart=\nExecStart=/usr/bin/true\n"' "$1" \
-        && grep -Fq '"/usr/bin/true" in fallback_command' "$1" \
-        && grep -Fq '"[Unit]\nStartLimitIntervalSec=0\n[Service]\nRestart=on-failure\n"' "$1"
-}
-verify_restart_control_isolation "${driver}" || {
-    echo 'session-authority systemd-safety: FAIL: restart control does not neutralize the production fallback' >&2
-    exit 1
-}
-sed 's#ExecStart=/usr/bin/true#ExecStart=/usr/bin/systemctl start --no-block pf-shell-selected.service#' \
-    "${driver}" >"${tmp}/restart-control-with-fallback.py"
-if verify_restart_control_isolation "${tmp}/restart-control-with-fallback.py"; then
-    echo 'session-authority systemd-safety: FAIL: restart control isolation negative control passed' >&2
+# A failed required start job cancels the session target and therefore also cancels
+# systemd's queued service restart. Do not emulate the old Restart=on-failure policy
+# inside this topology: the wiring verifier below owns that deterministic mutation
+# control, while the live fixture proves the effective policy and bounded attempts.
+if grep -Fq 'control_restart_on_failure_reproduces_trap' "${driver}"; then
+    echo 'session-authority systemd-safety: FAIL: obsolete live restart mutation control remains' >&2
     exit 1
 fi
+grep -Fq 'assert effective_restart(BROKER_DROPIN.parent) == "no"' \
+    "${root}/tests/verify-input-broker-wiring.py" || exit 1
+grep -Fq 'assert effective_restart(control) == "on-failure"' \
+    "${root}/tests/verify-input-broker-wiring.py" || exit 1
 
 for b4_check in 'R4 GATE FAILED' 'def assert_grab_timeline' 'def assert_broker_failure_never_traps' \
     'grab_lock_is_held()' 'systemctl_stop_exit_after_sigkill=' '"--reuid=gamer"' \
     'def assert_broker_exit_before_ready_never_traps' 'def assert_broker_exit_mid_session_never_traps' \
-    'def control_restart_on_failure_reproduces_trap' 'watch_units(30.0)' \
+    'watch_units(30.0)' \
     'broker_result == "exit-code"' 'broker uinput pre-start did not fail' \
     'probe["prefsd_connect"] != "ok"' 'prefsd_outside_sandbox=ok'; do
     grep -Fq -- "${b4_check}" "${driver}" || {
