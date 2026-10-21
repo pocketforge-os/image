@@ -191,6 +191,34 @@ class ArmFixture:
             check=False,
         )
 
+    def run_shell(self, body: str) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env.update(
+            {
+                "SF_V3_SYS_CLASS_BLOCK": str(self.sys),
+                "SF_V3_DEV_ROOT": str(self.dev),
+                "SF_V3_MARKER": str(self.marker),
+                "SF_V3_EXPECTED_CONTRACT_SHA256": self.contract_sha,
+                "SF_V3_ROOT_MAJOR_MINOR": "179:5",
+                "SF_V3_WORK": str(self.work),
+                "SF_V3_UPTIME": str(self.root / "uptime"),
+            }
+        )
+        (self.root / "uptime").write_text("12.345 98.000\n", encoding="ascii")
+        return subprocess.run(
+            ["/usr/bin/bash", "-c", f'. "{ENGINE}"; {body}'],
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def read_receipt(self) -> bytes:
+        with self.device.open("rb", buffering=0) as card:
+            card.seek(self.layout["receipt_offset"])
+            return card.read(stage.SLOT_BYTES)
+
 
 class InitrdArmTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -243,6 +271,37 @@ class InitrdArmTests(unittest.TestCase):
             with self.subTest(state=state_name):
                 self.fixture.write_records(state_name=state_name)
                 self.assert_refused()
+
+    def test_started_receipt_is_durable_and_self_hashed(self) -> None:
+        result = self.fixture.run_shell(
+            "sf_v3_load_armed_transaction && "
+            "sf_v3_receipt_defaults && "
+            "SF_V3_INITRD_START_MS=$(sf_v3_now_ms) && "
+            "SF_V3_WRITE_START_MS=$(sf_v3_now_ms) && "
+            "sf_v3_write_receipt started none none"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        slot = self.fixture.read_receipt()
+        record = slot.rstrip(b"\0")
+        self.assertEqual(len(slot), stage.SLOT_BYTES)
+        self.assertIn(b"State=started\n", record)
+        self.assertIn(b"InitrdStartMonotonicMs=12345\n", record)
+        self.assertIn(b"WriteStartMonotonicMs=12345\n", record)
+        self.assertTrue(record.endswith(b"\n\n"))
+        lines = record.decode("ascii").splitlines()
+        stored = lines[-1].split("=", 1)[1]
+        prefix = "\n".join(lines[:-1]).encode("ascii") + b"\n"
+        self.assertEqual(stored, hashlib.sha256(prefix).hexdigest())
+
+    def test_invalid_receipt_state_cannot_mutate_slot(self) -> None:
+        before = self.fixture.read_receipt()
+        result = self.fixture.run_shell(
+            "sf_v3_load_armed_transaction && "
+            "sf_v3_receipt_defaults && "
+            "sf_v3_write_receipt ready none none"
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.fixture.read_receipt(), before)
 
 
 if __name__ == "__main__":
