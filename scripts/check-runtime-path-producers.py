@@ -69,16 +69,27 @@ def logical_lines(path: Path) -> Iterable[str]:
         raise AuditError(f"unterminated continuation in {path}")
 
 
+# Keys whose values the audit reads as paths/words. Every other key (Description=, Environment=,
+# ExecStart=...) is free text to this audit: systemd treats an apostrophe in Description= as plain
+# text, so shell-splitting it would reject valid units. Malformed values of the keys below still
+# fail closed.
+AUDITED_KEYS = frozenset(PATH_DIRECTIVES | set(DIRECTORY_DIRECTIVES) | {"ListenStream"})
+
+
 def assignments(path: Path) -> Iterable[tuple[str, list[str]]]:
     for line in logical_lines(path):
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
+        key = key.strip()
+        if key not in AUDITED_KEYS:
+            yield key, [value.strip()]
+            continue
         try:
             words = shlex.split(value, comments=False, posix=True)
         except ValueError as error:
             raise AuditError(f"cannot parse {path}: {line}: {error}") from error
-        yield key.strip(), words
+        yield key, words
 
 
 def unit_instance(path: Path) -> str | None:
