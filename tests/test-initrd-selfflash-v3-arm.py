@@ -152,18 +152,37 @@ class ArmFixture:
         (part / "size").write_text(f"{sectors}\n", encoding="ascii")
         (part / "dev").write_text(f"{major_minor}\n", encoding="ascii")
 
-    def _receipt(self, state_name: str) -> bytes:
+    def _receipt(self, state_name: str, *, completed: bool = False) -> bytes:
         ready, _digest = stage._ready_receipt(self.request)
         payload = ready.rstrip(b"\0").decode("ascii").splitlines()
+        pass_values = {
+            "XzIntegrity": "pass",
+            "RawStreamSHA256": self.request["TargetRawSHA256"],
+            "RawStreamBytes": str(self.request["TargetRawBytes"]),
+            "RawStreamHashMatch": "pass",
+            "RawStreamCountMatch": "pass",
+            "WriteMethod": "dd-fsync",
+            "WriteResult": "pass",
+            "SeedResult": "pass",
+            "StampResult": "pass",
+        }
         fields = []
         for line in payload[:-2]:
             key, value = line.split("=", 1)
             if key == "State":
                 value = state_name
+            elif completed:
+                value = pass_values.get(key, value)
             fields.append((key, value))
         return stage._ordered_record(fields, "ReceiptRecordSHA256")[0]
 
-    def write_records(self, *, state_name: str = "ready", bad_tail_start: bool = False) -> None:
+    def write_records(
+        self,
+        *,
+        state_name: str = "ready",
+        bad_tail_start: bool = False,
+        completed: bool = False,
+    ) -> None:
         layout = dict(self.layout)
         if bad_tail_start:
             layout["tail_start"] += stage.ALIGNMENT_BYTES
@@ -172,7 +191,18 @@ class ArmFixture:
             card.seek(self.layout["arm_offset"])
             card.write(arm)
             card.seek(self.layout["receipt_offset"])
-            card.write(self._receipt(state_name))
+            card.write(self._receipt(state_name, completed=completed))
+
+    def completed_stamp(self) -> dict[str, str]:
+        receipt = self._receipt("pass", completed=True)
+        return {
+            "Schema": "pocketforge.self-flash-stamp/v3",
+            "Generation": self.generation,
+            "TargetDescriptorSHA256": self.request["TargetDescriptorSHA256"],
+            "TargetRawSHA256": self.request["TargetRawSHA256"],
+            "TargetRawBytes": str(self.request["TargetRawBytes"]),
+            "TailReceiptSHA256": hashlib.sha256(receipt).hexdigest(),
+        }
 
     def run_gate(self) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
@@ -412,6 +442,42 @@ class InitrdArmTests(unittest.TestCase):
                     next_boot.returncode, 0, next_boot.stdout + next_boot.stderr
                 )
                 self.assertIn("load=absent\n", next_boot.stderr)
+
+    def test_completed_fresh_handoff_is_consumed_before_second_boot(self) -> None:
+        size_file = self.fixture.sys / "card0p5/size"
+        self.fixture.write_records(state_name="pass", completed=True)
+        size_file.write_text("2611200\n", encoding="ascii")
+        first_boot = self.fixture.run_gate()
+        self.assertNotEqual(first_boot.returncode, 0, first_boot.stdout + first_boot.stderr)
+        self.assertIn("load=uninitialized\n", first_boot.stderr)
+
+        with self.fixture.device.open("r+b", buffering=0) as card:
+            disposition = grow.initialize_control_slots(
+                card,
+                arm_offset=self.fixture.layout["arm_offset"],
+                receipt_offset=self.fixture.layout["receipt_offset"],
+                sync=lambda: None,
+                success_stamp=self.fixture.completed_stamp(),
+            )
+        self.assertEqual(disposition, "consumed-completed-handoff")
+
+        size_file.write_text(f"{self.fixture.root_sectors}\n", encoding="ascii")
+        second_boot = self.fixture.run_gate()
+        self.assertNotEqual(second_boot.returncode, 0, second_boot.stdout + second_boot.stderr)
+        self.assertIn("load=absent\n", second_boot.stderr)
+
+        self.fixture.write_records(state_name="pass", completed=True)
+        mismatched_stamp = self.fixture.completed_stamp()
+        mismatched_stamp["TailReceiptSHA256"] = "0" * 64
+        with self.fixture.device.open("r+b", buffering=0) as card:
+            disposition = grow.initialize_control_slots(
+                card,
+                arm_offset=self.fixture.layout["arm_offset"],
+                receipt_offset=self.fixture.layout["receipt_offset"],
+                sync=lambda: None,
+                success_stamp=mismatched_stamp,
+            )
+        self.assertEqual(disposition, "zeroed-and-read-back")
 
     def test_pid1_gate_is_fail_closed_and_watchdog_ordered(self) -> None:
         source = INIT.read_text(encoding="utf-8")

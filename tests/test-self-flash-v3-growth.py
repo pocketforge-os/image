@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib.machinery
 import importlib.util
 import io
@@ -14,7 +13,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow"
-STAGE_HELPER = ROOT / "rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage"
 BUILDER = ROOT / "scripts/build-rootfs.sh"
 CLOUD_OVERRIDE = ROOT / "rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg"
 UNIT = ROOT / "rootfs-overlay/etc/systemd/system/pocketforge-self-flash-v3-grow.service"
@@ -32,7 +30,6 @@ def load_helper(name, path):
 
 
 sf = load_helper("self_flash_v3_grow", HELPER)
-stage = load_helper("self_flash_v3_stage_for_growth_test", STAGE_HELPER)
 
 
 class GrowthGeometryTests(unittest.TestCase):
@@ -104,65 +101,6 @@ class GrowthGeometryTests(unittest.TestCase):
 
 
 class ControlSlotTests(unittest.TestCase):
-    @staticmethod
-    def completed_handoff(arm_offset, receipt_offset):
-        request = {
-            "Generation": "a" * 32,
-            "BaseDescriptorSHA256": "1" * 64,
-            "BaseRawSHA256": "2" * 64,
-            "BaseRawBytes": 512,
-            "TargetDescriptorSHA256": "b" * 64,
-            "TargetRawSHA256": "c" * 64,
-            "TargetRawBytes": 1024,
-            "CompressedSHA256": "d" * 64,
-            "CompressedBytes": 512,
-            "SeedSHA256": "e" * 64,
-            "SeedBytes": 512,
-            "PartitionLayoutSHA256": "f" * 64,
-        }
-        selected = {
-            "serial": "0x1234abcd",
-            "bytes": 2_147_483_648,
-            "partitions": [
-                {"number": 5, "start_sector": 251_904, "sectors": 1_000_000}
-            ],
-        }
-        layout = {
-            "tail_start": 1_073_741_824,
-            "stage_offset": 1_073_741_824,
-            "seed_offset": 1_500_000_000,
-            "arm_offset": arm_offset,
-            "receipt_offset": receipt_offset,
-        }
-        arm, _digest = stage._arm_record(request, selected, layout)
-        ready, _digest = stage._ready_receipt(request)
-        fields = []
-        required_pass = {
-            "State": "pass",
-            "XzIntegrity": "pass",
-            "RawStreamSHA256": request["TargetRawSHA256"],
-            "RawStreamBytes": str(request["TargetRawBytes"]),
-            "RawStreamHashMatch": "pass",
-            "RawStreamCountMatch": "pass",
-            "WriteMethod": "dd-fsync",
-            "WriteResult": "pass",
-            "SeedResult": "pass",
-            "StampResult": "pass",
-        }
-        for line in ready.rstrip(b"\0").decode("ascii").splitlines()[:-2]:
-            key, value = line.split("=", 1)
-            fields.append((key, required_pass.get(key, value)))
-        receipt, _digest = stage._ordered_record(fields, "ReceiptRecordSHA256")
-        stamp = {
-            "Schema": "pocketforge.self-flash-stamp/v3",
-            "Generation": request["Generation"],
-            "TargetDescriptorSHA256": request["TargetDescriptorSHA256"],
-            "TargetRawSHA256": request["TargetRawSHA256"],
-            "TargetRawBytes": str(request["TargetRawBytes"]),
-            "TailReceiptSHA256": hashlib.sha256(receipt).hexdigest(),
-        }
-        return arm, receipt, stamp
-
     def test_only_two_control_slots_are_zeroed_and_read_back(self):
         arm_offset = 4096
         receipt_offset = arm_offset + sf.SLOT_BYTES
@@ -199,43 +137,6 @@ class ControlSlotTests(unittest.TestCase):
                 receipt_offset=receipt_offset,
                 sync=lambda: None,
             )
-
-        valid_arm, valid_receipt, success_stamp = self.completed_handoff(
-            arm_offset, receipt_offset
-        )
-        preserved = bytearray(before)
-        preserved[arm_offset:receipt_offset] = valid_arm
-        preserved[receipt_offset : receipt_offset + sf.SLOT_BYTES] = valid_receipt
-        preserved_device = io.BytesIO(preserved)
-        disposition = sf.initialize_control_slots(
-            preserved_device,
-            arm_offset=arm_offset,
-            receipt_offset=receipt_offset,
-            sync=lambda: None,
-            success_stamp=success_stamp,
-        )
-        self.assertEqual(disposition, "preserved-completed-handoff")
-        self.assertEqual(preserved_device.getvalue(), preserved)
-
-        for mutation in (
-            {"TailReceiptSHA256": "0" * 64},
-            {"TargetRawSHA256": "0" * 64},
-            None,
-        ):
-            with self.subTest(stamp_mutation=mutation):
-                candidate_stamp = dict(success_stamp) if mutation is not None else None
-                if candidate_stamp is not None:
-                    candidate_stamp.update(mutation)
-                candidate = io.BytesIO(preserved)
-                disposition = sf.initialize_control_slots(
-                    candidate,
-                    arm_offset=arm_offset,
-                    receipt_offset=receipt_offset,
-                    sync=lambda: None,
-                    success_stamp=candidate_stamp,
-                )
-                self.assertEqual(disposition, "zeroed-and-read-back")
-
 
 class InstalledPolicyTests(unittest.TestCase):
     def test_root_only_unit_cloud_override_and_packages_are_wired(self):

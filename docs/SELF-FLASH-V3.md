@@ -203,15 +203,16 @@ After all checks, the unit repairs or relocates the secondary GPT only within
 `[ControlEnd, CardBytes)`, changes only partition 5 so its half-open end equals
 `TailStart`, rereads and verifies the table, then grows only that partition's
 ext4 filesystem. Only after those operations pass, it examines the two control
-slots. It preserves both slots byte for byte only when the arm is structurally
-and self-hash valid, the receipt is a structurally and self-hash valid `pass`,
-and the root-owned FAT success stamp binds the same generation, target
-descriptor, target raw digest and byte count. The stamp's
-`TailReceiptSHA256` must also match the exact padded receipt slot. This is
-required on the target's first boot so the just-completed OTA evidence survives
-capped growth without admitting pre-rewrite state. Otherwise it overwrites
-exactly the 65,536-byte arm slot and the 65,536-byte receipt slot with zeroes
-and durably reads both back. That initialization is required
+slots. It recognizes a completed handoff only when the arm is structurally and
+self-hash valid, the receipt is a structurally and self-hash valid `pass`, and
+the root-owned FAT success stamp binds the same generation, target descriptor,
+target raw digest and byte count. The stamp's `TailReceiptSHA256` must also
+match the exact padded receipt slot. The unit then consumes the handoff by
+overwriting exactly the 65,536-byte arm slot and the 65,536-byte receipt slot
+with zeroes and durably reading both back. The growth receipt records whether
+that stamp-bound completed handoff was consumed; the FAT stamp remains as the
+bounded identity and receipt-digest evidence. All other slot combinations take
+the same zero-and-read-back path. That initialization is required
 because a card previously used by an unbounded-growth image can contain
 arbitrary old filesystem bytes at the new control offsets. A zero slot is
 unused; after initialization, any later nonzero arm or receipt slot is stale
@@ -224,11 +225,12 @@ sectors, `TailStart`, filesystem size before and after, and an ordered result
 for GPT relocation, partition growth, table reread, ext4 growth, and control
 slot handling. `ControlSlotsInitialized=zeroed-and-read-back` means both exact
 slots were zeroed and read back after the filesystem reached its capped size;
-`ControlSlotsInitialized=preserved-completed-handoff` means the arm, final
+`ControlSlotsInitialized=consumed-completed-handoff` means the arm, final
 `pass` receipt and receipt-bound FAT success stamp passed that complete binding
-check and both slots were left byte-identical. `ready`, `started`, `failed`, a
-standalone `pass`, or any mismatched/missing stamp always selects the zeroing
-path. Neither value authorizes or describes any write to the candidate range.
+check before both slots were zeroed and read back. `ready`, `started`, `failed`,
+a standalone `pass`, or any mismatched/missing stamp records
+`zeroed-and-read-back`. Neither value authorizes or describes any write to the
+candidate range.
 The unit is ordered before cloud-init and before SSH admission used by kit
 windows.
 Eligibility requires a valid receipt whose measured after-state still matches

@@ -213,14 +213,13 @@ def initialize_control_slots(
     existing_receipt = device.read(SLOT_BYTES)
     if len(existing_receipt) != SLOT_BYTES:
         raise Refusal("receipt_slot_read_short")
-    if _valid_completed_handoff(
+    completed_handoff = _valid_completed_handoff(
         existing_arm,
         existing_receipt,
         success_stamp,
         arm_offset=arm_offset,
         receipt_offset=receipt_offset,
-    ):
-        return "preserved-completed-handoff"
+    )
     zeroes = bytes(SLOT_BYTES)
     for name, offset in (("arm", arm_offset), ("receipt", receipt_offset)):
         if offset < 0 or offset % LOGICAL_SECTOR_BYTES:
@@ -234,6 +233,8 @@ def initialize_control_slots(
         device.seek(offset)
         if device.read(SLOT_BYTES) != zeroes:
             raise Refusal(f"{name}_slot_readback_mismatch")
+    if completed_handoff:
+        return "consumed-completed-handoff"
     return "zeroed-and-read-back"
 
 
