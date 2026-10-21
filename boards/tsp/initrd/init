@@ -483,6 +483,12 @@ pf_first_frame_start
 # =============================================================================
 SF_BS=4194304          # 4 MiB transfer block
 
+# The v3 engine is dev-initrd-only and has no definition-time side effects.
+# Its separate marker is checked again before any tail record is read.
+if [ -f /lib/pocketforge-self-flash-v3.sh ]; then
+    . /lib/pocketforge-self-flash-v3.sh
+fi
+
 # BEGIN POCKETFORGE SELF-FLASH V2 FUNCTIONS
 # This block is executed directly by tests/test-initrd-selfflash-v2.sh. Keep it
 # POSIX/BusyBox-ash compatible and free of boot-time side effects at definition.

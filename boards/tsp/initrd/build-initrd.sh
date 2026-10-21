@@ -290,7 +290,8 @@ echo "  busybox: AArch64, statically linked — OK"
 echo "=== verifying busybox provides initrd applets ==="
 BB_APPLETS="$("${STAGING}/bin/busybox" --list 2>/dev/null || true)"
 if [ -n "$BB_APPLETS" ]; then
-    for ap in awk blockdev grep unxz sha256sum dd findfs head sed tr reboot mount umount sync; do
+    for ap in awk blockdev grep unxz sha256sum dd findfs head sed tr reboot mount umount sync \
+            tee wc mkfifo tar; do
         printf '%s\n' "$BB_APPLETS" | grep -qx "$ap" \
             || { echo "FATAL: busybox lacks applet '$ap' (needed by /init)" >&2; exit 1; }
     done
@@ -417,9 +418,24 @@ if [ "$VARIANT" = "dev" ]; then
         > "${STAGING}/etc/pocketforge-selfflash"
     printf 'schema=2\nsd_controller=04020000\n' \
         > "${STAGING}/etc/pocketforge-selfflash-v2"
+    SELF_FLASH_V3_CONTRACT_SHA="$(sha256sum "${SRC_DIR}/docs/SELF-FLASH-V3.md" | awk '{print $1}')"
+    cat >"${STAGING}/etc/pocketforge-selfflash-v3" <<EOF
+Schema=pocketforge.self-flash-initrd-capability/v3
+ContractSHA256=${SELF_FLASH_V3_CONTRACT_SHA}
+CardController=04020000
+AlignmentBytes=4194304
+ReserveBytes=1073741824
+GuardBytes=4194304
+ControlBytes=4194304
+SeedMaxBytes=16777216
+SlotBytes=65536
+EOF
+    install -D -m 0644 "${INITRD_SRC}/self-flash-v3.sh" \
+        "${STAGING}/lib/pocketforge-self-flash-v3.sh"
     chmod 0644 "${STAGING}/etc/pocketforge-selfflash"
     chmod 0644 "${STAGING}/etc/pocketforge-selfflash-v2"
-    echo "  staged /etc/pocketforge-selfflash{,-v2} (dev gate)"
+    chmod 0644 "${STAGING}/etc/pocketforge-selfflash-v3"
+    echo "  staged /etc/pocketforge-selfflash{,-v2,-v3} (dev gate)"
 fi
 
 # ---- clamp mtimes for reproducibility ---------------------------------------
