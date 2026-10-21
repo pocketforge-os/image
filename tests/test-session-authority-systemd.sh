@@ -33,7 +33,7 @@ app_unit_sha256=0dd9419bdf68da46ea542b2acbbc574b28b8f9d8d788f210029e90eef73383f0
 # from this image tree. These pins make the real-systemd fixture test the same
 # unit contract as the related runtime PR instead of silently exercising v2.
 broker_unit_sha256=e6834f966ed070b5bb2cab9ed1464d5cdd55c78e7587b9931149a43ed9631f66
-broker_dropin_sha256=6d21df3c084dbb5cf27d1f1a22d86cb3663ef88c649288c5e4536f8ce7c403cc
+broker_dropin_sha256=03891f234b39b1e62dd944aa890295b05e81dbb3a22849d83a6833714a0bac47
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
