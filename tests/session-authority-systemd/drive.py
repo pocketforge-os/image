@@ -762,7 +762,7 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     require(
         start["shell"] == "inactive"
         and start["foreground_target"] == "inactive"
-        and start["session_target"] == "active",
+        and start["session_target_start_job"] is True,
         f"broker started outside the Gamescope session handoff: {start}",
     )
     require(grab_lock_is_held(), "negative control: the broker does not hold the pad grab model")

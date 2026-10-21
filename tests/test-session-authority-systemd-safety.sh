@@ -171,8 +171,10 @@ verify_broker_session_state_fixture() {
         "${test_broker}" \
         && grep -Fq '"session_target": unit_state("pocketforge-gamescope-session.target")' \
             "${test_broker}" \
+        && grep -Fq '"pocketforge-gamescope-session.target"' "${test_broker}" \
+        && grep -Fq '"session_target_start_job": unit_has_start_job(' "${test_broker}" \
         && grep -Fq 'start["foreground_target"] == "inactive"' "${test_driver}" \
-        && grep -Fq 'start["session_target"] == "active"' "${test_driver}" \
+        && grep -Fq 'start["session_target_start_job"] is True' "${test_driver}" \
         && grep -Fq '"--acquire-sock": "/run/pocketforge/input-broker.sock"' \
             "${test_broker}" \
         && grep -Fq '"--system-menu-sock": "/run/pocketforge/system-menu.sock"' \
@@ -187,14 +189,14 @@ verify_broker_session_state_fixture() {
 }
 
 # A Gamescope session conflicts with the fb0 foreground target. The broker may
-# grab only after that owner is inactive and the Gamescope session target has
-# reached active. Keep the two target identities explicit, then prove a probe
-# which aliases the session state to the foreground target is rejected.
+# grab only after that owner is inactive and while the Gamescope session target's
+# start transaction is pending on the broker's READY notification. Keep the two
+# target identities explicit, then prove an aliased job probe is rejected.
 verify_broker_session_state_fixture "${fake_broker}" "${driver}" || {
     echo 'session-authority systemd-safety: FAIL: broker session-state probe is incomplete' >&2
     exit 1
 }
-sed 's/unit_state("pocketforge-gamescope-session.target")/unit_state("pocketforge-foreground.target")/' \
+sed 's/pocketforge-gamescope-session.target/pocketforge-foreground.target/g' \
     "${fake_broker}" >"${tmp}/broker-with-aliased-targets"
 if verify_broker_session_state_fixture "${tmp}/broker-with-aliased-targets" "${driver}"; then
     echo 'session-authority systemd-safety: FAIL: broker probe with aliased targets passed' >&2
