@@ -424,6 +424,19 @@ def build_growth_receipt(
     }
 
 
+def build_degraded_receipt(reason: str) -> dict[str, str]:
+    """Record a bounded refusal without pretending capped growth succeeded."""
+    if not reason or len(reason) > 96 or any(
+        character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in reason
+    ):
+        reason = "unclassified_failure"
+    return {
+        "Schema": "pocketforge.self-flash-growth-degraded/v3",
+        "State": "degraded",
+        "FailureReason": reason,
+    }
+
+
 def _read_marker() -> dict[str, str]:
     stage = _load_stage_helper()
     try:
@@ -610,8 +623,20 @@ def main() -> int:
         receipt = grow()
     except (OSError, Refusal, ValueError) as error:
         reason = str(error) if isinstance(error, Refusal) else "io_or_value_error"
-        print(f"PF_SELF_FLASH_V3_GROW state=REFUSED reason={reason}", file=sys.stderr)
-        return 2
+        try:
+            _write_receipt(build_degraded_receipt(reason))
+        except OSError:
+            print(
+                "PF_SELF_FLASH_V3_GROW state=DEGRADED "
+                f"reason={reason} receipt=write_failed",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"PF_SELF_FLASH_V3_GROW state=DEGRADED reason={reason} receipt=recorded",
+                file=sys.stderr,
+            )
+        return 0
     print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
     print("PF_SELF_FLASH_V3_GROW state=PASS")
     return 0

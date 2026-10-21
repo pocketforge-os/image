@@ -6,7 +6,8 @@ Before=cloud-init-local.service cloud-init.service ssh.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/lib/pocketforge/self-flash-v3-grow
+# A growth refusal leaves OTA eligibility fail-closed, but must not block login.
+ExecStart=-/usr/lib/pocketforge/self-flash-v3-grow
 RemainAfterExit=yes
 
 [Install]

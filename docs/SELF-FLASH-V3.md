@@ -226,8 +226,14 @@ slots were zeroed and read back after the filesystem reached its capped size;
 `ControlSlotsInitialized=consumed-completed-handoff` means a completely bound arm,
 `pass` receipt and FAT stamp were validated before zeroing. Every other combination
 records `zeroed-and-read-back`; neither value describes a candidate-range write.
-The unit is ordered before cloud-init and before SSH admission used by kit
-windows.
+If validation or growth refuses, the helper instead atomically records
+`pocketforge.self-flash-growth-degraded/v3`, `State=degraded`, and a bounded
+`FailureReason`. The unit is ordered before cloud-init and before SSH admission
+used by kit windows, but is only wanted by `multi-user.target`; it is not a
+requirement of cloud-init, networking, SSH, or login. Its command failure is
+ignored as a final safety net, so a failure degrades OTA eligibility without
+blocking login. A degraded receipt lacks the success fields and therefore can
+never pass the eligibility probe.
 Eligibility requires a valid receipt whose measured after-state still matches
 the live geometry; a receipt alone never authorizes a mismatched card.
 
