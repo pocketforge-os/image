@@ -359,6 +359,21 @@ class InitrdArmTests(unittest.TestCase):
         self.assertLess(disarm, execute)
         self.assertNotIn("return 1", gate[execute:])
 
+    def test_pid1_initializes_v3_work_before_source_and_gate(self) -> None:
+        source = INIT.read_text(encoding="utf-8")
+        assignment = 'SF_V3_WORK=/run/pocketforge-self-flash-v3'
+        initialization = 'mkdir -p "$SF_V3_WORK"'
+        export = 'export SF_V3_WORK'
+        engine_source = '. /lib/pocketforge-self-flash-v3.sh'
+        gate = '# BEGIN POCKETFORGE SELF-FLASH V3 GATE'
+
+        for token in (assignment, initialization, export, engine_source, gate):
+            self.assertIn(token, source)
+        self.assertLess(source.index(assignment), source.index(initialization))
+        self.assertLess(source.index(initialization), source.index(export))
+        self.assertLess(source.index(export), source.index(engine_source))
+        self.assertLess(source.index(engine_source), source.index(gate))
+
     def test_started_receipt_is_durable_and_self_hashed(self) -> None:
         result = self.fixture.run_shell(
             "sf_v3_load_armed_transaction && "
