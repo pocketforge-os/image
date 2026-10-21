@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from importlib.machinery import SourceFileLoader
 import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -219,6 +221,42 @@ class ArmFixture:
             card.seek(self.layout["receipt_offset"])
             return card.read(stage.SLOT_BYTES)
 
+    def stage_seed(self, *, extra_member: bool = False) -> dict[str, bytes]:
+        members = {
+            "meta-data": b"instance-id: pf-v3\n",
+            "network-config": b"version: 2\n",
+            "user-data": b"#cloud-config\n",
+        }
+        if extra_member:
+            members["unexpected"] = b"refuse me\n"
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+            for name, content in members.items():
+                info = tarfile.TarInfo(name)
+                info.size = len(content)
+                info.mode = 0o600
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                info.mtime = 0
+                archive.addfile(info, io.BytesIO(content))
+        payload = stream.getvalue()
+        self.request["SeedBytes"] = len(payload)
+        self.request["SeedSHA256"] = hashlib.sha256(payload).hexdigest()
+        self.layout = stage.derive_layout(
+            card_bytes=self.card_bytes,
+            base_raw_bytes=self.request["BaseRawBytes"],
+            target_raw_bytes=self.request["TargetRawBytes"],
+            compressed_bytes=self.request["CompressedBytes"],
+            seed_bytes=self.request["SeedBytes"],
+        )
+        self.write_records()
+        with self.device.open("r+b", buffering=0) as card:
+            card.seek(self.layout["seed_offset"])
+            card.write(payload)
+        return members
+
 
 class InitrdArmTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -302,6 +340,33 @@ class InitrdArmTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.fixture.read_receipt(), before)
+
+    def test_seed_stream_installs_exact_three_members_on_fat(self) -> None:
+        members = self.fixture.stage_seed()
+        fat = self.fixture.root / "fat"
+        fat.mkdir()
+        result = self.fixture.run_shell(
+            f'sf_v3_load_armed_transaction && sf_v3_install_seed "{fat}" && '
+            'printf "seed=%s bytes=%s sha=%s\\n" "$SF_V3_SEED_RESULT" '
+            '"$SF_V3_SEED_STREAM_BYTES" "$SF_V3_SEED_STREAM_SHA256"'
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("seed=pass", result.stdout)
+        self.assertIn(f"bytes={self.fixture.request['SeedBytes']}", result.stdout)
+        self.assertIn(f"sha={self.fixture.request['SeedSHA256']}", result.stdout)
+        self.assertEqual(
+            {path.name: path.read_bytes() for path in fat.iterdir()}, members
+        )
+
+    def test_seed_stream_rejects_extra_member_without_installing(self) -> None:
+        self.fixture.stage_seed(extra_member=True)
+        fat = self.fixture.root / "fat"
+        fat.mkdir()
+        result = self.fixture.run_shell(
+            f'sf_v3_load_armed_transaction && sf_v3_install_seed "{fat}"'
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(any(path.name in ("meta-data", "network-config", "user-data") for path in fat.iterdir()))
 
 
 if __name__ == "__main__":
