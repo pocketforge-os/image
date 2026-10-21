@@ -7,11 +7,13 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -137,6 +139,32 @@ class ExactStreamTests(unittest.TestCase):
 
 
 class SurfaceTests(unittest.TestCase):
+    def test_stale_boot_growth_receipt_refuses_before_request_or_device_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / "growth"
+            boot_id_path = Path(directory) / "boot_id"
+            boot_id_path.write_text("11111111-2222-4333-8444-555555555555\n")
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "Schema": "pocketforge.self-flash-growth/v3",
+                        "BootID": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                        "GPTRelocation": "pass",
+                        "PartitionGrowth": "pass",
+                        "PartitionTableReread": "pass",
+                        "Ext4Growth": "pass",
+                    }
+                )
+            )
+            with (
+                mock.patch.object(sf, "GROWTH_RECEIPT_PATH", receipt_path, create=True),
+                mock.patch.object(sf, "BOOT_ID_PATH", boot_id_path, create=True),
+                mock.patch.object(sf, "_load_request") as load_request,
+                self.assertRaises(sf.Refusal),
+            ):
+                sf.stage(Path("unused"), Path("unused"), io.BytesIO())
+            load_request.assert_not_called()
+
     def test_cli_has_no_device_or_offset_authority(self):
         parser = sf.make_argument_parser()
         option_strings = {
