@@ -171,6 +171,14 @@ class ControlSlotTests(unittest.TestCase):
             sync=lambda: None,
         )
         self.assertEqual(disposition, "zeroed-and-read-back")
+
+        with self.assertRaisesRegex(sf.Refusal, "arm_slot_alignment"):
+            sf.initialize_control_slots(
+                NoWrite(bytes(receipt_offset + sf.SLOT_BYTES + 4096)),
+                arm_offset=arm_offset + 1,
+                receipt_offset=receipt_offset,
+                sync=lambda: None,
+            )
         after = device.getvalue()
         self.assertEqual(after[:arm_offset], before[:arm_offset])
         self.assertEqual(after[arm_offset:receipt_offset], bytes(sf.SLOT_BYTES))

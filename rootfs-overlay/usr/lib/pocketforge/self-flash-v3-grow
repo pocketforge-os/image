@@ -214,6 +214,9 @@ def initialize_control_slots(
     sync: Callable[[], None],
     success_stamp: Mapping[str, str] | None = None,
 ) -> str:
+    for name, offset in (("arm", arm_offset), ("receipt", receipt_offset)):
+        if offset < 0 or offset % LOGICAL_SECTOR_BYTES:
+            raise Refusal(f"{name}_slot_alignment")
     device.seek(arm_offset)
     existing_arm = device.read(SLOT_BYTES)
     if len(existing_arm) != SLOT_BYTES:
@@ -233,8 +236,6 @@ def initialize_control_slots(
     if existing_arm == zeroes and existing_receipt == zeroes:
         return "zeroed-and-read-back"
     for name, offset in (("arm", arm_offset), ("receipt", receipt_offset)):
-        if offset < 0 or offset % LOGICAL_SECTOR_BYTES:
-            raise Refusal(f"{name}_slot_alignment")
         device.seek(offset)
         if device.write(zeroes) != SLOT_BYTES:
             raise Refusal(f"{name}_slot_write_short")
@@ -640,7 +641,10 @@ def grow() -> dict[str, object]:
         )
         if verified["needs_partition_growth"]:
             raise Refusal("partition_table_reread_stale")
-        expected_filesystem_bytes = int(plan["tail_start"]) - int(marker["BakedRootPartitionStartSector"]) * 512
+        expected_filesystem_bytes = (
+            int(plan["tail_start"])
+            - int(marker["BakedRootPartitionStartSector"]) * LOGICAL_SECTOR_BYTES
+        )
         if filesystem_before > expected_filesystem_bytes:
             raise Refusal("ext4_growth_out_of_bounds")
         if expected_filesystem_bytes - filesystem_before > 4095:
@@ -699,7 +703,7 @@ def main() -> int:
         return 2
     try:
         receipt = grow()
-    except (OSError, Refusal, ValueError) as error:
+    except (KeyError, OSError, Refusal, TypeError, ValueError) as error:
         reason = str(error) if isinstance(error, Refusal) else "io_or_value_error"
         # grow() can install a pass receipt and then fail while syncing its
         # parent directory. Revoke that receipt before attempting to publish
