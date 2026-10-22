@@ -263,7 +263,8 @@ check_resident_hold() {
     local unit=$1
 
     grep -Fx 'BindsTo=pocketforge-gamescope-session.target' "${unit}" >/dev/null \
-        && grep -Fx 'After=pocketforge-gamescope-session.target' "${unit}" >/dev/null \
+        && grep -Fx 'Before=pocketforge-gamescope-session.target' "${unit}" >/dev/null \
+        && ! grep -Fx 'After=pocketforge-gamescope-session.target' "${unit}" >/dev/null \
         && grep -Fx 'Type=oneshot' "${unit}" >/dev/null \
         && grep -Fx 'ExecStart=/usr/bin/true' "${unit}" >/dev/null \
         && grep -Fx 'RemainAfterExit=yes' "${unit}" >/dev/null \
@@ -275,6 +276,11 @@ cp "${resident}" "${scratch}/resident-without-bind.service"
 sed -i '/^BindsTo=/d' "${scratch}/resident-without-bind.service"
 if check_resident_hold "${scratch}/resident-without-bind.service"; then
     fail "resident hold check accepted a unit without BindsTo"
+fi
+cp "${resident}" "${scratch}/resident-after-target.service"
+sed -i 's/^Before=/After=/' "${scratch}/resident-after-target.service"
+if check_resident_hold "${scratch}/resident-after-target.service"; then
+    fail "resident hold check accepted the StopWhenUnneeded startup race"
 fi
 if grep -Eq 'pocketforge-gamescope-resident\.service' \
     "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service" \

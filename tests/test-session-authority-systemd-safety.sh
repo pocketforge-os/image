@@ -134,7 +134,8 @@ verify_resident_fixture() {
     local test_recipe=$3
 
     grep -Fqx 'BindsTo=pocketforge-gamescope-session.target' "${unit}" \
-        && grep -Fqx 'After=pocketforge-gamescope-session.target' "${unit}" \
+        && grep -Fqx 'Before=pocketforge-gamescope-session.target' "${unit}" \
+        && ! grep -Fqx 'After=pocketforge-gamescope-session.target' "${unit}" \
         && grep -Fqx 'Type=oneshot' "${unit}" \
         && grep -Fqx 'RemainAfterExit=yes' "${unit}" \
         && ! grep -q '^\[Install\]$' "${unit}" \
@@ -373,6 +374,12 @@ sed '/^BindsTo=pocketforge-gamescope-session.target$/d' \
     "${resident_unit}" >"${tmp}/resident-without-bind.service"
 if verify_resident_fixture "${tmp}/resident-without-bind.service" "${harness}" "${recipe}"; then
     echo 'session-authority systemd-safety: FAIL: unbound resident hold passed' >&2
+    exit 1
+fi
+sed 's/^Before=pocketforge-gamescope-session.target$/After=pocketforge-gamescope-session.target/' \
+    "${resident_unit}" >"${tmp}/resident-after-target.service"
+if verify_resident_fixture "${tmp}/resident-after-target.service" "${harness}" "${recipe}"; then
+    echo 'session-authority systemd-safety: FAIL: resident StopWhenUnneeded race passed' >&2
     exit 1
 fi
 verify_residency_scenario_isolation "${driver}" || {
