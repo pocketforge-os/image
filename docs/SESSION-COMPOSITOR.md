@@ -159,7 +159,10 @@ The A133 descriptor remains an expectation until G1 replaces
 `pocketforge-gamescope-session.target` graph. The only resident opt-in is
 `systemctl start pocketforge-gamescope-resident.service`; its active oneshot
 holds the `StopWhenUnneeded` target through a `BindsTo=` reverse pin and drops
-whenever that target stops. Starting the target directly is not a resident
+whenever that target stops. The hold is ordered before the target so it is
+already active when the target completes; ordering it after the target creates
+a collection race that can stop an otherwise healthy compositor before the
+hold enters its active state. Starting the target directly is not a resident
 opt-in: with no app or hold unit pinning it, systemd stops it as unneeded after
 the start transaction. Neither unit has an `[Install]` section, and this
 installation does not enable or select a default session.

@@ -1,7 +1,10 @@
 [Unit]
 Description=Hold the PocketForge Gamescope session resident (explicit opt-in)
 BindsTo=pocketforge-gamescope-session.target
-After=pocketforge-gamescope-session.target
+# Enter the active state before the StopWhenUnneeded target completes.  Ordering
+# this hold after the target leaves a collection window in which systemd can
+# stop an otherwise healthy compositor before the hold becomes active.
+Before=pocketforge-gamescope-session.target
 
 [Service]
 Type=oneshot

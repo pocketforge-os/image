@@ -130,13 +130,14 @@ import sys
 resident, app, broker = (Path(path).read_text(encoding="utf-8") for path in sys.argv[1:])
 required = {
     "BindsTo=pocketforge-gamescope-session.target",
-    "After=pocketforge-gamescope-session.target",
+    "Before=pocketforge-gamescope-session.target",
     "Type=oneshot",
     "ExecStart=/usr/bin/true",
     "RemainAfterExit=yes",
 }
 lines = {line.strip() for line in resident.splitlines()}
 assert required <= lines
+assert "After=pocketforge-gamescope-session.target" not in lines
 assert "[Install]" not in lines
 assert "pocketforge-gamescope-resident.service" not in app
 assert "pocketforge-gamescope-resident.service" not in broker
@@ -144,6 +145,13 @@ assert "pocketforge-gamescope-resident.service" not in broker
 without_bind = resident.replace("BindsTo=pocketforge-gamescope-session.target\n", "")
 assert "BindsTo=pocketforge-gamescope-session.target" not in {
     line.strip() for line in without_bind.splitlines()
+}
+after_target = resident.replace(
+    "Before=pocketforge-gamescope-session.target\n",
+    "After=pocketforge-gamescope-session.target\n",
+)
+assert "Before=pocketforge-gamescope-session.target" not in {
+    line.strip() for line in after_target.splitlines()
 }
 PY
 
