@@ -211,20 +211,23 @@ class InstalledPolicyTests(unittest.TestCase):
         self.assertNotIn("Requires=", unit)
         self.assertNotIn("RequiredBy=", unit)
 
-        packages = (ROOT / "rootfs-packages-dev.txt").read_text(encoding="utf-8").splitlines()
+        packages = (ROOT / "rootfs-packages.txt").read_text(encoding="utf-8").splitlines()
         for package in ("e2fsprogs", "fdisk", "util-linux"):
             self.assertIn(package, packages)
 
         builder = BUILDER.read_text(encoding="utf-8")
         for literal in (
-            "self-flash-v3-grow",
-            "99-pocketforge-self-flash-v3.cfg",
-            "pocketforge-self-flash-v3-grow.service",
             "BakedRootPartitionStartSector=251904",
             "BakedRootPartitionSectors=${SELF_FLASH_V3_BAKED_ROOT_SECTORS}",
             "-m 0700",
         ):
             self.assertIn(literal, builder)
+        for retired in (
+            "/work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow",
+            "/work/src/rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg",
+            "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-self-flash-v3-grow.service",
+        ):
+            self.assertNotIn(retired, builder)
         self.assertIn("tests/test-self-flash-v3-growth.py", (ROOT / ".github/workflows/hermetic-tests.yml").read_text())
 
     def test_growth_cli_has_no_device_or_geometry_authority(self):

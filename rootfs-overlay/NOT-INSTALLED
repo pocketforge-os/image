@@ -1,3 +1,6 @@
 # Format: overlay-relative path<TAB>one-line reason
+etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg	Retained v3 contract fixture; full-disk cloud-init growth supersedes its disabled-grow policy.
 etc/modules-load.d/pocketforge-wifi.conf	Legacy XR819 template; build-rootfs.sh generates profile-specific XR829/xradio content instead.
+etc/systemd/system/pocketforge-self-flash-v3-grow.service	Retained v3 contract fixture; full-disk cloud-init growth supersedes capped raw-tail growth.
 usr/lib/pocketforge/cedar-spike.sh	Preserved tsp-h5ed.17 harness; its userspace dependencies remain detached pending a safely gated re-land.
+usr/lib/pocketforge/self-flash-v3-grow	Retained v3 contract fixture; current images deliberately leave no raw-tail reserve.

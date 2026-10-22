@@ -88,6 +88,7 @@ echo "ROOT_GROW_RED free_bytes=${free_on_larger_media} disposition=ungrown"
 cloud_config="${repo_dir}/rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-root-grow.cfg"
 reporter="${repo_dir}/rootfs-overlay/usr/lib/pocketforge/root-grow-result"
 unit="${repo_dir}/rootfs-overlay/etc/systemd/system/pocketforge-root-grow-result.service"
+builder="${repo_dir}/scripts/build-rootfs.sh"
 [ -f "${cloud_config}" ] || fail "first-boot cloud-init growth config is absent"
 grep -Fq 'mode: auto' "${cloud_config}" || fail "growpart is not automatic"
 grep -Fq -- '- /' "${cloud_config}" || fail "growpart does not target the root partition"
@@ -98,7 +99,16 @@ grep -Fq 'After=cloud-final.service' "${unit}" \
 grep -Fq 'ExecStart=/usr/lib/pocketforge/root-grow-result' "${unit}" \
     || fail "typed reporter unit does not execute the installed helper"
 grep -Fq 'WantedBy=multi-user.target' "${unit}" \
-    || fail "typed reporter unit is not enabled by the builder"
+    || fail "typed reporter unit has no installation target"
+for installed_path in \
+    '99-pocketforge-root-grow.cfg' \
+    'root-grow-result' \
+    'pocketforge-root-grow-result.service' \
+    'multi-user.target.wants/pocketforge-root-grow-result.service' \
+    'etc/pocketforge-root-grow'; do
+    grep -Fq "${installed_path}" "${builder}" \
+        || fail "rootfs builder does not install ${installed_path}"
+done
 
 sudo -n growpart "${loop_device}" 5 >"${grow_output}"
 sudo -n blockdev --rereadpt "${loop_device}"

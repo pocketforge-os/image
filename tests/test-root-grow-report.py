@@ -52,24 +52,26 @@ class RootGrowResultTests(unittest.TestCase):
         self.assertEqual((outcome.state, outcome.reason), ("already", "complete"))
 
     def test_partition_and_filesystem_failure_controls_are_typed(self):
-        partition_failed = dict(self.grown, root_sectors=655360)
-        outcome = self.reporter.classify(
-            self.marker, partition_failed, prior_complete=False
-        )
-        self.assertEqual(
-            (outcome.state, outcome.reason), ("failed", "partition_not_grown")
-        )
-
-        filesystem_failed = dict(
-            self.grown,
-            filesystem_bytes=self.marker["baked_sectors"] * 512,
-        )
-        outcome = self.reporter.classify(
-            self.marker, filesystem_failed, prior_complete=False
-        )
-        self.assertEqual(
-            (outcome.state, outcome.reason), ("failed", "filesystem_not_grown")
-        )
+        cases = {
+            "root_start_mismatch": dict(self.grown, root_start_sector=274433),
+            "partition_shrunk": dict(self.grown, root_sectors=655359),
+            "partition_not_grown": dict(self.grown, root_sectors=655360),
+            "partition_not_at_disk_end": dict(self.grown, root_sectors=655361),
+            "filesystem_exceeds_partition": dict(
+                self.grown,
+                filesystem_bytes=self.grown["root_sectors"] * 512 + 1,
+            ),
+            "filesystem_not_grown": dict(
+                self.grown,
+                filesystem_bytes=self.marker["baked_sectors"] * 512,
+            ),
+        }
+        for reason, geometry in cases.items():
+            with self.subTest(reason=reason):
+                outcome = self.reporter.classify(
+                    self.marker, geometry, prior_complete=False
+                )
+                self.assertEqual((outcome.state, outcome.reason), ("failed", reason))
 
     def test_probe_failure_logs_typed_line_and_does_not_block_boot(self):
         def fail_probe(_marker):
@@ -77,9 +79,16 @@ class RootGrowResultTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             output = io.StringIO()
+            marker_path = Path(directory) / "marker"
+            marker_path.write_text(
+                "Schema=pocketforge.root-grow/v1\n"
+                "BakedRootPartitionStartSector=274432\n"
+                "BakedRootPartitionSectors=655360\n",
+                encoding="ascii",
+            )
             result = self.reporter.run(
                 probe=fail_probe,
-                marker_path=Path(directory) / "marker",
+                marker_path=marker_path,
                 state_path=Path(directory) / "state",
                 output=output,
             )
@@ -89,6 +98,52 @@ class RootGrowResultTests(unittest.TestCase):
             output.getvalue(),
             "PF_ROOT_GROW state=failed reason=probe_failed\n",
         )
+
+    def test_all_reporting_failures_are_nonfatal_and_typed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            valid_marker = root / "marker"
+            valid_marker.write_text(
+                "Schema=pocketforge.root-grow/v1\n"
+                "BakedRootPartitionStartSector=274432\n"
+                "BakedRootPartitionSectors=655360\n",
+                encoding="ascii",
+            )
+
+            cases = (
+                (
+                    "marker_invalid",
+                    root / "missing-marker",
+                    lambda _marker: self.grown,
+                    root / "unused-state",
+                ),
+                (
+                    "classification_failed",
+                    valid_marker,
+                    lambda _marker: {},
+                    root / "unused-state-two",
+                ),
+                (
+                    "state_write_failed",
+                    valid_marker,
+                    lambda _marker: self.grown,
+                    root,
+                ),
+            )
+            for reason, marker_path, probe, state_path in cases:
+                with self.subTest(reason=reason):
+                    output = io.StringIO()
+                    result = self.reporter.run(
+                        probe=probe,
+                        marker_path=marker_path,
+                        state_path=state_path,
+                        output=output,
+                    )
+                    self.assertEqual(result, 0)
+                    self.assertEqual(
+                        output.getvalue(),
+                        f"PF_ROOT_GROW state=failed reason={reason}\n",
+                    )
 
 
 if __name__ == "__main__":
