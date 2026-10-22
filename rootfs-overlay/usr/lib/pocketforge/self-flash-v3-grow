@@ -230,6 +230,8 @@ def initialize_control_slots(
         receipt_offset=receipt_offset,
     )
     zeroes = bytes(SLOT_BYTES)
+    if existing_arm == zeroes and existing_receipt == zeroes:
+        return "zeroed-and-read-back"
     for name, offset in (("arm", arm_offset), ("receipt", receipt_offset)):
         if offset < 0 or offset % LOGICAL_SECTOR_BYTES:
             raise Refusal(f"{name}_slot_alignment")
@@ -638,10 +640,17 @@ def grow() -> dict[str, object]:
         )
         if verified["needs_partition_growth"]:
             raise Refusal("partition_table_reread_stale")
-        _run_checked(["/usr/sbin/resize2fs", partition_path])
-        filesystem_after = _filesystem_bytes(partition_path)
         expected_filesystem_bytes = int(plan["tail_start"]) - int(marker["BakedRootPartitionStartSector"]) * 512
-        if filesystem_after > expected_filesystem_bytes or filesystem_after < filesystem_before:
+        if filesystem_before > expected_filesystem_bytes:
+            raise Refusal("ext4_growth_out_of_bounds")
+        if expected_filesystem_bytes - filesystem_before > 4095:
+            _run_checked(["/usr/sbin/resize2fs", partition_path])
+        filesystem_after = _filesystem_bytes(partition_path)
+        if (
+            filesystem_after > expected_filesystem_bytes
+            or expected_filesystem_bytes - filesystem_after > 4095
+            or filesystem_after < filesystem_before
+        ):
             raise Refusal("ext4_growth_out_of_bounds")
         _verify_backup_gpt(device, int(selected["bytes"]), int(plan["control_end"]))
         control_slots_initialized = initialize_control_slots(
@@ -677,13 +686,13 @@ def make_argument_parser() -> argparse.ArgumentParser:
 def main() -> int:
     make_argument_parser().parse_args()
     if os.geteuid() != 0:
-        print("PF_SELF_FLASH_V3_GROW state=REFUSED reason=not_root", file=sys.stderr)
+        print("PF_ROOT_GROW state=failed reason=not_root", file=sys.stderr)
         return 2
     try:
         _invalidate_receipt()
     except OSError:
         print(
-            "PF_SELF_FLASH_V3_GROW state=FAILED "
+            "PF_ROOT_GROW state=failed "
             "reason=receipt_invalidation_failed",
             file=sys.stderr,
         )
@@ -699,7 +708,7 @@ def main() -> int:
             _invalidate_receipt()
         except OSError:
             print(
-                "PF_SELF_FLASH_V3_GROW state=FAILED "
+                "PF_ROOT_GROW state=failed "
                 "reason=receipt_invalidation_failed",
                 file=sys.stderr,
             )
@@ -708,16 +717,21 @@ def main() -> int:
             _write_receipt(build_degraded_receipt(reason))
         except OSError:
             print(
-                "PF_SELF_FLASH_V3_GROW state=DEGRADED "
+                "PF_ROOT_GROW state=failed "
                 f"reason={reason} receipt=write_failed",
                 file=sys.stderr,
             )
         else:
             print(
-                f"PF_SELF_FLASH_V3_GROW state=DEGRADED reason={reason} receipt=recorded",
+                f"PF_ROOT_GROW state=failed reason={reason} receipt=recorded",
                 file=sys.stderr,
             )
         return 2
+    state = "grown" if (
+        receipt["BeforeEndSector"] != receipt["AfterEndSector"]
+        or receipt["FilesystemBytesBefore"] != receipt["FilesystemBytesAfter"]
+    ) else "already"
+    print(f"PF_ROOT_GROW state={state} reason=complete")
     return 0
 
 
