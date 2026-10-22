@@ -32,13 +32,10 @@ name: sign-and-scan
 #     this repo to `gha_sign_repos`.)
 # ──────────────────────────────────────────────────────────────────────────────────────────
 #
-# ── RUNNER ROUTING (tsp-mc9m.41.984.47.50) ──────────────────────────────────────────────
-# The [self-hosted, pf-ci-container] jobs resolve to the static, non-ephemeral
-# mm-review-vm pool. Its runner slots share the `runner` account on two VMs.
-# The selected `pf-ci-container` runner group currently allows only the private
-# pocketforge-automation repo and rejects public repositories, so this public
-# `image` repo cannot schedule here. Admitting it requires a separate owner security-policy
-# change; the label change alone does not expand the pool's repository or fork-PR surface.
+# ── RUNNER ROUTING (tsp-mc9m.41.984.47.30) ──────────────────────────────────────────────
+# Package and protected signing use credential-free ephemeral pf-public runners.
+# Same-repository input and the protected sign environment remain separate gates;
+# neither job can reach the private mm-review-vm pool or its LAN-only services.
 # (Historical: every run before 2026-07-17 ended conclusion=startup_failure regardless of
 # routing — unpinned `actions/checkout@v4` under the org's sha_pinning_required Actions policy;
 # the checkouts below are now SHA-pinned.)
@@ -46,7 +43,10 @@ name: sign-and-scan
 
 on:
   pull_request:
-    paths: ["apps/**"]
+    paths:
+      - 'apps/**'
+      - '.github/workflows/sign-and-scan.yml'
+      - 'tests/test-public-ci-workflows.sh'
   push:
     branches: [main]
     paths: ["apps/**"]
@@ -69,15 +69,15 @@ env:
 jobs:
   # ---- package + scan (runs on every apps/** change; no secrets, never blocks on CVEs) -----
   package:
-    # Defence in depth for any future policy that admits this public repo: allow only
-    # same-repo PRs and pushes. Today the selected runner group excludes `image` and rejects
-    # public repositories, so neither image forks nor trusted image refs can reach the pool.
+    # Defence in depth: allow only same-repo PRs and pushes on the public runner.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, pf-ci-container]
+    runs-on: [self-hosted, pf-public-ci]
     timeout-minutes: 45
     steps:
       # SHA-pinned (org Actions policy sha_pinning_required=true; bare @v4 = startup_failure)
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
       - name: Fetch the pinned packaging path (pf-app oci/ kit)
         run: |
           git clone --depth 1 --branch "$PF_APP_REF" "https://github.com/${PF_APP_REPO}.git" .pf-app
@@ -116,7 +116,7 @@ jobs:
     needs: package
     # gate: manual release dispatch on main, in the protected `sign` environment
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.release == true && github.ref == 'refs/heads/main' }}
-    runs-on: [self-hosted, pf-ci-container]
+    runs-on: [self-hosted, pf-public-ci]
     environment: sign            # main-only deployment policy; holds the OIDC trust
     permissions:
       contents: read
@@ -125,6 +125,8 @@ jobs:
     steps:
       # SHA-pinned (org Actions policy sha_pinning_required=true; bare @v4 = startup_failure)
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
       - name: Assume the signing role (OIDC) and materialize release keys
         run: |
           set -euo pipefail

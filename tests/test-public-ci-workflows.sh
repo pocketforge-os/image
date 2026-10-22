@@ -76,17 +76,25 @@ check_public_builder_workflow()
         || fail 'app-policy-pair does not prohibit a runtime image pull'
     grep -Fq '10.0.32.86:5555/pocketforge/ci-rust@sha256:801f15f7e8fd20b449e3b0d0a7a56d632e28dae825b251a19a30e6f8b32bd8e9' "$workflow" \
         || fail 'app-policy-pair does not select the golden-bundled pinned image'
+    test "$(grep -c 'uses: actions/checkout@' "$workflow")" -eq \
+        "$(grep -Fxc '          persist-credentials: false' "$workflow")" \
+        || fail 'app-policy-pair leaves checkout credentials available'
 }
 
 check_signing_routes()
 {
     workflow=$1
 
+    grep -Fq "      - '.github/workflows/sign-and-scan.yml'" "$workflow" \
+        || fail 'sign-and-scan does not canary its own routing changes'
     test "$(grep -Fxc '    runs-on: [self-hosted, pf-public-ci]' "$workflow")" -eq 2 \
         || fail 'sign-and-scan package and sign jobs must use pf-public-ci'
     if grep -Eq 'runs-on:.*(pf-pr-review|pf-ci([^[:alnum:]-]|$)|pf-ci-container|pf-docker)' "$workflow"; then
         fail 'sign-and-scan retains a legacy or credential-bearing runner label'
     fi
+    test "$(grep -c 'uses: actions/checkout@' "$workflow")" -eq \
+        "$(grep -Fxc '          persist-credentials: false' "$workflow")" \
+        || fail 'sign-and-scan leaves checkout credentials available'
 }
 
 build_workflow=$root/.github/workflows/build-stage-environment.yml
