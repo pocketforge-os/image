@@ -7,7 +7,9 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import py_compile
 import sys
 import tempfile
 import unittest
@@ -171,6 +173,7 @@ class ControlSlotTests(unittest.TestCase):
             sync=lambda: None,
         )
         self.assertEqual(disposition, "zeroed-and-read-back")
+
         after = device.getvalue()
         self.assertEqual(after[:arm_offset], before[:arm_offset])
         self.assertEqual(after[arm_offset:receipt_offset], bytes(sf.SLOT_BYTES))
@@ -195,14 +198,68 @@ class ControlSlotTests(unittest.TestCase):
                 sync=lambda: None,
             )
 
+    def test_already_zero_control_slots_are_read_only(self):
+        class NoWrite(io.BytesIO):
+            def write(self, _payload):
+                raise AssertionError("second boot attempted a tail write")
+
+        arm_offset = 4096
+        receipt_offset = arm_offset + sf.SLOT_BYTES
+        device = NoWrite(bytes(receipt_offset + sf.SLOT_BYTES + 4096))
+        disposition = sf.initialize_control_slots(
+            device,
+            arm_offset=arm_offset,
+            receipt_offset=receipt_offset,
+            sync=lambda: self.fail("second boot attempted a device sync"),
+        )
+        self.assertEqual(disposition, "zeroed-and-read-back")
+
+        with self.assertRaisesRegex(sf.Refusal, "arm_slot_alignment"):
+            sf.initialize_control_slots(
+                NoWrite(bytes(receipt_offset + sf.SLOT_BYTES + 4096)),
+                arm_offset=arm_offset + 1,
+                receipt_offset=receipt_offset,
+                sync=lambda: None,
+            )
+
 class InstalledPolicyTests(unittest.TestCase):
+    def test_production_stage_import_ignores_stale_bytecode(self):
+        unit_execs = [
+            line
+            for line in UNIT.read_text(encoding="utf-8").splitlines()
+            if line.startswith("ExecStart=")
+        ]
+        self.assertEqual(
+            unit_execs,
+            ["ExecStart=/usr/lib/pocketforge/self-flash-v3-grow"],
+            "enumerate the sole production entry point that imports the stage helper",
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            installed_stage = Path(directory) / "self-flash-v3-stage"
+            stale_source = "CONTRACT_SOURCE = 'stale'\n"
+            current_source = "CONTRACT_SOURCE = 'fresh'\n"
+            self.assertEqual(len(stale_source), len(current_source))
+            installed_stage.write_text(stale_source, encoding="utf-8")
+            source_timestamp = 1_700_000_000
+            os.utime(installed_stage, (source_timestamp, source_timestamp))
+            py_compile.compile(str(installed_stage), doraise=True)
+
+            installed_stage.write_text(current_source, encoding="utf-8")
+            os.utime(installed_stage, (source_timestamp, source_timestamp))
+            with mock.patch.object(sf, "STAGE_HELPER", installed_stage):
+                loaded = sf._load_stage_helper()
+
+            self.assertEqual(loaded.CONTRACT_SOURCE, "fresh")
+
     def test_root_only_unit_cloud_override_and_packages_are_wired(self):
         cloud = CLOUD_OVERRIDE.read_text(encoding="utf-8")
         self.assertEqual(cloud, "growpart:\n  mode: off\nresize_rootfs: false\n")
 
         unit = UNIT.read_text(encoding="utf-8")
         self.assertIn("After=local-fs.target", unit)
-        self.assertNotIn("Before=cloud-init", unit)
+        self.assertIn("Before=cloud-final.service", unit)
+        self.assertNotIn("Before=cloud-init-local.service", unit)
         self.assertNotIn("Before=ssh.service", unit)
         self.assertIn("ExecStart=/usr/lib/pocketforge/self-flash-v3-grow", unit)
         self.assertIn("TimeoutStartSec=90s", unit)
@@ -211,7 +268,7 @@ class InstalledPolicyTests(unittest.TestCase):
         self.assertNotIn("Requires=", unit)
         self.assertNotIn("RequiredBy=", unit)
 
-        packages = (ROOT / "rootfs-packages.txt").read_text(encoding="utf-8").splitlines()
+        packages = (ROOT / "rootfs-packages-dev.txt").read_text(encoding="utf-8").splitlines()
         for package in ("e2fsprogs", "fdisk", "util-linux"):
             self.assertIn(package, packages)
 
@@ -222,12 +279,19 @@ class InstalledPolicyTests(unittest.TestCase):
             "-m 0700",
         ):
             self.assertIn(literal, builder)
-        for retired in (
+        for installed in (
             "/work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow",
             "/work/src/rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg",
             "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-self-flash-v3-grow.service",
         ):
+            self.assertIn(installed, builder)
+        for retired in (
+            "99-pocketforge-root-grow.cfg",
+            "root-grow-result",
+            "pocketforge-root-grow-result.service",
+        ):
             self.assertNotIn(retired, builder)
+        self.assertIn("PF_ROOT_GROW state=", HELPER.read_text(encoding="utf-8"))
         self.assertIn("tests/test-self-flash-v3-growth.py", (ROOT / ".github/workflows/hermetic-tests.yml").read_text())
 
     def test_growth_cli_has_no_device_or_geometry_authority(self):
@@ -279,6 +343,7 @@ class InstalledPolicyTests(unittest.TestCase):
     def test_known_growth_refusal_degrades_and_records_reason(self):
         with tempfile.TemporaryDirectory() as directory:
             receipt_path = Path(directory) / "self-flash-v3-growth"
+            output = io.StringIO()
             with (
                 mock.patch.object(sf, "RECEIPT_PATH", receipt_path),
                 mock.patch.object(
@@ -288,6 +353,7 @@ class InstalledPolicyTests(unittest.TestCase):
                 ),
                 mock.patch.object(sf.os, "geteuid", return_value=0),
                 mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
+                mock.patch.object(sys, "stderr", output),
             ):
                 self.assertEqual(sf.main(), 2)
 
@@ -295,6 +361,43 @@ class InstalledPolicyTests(unittest.TestCase):
             self.assertEqual(receipt["Schema"], "pocketforge.self-flash-growth-degraded/v3")
             self.assertEqual(receipt["State"], "degraded")
             self.assertEqual(receipt["FailureReason"], "reserve_too_small_for_baked_root")
+            self.assertEqual(
+                output.getvalue(),
+                "PF_ROOT_GROW state=failed reason=reserve_too_small_for_baked_root receipt=recorded\n",
+            )
+
+    def test_success_has_grown_and_already_typed_states(self):
+        base = {
+            "BeforeEndSector": 100,
+            "AfterEndSector": 200,
+            "FilesystemBytesBefore": 1000,
+            "FilesystemBytesAfter": 2000,
+        }
+        for expected, receipt in (
+            ("grown", base),
+            (
+                "already",
+                dict(
+                    base,
+                    BeforeEndSector=200,
+                    FilesystemBytesBefore=2000,
+                ),
+            ),
+        ):
+            with self.subTest(expected=expected):
+                output = io.StringIO()
+                with (
+                    mock.patch.object(sf, "_invalidate_receipt"),
+                    mock.patch.object(sf, "grow", return_value=receipt),
+                    mock.patch.object(sf.os, "geteuid", return_value=0),
+                    mock.patch.object(sys, "argv", ["self-flash-v3-grow"]),
+                    mock.patch.object(sys, "stdout", output),
+                ):
+                    self.assertEqual(sf.main(), 0)
+                self.assertEqual(
+                    output.getvalue(),
+                    f"PF_ROOT_GROW state={expected} reason=complete\n",
+                )
 
     def test_refusal_invalidates_prior_success_before_each_receipt_write_failure(self):
         class FailingOutput:

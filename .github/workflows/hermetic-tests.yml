@@ -136,7 +136,6 @@ jobs:
             tests/test-initrd-busybox-find.sh
             tests/test-self-flash-v3-growth.py
             tests/test-root-grow-firstboot.sh
-            tests/test-root-grow-report.py
             tests/test-self-flash-v3-ordering.py
             tests/test-self-flash-v3-stage.py
             tests/test-initrd-volatile-root.sh

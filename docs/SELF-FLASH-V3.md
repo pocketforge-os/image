@@ -5,14 +5,6 @@ Status: implementation contract for `tsp-mc9m.41.1018.12.36.1` and
 image and the typed kit-window operation. It does not make any existing image
 eligible.
 
-> **Superseded image policy:** current images grow root partition p5 to the end
-> of the SD card with cloud-init. They do not install this contract's capped
-> grow helper or reserve a raw tail. The staging helper therefore refuses v3
-> same-card raw-tail OTA, while ordinary on-filesystem OTA staging under
-> `/var/tmp` gains the card's capacity. The source below is retained as the
-> specification for historical v3 images and its fail-closed compatibility
-> checks; it is not the current partition policy.
-
 ## Scope and invariants
 
 Self-flash v3 loads a complete, descriptor-pinned raw image from a compressed

@@ -5,7 +5,9 @@
 #
 # Source: pocketforge-plan.md §3.5 (variant definitions)
 
+e2fsprogs
 evtest
+fdisk
 ffmpeg
 i2c-tools
 iperf3
@@ -16,3 +18,4 @@ openssh-server
 rsync
 strace
 systemd-coredump
+util-linux
