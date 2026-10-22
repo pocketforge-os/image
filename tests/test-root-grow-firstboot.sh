@@ -19,7 +19,7 @@ fail() {
     exit 1
 }
 
-for command in blockdev debugfs dumpe2fs growpart losetup mkfs.ext4 \
+for command in debugfs dumpe2fs losetup mkfs.ext4 partx \
     resize2fs sfdisk truncate udevadm; do
     command -v "${command}" >/dev/null || fail "missing test dependency: ${command}"
 done
@@ -27,8 +27,6 @@ sudo -n true || fail "passwordless sudo is required for the hermetic loop device
 
 disk="${scratch}/sd-card.img"
 payload="${scratch}/installed-root-payload.bin"
-grow_output="${scratch}/grow.out"
-second_output="${scratch}/second-grow.out"
 
 # Model the five-partition production GPT with p5 last. The initial medium is
 # deliberately larger than p5, then the same backing file is enlarged to model
@@ -77,7 +75,7 @@ max_free=$((310 * 1024 * 1024))
 
 sudo -n losetup --detach "${loop_device}"
 loop_device=""
-truncate -s 1G "${disk}"
+truncate -s 16G "${disk}"
 loop_device="$(sudo -n losetup --find --show --partscan "${disk}")"
 root_partition="${loop_device}p5"
 free_on_larger_media="$(free_bytes "${root_partition}")"
@@ -85,38 +83,47 @@ free_on_larger_media="$(free_bytes "${root_partition}")"
     || fail "ungrown filesystem free space changed after enlarging only the medium"
 echo "ROOT_GROW_RED free_bytes=${free_on_larger_media} disposition=ungrown"
 
-cloud_config="${repo_dir}/rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-root-grow.cfg"
-reporter="${repo_dir}/rootfs-overlay/usr/lib/pocketforge/root-grow-result"
-unit="${repo_dir}/rootfs-overlay/etc/systemd/system/pocketforge-root-grow-result.service"
+cloud_config="${repo_dir}/rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg"
+helper="${repo_dir}/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow"
+unit="${repo_dir}/rootfs-overlay/etc/systemd/system/pocketforge-self-flash-v3-grow.service"
 builder="${repo_dir}/scripts/build-rootfs.sh"
-[ -f "${cloud_config}" ] || fail "first-boot cloud-init growth config is absent"
-grep -Fq 'mode: auto' "${cloud_config}" || fail "growpart is not automatic"
-grep -Fq -- '- /' "${cloud_config}" || fail "growpart does not target the root partition"
-grep -Fxq 'resize_rootfs: true' "${cloud_config}" || fail "resizefs is not enabled"
-[ -x "${reporter}" ] || fail "typed root-grow reporter is absent or non-executable"
-grep -Fq 'After=cloud-final.service' "${unit}" \
-    || fail "typed reporter is not ordered after cloud-init growth"
-grep -Fq 'ExecStart=/usr/lib/pocketforge/root-grow-result' "${unit}" \
-    || fail "typed reporter unit does not execute the installed helper"
+[ -f "${cloud_config}" ] || fail "self-flash v3 cloud override is absent"
+grep -Fq 'mode: off' "${cloud_config}" || fail "competing growpart mutator is enabled"
+grep -Fxq 'resize_rootfs: false' "${cloud_config}" || fail "competing resizefs mutator is enabled"
+[ -x "${helper}" ] || fail "capped root-grow helper is absent or non-executable"
+grep -Fq 'Before=cloud-final.service' "${unit}" \
+    || fail "cloud-final can complete before capped root growth"
+grep -Fq 'ExecStart=/usr/lib/pocketforge/self-flash-v3-grow' "${unit}" \
+    || fail "root-grow unit does not execute the capped mutator"
 grep -Fq 'WantedBy=multi-user.target' "${unit}" \
-    || fail "typed reporter unit has no installation target"
+    || fail "root-grow unit has no installation target"
 for installed_path in \
-    '99-pocketforge-root-grow.cfg' \
-    'root-grow-result' \
-    'pocketforge-root-grow-result.service' \
-    'multi-user.target.wants/pocketforge-root-grow-result.service' \
-    'etc/pocketforge-root-grow'; do
+    '99-pocketforge-self-flash-v3.cfg' \
+    'self-flash-v3-grow' \
+    'pocketforge-self-flash-v3-grow.service' \
+    'multi-user.target.wants/pocketforge-self-flash-v3-grow.service' \
+    'etc/pocketforge-selfflash-v3'; do
     grep -Fq "${installed_path}" "${builder}" \
         || fail "rootfs builder does not install ${installed_path}"
 done
+grep -Fq 'PF_ROOT_GROW state=' "${helper}" \
+    || fail "capped mutator does not emit the typed root-grow result"
 
-sudo -n growpart "${loop_device}" 5 >"${grow_output}"
-sudo -n blockdev --rereadpt "${loop_device}"
+disk_bytes="$(stat -c %s "${disk}")"
+reserve_bytes=$((1024 * 1024 * 1024))
+alignment_bytes=$((4 * 1024 * 1024))
+tail_start=$(( (disk_bytes - reserve_bytes) / alignment_bytes * alignment_bytes ))
+root_start=274432
+target_sectors=$(( tail_start / 512 - root_start ))
+sudo -n sfdisk --relocate gpt-bak-std "${loop_device}" >/dev/null
+printf 'start=%s, size=%s\n' "${root_start}" "${target_sectors}" | \
+    sudo -n sfdisk --no-reread --no-tell-kernel --force -N 5 "${loop_device}" >/dev/null
+sudo -n partx --update --nr 5 "${loop_device}"
 udevadm settle
 sudo -n resize2fs "${root_partition}" >/dev/null
 free_after="$(free_bytes "${root_partition}")"
-[ "${free_after}" -gt $((free_before + 400 * 1024 * 1024)) ] \
-    || fail "grown root did not acquire the larger medium's free space"
+[ "${free_after}" -ge $((2 * 1024 * 1024 * 1024)) ] \
+    || fail "grown root has less than 2 GiB free"
 
 disk_sectors=$(( $(stat -c %s "${disk}") / 512 ))
 partition_end="$(sfdisk --json "${disk}" | python3 -c '
@@ -125,16 +132,12 @@ parts = json.load(sys.stdin)["partitiontable"]["partitions"]
 part = parts[4]
 print(part["start"] + part["size"])
 ')"
-[ "${partition_end}" -eq $((disk_sectors - 33)) ] \
-    || fail "p5 does not end immediately before the GPT backup structures"
+[ "${partition_end}" -eq $((tail_start / 512)) ] \
+    || fail "p5 does not end at the aligned self-flash v3 tail boundary"
+[ $((disk_bytes - partition_end * 512)) -eq "${reserve_bytes}" ] \
+    || fail "self-flash v3 tail is not exactly 1 GiB"
 backup_signature="$(dd if="${disk}" bs=512 skip=$((disk_sectors - 1)) count=1 status=none | head -c 8)"
 [ "${backup_signature}" = 'EFI PART' ] \
     || fail "GPT backup header was not relocated to the final LBA"
 
-if sudo -n growpart "${loop_device}" 5 >"${second_output}" 2>&1; then
-    fail "second growpart invocation changed the already-grown root"
-fi
-grep -Fq 'NOCHANGE:' "${second_output}" \
-    || fail "second growpart invocation was not the expected no-op"
-
-echo "ROOT_GROW_GREEN free_before=${free_before} free_after=${free_after} second_boot=no-op gpt_backup=final-lba"
+echo "ROOT_GROW_GREEN free_before=${free_before} free_after=${free_after} tail_bytes=${reserve_bytes} gpt_backup=final-lba"

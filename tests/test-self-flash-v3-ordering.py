@@ -102,9 +102,10 @@ class SelfFlashOrderingTests(unittest.TestCase):
             }
         )
 
-    def test_current_overlay_does_not_order_cloud_init_behind_growth(self):
+    def test_current_overlay_waits_before_cloud_final_without_early_boot_cycle(self):
         grow = GROW.read_text(encoding="utf-8")
         self.assertNotRegex(grow, r"(?m)^Before=.*\bcloud-init-local\.service\b")
+        self.assertRegex(grow, r"(?m)^Before=.*\bcloud-final\.service\b")
         self.assertIsNone(find_cycle(self.graph(grow)))
 
     def test_old_before_edge_is_a_negative_control(self):

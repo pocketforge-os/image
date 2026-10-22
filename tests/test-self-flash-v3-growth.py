@@ -202,7 +202,8 @@ class InstalledPolicyTests(unittest.TestCase):
 
         unit = UNIT.read_text(encoding="utf-8")
         self.assertIn("After=local-fs.target", unit)
-        self.assertNotIn("Before=cloud-init", unit)
+        self.assertIn("Before=cloud-final.service", unit)
+        self.assertNotIn("Before=cloud-init-local.service", unit)
         self.assertNotIn("Before=ssh.service", unit)
         self.assertIn("ExecStart=/usr/lib/pocketforge/self-flash-v3-grow", unit)
         self.assertIn("TimeoutStartSec=90s", unit)
@@ -222,12 +223,19 @@ class InstalledPolicyTests(unittest.TestCase):
             "-m 0700",
         ):
             self.assertIn(literal, builder)
-        for retired in (
+        for installed in (
             "/work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow",
             "/work/src/rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg",
             "/work/src/rootfs-overlay/etc/systemd/system/pocketforge-self-flash-v3-grow.service",
         ):
+            self.assertIn(installed, builder)
+        for retired in (
+            "99-pocketforge-root-grow.cfg",
+            "root-grow-result",
+            "pocketforge-root-grow-result.service",
+        ):
             self.assertNotIn(retired, builder)
+        self.assertIn("PF_ROOT_GROW state=", HELPER.read_text(encoding="utf-8"))
         self.assertIn("tests/test-self-flash-v3-growth.py", (ROOT / ".github/workflows/hermetic-tests.yml").read_text())
 
     def test_growth_cli_has_no_device_or_geometry_authority(self):
