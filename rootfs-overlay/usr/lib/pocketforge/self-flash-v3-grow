@@ -6,8 +6,6 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
-import importlib.machinery
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,6 +13,7 @@ import stat
 import struct
 import subprocess
 import sys
+import types
 from typing import BinaryIO, Callable, Mapping, Sequence
 
 
@@ -120,12 +119,14 @@ class Refusal(RuntimeError):
 
 
 def _load_stage_helper():
-    loader = importlib.machinery.SourceFileLoader("self_flash_v3_stage_runtime", str(STAGE_HELPER))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    if spec is None:
-        raise Refusal("stage_helper_import_failed")
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
+    # This is the production bridge to the installed geometry/controller
+    # contract.  Compile that source directly: SourceFileLoader may accept a
+    # same-size, same-second stale .pyc after an image replaces the helper.
+    module = types.ModuleType("self_flash_v3_stage_runtime")
+    module.__file__ = str(STAGE_HELPER)
+    source = STAGE_HELPER.read_bytes()
+    code = compile(source, str(STAGE_HELPER), "exec", dont_inherit=True)
+    exec(code, module.__dict__)
     return module
 
 

@@ -7,7 +7,9 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import py_compile
 import sys
 import tempfile
 import unittest
@@ -221,6 +223,35 @@ class ControlSlotTests(unittest.TestCase):
             )
 
 class InstalledPolicyTests(unittest.TestCase):
+    def test_production_stage_import_ignores_stale_bytecode(self):
+        unit_execs = [
+            line
+            for line in UNIT.read_text(encoding="utf-8").splitlines()
+            if line.startswith("ExecStart=")
+        ]
+        self.assertEqual(
+            unit_execs,
+            ["ExecStart=/usr/lib/pocketforge/self-flash-v3-grow"],
+            "enumerate the sole production entry point that imports the stage helper",
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            installed_stage = Path(directory) / "self-flash-v3-stage"
+            stale_source = "CONTRACT_SOURCE = 'stale'\n"
+            current_source = "CONTRACT_SOURCE = 'fresh'\n"
+            self.assertEqual(len(stale_source), len(current_source))
+            installed_stage.write_text(stale_source, encoding="utf-8")
+            source_timestamp = 1_700_000_000
+            os.utime(installed_stage, (source_timestamp, source_timestamp))
+            py_compile.compile(str(installed_stage), doraise=True)
+
+            installed_stage.write_text(current_source, encoding="utf-8")
+            os.utime(installed_stage, (source_timestamp, source_timestamp))
+            with mock.patch.object(sf, "STAGE_HELPER", installed_stage):
+                loaded = sf._load_stage_helper()
+
+            self.assertEqual(loaded.CONTRACT_SOURCE, "fresh")
+
     def test_root_only_unit_cloud_override_and_packages_are_wired(self):
         cloud = CLOUD_OVERRIDE.read_text(encoding="utf-8")
         self.assertEqual(cloud, "growpart:\n  mode: off\nresize_rootfs: false\n")
