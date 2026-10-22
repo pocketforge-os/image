@@ -6,6 +6,8 @@ workflow="${root}/.github/workflows/hermetic-tests.yml"
 
 grep -Fq 'tests/test-initrd-selfflash-v3-arm.py' "${workflow}"
 grep -Fq 'tests/test-self-flash-v3-growth.py' "${workflow}"
+grep -Fq 'tests/test-root-grow-firstboot.sh' "${workflow}"
+grep -Fq 'tests/test-root-grow-report.py' "${workflow}"
 grep -Fq 'tests/test-self-flash-v3-stage.py' "${workflow}"
 
 grep -Fq 'case "${t}" in' "${workflow}" || {

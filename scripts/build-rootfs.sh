@@ -1897,6 +1897,24 @@ install -d "${ROOTFS}/etc/pocketforge/keys/release.d"
 install -d "${ROOTFS}/opt/pocketforge/apps"
 install -d "${ROOTFS}/var/lib/pocketforge/apps"
 
+# --- First-boot root growth -------------------------------------------------
+# The published image has a fixed p5, but cards are larger. Let the pinned
+# cloud-init fork grow the mounted last partition and ext4 using its standard
+# growpart/resizefs modules. The result unit is read-only and non-blocking.
+install -D -o root -g root -m 0644 \
+    /work/src/rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-root-grow.cfg \
+    "${ROOTFS}/etc/cloud/cloud.cfg.d/99-pocketforge-root-grow.cfg"
+install -D -o root -g root -m 0700 \
+    /work/src/rootfs-overlay/usr/lib/pocketforge/root-grow-result \
+    "${ROOTFS}/usr/lib/pocketforge/root-grow-result"
+install -D -o root -g root -m 0644 \
+    /work/src/rootfs-overlay/etc/systemd/system/pocketforge-root-grow-result.service \
+    "${ROOTFS}/etc/systemd/system/pocketforge-root-grow-result.service"
+install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+ln -sf /etc/systemd/system/pocketforge-root-grow-result.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-root-grow-result.service"
+echo "[customize] cloud-init root growth and typed result reporter installed"
+
 # --- Boot-time entropy + random-seed -----------------------------------------
 # systemd-random-seed.service blocks boot on first boot (no saved seed, and
 # getrandom() blocks until the entropy pool is initialized). haveged provides
@@ -1923,19 +1941,7 @@ if [ "${VARIANT}" = "dev" ]; then
             install -D -o root -g root -m 0700 \
                 /work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage \
                 "${ROOTFS}/usr/lib/pocketforge/self-flash-v3-stage"
-            install -D -o root -g root -m 0700 \
-                /work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow \
-                "${ROOTFS}/usr/lib/pocketforge/self-flash-v3-grow"
-            install -D -o root -g root -m 0644 \
-                /work/src/rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg \
-                "${ROOTFS}/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg"
-            install -D -o root -g root -m 0644 \
-                /work/src/rootfs-overlay/etc/systemd/system/pocketforge-self-flash-v3-grow.service \
-                "${ROOTFS}/etc/systemd/system/pocketforge-self-flash-v3-grow.service"
-            install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
-            ln -sf /etc/systemd/system/pocketforge-self-flash-v3-grow.service \
-                "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-self-flash-v3-grow.service"
-            echo "[customize] dev: self-flash v3 root helpers and capped-growth policy installed"
+            echo "[customize] dev: self-flash v3 stage installed (raw-tail growth retired)"
             ;;
     esac
 
@@ -2321,6 +2327,18 @@ if [ "${ROOTFS_DU}" -gt 768 ]; then
 fi
 EXT4_SIZE_BLOCKS=$(( EXT4_SIZE_MB * 1024 ))   # 1K blocks for mke2fs
 echo "  ext4 target: ${EXT4_SIZE_MB} MiB (${EXT4_SIZE_BLOCKS} x 1K blocks)"
+
+# Bind the reporter to the immutable geometry of the ext4 image. The marker is
+# created after sizing and included in p5; it does not change the raw image or
+# grant the reporter any mutation authority.
+ROOT_GROW_BAKED_SECTORS=$(( EXT4_SIZE_MB * 2048 ))
+cat >"${ROOTFS_EXTRACTED}/etc/pocketforge-root-grow" <<EOF
+Schema=pocketforge.root-grow/v1
+BakedRootPartitionStartSector=251904
+BakedRootPartitionSectors=${ROOT_GROW_BAKED_SECTORS}
+EOF
+chown root:root "${ROOTFS_EXTRACTED}/etc/pocketforge-root-grow"
+chmod 0644 "${ROOTFS_EXTRACTED}/etc/pocketforge-root-grow"
 
 # The marker binds the contract to the baked partition-5 geometry. genimage's
 # fixed layout starts userdata at sector 251904; its sectors equal the exact
