@@ -13,6 +13,7 @@ import stat
 import struct
 import subprocess
 import sys
+import time
 import types
 from typing import BinaryIO, Callable, Mapping, Sequence
 
@@ -29,6 +30,8 @@ RESERVE_BYTES = 1_073_741_824
 ALIGNMENT_BYTES = 4_194_304
 GUARD_BYTES = 4_194_304
 CONTROL_BYTES = 4_194_304
+IDENTITY_WAIT_SECONDS = 10.0
+IDENTITY_POLL_SECONDS = 0.25
 MARKER_KEYS = (
     "Schema",
     "ContractSHA256",
@@ -598,6 +601,31 @@ def _invalidate_receipt() -> None:
         os.close(directory)
 
 
+def _select_sd_when_ready(
+    stage: types.ModuleType,
+    *,
+    root_major_minor: str,
+    timeout_seconds: float = IDENTITY_WAIT_SECONDS,
+    poll_seconds: float = IDENTITY_POLL_SECONDS,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, object]:
+    """Wait briefly for MMC identity attributes without weakening selection."""
+    deadline = monotonic() + timeout_seconds
+    while True:
+        try:
+            return stage.select_sd(
+                stage._discover_cards(), root_major_minor=root_major_minor
+            )
+        except stage.Refusal as error:
+            if str(error) not in {"card_type_unreadable", "card_serial_unreadable"}:
+                raise
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise
+            sleep(min(poll_seconds, remaining))
+
+
 def grow() -> dict[str, object]:
     boot_id = BOOT_ID_PATH.read_text(encoding="ascii").strip()
     invocation_id = os.environ.get("INVOCATION_ID", "")
@@ -605,7 +633,8 @@ def grow() -> dict[str, object]:
         raise Refusal("invocation_id_invalid")
     stage = _load_stage_helper()
     marker = _read_marker()
-    selected = stage.select_sd(stage._discover_cards(), root_major_minor=stage._root_major_minor())
+    root_major_minor = stage._root_major_minor()
+    selected = _select_sd_when_ready(stage, root_major_minor=root_major_minor)
     plan = derive_growth_plan(
         card_bytes=int(selected["bytes"]),
         partitions=selected["partitions"],
@@ -633,7 +662,7 @@ def grow() -> dict[str, object]:
                 input_text=definition,
             )
             _run_checked(["/usr/bin/partx", "--update", "--nr", "5", device_path])
-        refreshed = stage.select_sd(stage._discover_cards(), root_major_minor=stage._root_major_minor())
+        refreshed = _select_sd_when_ready(stage, root_major_minor=root_major_minor)
         verified = derive_growth_plan(
             card_bytes=int(refreshed["bytes"]),
             partitions=refreshed["partitions"],
