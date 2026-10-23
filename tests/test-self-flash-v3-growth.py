@@ -159,6 +159,83 @@ class GrowthGeometryTests(unittest.TestCase):
             )
 
 
+class IdentityReadinessTests(unittest.TestCase):
+    class FakeStage:
+        Refusal = stage.Refusal
+
+        def __init__(self, outcomes):
+            self.outcomes = iter(outcomes)
+
+        def _discover_cards(self):
+            outcome = next(self.outcomes)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        def select_sd(self, cards, *, root_major_minor):
+            self.root_major_minor = root_major_minor
+            return cards[0]
+
+    def test_transient_identity_wait_is_bounded_and_semantic_refusals_are_immediate(self):
+        clock = [0.0]
+        sleeps = []
+
+        def monotonic():
+            return clock[0]
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        selected = {"path": "/dev/mmcblk0"}
+        eventual = self.FakeStage(
+            [stage.Refusal("card_type_unreadable"), [selected]]
+        )
+        self.assertIs(
+            sf._select_sd_when_ready(
+                eventual,
+                root_major_minor="179:5",
+                timeout_seconds=1.0,
+                poll_seconds=0.25,
+                monotonic=monotonic,
+                sleep=sleep,
+            ),
+            selected,
+        )
+        self.assertEqual(eventual.root_major_minor, "179:5")
+        self.assertEqual(sleeps, [0.25])
+
+        clock[0] = 0.0
+        sleeps.clear()
+        exhausted = self.FakeStage(
+            [stage.Refusal("card_type_unreadable")] * 5
+        )
+        with self.assertRaisesRegex(stage.Refusal, "^card_type_unreadable$"):
+            sf._select_sd_when_ready(
+                exhausted,
+                root_major_minor="179:5",
+                timeout_seconds=0.5,
+                poll_seconds=0.25,
+                monotonic=monotonic,
+                sleep=sleep,
+            )
+        self.assertEqual(sleeps, [0.25, 0.25])
+
+        clock[0] = 0.0
+        sleeps.clear()
+        mismatch = self.FakeStage([stage.Refusal("card_type_mismatch")])
+        with self.assertRaisesRegex(stage.Refusal, "^card_type_mismatch$"):
+            sf._select_sd_when_ready(
+                mismatch,
+                root_major_minor="179:5",
+                timeout_seconds=1.0,
+                poll_seconds=0.25,
+                monotonic=monotonic,
+                sleep=sleep,
+            )
+        self.assertEqual(sleeps, [])
+
+
 class ControlSlotTests(unittest.TestCase):
     def test_only_two_control_slots_are_zeroed_and_read_back(self):
         arm_offset = 4096
