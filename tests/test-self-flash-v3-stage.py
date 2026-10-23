@@ -189,6 +189,47 @@ class DeviceDiscoveryTests(unittest.TestCase):
                     cards = sf._discover_cards()
                     sf.select_sd(cards, root_major_minor="179:5")
 
+    def test_discovery_ignores_emmc_special_areas_but_not_unreadable_user_area(self):
+        with tempfile.TemporaryDirectory(prefix="pf-sf3-discovery-emmc-areas-") as directory:
+            sys_block, dev_root = self._sysfs_card(
+                directory,
+                card_type="SD",
+                uevent_type="SD",
+                serial="0x1234abcd",
+                cid=None,
+            )
+            root = Path(directory)
+            card_device = root / "devices/platform/soc/4022000.mmc/mmc2/mmc2:0001"
+            card_block = card_device / "block/mmcblk2"
+            (card_block / "queue").mkdir(parents=True)
+            (sys_block / "mmcblk2").symlink_to(card_block)
+            (card_block / "device").symlink_to(card_device)
+            (card_block / "size").write_text("15269888\n", encoding="ascii")
+            (card_block / "queue/logical_block_size").write_text("512\n", encoding="ascii")
+            (card_device / "type").write_text("MMC\n", encoding="ascii")
+            (card_device / "uevent").write_text(
+                "DRIVER=mmcblk\nMMC_TYPE=MMC\n", encoding="ascii"
+            )
+            (card_device / "serial").write_text("0x87654321\n", encoding="ascii")
+
+            for name in ("mmcblk2boot0", "mmcblk2boot1", "mmcblk2rpmb"):
+                special = card_block / name
+                (special / "queue").mkdir(parents=True)
+                (sys_block / name).symlink_to(special)
+                (special / "device").symlink_to(card_block)
+
+            with mock.patch.object(sf, "SYS_BLOCK", sys_block), mock.patch.object(
+                sf, "DEV_ROOT", dev_root
+            ):
+                cards = sf._discover_cards()
+                self.assertEqual([card["name"] for card in cards], ["mmcblk0", "mmcblk2"])
+                self.assertEqual(sf.select_sd(cards, root_major_minor="179:5")["name"], "mmcblk0")
+
+                (card_device / "type").unlink()
+                (card_device / "uevent").unlink()
+                with self.assertRaisesRegex(sf.Refusal, "^card_type_unreadable$"):
+                    sf._discover_cards()
+
 
 class ExactStreamTests(unittest.TestCase):
     def test_exact_stream_is_durable_and_short_or_long_refuses(self):
