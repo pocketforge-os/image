@@ -41,6 +41,47 @@ sf_v3_controller_path() {
     esac
 }
 
+sf_v3_card_type() {
+    sf_v3_card_device=$1
+    sf_v3_primary_type="$(cat "$sf_v3_card_device/type" 2>/dev/null)" \
+        || sf_v3_primary_type=""
+    sf_v3_alternate_type=""
+    if [ -e "$sf_v3_card_device/uevent" ]; then
+        sf_v3_alternate_type="$(awk '
+            BEGIN { count = 0 }
+            /^MMC_TYPE=/ { count += 1; value = substr($0, 10) }
+            END {
+                if (count == 0) exit 2
+                if (count != 1 || value == "") exit 1
+                print value
+            }
+        ' "$sf_v3_card_device/uevent" 2>/dev/null)"
+        sf_v3_type_status=$?
+        [ "$sf_v3_type_status" -eq 0 ] \
+            || [ "$sf_v3_type_status" -eq 2 ] || return 1
+    fi
+    if [ -n "$sf_v3_primary_type" ] && [ -n "$sf_v3_alternate_type" ]; then
+        [ "$sf_v3_primary_type" = "$sf_v3_alternate_type" ] || return 1
+    fi
+    sf_v3_card_type_value=${sf_v3_primary_type:-$sf_v3_alternate_type}
+    [ -n "$sf_v3_card_type_value" ] || return 1
+    printf '%s\n' "$sf_v3_card_type_value"
+}
+
+sf_v3_card_serial() {
+    sf_v3_card_device=$1
+    sf_v3_primary_serial="$(cat "$sf_v3_card_device/serial" 2>/dev/null)" \
+        || sf_v3_primary_serial=""
+    if [ -n "$sf_v3_primary_serial" ]; then
+        printf '%s\n' "$sf_v3_primary_serial"
+        return 0
+    fi
+    sf_v3_cid="$(cat "$sf_v3_card_device/cid" 2>/dev/null)" || return 1
+    [ "${#sf_v3_cid}" -eq 32 ] || return 1
+    case "$sf_v3_cid" in *[!0-9a-fA-F]*) return 1 ;; esac
+    printf 'cid:%s\n' "$sf_v3_cid" | tr A-F a-f
+}
+
 sf_v3_validate_marker() {
     [ -f "$SF_V3_MARKER" ] && [ ! -L "$SF_V3_MARKER" ] || return 1
     [ "$(wc -l <"$SF_V3_MARKER")" -eq 9 ] || return 1
@@ -77,8 +118,8 @@ sf_v3_discover_sd() {
         [ ! -e "$sf_v3_entry/partition" ] || continue
         sf_v3_physical="$(readlink -f "$sf_v3_entry/device" 2>/dev/null)"
         sf_v3_controller_path "$sf_v3_physical" || continue
-        [ "$(cat "$sf_v3_entry/device/type" 2>/dev/null)" = SD ] || continue
-        sf_v3_serial="$(cat "$sf_v3_entry/device/serial" 2>/dev/null)"
+        [ "$(sf_v3_card_type "$sf_v3_entry/device")" = SD ] || continue
+        sf_v3_serial="$(sf_v3_card_serial "$sf_v3_entry/device")" || continue
         sf_v3_sectors="$(cat "$sf_v3_entry/size" 2>/dev/null)"
         sf_v3_logical="$(cat "$sf_v3_entry/queue/logical_block_size" 2>/dev/null)"
         sf_v3_uint "$sf_v3_sectors" && [ "$sf_v3_logical" = 512 ] \
