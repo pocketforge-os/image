@@ -115,7 +115,7 @@ def publish(args: argparse.Namespace) -> None:
         stage / "environment",
         "POCKETFORGE_SESSION=/run/pocketforge/session\n"
         f"POCKETFORGE_SESSION_GENERATION={number}\n"
-        "WAYLAND_DISPLAY=wayland-0\n",
+        "WAYLAND_DISPLAY=/run/pocketforge/session/wayland-0\n",
     )
     os.chmod(stage / "capabilities", 0o755)
     os.chown(args.wayland, 0 if os.geteuid() == 0 else -1, gid)
