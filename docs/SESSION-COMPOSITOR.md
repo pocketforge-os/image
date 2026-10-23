@@ -224,7 +224,7 @@ allow-list:
 ```text
 POCKETFORGE_SESSION=/run/pocketforge/session
 POCKETFORGE_SESSION_GENERATION=<unsigned decimal>
-WAYLAND_DISPLAY=wayland-0
+WAYLAND_DISPLAY=/run/pocketforge/session/wayland-0
 ```
 
 `DISPLAY` appears only in the `x11` policy environment record. The

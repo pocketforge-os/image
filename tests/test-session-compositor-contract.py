@@ -85,6 +85,10 @@ require(session["environment_publish"] == "temp-fsync-rename",
         "environment publication lost atomicity")
 for key in ("runtime_dir", "wayland_socket", "environment_file"):
     require(session[key] in doc, f"document omits session {key}")
+require("WAYLAND_DISPLAY=/run/pocketforge/session/wayland-0" in doc,
+        "session ABI document does not publish the absolute Wayland display")
+require("WAYLAND_DISPLAY=wayland-0" not in doc,
+        "session ABI document still publishes a relative Wayland display")
 
 capability = data["capability_schema"]
 require(capability["source_glob"] == "platform/devices/<id>/capabilities.toml",

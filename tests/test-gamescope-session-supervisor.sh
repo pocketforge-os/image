@@ -545,7 +545,7 @@ assert (generation.stat().st_mode & 0o777) == 0o755
 assert (generation / "environment").read_text() == (
     "POCKETFORGE_SESSION=/run/pocketforge/session\n"
     "POCKETFORGE_SESSION_GENERATION=1\n"
-    "WAYLAND_DISPLAY=wayland-0\n"
+    "WAYLAND_DISPLAY=/run/pocketforge/session/wayland-0\n"
 )
 assert not any(
     line.startswith(("DISPLAY=", "XAUTHORITY="))
