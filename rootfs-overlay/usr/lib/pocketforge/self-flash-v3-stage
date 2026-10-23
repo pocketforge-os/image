@@ -491,6 +491,12 @@ def _root_major_minor() -> str:
     return value
 
 
+def _is_mmc_user_area(entry: Path, device_link: Path) -> bool:
+    block_path = Path(os.path.realpath(entry))
+    card_path = Path(os.path.realpath(device_link))
+    return block_path.parent.name == "block" and block_path.parent.parent == card_path
+
+
 def _discover_cards() -> list[dict[str, object]]:
     cards: list[dict[str, object]] = []
     for entry in sorted(SYS_BLOCK.iterdir()):
@@ -500,6 +506,13 @@ def _discover_cards() -> list[dict[str, object]]:
         real_device = os.path.realpath(device_link)
         controller = _controller(real_device)
         if controller is None:
+            continue
+        # The kernel exposes an MMC user-area disk directly below the card's
+        # block directory.  eMMC boot and RPMB hardware areas instead live
+        # below that user-area disk and point their device link at the block
+        # disk, where card identity is intentionally absent.  Select by this
+        # sysfs relationship before requiring the card's identity below.
+        if not _is_mmc_user_area(entry, device_link):
             continue
         card_type = _card_type(device_link)
         serial = _card_serial(device_link)
