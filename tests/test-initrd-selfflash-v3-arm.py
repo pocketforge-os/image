@@ -337,6 +337,46 @@ class InitrdArmTests(unittest.TestCase):
         self.assertIn(f"sd={self.fixture.device}\n", result.stdout)
         self.assertIn("receipt=ready\n", result.stdout)
 
+    def test_initrd_uses_type_and_stable_identity_fallbacks(self) -> None:
+        physical = next((self.fixture.root / "sys/devices").rglob("card0:0001"))
+
+        (physical / "uevent").write_text(
+            "DRIVER=mmcblk\nMMC_TYPE=SD\n", encoding="ascii"
+        )
+        (physical / "type").unlink()
+        type_fallback = self.fixture.run_gate()
+        self.assertEqual(
+            type_fallback.returncode, 0, type_fallback.stdout + type_fallback.stderr
+        )
+
+        (physical / "type").write_text("SD\n", encoding="ascii")
+        (physical / "serial").unlink()
+        cid = "1b534d3030303030107f4f8d7a019f00"
+        (physical / "cid").write_text(f"{cid}\n", encoding="ascii")
+        self.fixture.request["CardSerial"] = f"cid:{cid}"
+        self.fixture.selected["serial"] = f"cid:{cid}"
+        self.fixture.write_records()
+        identity_fallback = self.fixture.run_gate()
+        self.assertEqual(
+            identity_fallback.returncode,
+            0,
+            identity_fallback.stdout + identity_fallback.stderr,
+        )
+
+    def test_initrd_identity_fallbacks_remain_fail_closed(self) -> None:
+        physical = next((self.fixture.root / "sys/devices").rglob("card0:0001"))
+        (physical / "uevent").write_text(
+            "DRIVER=mmcblk\nMMC_TYPE=MMC\n", encoding="ascii"
+        )
+        self.assert_refused()
+
+        (physical / "uevent").write_text(
+            "DRIVER=mmcblk\nMMC_TYPE=SD\n", encoding="ascii"
+        )
+        (physical / "serial").unlink()
+        (physical / "cid").write_text("not-a-cid\n", encoding="ascii")
+        self.assert_refused()
+
     def test_wrong_card_type_refused(self) -> None:
         type_file = next((self.fixture.root / "sys/devices").rglob("type"))
         type_file.write_text("MMC\n", encoding="ascii")
