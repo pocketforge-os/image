@@ -491,9 +491,22 @@ def _root_major_minor() -> str:
     return value
 
 
+def _is_mmc_user_area(name: str) -> bool:
+    suffix = name.removeprefix("mmcblk")
+    return name.startswith("mmcblk") and bool(suffix) and all(
+        character in "0123456789" for character in suffix
+    )
+
+
 def _discover_cards() -> list[dict[str, object]]:
     cards: list[dict[str, object]] = []
     for entry in sorted(SYS_BLOCK.iterdir()):
+        # eMMC exposes boot and RPMB hardware areas as separate block devices,
+        # but their device links resolve below the user-area disk and do not
+        # carry card identity.  Discover only whole MMC user-area disks; their
+        # card identity remains mandatory and fail-closed below.
+        if not _is_mmc_user_area(entry.name):
+            continue
         device_link = entry / "device"
         if not device_link.exists() or (entry / "partition").exists():
             continue
