@@ -86,7 +86,7 @@ def authorize(path: Path, user: str, timeout: float) -> None:
     with connect_authorized(path, user, timeout):
         pass
 
-    print(f"x11-authorization-ready user={user}")
+    print(f"x11-authorization-ready user={user}", flush=True)
 
 
 def notify_ready() -> None:
@@ -113,7 +113,7 @@ def probe(client: socket.socket, poll_seconds: float) -> None:
 def monitor(path: Path, user: str, timeout: float, poll_seconds: float) -> None:
     # Type=notify keeps the publisher behind this first successful ACL update.
     client = connect_authorized(path, user, timeout)
-    print(f"x11-authorization-ready user={user}")
+    print(f"x11-authorization-ready user={user}", flush=True)
     notify_ready()
     try:
         while True:
