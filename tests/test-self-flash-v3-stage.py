@@ -122,7 +122,7 @@ class DeviceDiscoveryTests(unittest.TestCase):
         root = Path(directory)
         sys_block = root / "sys/class/block"
         card_device = root / "devices/platform/soc/4020000.mmc/mmc0/mmc0:0001"
-        card_block = root / "devices/virtual/block/mmcblk0"
+        card_block = card_device / "block/mmcblk0"
         partition = card_block / "mmcblk0p5"
         for path in (sys_block, card_device, card_block / "queue", partition):
             path.mkdir(parents=True, exist_ok=True)
@@ -212,11 +212,18 @@ class DeviceDiscoveryTests(unittest.TestCase):
             )
             (card_device / "serial").write_text("0x87654321\n", encoding="ascii")
 
-            for name in ("mmcblk2boot0", "mmcblk2boot1", "mmcblk2rpmb"):
+            for name in (
+                "mmcblk2boot0",
+                "mmcblk2boot1",
+                "mmcblk2rpmb",
+                "mmcblk999",
+            ):
                 special = card_block / name
                 (special / "queue").mkdir(parents=True)
                 (sys_block / name).symlink_to(special)
                 (special / "device").symlink_to(card_block)
+                if "boot" in name:
+                    (special / "force_ro").write_text("1\n", encoding="ascii")
 
             with mock.patch.object(sf, "SYS_BLOCK", sys_block), mock.patch.object(
                 sf, "DEV_ROOT", dev_root
@@ -224,6 +231,12 @@ class DeviceDiscoveryTests(unittest.TestCase):
                 cards = sf._discover_cards()
                 self.assertEqual([card["name"] for card in cards], ["mmcblk0", "mmcblk2"])
                 self.assertEqual(sf.select_sd(cards, root_major_minor="179:5")["name"], "mmcblk0")
+                self.assertFalse(
+                    sf._is_mmc_user_area(
+                        sys_block / "mmcblk999", sys_block / "mmcblk999/device"
+                    ),
+                    "a block child must not become a user area through its name",
+                )
 
                 (card_device / "type").unlink()
                 (card_device / "uevent").unlink()
