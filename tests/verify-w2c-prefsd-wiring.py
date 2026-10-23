@@ -9,7 +9,7 @@ SYSTEMD = ROOT / "rootfs-overlay/etc/systemd/system"
 SOCKET = "/run/pocketforge/prefsd.sock"
 WRITER_GROUP = "pf-pref-writer"
 RUNTIME_SHA = "e6d3290c60581695f5a113e245e3ab17cbf6f33c"
-LAUNCHER_SHA = "0165f7863c5bebe1bc1faf4322acbb6c9ae1038d"
+LAUNCHER_SHA = "f6710cb52bcd9f0fa88fb9d0361e7f0578106890"
 
 
 def text(path: Path) -> str:
