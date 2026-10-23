@@ -380,6 +380,11 @@ class InstalledPolicyTests(unittest.TestCase):
         source = HELPER.read_text(encoding="utf-8")
         for forbidden in ("/run/", "/dev/shm", "--device", "--offset", "--seek", "--skip"):
             self.assertNotIn(forbidden, source)
+        self.assertEqual(
+            source.count("_select_sd_when_ready("),
+            3,
+            "definition plus initial and post-reread discovery must share the wait",
+        )
 
     def test_receipt_truthfully_records_control_initialization(self):
         receipt = sf.build_growth_receipt(
