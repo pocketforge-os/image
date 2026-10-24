@@ -77,11 +77,13 @@ stage_xz() {
 
 set_contract() {
     SF_V3_SD="$disk"
+    exec 9<>"$SF_V3_SD"
+    SF_V3_SD_IO=/proc/self/fd/9
     SF_V3_STAGE_OFFSET="$stage_offset"
     SF_V3_TARGET_RAW_BYTES="$raw_bytes"
     SF_V3_TARGET_RAW_SHA256="$raw_sha"
     SF_V3_WORK="$work"
-    export SF_V3_SD SF_V3_STAGE_OFFSET SF_V3_COMPRESSED_BYTES
+    export SF_V3_SD SF_V3_SD_IO SF_V3_STAGE_OFFSET SF_V3_COMPRESSED_BYTES
     export SF_V3_TARGET_RAW_BYTES SF_V3_TARGET_RAW_SHA256 SF_V3_WORK
 }
 

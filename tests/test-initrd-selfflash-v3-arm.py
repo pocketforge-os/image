@@ -724,6 +724,62 @@ class InitrdArmTests(unittest.TestCase):
         )
         self.assertEqual(v2.returncode, 0, v2.stdout + v2.stderr)
 
+    def test_transaction_io_stays_bound_after_device_path_replacement(self) -> None:
+        admitted = self.fixture.dev / "card0.admitted"
+        replacement = self.fixture.device
+        result = self.fixture.run_shell(
+            "sf_v3_load_armed_transaction && "
+            "sf_v3_selected_card_unmounted && "
+            f'mv "$SF_V3_SD" "{admitted}" && '
+            'truncate -s "$SF_V3_CARD_BYTES" "$SF_V3_SD" && '
+            "printf REPLACED | dd of=\"$SF_V3_SD\" bs=1 conv=notrunc status=none && "
+            "SF_V3_TARGET_RAW_BYTES=8 && "
+            "printf ORIGINAL | sf_v3_write_sink && "
+            "sf_v3_receipt_defaults && "
+            "sf_v3_write_receipt started none none"
+        )
+        try:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            with admitted.open("rb", buffering=0) as card:
+                self.assertEqual(card.read(8), b"ORIGINAL")
+                card.seek(self.fixture.layout["receipt_offset"])
+                admitted_receipt = card.read(stage.SLOT_BYTES)
+            with replacement.open("rb", buffering=0) as card:
+                self.assertEqual(card.read(8), b"REPLACED")
+                card.seek(self.fixture.layout["receipt_offset"])
+                replacement_receipt = card.read(stage.SLOT_BYTES)
+            self.assertIn(b"State=started\n", admitted_receipt.rstrip(b"\0"))
+            self.assertEqual(replacement_receipt, b"\0" * stage.SLOT_BYTES)
+        finally:
+            replacement.unlink(missing_ok=True)
+            if admitted.exists():
+                admitted.rename(replacement)
+
+    def test_target_fat_mount_stays_bound_after_partition_path_replacement(self) -> None:
+        partition = self.fixture.dev / "card0p5"
+        admitted = self.fixture.dev / "card0p5.admitted"
+        partition.write_bytes(b"ADMITTED")
+        result = self.fixture.run_shell(
+            "sf_v3_load_armed_transaction && "
+            "blockdev() { :; }; "
+            "sf_drop_cache() { :; }; "
+            f'findfs() {{ printf "%s\\n" "{partition}"; }}; '
+            "mkdir() { :; }; "
+            "mount() { "
+            f'mv "$SF_V3_FAT_DEVICE" "{admitted}" && '
+            'printf REPLACED >"$SF_V3_FAT_DEVICE" && '
+            'dd if="$5" bs=8 count=1 status=none; '
+            "}; "
+            "sf_v3_mount_target_fat"
+        )
+        try:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout, "ADMITTED")
+            self.assertEqual(partition.read_bytes(), b"REPLACED")
+        finally:
+            partition.unlink(missing_ok=True)
+            admitted.unlink(missing_ok=True)
+
     def test_pid1_initializes_v3_work_before_source_and_gate(self) -> None:
         source = INIT.read_text(encoding="utf-8")
         assignment = 'SF_V3_WORK=/run/pocketforge-self-flash-v3'
