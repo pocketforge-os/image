@@ -65,6 +65,8 @@ jobs:
           docker run --rm --pull=never \
             --user "$(id -u):$(id -g)" \
             -e HOME=/tmp \
+            -e CARGO_HOME=/tmp/cargo-home \
+            -e SCCACHE_DIR=/tmp/sccache \
             -e GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -w "$GITHUB_WORKSPACE" \
