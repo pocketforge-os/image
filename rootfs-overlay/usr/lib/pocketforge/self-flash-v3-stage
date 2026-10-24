@@ -431,6 +431,50 @@ def _read_int(path: Path, name: str) -> int:
         raise Refusal(f"{name}_unreadable") from error
 
 
+def _read_optional_card_text(path: Path) -> str | None:
+    try:
+        value = path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return None
+    return value or None
+
+
+def _card_type(device_link: Path) -> str:
+    primary = _read_optional_card_text(device_link / "type")
+    uevent = _read_optional_card_text(device_link / "uevent")
+    alternate: str | None = None
+    if uevent is not None:
+        values = [
+            line.removeprefix("MMC_TYPE=")
+            for line in uevent.splitlines()
+            if line.startswith("MMC_TYPE=")
+        ]
+        if len(values) == 1 and values[0]:
+            alternate = values[0]
+        elif values:
+            raise Refusal("card_type_unreadable")
+    if primary is not None and alternate is not None and primary != alternate:
+        raise Refusal("card_type_mismatch")
+    card_type = primary or alternate
+    if card_type is None:
+        raise Refusal("card_type_unreadable")
+    return card_type
+
+
+def _card_serial(device_link: Path) -> str:
+    serial = _read_optional_card_text(device_link / "serial")
+    if serial is not None:
+        return serial
+    cid = _read_optional_card_text(device_link / "cid")
+    if (
+        cid is None
+        or len(cid) != 32
+        or any(character not in "0123456789abcdefABCDEF" for character in cid)
+    ):
+        raise Refusal("card_serial_unreadable")
+    return f"cid:{cid.lower()}"
+
+
 def _root_major_minor() -> str:
     import subprocess
 
@@ -447,6 +491,12 @@ def _root_major_minor() -> str:
     return value
 
 
+def _is_mmc_user_area(entry: Path, device_link: Path) -> bool:
+    block_path = Path(os.path.realpath(entry))
+    card_path = Path(os.path.realpath(device_link))
+    return block_path.parent.name == "block" and block_path.parent.parent == card_path
+
+
 def _discover_cards() -> list[dict[str, object]]:
     cards: list[dict[str, object]] = []
     for entry in sorted(SYS_BLOCK.iterdir()):
@@ -457,13 +507,17 @@ def _discover_cards() -> list[dict[str, object]]:
         controller = _controller(real_device)
         if controller is None:
             continue
-        try:
-            card_type = (device_link / "type").read_text(encoding="ascii").strip()
-            serial = (device_link / "serial").read_text(encoding="ascii").strip()
-            sectors = _read_int(entry / "size", "card_size")
-            logical = _read_int(entry / "queue/logical_block_size", "logical_sector")
-        except OSError as error:
-            raise Refusal("card_identity_unreadable") from error
+        # The kernel exposes an MMC user-area disk directly below the card's
+        # block directory.  eMMC boot and RPMB hardware areas instead live
+        # below that user-area disk and point their device link at the block
+        # disk, where card identity is intentionally absent.  Select by this
+        # sysfs relationship before requiring the card's identity below.
+        if not _is_mmc_user_area(entry, device_link):
+            continue
+        card_type = _card_type(device_link)
+        serial = _card_serial(device_link)
+        sectors = _read_int(entry / "size", "card_size")
+        logical = _read_int(entry / "queue/logical_block_size", "logical_sector")
         partitions: list[dict[str, int | str]] = []
         partition5_major_minor = ""
         card_real = os.path.realpath(entry)

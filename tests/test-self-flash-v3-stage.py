@@ -109,6 +109,141 @@ class DeviceSelectionTests(unittest.TestCase):
             sf.select_sd([self.sd], root_major_minor="179:9")
 
 
+class DeviceDiscoveryTests(unittest.TestCase):
+    @staticmethod
+    def _sysfs_card(
+        directory: str,
+        *,
+        card_type: str | None,
+        uevent_type: str | None,
+        serial: str | None,
+        cid: str | None,
+    ) -> tuple[Path, Path]:
+        root = Path(directory)
+        sys_block = root / "sys/class/block"
+        card_device = root / "devices/platform/soc/4020000.mmc/mmc0/mmc0:0001"
+        card_block = card_device / "block/mmcblk0"
+        partition = card_block / "mmcblk0p5"
+        for path in (sys_block, card_device, card_block / "queue", partition):
+            path.mkdir(parents=True, exist_ok=True)
+        (sys_block / "mmcblk0").symlink_to(card_block)
+        (sys_block / "mmcblk0p5").symlink_to(partition)
+        (card_block / "device").symlink_to(card_device)
+        (card_block / "size").write_text("122138624\n", encoding="ascii")
+        (card_block / "queue/logical_block_size").write_text("512\n", encoding="ascii")
+        (partition / "partition").write_text("5\n", encoding="ascii")
+        (partition / "start").write_text("251904\n", encoding="ascii")
+        (partition / "size").write_text("2613248\n", encoding="ascii")
+        (partition / "dev").write_text("179:5\n", encoding="ascii")
+        if card_type is not None:
+            (card_device / "type").write_text(f"{card_type}\n", encoding="ascii")
+        if uevent_type is not None:
+            (card_device / "uevent").write_text(
+                f"DRIVER=mmcblk\nMMC_TYPE={uevent_type}\n", encoding="ascii"
+            )
+        if serial is not None:
+            (card_device / "serial").write_text(f"{serial}\n", encoding="ascii")
+        if cid is not None:
+            (card_device / "cid").write_text(f"{cid}\n", encoding="ascii")
+        return sys_block, root / "dev"
+
+    def test_discovery_uses_same_card_uevent_and_cid_fallbacks(self):
+        with tempfile.TemporaryDirectory(prefix="pf-sf3-discovery-") as directory:
+            sys_block, dev_root = self._sysfs_card(
+                directory,
+                card_type=None,
+                uevent_type="SD",
+                serial=None,
+                cid="1b534d3030303030107f4f8d7a019f00",
+            )
+            with mock.patch.object(sf, "SYS_BLOCK", sys_block), mock.patch.object(
+                sf, "DEV_ROOT", dev_root
+            ):
+                cards = sf._discover_cards()
+            selected = sf.select_sd(cards, root_major_minor="179:5")
+            self.assertEqual(selected["card_type"], "SD")
+            self.assertEqual(selected["serial"], "cid:1b534d3030303030107f4f8d7a019f00")
+            self.assertEqual(selected["partition5_major_minor"], "179:5")
+
+    def test_discovery_fallbacks_remain_fail_closed(self):
+        scenarios = (
+            ("emmc", None, "MMC", None, "1b534d3030303030107f4f8d7a019f00", "sd_selection_not_unique"),
+            ("type-conflict", "SD", "MMC", "0x1234abcd", None, "card_type_mismatch"),
+            ("malformed-cid", None, "SD", None, "not-a-cid", "card_serial_unreadable"),
+            ("identity-missing", None, None, None, None, "card_type_unreadable"),
+        )
+        for name, card_type, uevent_type, serial, cid, refusal in scenarios:
+            with self.subTest(name=name), tempfile.TemporaryDirectory(
+                prefix=f"pf-sf3-discovery-{name}-"
+            ) as directory:
+                sys_block, dev_root = self._sysfs_card(
+                    directory,
+                    card_type=card_type,
+                    uevent_type=uevent_type,
+                    serial=serial,
+                    cid=cid,
+                )
+                with mock.patch.object(sf, "SYS_BLOCK", sys_block), mock.patch.object(
+                    sf, "DEV_ROOT", dev_root
+                ), self.assertRaisesRegex(sf.Refusal, f"^{refusal}$"):
+                    cards = sf._discover_cards()
+                    sf.select_sd(cards, root_major_minor="179:5")
+
+    def test_discovery_ignores_emmc_special_areas_but_not_unreadable_user_area(self):
+        with tempfile.TemporaryDirectory(prefix="pf-sf3-discovery-emmc-areas-") as directory:
+            sys_block, dev_root = self._sysfs_card(
+                directory,
+                card_type="SD",
+                uevent_type="SD",
+                serial="0x1234abcd",
+                cid=None,
+            )
+            root = Path(directory)
+            card_device = root / "devices/platform/soc/4022000.mmc/mmc2/mmc2:0001"
+            card_block = card_device / "block/mmcblk2"
+            (card_block / "queue").mkdir(parents=True)
+            (sys_block / "mmcblk2").symlink_to(card_block)
+            (card_block / "device").symlink_to(card_device)
+            (card_block / "size").write_text("15269888\n", encoding="ascii")
+            (card_block / "queue/logical_block_size").write_text("512\n", encoding="ascii")
+            (card_device / "type").write_text("MMC\n", encoding="ascii")
+            (card_device / "uevent").write_text(
+                "DRIVER=mmcblk\nMMC_TYPE=MMC\n", encoding="ascii"
+            )
+            (card_device / "serial").write_text("0x87654321\n", encoding="ascii")
+
+            for name in (
+                "mmcblk2boot0",
+                "mmcblk2boot1",
+                "mmcblk2rpmb",
+                "mmcblk999",
+            ):
+                special = card_block / name
+                (special / "queue").mkdir(parents=True)
+                (sys_block / name).symlink_to(special)
+                (special / "device").symlink_to(card_block)
+                if "boot" in name:
+                    (special / "force_ro").write_text("1\n", encoding="ascii")
+
+            with mock.patch.object(sf, "SYS_BLOCK", sys_block), mock.patch.object(
+                sf, "DEV_ROOT", dev_root
+            ):
+                cards = sf._discover_cards()
+                self.assertEqual([card["name"] for card in cards], ["mmcblk0", "mmcblk2"])
+                self.assertEqual(sf.select_sd(cards, root_major_minor="179:5")["name"], "mmcblk0")
+                self.assertFalse(
+                    sf._is_mmc_user_area(
+                        sys_block / "mmcblk999", sys_block / "mmcblk999/device"
+                    ),
+                    "a block child must not become a user area through its name",
+                )
+
+                (card_device / "type").unlink()
+                (card_device / "uevent").unlink()
+                with self.assertRaisesRegex(sf.Refusal, "^card_type_unreadable$"):
+                    sf._discover_cards()
+
+
 class ExactStreamTests(unittest.TestCase):
     def test_exact_stream_is_durable_and_short_or_long_refuses(self):
         payload = bytes(range(251)) * 19

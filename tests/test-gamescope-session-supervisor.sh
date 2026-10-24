@@ -421,6 +421,7 @@ PY
 python3 - "${authorization_helper}" "${scratch}" <<'PY'
 import os
 from pathlib import Path
+import select
 import socket
 import struct
 import subprocess
@@ -475,6 +476,9 @@ process = subprocess.Popen(
 try:
     notify.settimeout(2)
     assert notify.recv(256).startswith(b"READY=1")
+    readable, _, _ = select.select([process.stdout], [], [], 2)
+    assert readable, "x11 ready marker was not flushed while monitor remained active"
+    assert process.stdout.readline().strip() == "x11-authorization-ready user=gamer"
     server.join(4)
     assert not server.is_alive()
     assert len(accepted) == 2
@@ -545,7 +549,7 @@ assert (generation.stat().st_mode & 0o777) == 0o755
 assert (generation / "environment").read_text() == (
     "POCKETFORGE_SESSION=/run/pocketforge/session\n"
     "POCKETFORGE_SESSION_GENERATION=1\n"
-    "WAYLAND_DISPLAY=wayland-0\n"
+    "WAYLAND_DISPLAY=/run/pocketforge/session/wayland-0\n"
 )
 assert not any(
     line.startswith(("DISPLAY=", "XAUTHORITY="))

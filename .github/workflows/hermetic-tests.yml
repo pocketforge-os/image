@@ -2,8 +2,9 @@ name: hermetic tests
 
 # Runs the image repo's hermetic tests/*.sh on every PR (bd tsp-mc9m.41.984.30).
 # "Hermetic" here means: no docker daemon, no network, no live device state --
-# only tmpdir fixtures, fake PATH binaries and local toolchains (cc, bwrap,
-# python3, mtools/dosfstools). Before this workflow the repo had ZERO PR-time
+# only tmpdir fixtures, an ephemeral loop-backed disk, fake PATH binaries and
+# local toolchains (cc, bwrap, python3, mtools/dosfstools). Before this workflow
+# the repo had ZERO PR-time
 # test signal (memory image-repo-runs-no-pr-checks: only sign-and-scan.yml
 # existed, gated to apps/** changes), so tests/test-rootfs-fallback-profile.sh
 # went red on main for a full cycle (ea8c7b8, tsp-mc9m.41.984.20.1) before
@@ -134,6 +135,7 @@ jobs:
             tests/test-initrd-selfflash-v3-arm.py
             tests/test-initrd-busybox-find.sh
             tests/test-self-flash-v3-growth.py
+            tests/test-root-grow-firstboot.sh
             tests/test-self-flash-v3-ordering.py
             tests/test-self-flash-v3-stage.py
             tests/test-initrd-volatile-root.sh
@@ -174,6 +176,7 @@ jobs:
             tests/test-session-authority-systemd-safety.sh
             tests/test-session-compositor-contract.sh
             tests/test-shell-fonts.sh
+            tests/test-steamlink-ffmpeg59-config-normalizer.sh
             tests/test-steamlink-ffmpeg59-runtime.sh
             tests/test-userdata-partition.sh
             tests/test-uboot-logo.sh

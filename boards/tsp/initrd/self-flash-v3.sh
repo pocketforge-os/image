@@ -18,6 +18,7 @@ SF_V3_SYS_CLASS_BLOCK="${SF_V3_SYS_CLASS_BLOCK:-/sys/class/block}"
 SF_V3_DEV_ROOT="${SF_V3_DEV_ROOT:-/dev}"
 SF_V3_MARKER="${SF_V3_MARKER:-/etc/pocketforge-selfflash-v3}"
 SF_V3_UPTIME="${SF_V3_UPTIME:-/proc/uptime}"
+SF_V3_MOUNTINFO_FILE="${SF_V3_MOUNTINFO_FILE:-${SF_MOUNTINFO_FILE:-/proc/self/mountinfo}}"
 SF_V3_EXPECTED_CONTRACT_SHA256="${SF_V3_EXPECTED_CONTRACT_SHA256:-@SELF_FLASH_V3_CONTRACT_SHA256@}"
 
 sf_v3_sha() {
@@ -39,6 +40,103 @@ sf_v3_controller_path() {
         *'/4020000.mmc/'*|*'/04020000.mmc/'*|*'/sdmmc@04020000/'*) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+sf_v3_card_type() {
+    sf_v3_card_device=$1
+    sf_v3_primary_type="$(cat "$sf_v3_card_device/type" 2>/dev/null)" \
+        || sf_v3_primary_type=""
+    sf_v3_alternate_type=""
+    if [ -e "$sf_v3_card_device/uevent" ]; then
+        sf_v3_alternate_type="$(awk '
+            BEGIN { count = 0 }
+            /^MMC_TYPE=/ { count += 1; value = substr($0, 10) }
+            END {
+                if (count == 0) exit 2
+                if (count != 1 || value == "") exit 1
+                print value
+            }
+        ' "$sf_v3_card_device/uevent" 2>/dev/null)"
+        sf_v3_type_status=$?
+        [ "$sf_v3_type_status" -eq 0 ] \
+            || [ "$sf_v3_type_status" -eq 2 ] || return 1
+    fi
+    if [ -n "$sf_v3_primary_type" ] && [ -n "$sf_v3_alternate_type" ]; then
+        [ "$sf_v3_primary_type" = "$sf_v3_alternate_type" ] || return 1
+    fi
+    sf_v3_card_type_value=${sf_v3_primary_type:-$sf_v3_alternate_type}
+    [ -n "$sf_v3_card_type_value" ] || return 1
+    printf '%s\n' "$sf_v3_card_type_value"
+}
+
+sf_v3_card_serial() {
+    sf_v3_card_device=$1
+    sf_v3_primary_serial="$(cat "$sf_v3_card_device/serial" 2>/dev/null)" \
+        || sf_v3_primary_serial=""
+    if [ -n "$sf_v3_primary_serial" ]; then
+        printf '%s\n' "$sf_v3_primary_serial"
+        return 0
+    fi
+    sf_v3_cid="$(cat "$sf_v3_card_device/cid" 2>/dev/null)" || return 1
+    [ "${#sf_v3_cid}" -eq 32 ] || return 1
+    case "$sf_v3_cid" in *[!0-9a-fA-F]*) return 1 ;; esac
+    printf 'cid:%s\n' "$sf_v3_cid" | tr A-F a-f
+}
+
+sf_v3_node_identity() {
+    sf_v3_node="$1"
+    if [ "$SF_V3_DEV_ROOT" = /dev ]; then
+        sf_v3_rdev="$(stat -Lc '%t:%T' "$sf_v3_node" 2>/dev/null)" || return 1
+        case "$sf_v3_rdev" in
+            *:*) ;;
+            *) return 1 ;;
+        esac
+        sf_v3_major_hex=${sf_v3_rdev%%:*}
+        sf_v3_minor_hex=${sf_v3_rdev#*:}
+        case "$sf_v3_major_hex:$sf_v3_minor_hex" in
+            *[!0-9a-fA-F:]*) return 1 ;;
+        esac
+        printf '%s:%s\n' "$((0x$sf_v3_major_hex))" "$((0x$sf_v3_minor_hex))"
+    else
+        # Hermetic fixtures use regular sparse files rather than block nodes.
+        stat -Lc 'file:%d:%i' "$sf_v3_node" 2>/dev/null
+    fi
+}
+
+sf_v3_pin_selected_card() {
+    SF_V3_CARD_IDENTITY_REASON=no_card_identity
+    sf_v3_resolve_selected_card_sys || return 1
+    sf_v3_path_identity="$(sf_v3_node_identity "$SF_V3_SD")" || return 1
+    if [ "$SF_V3_DEV_ROOT" = /dev ] \
+            && [ "$sf_v3_path_identity" != "$SF_V3_ADMITTED_CARD_DEV" ]; then
+        SF_V3_CARD_IDENTITY_REASON=stale_card_identity
+        export SF_V3_CARD_IDENTITY_REASON
+        return 1
+    fi
+    exec 9<>"$SF_V3_SD" || return 1
+    sf_v3_open_identity="$(sf_v3_node_identity /proc/self/fd/9)" || {
+        exec 9>&-
+        return 1
+    }
+    if [ "$sf_v3_open_identity" != "$sf_v3_path_identity" ] \
+            || ! sf_v3_resolve_selected_card_sys; then
+        SF_V3_CARD_IDENTITY_REASON=stale_card_identity
+        export SF_V3_CARD_IDENTITY_REASON
+        exec 9>&-
+        return 1
+    fi
+    SF_V3_SD_IO=/proc/self/fd/9
+    SF_V3_ADMITTED_NODE_IDENTITY="$sf_v3_open_identity"
+    export SF_V3_SD_IO SF_V3_ADMITTED_NODE_IDENTITY
+}
+
+sf_v3_unpin_selected_card() {
+    if [ -n "${SF_V3_SD_IO:-}" ]; then
+        exec 9>&- || return 1
+    fi
+    SF_V3_SD_IO=""
+    SF_V3_ADMITTED_NODE_IDENTITY=""
+    export SF_V3_SD_IO SF_V3_ADMITTED_NODE_IDENTITY
 }
 
 sf_v3_validate_marker() {
@@ -64,6 +162,7 @@ sf_v3_validate_marker() {
 }
 
 sf_v3_discover_sd() {
+    sf_v3_unpin_selected_card || return 1
     sf_v3_root_major_minor="${SF_V3_ROOT_MAJOR_MINOR:-}"
     if [ -z "$sf_v3_root_major_minor" ] && [ -n "${SF_ROOTPART:-}" ]; then
         sf_v3_root_major_minor="$(cat "$SF_V3_SYS_CLASS_BLOCK/${SF_ROOTPART##*/}/dev" 2>/dev/null)"
@@ -71,14 +170,18 @@ sf_v3_discover_sd() {
     [ -n "$sf_v3_root_major_minor" ] || return 1
     sf_v3_match_count=0
     SF_V3_SD=""
+    SF_V3_SD_SYS=""
+    SF_V3_ADMITTED_CARD_SYS=""
+    SF_V3_ADMITTED_CARD_DEVICE_SYS=""
+    SF_V3_ADMITTED_CARD_DEV=""
     for sf_v3_entry in "$SF_V3_SYS_CLASS_BLOCK"/*; do
         [ -e "$sf_v3_entry" ] || continue
         [ -e "$sf_v3_entry/device" ] || continue
         [ ! -e "$sf_v3_entry/partition" ] || continue
         sf_v3_physical="$(readlink -f "$sf_v3_entry/device" 2>/dev/null)"
         sf_v3_controller_path "$sf_v3_physical" || continue
-        [ "$(cat "$sf_v3_entry/device/type" 2>/dev/null)" = SD ] || continue
-        sf_v3_serial="$(cat "$sf_v3_entry/device/serial" 2>/dev/null)"
+        [ "$(sf_v3_card_type "$sf_v3_entry/device")" = SD ] || continue
+        sf_v3_serial="$(sf_v3_card_serial "$sf_v3_entry/device")" || continue
         sf_v3_sectors="$(cat "$sf_v3_entry/size" 2>/dev/null)"
         sf_v3_logical="$(cat "$sf_v3_entry/queue/logical_block_size" 2>/dev/null)"
         sf_v3_uint "$sf_v3_sectors" && [ "$sf_v3_logical" = 512 ] \
@@ -107,6 +210,9 @@ sf_v3_discover_sd() {
         sf_v3_match_count=$((sf_v3_match_count + 1))
         SF_V3_SD="$sf_v3_device"
         SF_V3_SD_SYS="$sf_v3_entry"
+        SF_V3_ADMITTED_CARD_SYS="$sf_v3_whole_real"
+        SF_V3_ADMITTED_CARD_DEVICE_SYS="$sf_v3_physical"
+        SF_V3_ADMITTED_CARD_DEV="$(cat "$sf_v3_entry/dev" 2>/dev/null)"
         SF_V3_CARD_SERIAL="$sf_v3_serial"
         SF_V3_CARD_BYTES=$((sf_v3_sectors * sf_v3_logical))
     done
@@ -170,10 +276,11 @@ sf_v3_discover_sd() {
         || return 1
     SF_V3_PARTITION_LAYOUT_SHA256="$(sha256sum "$sf_v3_partition_file.sorted" \
         | awk '{print $1}')"
+    sf_v3_pin_selected_card
 }
 
 sf_v3_read_slot() {
-    dd if="$SF_V3_SD" of="$2" bs="$SF_V3_TRANSFER_BYTES" \
+    dd if="$SF_V3_SD_IO" of="$2" bs="$SF_V3_TRANSFER_BYTES" \
         skip="$1" count="$SF_V3_SLOT_BYTES" \
         iflag=skip_bytes,count_bytes,fullblock status=none \
         || return 1
@@ -426,7 +533,7 @@ sf_v3_write_receipt() {
         status=none || return 1
     dd if="$sf_v3_receipt_record" of="$sf_v3_receipt_slot" conv=notrunc \
         status=none || return 1
-    dd if="$sf_v3_receipt_slot" of="$SF_V3_SD" bs="$SF_V3_TRANSFER_BYTES" \
+    dd if="$sf_v3_receipt_slot" of="$SF_V3_SD_IO" bs="$SF_V3_TRANSFER_BYTES" \
         seek="$SF_V3_RECEIPT_OFFSET" count="$SF_V3_SLOT_BYTES" \
         iflag=count_bytes,fullblock oflag=seek_bytes conv=notrunc,fsync status=none \
         || return 1
@@ -470,6 +577,7 @@ sf_v3_install_stamp() {
 sf_v3_load_armed_transaction() {
     SF_V3_LOAD_STATE=refused
     export SF_V3_LOAD_STATE
+    sf_v3_unpin_selected_card || return 1
     mkdir -p "$SF_V3_WORK" || return 1
     sf_v3_clean_work || return 1
     sf_v3_validate_marker || { sf_v3_clean_work; return 1; }
@@ -479,19 +587,20 @@ sf_v3_load_armed_transaction() {
     sf_v3_arm_record="$SF_V3_WORK/arm.record"
     sf_v3_receipt_record="$SF_V3_WORK/receipt.record"
     sf_v3_read_slot "$SF_V3_ARM_OFFSET" "$sf_v3_arm_slot" \
-        || { sf_v3_clean_work; return 1; }
+        || { sf_v3_clean_work; sf_v3_unpin_selected_card; return 1; }
     if [ "$(tr -d '\000' <"$sf_v3_arm_slot" | wc -c)" -eq 0 ]; then
         SF_V3_LOAD_STATE=absent
         export SF_V3_LOAD_STATE
         sf_v3_clean_work
+        sf_v3_unpin_selected_card
         return 1
     fi
     sf_v3_decode_slot "$sf_v3_arm_slot" "$sf_v3_arm_record" 27 ArmRecordSHA256 \
         && sf_v3_validate_arm "$sf_v3_arm_record" \
-        || { sf_v3_clean_work; return 1; }
+        || { sf_v3_clean_work; sf_v3_unpin_selected_card; return 1; }
     sf_v3_read_slot "$SF_V3_RECEIPT_OFFSET" "$sf_v3_receipt_slot" \
         && sf_v3_decode_slot "$sf_v3_receipt_slot" "$sf_v3_receipt_record" 29 ReceiptRecordSHA256 \
-        || { sf_v3_clean_work; return 1; }
+        || { sf_v3_clean_work; sf_v3_unpin_selected_card; return 1; }
     SF_V3_RECEIPT_STATE="$(sf_v3_get_line "$sf_v3_receipt_record" 2)"
     if [ "$SF_V3_RECEIPT_STATE" != ready ]; then
         case "$SF_V3_RECEIPT_STATE" in
@@ -500,10 +609,11 @@ sf_v3_load_armed_transaction() {
         esac
         export SF_V3_LOAD_STATE
         sf_v3_clean_work
+        sf_v3_unpin_selected_card
         return 1
     fi
     sf_v3_validate_ready_receipt "$sf_v3_receipt_record" \
-        || { sf_v3_clean_work; return 1; }
+        || { sf_v3_clean_work; sf_v3_unpin_selected_card; return 1; }
     SF_V3_LOAD_STATE=ready
     export SF_V3_LOAD_STATE
     sf_v3_clean_work
@@ -514,13 +624,13 @@ sf_v3_require_pipefail() {
 }
 
 sf_v3_read_stage() {
-    dd if="$SF_V3_SD" bs="$SF_V3_TRANSFER_BYTES" \
+    dd if="$SF_V3_SD_IO" bs="$SF_V3_TRANSFER_BYTES" \
         skip="$SF_V3_STAGE_OFFSET" count="$SF_V3_COMPRESSED_BYTES" \
         iflag=skip_bytes,count_bytes,fullblock status=none
 }
 
 sf_v3_read_seed() {
-    dd if="$SF_V3_SD" bs="$SF_V3_TRANSFER_BYTES" \
+    dd if="$SF_V3_SD_IO" bs="$SF_V3_TRANSFER_BYTES" \
         skip="$SF_V3_SEED_OFFSET" count="$SF_V3_SEED_BYTES" \
         iflag=skip_bytes,count_bytes,fullblock status=none
 }
@@ -614,24 +724,156 @@ sf_v3_install_seed() {
 }
 
 sf_v3_write_sink() {
-    dd of="$SF_V3_SD" bs="$SF_V3_TRANSFER_BYTES" \
+    dd of="$SF_V3_SD_IO" bs="$SF_V3_TRANSFER_BYTES" \
         count="$SF_V3_TARGET_RAW_BYTES" iflag=count_bytes,fullblock \
         conv=notrunc,fsync status=none
 }
 
+sf_v3_resolve_selected_card_sys() {
+    SF_V3_CARD_IDENTITY_REASON=no_card_identity
+    SF_V3_SELECTED_CARD_SYS=""
+    [ -n "${SF_V3_SD:-}" ] && [ -n "${SF_V3_SD_SYS:-}" ] \
+        && [ -n "${SF_V3_ADMITTED_CARD_SYS:-}" ] \
+        && [ -n "${SF_V3_ADMITTED_CARD_DEVICE_SYS:-}" ] \
+        && [ -n "${SF_V3_ADMITTED_CARD_DEV:-}" ] || return 1
+    sf_v3_selected_name="${SF_V3_SD_SYS##*/}"
+    [ "$SF_V3_SD_SYS" = "$SF_V3_SYS_CLASS_BLOCK/$sf_v3_selected_name" ] \
+        && [ "$SF_V3_SD" = "$SF_V3_DEV_ROOT/$sf_v3_selected_name" ] \
+        && [ -e "$SF_V3_SD_SYS" ] || return 1
+    sf_v3_current_card_sys="$(readlink -f "$SF_V3_SD_SYS" 2>/dev/null)"
+    sf_v3_current_device_sys="$(readlink -f "$SF_V3_SD_SYS/device" 2>/dev/null)"
+    sf_v3_current_dev="$(cat "$SF_V3_SD_SYS/dev" 2>/dev/null)"
+    sf_v3_current_serial="$(sf_v3_card_serial "$SF_V3_SD_SYS/device" 2>/dev/null)"
+    sf_v3_current_sectors="$(cat "$SF_V3_SD_SYS/size" 2>/dev/null)"
+    sf_v3_current_logical="$(cat "$SF_V3_SD_SYS/queue/logical_block_size" 2>/dev/null)"
+    if [ "$sf_v3_current_card_sys" != "$SF_V3_ADMITTED_CARD_SYS" ] \
+            || [ "$sf_v3_current_device_sys" != "$SF_V3_ADMITTED_CARD_DEVICE_SYS" ] \
+            || [ "$sf_v3_current_dev" != "$SF_V3_ADMITTED_CARD_DEV" ] \
+            || [ "$sf_v3_current_serial" != "$SF_V3_CARD_SERIAL" ] \
+            || ! sf_v3_uint "$sf_v3_current_sectors" \
+            || [ "$sf_v3_current_logical" != 512 ] \
+            || [ $((sf_v3_current_sectors * sf_v3_current_logical)) \
+                -ne "$SF_V3_CARD_BYTES" ]; then
+        SF_V3_CARD_IDENTITY_REASON=stale_card_identity
+        export SF_V3_CARD_IDENTITY_REASON SF_V3_SELECTED_CARD_SYS
+        return 1
+    fi
+    SF_V3_SELECTED_CARD_SYS="$SF_V3_ADMITTED_CARD_SYS"
+    SF_V3_CARD_IDENTITY_REASON=resolved
+    export SF_V3_CARD_IDENTITY_REASON SF_V3_SELECTED_CARD_SYS
+}
+
+sf_v3_partition_on_selected_card() {
+    sf_v3_partition="$1"
+    sf_v3_resolve_selected_card_sys || return 1
+    sf_v3_partition_sys="$SF_V3_SYS_CLASS_BLOCK/${sf_v3_partition##*/}"
+    [ -e "$sf_v3_partition_sys" ] || return 1
+    sf_v3_partition_real="$(readlink -f "$sf_v3_partition_sys" 2>/dev/null)"
+    case "$sf_v3_partition_real" in
+        "$SF_V3_SELECTED_CARD_SYS"/*) return 0 ;;
+    esac
+    return 1
+}
+
+sf_v3_pin_target_fat() {
+    sf_v3_partition="$1"
+    sf_v3_partition_on_selected_card "$sf_v3_partition" || return 1
+    sf_v3_partition_identity="$(sf_v3_node_identity "$sf_v3_partition")" || return 1
+    sf_v3_partition_sys="$SF_V3_SYS_CLASS_BLOCK/${sf_v3_partition##*/}"
+    sf_v3_partition_dev="$(cat "$sf_v3_partition_sys/dev" 2>/dev/null)" || return 1
+    if [ "$SF_V3_DEV_ROOT" = /dev ] \
+            && [ "$sf_v3_partition_identity" != "$sf_v3_partition_dev" ]; then
+        return 1
+    fi
+    exec 8<>"$sf_v3_partition" || return 1
+    sf_v3_open_partition_identity="$(sf_v3_node_identity /proc/self/fd/8)" || {
+        exec 8>&-
+        return 1
+    }
+    if [ "$sf_v3_open_partition_identity" != "$sf_v3_partition_identity" ] \
+            || ! sf_v3_partition_on_selected_card "$sf_v3_partition" \
+            || [ "$(cat "$sf_v3_partition_sys/dev" 2>/dev/null)" \
+                != "$sf_v3_partition_dev" ]; then
+        exec 8>&-
+        return 1
+    fi
+    SF_V3_FAT_IO=/proc/self/fd/8
+    export SF_V3_FAT_IO
+}
+
+sf_v3_selected_card_unmounted() {
+    SF_V3_UNMOUNT_REASON=no_card_identity
+    SF_V3_MOUNTED_DEV=""
+    SF_V3_MOUNTED_PATH=""
+    export SF_V3_UNMOUNT_REASON SF_V3_MOUNTED_DEV SF_V3_MOUNTED_PATH
+    if ! sf_v3_resolve_selected_card_sys; then
+        SF_V3_UNMOUNT_REASON="$SF_V3_CARD_IDENTITY_REASON"
+        export SF_V3_UNMOUNT_REASON
+        return 1
+    fi
+    sf_v3_dev_count=0
+    for sf_v3_dev_file in \
+            "$SF_V3_SELECTED_CARD_SYS/dev" "$SF_V3_SELECTED_CARD_SYS"/*/dev; do
+        [ -f "$sf_v3_dev_file" ] || continue
+        sf_v3_dev_count=$((sf_v3_dev_count + 1))
+        sf_v3_major_minor="$(cat "$sf_v3_dev_file" 2>/dev/null)"
+        if [ -z "$sf_v3_major_minor" ]; then
+            SF_V3_UNMOUNT_REASON=mount_state_unavailable
+            export SF_V3_UNMOUNT_REASON
+            return 1
+        fi
+        sf_v3_mount_path="$(awk -v dev="$sf_v3_major_minor" \
+            '$3 == dev { print $5; exit }' "$SF_V3_MOUNTINFO_FILE")" || {
+                SF_V3_UNMOUNT_REASON=mount_state_unavailable
+                export SF_V3_UNMOUNT_REASON
+                return 1
+            }
+        if [ -n "$sf_v3_mount_path" ]; then
+            SF_V3_UNMOUNT_REASON=mounted
+            SF_V3_MOUNTED_DEV="$sf_v3_major_minor"
+            SF_V3_MOUNTED_PATH="$sf_v3_mount_path"
+            export SF_V3_UNMOUNT_REASON SF_V3_MOUNTED_DEV SF_V3_MOUNTED_PATH
+            return 1
+        fi
+    done
+    if [ "$sf_v3_dev_count" -eq 0 ]; then
+        SF_V3_UNMOUNT_REASON=no_card_identity
+        export SF_V3_UNMOUNT_REASON
+        return 1
+    fi
+    SF_V3_UNMOUNT_REASON=unmounted
+    export SF_V3_UNMOUNT_REASON
+    return 0
+}
+
 sf_v3_mount_target_fat() {
-    blockdev --rereadpt "$SF_V3_SD" || return 1
+    blockdev --rereadpt "$SF_V3_SD_IO" || return 1
     sf_drop_cache
     SF_V3_FAT_DEVICE="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
     [ -n "$SF_V3_FAT_DEVICE" ] \
-        && sf_v2_partition_on_selected_card "$SF_V3_FAT_DEVICE" || return 1
+        && sf_v3_pin_target_fat "$SF_V3_FAT_DEVICE" || return 1
     SF_V3_FAT=/sf-v3-fat
-    mkdir -p "$SF_V3_FAT" || return 1
-    mount -t vfat -o rw,flush "$SF_V3_FAT_DEVICE" "$SF_V3_FAT" 2>/dev/null
+    mkdir -p "$SF_V3_FAT" || {
+        exec 8>&-
+        SF_V3_FAT_IO=""
+        export SF_V3_FAT_IO
+        return 1
+    }
+    mount -t vfat -o rw,flush "$SF_V3_FAT_IO" "$SF_V3_FAT" 2>/dev/null || {
+        exec 8>&-
+        SF_V3_FAT_IO=""
+        export SF_V3_FAT_IO
+        return 1
+    }
 }
 
 sf_v3_unmount_target_fat() {
-    umount "$SF_V3_FAT" 2>/dev/null
+    sf_v3_unmount_rc=0
+    umount "$SF_V3_FAT" 2>/dev/null || sf_v3_unmount_rc=$?
+    exec 8>&-
+    SF_V3_FAT_IO=""
+    export SF_V3_FAT_IO
+    return "$sf_v3_unmount_rc"
 }
 
 sf_v3_record_failure() {
@@ -752,7 +994,7 @@ sf_v3_stream_write() {
     [ "$SF_V3_TARGET_RAW_BYTES" -gt 0 ] 2>/dev/null || return 1
     [ "${#SF_V3_TARGET_RAW_SHA256}" -eq 64 ] || return 1
     case "$SF_V3_TARGET_RAW_SHA256" in *[!0-9a-f]*) return 1 ;; esac
-    [ -n "$SF_V3_SD" ] && [ -n "$SF_V3_WORK" ] || return 1
+    [ -n "$SF_V3_SD_IO" ] && [ -n "$SF_V3_WORK" ] || return 1
 
     mkdir -p "$SF_V3_WORK" || return 1
     sf_v3_clean_work || return 1

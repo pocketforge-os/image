@@ -94,6 +94,21 @@ def main() -> int:
         handle.write(mode + "\n")
     descriptor = os.environ.get("PF_DESCRIPTOR", "")
     broker = os.environ.get("PF_BROKER_SOCK", "")
+    runtime_directory = os.environ.get("XDG_RUNTIME_DIR", "")
+    try:
+        runtime_stat = os.stat(runtime_directory)
+        runtime_directory_is_dir = stat.S_ISDIR(runtime_stat.st_mode)
+        runtime_directory_mode = oct(stat.S_IMODE(runtime_stat.st_mode))
+        runtime_directory_uid = runtime_stat.st_uid
+        runtime_probe = Path(runtime_directory) / ".pf-fixture-probe"
+        runtime_probe.write_text("private\n")
+        runtime_probe.unlink()
+        runtime_directory_writable = True
+    except OSError:
+        runtime_directory_is_dir = False
+        runtime_directory_mode = None
+        runtime_directory_uid = None
+        runtime_directory_writable = False
     authority = "/run/pocketforge/session-authority.sock"
     prefsd = "/run/pocketforge/prefsd.sock"
     try:
@@ -104,6 +119,11 @@ def main() -> int:
         "mode": mode,
         "POCKETFORGE_SESSION": os.environ.get("POCKETFORGE_SESSION"),
         "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY"),
+        "XDG_RUNTIME_DIR": runtime_directory,
+        "runtime_directory_is_dir": runtime_directory_is_dir,
+        "runtime_directory_mode": runtime_directory_mode,
+        "runtime_directory_uid": runtime_directory_uid,
+        "runtime_directory_writable": runtime_directory_writable,
         "wayland_socket": stat.S_ISSOCK(
             os.stat("/run/pocketforge/session/wayland-0").st_mode
         ),

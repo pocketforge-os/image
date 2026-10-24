@@ -6,8 +6,6 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
-import importlib.machinery
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,6 +13,8 @@ import stat
 import struct
 import subprocess
 import sys
+import time
+import types
 from typing import BinaryIO, Callable, Mapping, Sequence
 
 
@@ -30,6 +30,8 @@ RESERVE_BYTES = 1_073_741_824
 ALIGNMENT_BYTES = 4_194_304
 GUARD_BYTES = 4_194_304
 CONTROL_BYTES = 4_194_304
+IDENTITY_WAIT_SECONDS = 10.0
+IDENTITY_POLL_SECONDS = 0.25
 MARKER_KEYS = (
     "Schema",
     "ContractSHA256",
@@ -120,12 +122,14 @@ class Refusal(RuntimeError):
 
 
 def _load_stage_helper():
-    loader = importlib.machinery.SourceFileLoader("self_flash_v3_stage_runtime", str(STAGE_HELPER))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    if spec is None:
-        raise Refusal("stage_helper_import_failed")
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
+    # This is the production bridge to the installed geometry/controller
+    # contract.  Compile that source directly: SourceFileLoader may accept a
+    # same-size, same-second stale .pyc after an image replaces the helper.
+    module = types.ModuleType("self_flash_v3_stage_runtime")
+    module.__file__ = str(STAGE_HELPER)
+    source = STAGE_HELPER.read_bytes()
+    code = compile(source, str(STAGE_HELPER), "exec", dont_inherit=True)
+    exec(code, module.__dict__)
     return module
 
 
@@ -214,6 +218,9 @@ def initialize_control_slots(
     sync: Callable[[], None],
     success_stamp: Mapping[str, str] | None = None,
 ) -> str:
+    for name, offset in (("arm", arm_offset), ("receipt", receipt_offset)):
+        if offset < 0 or offset % LOGICAL_SECTOR_BYTES:
+            raise Refusal(f"{name}_slot_alignment")
     device.seek(arm_offset)
     existing_arm = device.read(SLOT_BYTES)
     if len(existing_arm) != SLOT_BYTES:
@@ -230,9 +237,9 @@ def initialize_control_slots(
         receipt_offset=receipt_offset,
     )
     zeroes = bytes(SLOT_BYTES)
+    if existing_arm == zeroes and existing_receipt == zeroes:
+        return "zeroed-and-read-back"
     for name, offset in (("arm", arm_offset), ("receipt", receipt_offset)):
-        if offset < 0 or offset % LOGICAL_SECTOR_BYTES:
-            raise Refusal(f"{name}_slot_alignment")
         device.seek(offset)
         if device.write(zeroes) != SLOT_BYTES:
             raise Refusal(f"{name}_slot_write_short")
@@ -594,6 +601,31 @@ def _invalidate_receipt() -> None:
         os.close(directory)
 
 
+def _select_sd_when_ready(
+    stage: types.ModuleType,
+    *,
+    root_major_minor: str,
+    timeout_seconds: float = IDENTITY_WAIT_SECONDS,
+    poll_seconds: float = IDENTITY_POLL_SECONDS,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, object]:
+    """Wait briefly for MMC identity attributes without weakening selection."""
+    deadline = monotonic() + timeout_seconds
+    while True:
+        try:
+            return stage.select_sd(
+                stage._discover_cards(), root_major_minor=root_major_minor
+            )
+        except stage.Refusal as error:
+            if str(error) not in {"card_type_unreadable", "card_serial_unreadable"}:
+                raise
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise
+            sleep(min(poll_seconds, remaining))
+
+
 def grow() -> dict[str, object]:
     boot_id = BOOT_ID_PATH.read_text(encoding="ascii").strip()
     invocation_id = os.environ.get("INVOCATION_ID", "")
@@ -601,7 +633,8 @@ def grow() -> dict[str, object]:
         raise Refusal("invocation_id_invalid")
     stage = _load_stage_helper()
     marker = _read_marker()
-    selected = stage.select_sd(stage._discover_cards(), root_major_minor=stage._root_major_minor())
+    root_major_minor = stage._root_major_minor()
+    selected = _select_sd_when_ready(stage, root_major_minor=root_major_minor)
     plan = derive_growth_plan(
         card_bytes=int(selected["bytes"]),
         partitions=selected["partitions"],
@@ -629,7 +662,7 @@ def grow() -> dict[str, object]:
                 input_text=definition,
             )
             _run_checked(["/usr/bin/partx", "--update", "--nr", "5", device_path])
-        refreshed = stage.select_sd(stage._discover_cards(), root_major_minor=stage._root_major_minor())
+        refreshed = _select_sd_when_ready(stage, root_major_minor=root_major_minor)
         verified = derive_growth_plan(
             card_bytes=int(refreshed["bytes"]),
             partitions=refreshed["partitions"],
@@ -638,10 +671,20 @@ def grow() -> dict[str, object]:
         )
         if verified["needs_partition_growth"]:
             raise Refusal("partition_table_reread_stale")
-        _run_checked(["/usr/sbin/resize2fs", partition_path])
+        expected_filesystem_bytes = (
+            int(plan["tail_start"])
+            - int(marker["BakedRootPartitionStartSector"]) * LOGICAL_SECTOR_BYTES
+        )
+        if filesystem_before > expected_filesystem_bytes:
+            raise Refusal("ext4_growth_out_of_bounds")
+        if expected_filesystem_bytes - filesystem_before > 4095:
+            _run_checked(["/usr/sbin/resize2fs", partition_path])
         filesystem_after = _filesystem_bytes(partition_path)
-        expected_filesystem_bytes = int(plan["tail_start"]) - int(marker["BakedRootPartitionStartSector"]) * 512
-        if filesystem_after > expected_filesystem_bytes or filesystem_after < filesystem_before:
+        if (
+            filesystem_after > expected_filesystem_bytes
+            or expected_filesystem_bytes - filesystem_after > 4095
+            or filesystem_after < filesystem_before
+        ):
             raise Refusal("ext4_growth_out_of_bounds")
         _verify_backup_gpt(device, int(selected["bytes"]), int(plan["control_end"]))
         control_slots_initialized = initialize_control_slots(
@@ -677,20 +720,20 @@ def make_argument_parser() -> argparse.ArgumentParser:
 def main() -> int:
     make_argument_parser().parse_args()
     if os.geteuid() != 0:
-        print("PF_SELF_FLASH_V3_GROW state=REFUSED reason=not_root", file=sys.stderr)
+        print("PF_ROOT_GROW state=failed reason=not_root", file=sys.stderr)
         return 2
     try:
         _invalidate_receipt()
     except OSError:
         print(
-            "PF_SELF_FLASH_V3_GROW state=FAILED "
+            "PF_ROOT_GROW state=failed "
             "reason=receipt_invalidation_failed",
             file=sys.stderr,
         )
         return 2
     try:
         receipt = grow()
-    except (OSError, Refusal, ValueError) as error:
+    except (KeyError, OSError, Refusal, TypeError, ValueError) as error:
         reason = str(error) if isinstance(error, Refusal) else "io_or_value_error"
         # grow() can install a pass receipt and then fail while syncing its
         # parent directory. Revoke that receipt before attempting to publish
@@ -699,7 +742,7 @@ def main() -> int:
             _invalidate_receipt()
         except OSError:
             print(
-                "PF_SELF_FLASH_V3_GROW state=FAILED "
+                "PF_ROOT_GROW state=failed "
                 "reason=receipt_invalidation_failed",
                 file=sys.stderr,
             )
@@ -708,16 +751,21 @@ def main() -> int:
             _write_receipt(build_degraded_receipt(reason))
         except OSError:
             print(
-                "PF_SELF_FLASH_V3_GROW state=DEGRADED "
+                "PF_ROOT_GROW state=failed "
                 f"reason={reason} receipt=write_failed",
                 file=sys.stderr,
             )
         else:
             print(
-                f"PF_SELF_FLASH_V3_GROW state=DEGRADED reason={reason} receipt=recorded",
+                f"PF_ROOT_GROW state=failed reason={reason} receipt=recorded",
                 file=sys.stderr,
             )
         return 2
+    state = "grown" if (
+        receipt["BeforeEndSector"] != receipt["AfterEndSector"]
+        or receipt["FilesystemBytesBefore"] != receipt["FilesystemBytesAfter"]
+    ) else "already"
+    print(f"PF_ROOT_GROW state={state} reason=complete")
     return 0
 
 

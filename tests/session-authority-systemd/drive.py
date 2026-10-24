@@ -692,9 +692,17 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     probe = json.loads(PROBE.read_text())
     require(
         probe["POCKETFORGE_SESSION"] == "/run/pocketforge/session"
-        and probe["WAYLAND_DISPLAY"] == "wayland-0"
+        and probe["WAYLAND_DISPLAY"] == "/run/pocketforge/session/wayland-0"
         and probe["wayland_socket"] is True,
         f"app did not receive the published compositor session: {probe}",
+    )
+    require(
+        probe["XDG_RUNTIME_DIR"] == "/run/pf-app/org.pocketforge.fixture"
+        and probe["runtime_directory_is_dir"] is True
+        and probe["runtime_directory_mode"] == "0o700"
+        and probe["runtime_directory_uid"] == probe["uid"]
+        and probe["runtime_directory_writable"] is True,
+        f"app did not receive its private runtime directory: {probe}",
     )
     require(probe["PF_DESCRIPTOR"] == DESCRIPTOR, f"PF_DESCRIPTOR: {probe}")
     require(probe["descriptor_readable"] is True, f"descriptor unreadable in app sandbox: {probe}")

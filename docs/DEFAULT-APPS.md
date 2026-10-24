@@ -360,6 +360,7 @@ WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
+Environment=XDG_RUNTIME_DIR=/run/pf-app/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
 EnvironmentFile=/run/pocketforge/session/environment
@@ -369,12 +370,14 @@ StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
 CacheDirectory=pocketforge/apps/%i
 CacheDirectoryMode=0700
+RuntimeDirectory=pf-app/%i
+RuntimeDirectoryMode=0700
 ProtectSystem=strict
 ProtectHome=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
-ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i
+ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i /run/pf-app/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
 InaccessiblePaths=-/dev/uinput
 InaccessiblePaths=/run/pocketforge/prefsd.sock
@@ -400,6 +403,14 @@ Restart=no
 OOMScoreAdjust=300
 Nice=-5
 ```
+
+The compositor publisher records the absolute app-visible socket path
+`WAYLAND_DISPLAY=/run/pocketforge/session/wayland-0`; its environment file never defines
+`XDG_RUNTIME_DIR`. Each unit instance instead owns `/run/pf-app/%i` through systemd's
+`RuntimeDirectory=` contract. The directory is mode 0700, writable only by that app's `gamer`
+process, and is also the only value accepted by the launcher's Landlock policy. Apps therefore
+never share an XDG runtime directory, and the session record cannot override it. The explicit
+nonexistent `DBUS_SESSION_BUS_ADDRESS` below still prevents `$XDG_RUNTIME_DIR/bus` discovery.
 
 The image installs `pf-app@.service.d/30-cursor-theme.conf` alongside this security-pinned
 template. Its two `Environment=` directives set `XCURSOR_THEME=pocketforge-light` and
