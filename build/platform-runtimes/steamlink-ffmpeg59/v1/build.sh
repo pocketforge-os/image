@@ -222,6 +222,7 @@ normalize_config_log() {
         -e "s#${work}#.#g" \
         -e 's#/tmp/ffconf\.[[:alnum:]]+#/tmp/ffconf.XXXXXXXX#g' \
         -e 's#/tmp/cc[[:alnum:]]+\.[[:alnum:]]+#/tmp/ccXXXXXXXX.ext#g' \
+        -e "s/^PPID='[0-9]+'$/PPID='0'/" \
         "$1" \
         | awk 'previous == "mktemp -u XXXXXX" && length($0) == 6 && $0 !~ /[^[:alnum:]]/ {$0 = "XXXXXX"} {print; previous = $0}'
 }

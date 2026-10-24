@@ -23,6 +23,8 @@ grep -Fxq '}' "${scratch}/normalizer.sh"
 # shellcheck disable=SC1091
 . "${scratch}/normalizer.sh"
 
+# Consumed by the sourced normalize_config_log function.
+# shellcheck disable=SC2034
 work=/work/pf-steamlink-ffmpeg59-v1
 write_fixture() {
     local output=$1
