@@ -793,8 +793,20 @@ if [ "$PF_ROOT_MODE" != volatile ] \
                 fi
                 PFLOG=""
             fi
-            if ! sf_v2_selected_card_unmounted; then
-                sf_v3_terminal_recovery "selected SD remains mounted"
+            if ! sf_v3_selected_card_unmounted; then
+                case "$SF_V3_UNMOUNT_REASON" in
+                    mounted)
+                        sf_v3_terminal_recovery \
+                            "selected SD remains mounted dev=$SF_V3_MOUNTED_DEV mnt=$SF_V3_MOUNTED_PATH"
+                        ;;
+                    mount_state_unavailable)
+                        sf_v3_terminal_recovery \
+                            "selected SD mount state unavailable"
+                        ;;
+                    *)
+                        sf_v3_terminal_recovery "selected SD has no card identity"
+                        ;;
+                esac
             fi
             watchdog_disarm_for_selfflash
             if sf_v3_run_armed_transaction; then

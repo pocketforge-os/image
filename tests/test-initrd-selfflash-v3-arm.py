@@ -256,6 +256,81 @@ class ArmFixture:
             check=False,
         )
 
+    def run_pid1_gate(
+        self, *, extra_mount: bool = False, invalidate_sd: str = ""
+    ) -> subprocess.CompletedProcess[str]:
+        """Execute the production v3 PID1 gate with hermetic boot primitives."""
+        source = INIT.read_text(encoding="utf-8")
+        start = source.index("# BEGIN POCKETFORGE SELF-FLASH V3 GATE")
+        end = source.index("# END POCKETFORGE SELF-FLASH V3 GATE")
+        gate = source[start:end]
+        gate = gate.replace(
+            "[ -f /lib/pocketforge-self-flash-v3.sh ]", "true"
+        )
+        gate_path = self.root / "pid1-v3-gate.sh"
+        gate_path.write_text(gate, encoding="utf-8")
+
+        mountinfo = self.root / "mountinfo"
+        records = [
+            "24 1 179:4 / /pflog rw - vfat /dev/card0p4 rw\n",
+        ]
+        if extra_mount:
+            records.append(
+                "25 1 179:5 / /selected-root rw - ext4 /dev/card0p5 rw\n"
+            )
+        mountinfo.write_text("".join(records), encoding="ascii")
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "SF_V3_SYS_CLASS_BLOCK": str(self.sys),
+                "SF_V3_DEV_ROOT": str(self.dev),
+                "SF_V3_MARKER": str(self.marker),
+                "SF_V3_EXPECTED_CONTRACT_SHA256": self.contract_sha,
+                "SF_V3_ROOT_MAJOR_MINOR": "179:5",
+                "SF_V3_WORK": str(self.work),
+                "SF_MOUNTINFO_FILE": str(mountinfo),
+                "PF_TEST_INVALIDATE_SD": invalidate_sd,
+            }
+        )
+        command = f'''
+            . "{ENGINE}"
+            eval "$(declare -f sf_v3_load_armed_transaction | sed \
+                '1s/sf_v3_load_armed_transaction/sf_v3_load_armed_transaction_real/')"
+            sf_v3_load_armed_transaction() {{
+                sf_v3_load_armed_transaction_real || return
+                case "$PF_TEST_INVALIDATE_SD" in
+                    empty) SF_V3_SD= ;;
+                    unresolved) SF_V3_SD="$SF_V3_DEV_ROOT/missing-card" ;;
+                esac
+            }}
+            PF_ROOT_MODE=normal
+            PFLOG=present
+            log() {{ printf 'LOG:%s\\n' "$*"; }}
+            watchdog_ping() {{ :; }}
+            sf_wait_for_root() {{ return 0; }}
+            pf_first_frame_reap() {{ :; }}
+            watchdog_disarm_for_selfflash() {{ printf 'WATCHDOG_DISARMED\\n'; }}
+            sf_v3_run_armed_transaction() {{ printf 'TRANSACTION_ENTERED\\n'; return 1; }}
+            sync() {{ :; }}
+            umount() {{
+                [ "$1" = /pflog ] || return 1
+                awk '$5 != "/pflog"' "$SF_MOUNTINFO_FILE" \
+                    >"$SF_MOUNTINFO_FILE.next" || return 1
+                mv "$SF_MOUNTINFO_FILE.next" "$SF_MOUNTINFO_FILE"
+            }}
+            . "{gate_path}"
+        '''
+        return subprocess.run(
+            ["/usr/bin/bash", "-c", command],
+            env=env,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
     def read_receipt(self) -> bytes:
         with self.device.open("rb", buffering=0) as card:
             card.seek(self.layout["receipt_offset"])
@@ -532,6 +607,51 @@ class InitrdArmTests(unittest.TestCase):
         execute = gate.index("sf_v3_run_armed_transaction", disarm)
         self.assertLess(disarm, execute)
         self.assertNotIn("return 1", gate[execute:])
+
+    def test_pid1_v3_gate_uses_v3_card_identity_and_mount_state(self) -> None:
+        admitted = self.fixture.run_pid1_gate()
+        self.assertIn("selfflash-v3: admitted", admitted.stdout)
+        self.assertIn("WATCHDOG_DISARMED\n", admitted.stdout)
+        self.assertIn("TRANSACTION_ENTERED\n", admitted.stdout)
+        self.assertNotIn("selected SD remains mounted", admitted.stdout)
+
+        mounted = self.fixture.run_pid1_gate(extra_mount=True)
+        self.assertNotIn("WATCHDOG_DISARMED\n", mounted.stdout)
+        self.assertIn(
+            "selected SD remains mounted dev=179:5 mnt=/selected-root",
+            mounted.stdout,
+        )
+
+        for invalid in ("empty", "unresolved"):
+            with self.subTest(invalid=invalid):
+                no_identity = self.fixture.run_pid1_gate(invalidate_sd=invalid)
+                self.assertNotIn("WATCHDOG_DISARMED\n", no_identity.stdout)
+                self.assertIn("selected SD has no card identity", no_identity.stdout)
+
+        v3_partition = self.fixture.run_shell(
+            "sf_v3_load_armed_transaction && "
+            "SF_SD_SYS=$SF_V3_SYS_CLASS_BLOCK/not-the-v3-card && "
+            "sf_v3_partition_on_selected_card $SF_V3_DEV_ROOT/card0p5"
+        )
+        self.assertEqual(
+            v3_partition.returncode,
+            0,
+            v3_partition.stdout + v3_partition.stderr,
+        )
+
+        # The v2 gate retains its existing SF_SD_SYS-based behavior.
+        v2 = self.fixture.run_shell(
+            f'''awk '/^# BEGIN POCKETFORGE SELF-FLASH V2 FUNCTIONS$/ {{copy=1; next}}
+                /^# END POCKETFORGE SELF-FLASH V2 FUNCTIONS$/ {{copy=0}}
+                copy {{print}}' "{INIT}" >"$SF_V3_WORK/v2-functions" &&
+                . "$SF_V3_WORK/v2-functions" &&
+                SF_SYS_CLASS_BLOCK="$SF_V3_SYS_CLASS_BLOCK" &&
+                SF_SD_SYS="$SF_V3_SYS_CLASS_BLOCK/card0" &&
+                SF_MOUNTINFO_FILE="{self.fixture.root / 'v2-mountinfo'}" &&
+                : >"$SF_MOUNTINFO_FILE" &&
+                sf_v2_selected_card_unmounted'''
+        )
+        self.assertEqual(v2.returncode, 0, v2.stdout + v2.stderr)
 
     def test_pid1_initializes_v3_work_before_source_and_gate(self) -> None:
         source = INIT.read_text(encoding="utf-8")

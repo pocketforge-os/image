@@ -18,6 +18,7 @@ SF_V3_SYS_CLASS_BLOCK="${SF_V3_SYS_CLASS_BLOCK:-/sys/class/block}"
 SF_V3_DEV_ROOT="${SF_V3_DEV_ROOT:-/dev}"
 SF_V3_MARKER="${SF_V3_MARKER:-/etc/pocketforge-selfflash-v3}"
 SF_V3_UPTIME="${SF_V3_UPTIME:-/proc/uptime}"
+SF_V3_MOUNTINFO_FILE="${SF_V3_MOUNTINFO_FILE:-${SF_MOUNTINFO_FILE:-/proc/self/mountinfo}}"
 SF_V3_EXPECTED_CONTRACT_SHA256="${SF_V3_EXPECTED_CONTRACT_SHA256:-@SELF_FLASH_V3_CONTRACT_SHA256@}"
 
 sf_v3_sha() {
@@ -660,12 +661,80 @@ sf_v3_write_sink() {
         conv=notrunc,fsync status=none
 }
 
+sf_v3_resolve_selected_card_sys() {
+    SF_V3_CARD_IDENTITY_REASON=no_card_identity
+    SF_V3_SELECTED_CARD_SYS=""
+    [ -n "${SF_V3_SD:-}" ] || return 1
+    sf_v3_selected_name="${SF_V3_SD##*/}"
+    [ -n "$sf_v3_selected_name" ] \
+        && [ "$SF_V3_SD" = "$SF_V3_DEV_ROOT/$sf_v3_selected_name" ] || return 1
+    sf_v3_selected_class="$SF_V3_SYS_CLASS_BLOCK/$sf_v3_selected_name"
+    [ -e "$sf_v3_selected_class" ] || return 1
+    SF_V3_SELECTED_CARD_SYS="$(readlink -f "$sf_v3_selected_class" 2>/dev/null)"
+    [ -n "$SF_V3_SELECTED_CARD_SYS" ] || return 1
+    SF_V3_CARD_IDENTITY_REASON=resolved
+    export SF_V3_CARD_IDENTITY_REASON SF_V3_SELECTED_CARD_SYS
+}
+
+sf_v3_partition_on_selected_card() {
+    sf_v3_partition="$1"
+    sf_v3_resolve_selected_card_sys || return 1
+    sf_v3_partition_sys="$SF_V3_SYS_CLASS_BLOCK/${sf_v3_partition##*/}"
+    [ -e "$sf_v3_partition_sys" ] || return 1
+    sf_v3_partition_real="$(readlink -f "$sf_v3_partition_sys" 2>/dev/null)"
+    case "$sf_v3_partition_real" in
+        "$SF_V3_SELECTED_CARD_SYS"/*) return 0 ;;
+    esac
+    return 1
+}
+
+sf_v3_selected_card_unmounted() {
+    SF_V3_UNMOUNT_REASON=no_card_identity
+    SF_V3_MOUNTED_DEV=""
+    SF_V3_MOUNTED_PATH=""
+    export SF_V3_UNMOUNT_REASON SF_V3_MOUNTED_DEV SF_V3_MOUNTED_PATH
+    sf_v3_resolve_selected_card_sys || return 1
+    sf_v3_dev_count=0
+    for sf_v3_dev_file in \
+            "$SF_V3_SELECTED_CARD_SYS/dev" "$SF_V3_SELECTED_CARD_SYS"/*/dev; do
+        [ -f "$sf_v3_dev_file" ] || continue
+        sf_v3_dev_count=$((sf_v3_dev_count + 1))
+        sf_v3_major_minor="$(cat "$sf_v3_dev_file" 2>/dev/null)"
+        if [ -z "$sf_v3_major_minor" ]; then
+            SF_V3_UNMOUNT_REASON=mount_state_unavailable
+            export SF_V3_UNMOUNT_REASON
+            return 1
+        fi
+        sf_v3_mount_path="$(awk -v dev="$sf_v3_major_minor" \
+            '$3 == dev { print $5; exit }' "$SF_V3_MOUNTINFO_FILE")" || {
+                SF_V3_UNMOUNT_REASON=mount_state_unavailable
+                export SF_V3_UNMOUNT_REASON
+                return 1
+            }
+        if [ -n "$sf_v3_mount_path" ]; then
+            SF_V3_UNMOUNT_REASON=mounted
+            SF_V3_MOUNTED_DEV="$sf_v3_major_minor"
+            SF_V3_MOUNTED_PATH="$sf_v3_mount_path"
+            export SF_V3_UNMOUNT_REASON SF_V3_MOUNTED_DEV SF_V3_MOUNTED_PATH
+            return 1
+        fi
+    done
+    if [ "$sf_v3_dev_count" -eq 0 ]; then
+        SF_V3_UNMOUNT_REASON=no_card_identity
+        export SF_V3_UNMOUNT_REASON
+        return 1
+    fi
+    SF_V3_UNMOUNT_REASON=unmounted
+    export SF_V3_UNMOUNT_REASON
+    return 0
+}
+
 sf_v3_mount_target_fat() {
     blockdev --rereadpt "$SF_V3_SD" || return 1
     sf_drop_cache
     SF_V3_FAT_DEVICE="$(findfs LABEL=POCKETFORGE 2>/dev/null)"
     [ -n "$SF_V3_FAT_DEVICE" ] \
-        && sf_v2_partition_on_selected_card "$SF_V3_FAT_DEVICE" || return 1
+        && sf_v3_partition_on_selected_card "$SF_V3_FAT_DEVICE" || return 1
     SF_V3_FAT=/sf-v3-fat
     mkdir -p "$SF_V3_FAT" || return 1
     mount -t vfat -o rw,flush "$SF_V3_FAT_DEVICE" "$SF_V3_FAT" 2>/dev/null
