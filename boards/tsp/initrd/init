@@ -803,6 +803,10 @@ if [ "$PF_ROOT_MODE" != volatile ] \
                         sf_v3_terminal_recovery \
                             "selected SD mount state unavailable"
                         ;;
+                    stale_card_identity)
+                        sf_v3_terminal_recovery \
+                            "selected SD card identity changed"
+                        ;;
                     *)
                         sf_v3_terminal_recovery "selected SD has no card identity"
                         ;;

@@ -113,6 +113,10 @@ sf_v3_discover_sd() {
     [ -n "$sf_v3_root_major_minor" ] || return 1
     sf_v3_match_count=0
     SF_V3_SD=""
+    SF_V3_SD_SYS=""
+    SF_V3_ADMITTED_CARD_SYS=""
+    SF_V3_ADMITTED_CARD_DEVICE_SYS=""
+    SF_V3_ADMITTED_CARD_DEV=""
     for sf_v3_entry in "$SF_V3_SYS_CLASS_BLOCK"/*; do
         [ -e "$sf_v3_entry" ] || continue
         [ -e "$sf_v3_entry/device" ] || continue
@@ -149,6 +153,9 @@ sf_v3_discover_sd() {
         sf_v3_match_count=$((sf_v3_match_count + 1))
         SF_V3_SD="$sf_v3_device"
         SF_V3_SD_SYS="$sf_v3_entry"
+        SF_V3_ADMITTED_CARD_SYS="$sf_v3_whole_real"
+        SF_V3_ADMITTED_CARD_DEVICE_SYS="$sf_v3_physical"
+        SF_V3_ADMITTED_CARD_DEV="$(cat "$sf_v3_entry/dev" 2>/dev/null)"
         SF_V3_CARD_SERIAL="$sf_v3_serial"
         SF_V3_CARD_BYTES=$((sf_v3_sectors * sf_v3_logical))
     done
@@ -664,14 +671,33 @@ sf_v3_write_sink() {
 sf_v3_resolve_selected_card_sys() {
     SF_V3_CARD_IDENTITY_REASON=no_card_identity
     SF_V3_SELECTED_CARD_SYS=""
-    [ -n "${SF_V3_SD:-}" ] || return 1
-    sf_v3_selected_name="${SF_V3_SD##*/}"
-    [ -n "$sf_v3_selected_name" ] \
-        && [ "$SF_V3_SD" = "$SF_V3_DEV_ROOT/$sf_v3_selected_name" ] || return 1
-    sf_v3_selected_class="$SF_V3_SYS_CLASS_BLOCK/$sf_v3_selected_name"
-    [ -e "$sf_v3_selected_class" ] || return 1
-    SF_V3_SELECTED_CARD_SYS="$(readlink -f "$sf_v3_selected_class" 2>/dev/null)"
-    [ -n "$SF_V3_SELECTED_CARD_SYS" ] || return 1
+    [ -n "${SF_V3_SD:-}" ] && [ -n "${SF_V3_SD_SYS:-}" ] \
+        && [ -n "${SF_V3_ADMITTED_CARD_SYS:-}" ] \
+        && [ -n "${SF_V3_ADMITTED_CARD_DEVICE_SYS:-}" ] \
+        && [ -n "${SF_V3_ADMITTED_CARD_DEV:-}" ] || return 1
+    sf_v3_selected_name="${SF_V3_SD_SYS##*/}"
+    [ "$SF_V3_SD_SYS" = "$SF_V3_SYS_CLASS_BLOCK/$sf_v3_selected_name" ] \
+        && [ "$SF_V3_SD" = "$SF_V3_DEV_ROOT/$sf_v3_selected_name" ] \
+        && [ -e "$SF_V3_SD_SYS" ] || return 1
+    sf_v3_current_card_sys="$(readlink -f "$SF_V3_SD_SYS" 2>/dev/null)"
+    sf_v3_current_device_sys="$(readlink -f "$SF_V3_SD_SYS/device" 2>/dev/null)"
+    sf_v3_current_dev="$(cat "$SF_V3_SD_SYS/dev" 2>/dev/null)"
+    sf_v3_current_serial="$(sf_v3_card_serial "$SF_V3_SD_SYS/device" 2>/dev/null)"
+    sf_v3_current_sectors="$(cat "$SF_V3_SD_SYS/size" 2>/dev/null)"
+    sf_v3_current_logical="$(cat "$SF_V3_SD_SYS/queue/logical_block_size" 2>/dev/null)"
+    if [ "$sf_v3_current_card_sys" != "$SF_V3_ADMITTED_CARD_SYS" ] \
+            || [ "$sf_v3_current_device_sys" != "$SF_V3_ADMITTED_CARD_DEVICE_SYS" ] \
+            || [ "$sf_v3_current_dev" != "$SF_V3_ADMITTED_CARD_DEV" ] \
+            || [ "$sf_v3_current_serial" != "$SF_V3_CARD_SERIAL" ] \
+            || ! sf_v3_uint "$sf_v3_current_sectors" \
+            || [ "$sf_v3_current_logical" != 512 ] \
+            || [ $((sf_v3_current_sectors * sf_v3_current_logical)) \
+                -ne "$SF_V3_CARD_BYTES" ]; then
+        SF_V3_CARD_IDENTITY_REASON=stale_card_identity
+        export SF_V3_CARD_IDENTITY_REASON SF_V3_SELECTED_CARD_SYS
+        return 1
+    fi
+    SF_V3_SELECTED_CARD_SYS="$SF_V3_ADMITTED_CARD_SYS"
     SF_V3_CARD_IDENTITY_REASON=resolved
     export SF_V3_CARD_IDENTITY_REASON SF_V3_SELECTED_CARD_SYS
 }
@@ -693,7 +719,11 @@ sf_v3_selected_card_unmounted() {
     SF_V3_MOUNTED_DEV=""
     SF_V3_MOUNTED_PATH=""
     export SF_V3_UNMOUNT_REASON SF_V3_MOUNTED_DEV SF_V3_MOUNTED_PATH
-    sf_v3_resolve_selected_card_sys || return 1
+    if ! sf_v3_resolve_selected_card_sys; then
+        SF_V3_UNMOUNT_REASON="$SF_V3_CARD_IDENTITY_REASON"
+        export SF_V3_UNMOUNT_REASON
+        return 1
+    fi
     sf_v3_dev_count=0
     for sf_v3_dev_file in \
             "$SF_V3_SELECTED_CARD_SYS/dev" "$SF_V3_SELECTED_CARD_SYS"/*/dev; do

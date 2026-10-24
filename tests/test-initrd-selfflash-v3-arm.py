@@ -62,6 +62,8 @@ class ArmFixture:
         )
         self.root_sectors = tail_start // 512 - self.root_start
         self._make_partition("card0", 5, self.root_start, self.root_sectors, "179:5")
+        self.primary_block = (self.sys / "card0").resolve()
+        self.primary_partition = (self.sys / "card0p5").resolve()
         self.partition_sha = hashlib.sha256(
             f"5:{self.root_start}:{self.root_sectors}\n".encode("ascii")
         ).hexdigest()
@@ -151,6 +153,38 @@ class ArmFixture:
         (part / "start").write_text(f"{start}\n", encoding="ascii")
         (part / "size").write_text(f"{sectors}\n", encoding="ascii")
         (part / "dev").write_text(f"{major_minor}\n", encoding="ascii")
+
+    def _make_replacement_card(self) -> Path:
+        physical = (
+            self.root
+            / "sys/devices/platform/soc/4020000.mmc/mmc_host/replacement/replacement:0001"
+        )
+        block = physical / "block/card0"
+        block.mkdir(parents=True, exist_ok=True)
+        if not (block / "device").exists():
+            (block / "device").symlink_to(physical)
+        (block / "queue").mkdir(exist_ok=True)
+        (block / "queue/logical_block_size").write_text("512\n", encoding="ascii")
+        (block / "size").write_text(f"{self.sectors}\n", encoding="ascii")
+        (block / "dev").write_text("179:0\n", encoding="ascii")
+        (physical / "type").write_text("SD\n", encoding="ascii")
+        (physical / "serial").write_text("0x1234abcd\n", encoding="ascii")
+        part = block / "card0p5"
+        part.mkdir(exist_ok=True)
+        (part / "partition").write_text("5\n", encoding="ascii")
+        (part / "start").write_text(f"{self.root_start}\n", encoding="ascii")
+        (part / "size").write_text(f"{self.root_sectors}\n", encoding="ascii")
+        (part / "dev").write_text("179:5\n", encoding="ascii")
+        return block
+
+    def _restore_primary_card_links(self) -> None:
+        for name, target in (
+            ("card0", self.primary_block),
+            ("card0p5", self.primary_partition),
+        ):
+            link = self.sys / name
+            link.unlink(missing_ok=True)
+            link.symlink_to(target)
 
     def _receipt(self, state_name: str, *, completed: bool = False) -> bytes:
         ready, _digest = stage._ready_receipt(self.request)
@@ -281,6 +315,7 @@ class ArmFixture:
         mountinfo.write_text("".join(records), encoding="ascii")
 
         env = os.environ.copy()
+        replacement = self._make_replacement_card()
         env.update(
             {
                 "SF_V3_SYS_CLASS_BLOCK": str(self.sys),
@@ -291,6 +326,7 @@ class ArmFixture:
                 "SF_V3_WORK": str(self.work),
                 "SF_MOUNTINFO_FILE": str(mountinfo),
                 "PF_TEST_INVALIDATE_SD": invalidate_sd,
+                "PF_TEST_REPLACEMENT_BLOCK": str(replacement),
             }
         )
         command = f'''
@@ -302,6 +338,14 @@ class ArmFixture:
                 case "$PF_TEST_INVALIDATE_SD" in
                     empty) SF_V3_SD= ;;
                     unresolved) SF_V3_SD="$SF_V3_DEV_ROOT/missing-card" ;;
+                    swap)
+                        rm "$SF_V3_SYS_CLASS_BLOCK/card0" \
+                            "$SF_V3_SYS_CLASS_BLOCK/card0p5"
+                        ln -s "$PF_TEST_REPLACEMENT_BLOCK" \
+                            "$SF_V3_SYS_CLASS_BLOCK/card0"
+                        ln -s "$PF_TEST_REPLACEMENT_BLOCK/card0p5" \
+                            "$SF_V3_SYS_CLASS_BLOCK/card0p5"
+                        ;;
                 esac
             }}
             PF_ROOT_MODE=normal
@@ -321,7 +365,7 @@ class ArmFixture:
             }}
             . "{gate_path}"
         '''
-        return subprocess.run(
+        result = subprocess.run(
             ["/usr/bin/bash", "-c", command],
             env=env,
             text=True,
@@ -330,6 +374,9 @@ class ArmFixture:
             stderr=subprocess.PIPE,
             check=False,
         )
+        if invalidate_sd == "swap":
+            self._restore_primary_card_links()
+        return result
 
     def read_receipt(self) -> bytes:
         with self.device.open("rb", buffering=0) as card:
@@ -628,6 +675,10 @@ class InitrdArmTests(unittest.TestCase):
                 self.assertNotIn("WATCHDOG_DISARMED\n", no_identity.stdout)
                 self.assertIn("selected SD has no card identity", no_identity.stdout)
 
+        swapped = self.fixture.run_pid1_gate(invalidate_sd="swap")
+        self.assertNotIn("WATCHDOG_DISARMED\n", swapped.stdout)
+        self.assertIn("selected SD card identity changed", swapped.stdout)
+
         v3_partition = self.fixture.run_shell(
             "sf_v3_load_armed_transaction && "
             "SF_SD_SYS=$SF_V3_SYS_CLASS_BLOCK/not-the-v3-card && "
@@ -637,6 +688,26 @@ class InitrdArmTests(unittest.TestCase):
             v3_partition.returncode,
             0,
             v3_partition.stdout + v3_partition.stderr,
+        )
+
+        replacement = self.fixture._make_replacement_card()
+        try:
+            stale_boundaries = self.fixture.run_shell(
+                "sf_v3_load_armed_transaction && "
+                "rm $SF_V3_SYS_CLASS_BLOCK/card0 "
+                "$SF_V3_SYS_CLASS_BLOCK/card0p5 && "
+                f"ln -s {replacement} $SF_V3_SYS_CLASS_BLOCK/card0 && "
+                f"ln -s {replacement / 'card0p5'} "
+                "$SF_V3_SYS_CLASS_BLOCK/card0p5 && "
+                "! sf_v3_partition_on_selected_card "
+                "$SF_V3_DEV_ROOT/card0p5"
+            )
+        finally:
+            self.fixture._restore_primary_card_links()
+        self.assertEqual(
+            stale_boundaries.returncode,
+            0,
+            stale_boundaries.stdout + stale_boundaries.stderr,
         )
 
         # The v2 gate retains its existing SF_SD_SYS-based behavior.
