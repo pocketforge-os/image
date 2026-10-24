@@ -71,7 +71,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -w "$GITHUB_WORKSPACE" \
             10.0.32.86:5555/pocketforge/ci-rust@sha256:801f15f7e8fd20b449e3b0d0a7a56d632e28dae825b251a19a30e6f8b32bd8e9 \
-            bash -lc '
+            bash -c '
               set -euo pipefail
               test "$(git -C runtime-pair rev-parse HEAD)" = e6d3290c60581695f5a113e245e3ab17cbf6f33c
               test "$(git -C launcher-pair rev-parse HEAD)" = f6710cb52bcd9f0fa88fb9d0361e7f0578106890
