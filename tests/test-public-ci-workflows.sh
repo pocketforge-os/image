@@ -74,6 +74,10 @@ check_public_builder_workflow()
     fi
     grep -Fq 'docker run --rm --pull=never' "$workflow" \
         || fail 'app-policy-pair does not prohibit a runtime image pull'
+    grep -Fq -- '-e CARGO_HOME=/tmp/cargo-home' "$workflow" \
+        || fail 'app-policy-pair leaves the unprivileged cargo cache at /work/cargo-home'
+    grep -Fq -- '-e SCCACHE_DIR=/tmp/sccache' "$workflow" \
+        || fail 'app-policy-pair leaves the unprivileged sccache at /work/sccache'
     grep -Fq '10.0.32.86:5555/pocketforge/ci-rust@sha256:801f15f7e8fd20b449e3b0d0a7a56d632e28dae825b251a19a30e6f8b32bd8e9' "$workflow" \
         || fail 'app-policy-pair does not select the golden-bundled pinned image'
     test "$(grep -c 'uses: actions/checkout@' "$workflow")" -eq \
@@ -159,6 +163,10 @@ fi
 sed 's/--pull=never/--pull=always/' "$pair_workflow" >"$scratch/network-pull.yml"
 if (check_public_builder_workflow "$scratch/network-pull.yml" >/dev/null 2>&1); then
     fail 'negative control accepted a runtime registry pull'
+fi
+sed '/-e SCCACHE_DIR=\/tmp\/sccache/d' "$pair_workflow" >"$scratch/root-owned-cache.yml"
+if (check_public_builder_workflow "$scratch/root-owned-cache.yml" >/dev/null 2>&1); then
+    fail 'negative control accepted the root-owned image cache paths'
 fi
 sed '0,/pf-public-ci/s//pf-ci-container/' "$signing_workflow" >"$scratch/private-signing.yml"
 if (check_signing_routes "$scratch/private-signing.yml" >/dev/null 2>&1); then
