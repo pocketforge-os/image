@@ -41,45 +41,58 @@ jobs:
   pair:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, pf-ci]
+    runs-on: [self-hosted, pf-public-builder]
     timeout-minutes: 15
-    container:
-      image: 10.0.32.86:5555/pocketforge/ci-rust@sha256:801f15f7e8fd20b449e3b0d0a7a56d632e28dae825b251a19a30e6f8b32bd8e9
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/runtime
           ref: e6d3290c60581695f5a113e245e3ab17cbf6f33c
           path: runtime-pair
+          persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/launcher
           ref: f6710cb52bcd9f0fa88fb9d0361e7f0578106890
           path: launcher-pair
+          persist-credentials: false
       - name: Prove exact runtime, launcher, and image candidates together
         run: |
-          test "$(git -C runtime-pair rev-parse HEAD)" = e6d3290c60581695f5a113e245e3ab17cbf6f33c
-          test "$(git -C launcher-pair rev-parse HEAD)" = f6710cb52bcd9f0fa88fb9d0361e7f0578106890
-          scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
-            pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
-            pf-framehost-wayland pf-hang-trigger pf-theme pf-input-map pf-prefs pf-prefs-port \
-            pf-session-client pf-session-authority pf-wire
-          PF_HANG_RUNTIME_ROOT=runtime-pair tests/test-hang-sampler-image.sh
-          (cd runtime-pair && cargo build --locked \
-            --manifest-path Cargo.toml \
-            -p pf-app-launch --bin pf-app-policy-render \
-            --target-dir target)
-          export PF_APP_POLICY_RENDER="$GITHUB_WORKSPACE/runtime-pair/target/debug/pf-app-policy-render"
-          printf 'runtime_candidate=%s launcher_candidate=%s image_candidate=%s policy_renderer_sha256=%s\n' \
-            "$(git -C runtime-pair rev-parse HEAD)" \
-            "$(git -C launcher-pair rev-parse HEAD)" \
-            "$(git rev-parse HEAD)" \
-            "$(sha256sum "$PF_APP_POLICY_RENDER" | cut -d' ' -f1)"
-          tests/test-app-runtime-root.sh
-          tests/test-steamlink-app-policy.sh "$PF_APP_POLICY_RENDER"
-          tests/test-default-app-platform.sh
-          PF_RUNTIME_UNITS_DIR="$GITHUB_WORKSPACE/runtime-pair/systemd" \
-            tests/test-runtime-path-producers.sh
+          docker run --rm --pull=never \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -e CARGO_HOME=/tmp/cargo-home \
+            -e SCCACHE_DIR=/tmp/sccache \
+            -e GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE" \
+            10.0.32.86:5555/pocketforge/ci-rust@sha256:801f15f7e8fd20b449e3b0d0a7a56d632e28dae825b251a19a30e6f8b32bd8e9 \
+            bash -c '
+              set -euo pipefail
+              test "$(git -C runtime-pair rev-parse HEAD)" = e6d3290c60581695f5a113e245e3ab17cbf6f33c
+              test "$(git -C launcher-pair rev-parse HEAD)" = f6710cb52bcd9f0fa88fb9d0361e7f0578106890
+              scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
+                pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
+                pf-framehost-wayland pf-hang-trigger pf-theme pf-input-map pf-prefs pf-prefs-port \
+                pf-session-client pf-session-authority pf-wire
+              PF_HANG_RUNTIME_ROOT=runtime-pair tests/test-hang-sampler-image.sh
+              (cd runtime-pair && cargo build --locked \
+                --manifest-path Cargo.toml \
+                -p pf-app-launch --bin pf-app-policy-render \
+                --target-dir target)
+              export PF_APP_POLICY_RENDER="$GITHUB_WORKSPACE/runtime-pair/target/debug/pf-app-policy-render"
+              printf "runtime_candidate=%s launcher_candidate=%s image_candidate=%s policy_renderer_sha256=%s\n" \
+                "$(git -C runtime-pair rev-parse HEAD)" \
+                "$(git -C launcher-pair rev-parse HEAD)" \
+                "$(git rev-parse HEAD)" \
+                "$(sha256sum "$PF_APP_POLICY_RENDER" | cut -d" " -f1)"
+              tests/test-app-runtime-root.sh
+              tests/test-steamlink-app-policy.sh "$PF_APP_POLICY_RENDER"
+              tests/test-default-app-platform.sh
+              PF_RUNTIME_UNITS_DIR="$GITHUB_WORKSPACE/runtime-pair/systemd" \
+                tests/test-runtime-path-producers.sh
+            '
