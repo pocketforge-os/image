@@ -130,6 +130,15 @@ sf_v3_pin_selected_card() {
     export SF_V3_SD_IO SF_V3_ADMITTED_NODE_IDENTITY
 }
 
+sf_v3_unpin_selected_card() {
+    if [ -n "${SF_V3_SD_IO:-}" ]; then
+        exec 9>&- || return 1
+    fi
+    SF_V3_SD_IO=""
+    SF_V3_ADMITTED_NODE_IDENTITY=""
+    export SF_V3_SD_IO SF_V3_ADMITTED_NODE_IDENTITY
+}
+
 sf_v3_validate_marker() {
     [ -f "$SF_V3_MARKER" ] && [ ! -L "$SF_V3_MARKER" ] || return 1
     [ "$(wc -l <"$SF_V3_MARKER")" -eq 9 ] || return 1
@@ -153,9 +162,7 @@ sf_v3_validate_marker() {
 }
 
 sf_v3_discover_sd() {
-    [ -z "${SF_V3_SD_IO:-}" ] || exec 9>&-
-    SF_V3_SD_IO=""
-    SF_V3_ADMITTED_NODE_IDENTITY=""
+    sf_v3_unpin_selected_card || return 1
     sf_v3_root_major_minor="${SF_V3_ROOT_MAJOR_MINOR:-}"
     if [ -z "$sf_v3_root_major_minor" ] && [ -n "${SF_ROOTPART:-}" ]; then
         sf_v3_root_major_minor="$(cat "$SF_V3_SYS_CLASS_BLOCK/${SF_ROOTPART##*/}/dev" 2>/dev/null)"
@@ -570,6 +577,7 @@ sf_v3_install_stamp() {
 sf_v3_load_armed_transaction() {
     SF_V3_LOAD_STATE=refused
     export SF_V3_LOAD_STATE
+    sf_v3_unpin_selected_card || return 1
     mkdir -p "$SF_V3_WORK" || return 1
     sf_v3_clean_work || return 1
     sf_v3_validate_marker || { sf_v3_clean_work; return 1; }
@@ -579,19 +587,20 @@ sf_v3_load_armed_transaction() {
     sf_v3_arm_record="$SF_V3_WORK/arm.record"
     sf_v3_receipt_record="$SF_V3_WORK/receipt.record"
     sf_v3_read_slot "$SF_V3_ARM_OFFSET" "$sf_v3_arm_slot" \
-        || { sf_v3_clean_work; return 1; }
+        || { sf_v3_clean_work; sf_v3_unpin_selected_card; return 1; }
     if [ "$(tr -d '\000' <"$sf_v3_arm_slot" | wc -c)" -eq 0 ]; then
         SF_V3_LOAD_STATE=absent
         export SF_V3_LOAD_STATE
         sf_v3_clean_work
+        sf_v3_unpin_selected_card
         return 1
     fi
     sf_v3_decode_slot "$sf_v3_arm_slot" "$sf_v3_arm_record" 27 ArmRecordSHA256 \
         && sf_v3_validate_arm "$sf_v3_arm_record" \
-        || { sf_v3_clean_work; return 1; }
+        || { sf_v3_clean_work; sf_v3_unpin_selected_card; return 1; }
     sf_v3_read_slot "$SF_V3_RECEIPT_OFFSET" "$sf_v3_receipt_slot" \
         && sf_v3_decode_slot "$sf_v3_receipt_slot" "$sf_v3_receipt_record" 29 ReceiptRecordSHA256 \
-        || { sf_v3_clean_work; return 1; }
+        || { sf_v3_clean_work; sf_v3_unpin_selected_card; return 1; }
     SF_V3_RECEIPT_STATE="$(sf_v3_get_line "$sf_v3_receipt_record" 2)"
     if [ "$SF_V3_RECEIPT_STATE" != ready ]; then
         case "$SF_V3_RECEIPT_STATE" in
@@ -600,10 +609,11 @@ sf_v3_load_armed_transaction() {
         esac
         export SF_V3_LOAD_STATE
         sf_v3_clean_work
+        sf_v3_unpin_selected_card
         return 1
     fi
     sf_v3_validate_ready_receipt "$sf_v3_receipt_record" \
-        || { sf_v3_clean_work; return 1; }
+        || { sf_v3_clean_work; sf_v3_unpin_selected_card; return 1; }
     SF_V3_LOAD_STATE=ready
     export SF_V3_LOAD_STATE
     sf_v3_clean_work

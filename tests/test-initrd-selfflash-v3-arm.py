@@ -534,6 +534,38 @@ class InitrdArmTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("load=stale\n", result.stderr)
 
+    def test_non_transaction_returns_release_pinned_card(self) -> None:
+        body = r'''
+            if sf_v3_load_armed_transaction; then
+                exit 90
+            fi
+            [ ! -e /proc/$$/fd/9 ] || {
+                printf 'pinned_fd=open\n' >&2
+                exit 91
+            }
+            [ -z "${SF_V3_SD_IO:-}" ] || {
+                printf 'pinned_path=%s\n' "$SF_V3_SD_IO" >&2
+                exit 92
+            }
+            printf 'load=%s pinned_fd=closed\n' "$SF_V3_LOAD_STATE"
+        '''
+
+        for state_name, expected_state in ((None, "absent"), ("started", "stale")):
+            with self.subTest(state=expected_state):
+                if state_name is None:
+                    with self.fixture.device.open("r+b", buffering=0) as card:
+                        card.seek(self.fixture.layout["arm_offset"])
+                        card.write(b"\0" * stage.SLOT_BYTES)
+                        card.seek(self.fixture.layout["receipt_offset"])
+                        card.write(b"\0" * stage.SLOT_BYTES)
+                else:
+                    self.fixture.write_records(state_name=state_name)
+                result = self.fixture.run_shell(body)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(
+                    f"load={expected_state} pinned_fd=closed\n", result.stdout
+                )
+
     def test_zero_control_slots_report_absent(self) -> None:
         with self.fixture.device.open("r+b", buffering=0) as card:
             card.seek(self.fixture.layout["arm_offset"])
