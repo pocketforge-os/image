@@ -223,6 +223,7 @@ def section_asset_audit(work):
         "guest/agent.py",
         "guest/build-tools.sh",
         "session/entry-guest.sh",
+        "session/select-product-kms.sh",
         "selftest/uinput-domain-v1.SOURCE",
         "selftest/uinput-domain-v1.tsv",
     ]
@@ -618,6 +619,18 @@ def section_asset_audit(work):
         "/usr/bin/gamescope --backend drm --expose-wayland" in entry_source
         and "--backend headless" not in entry_source,
         "guest real-kernel tier must use product gamescope's libinput-capable DRM session",
+    )
+    require(
+        "/usr/lib/pocketforge/pf-gamescope-kms-select" in entry_source,
+        "guest real-kernel tier bypasses the product KMS-node selector",
+    )
+    require(
+        '--prefer-drm "$PF_GAMESCOPE_KMS_NODE"' in entry_source,
+        "guest real-kernel tier does not pass the selected KMS node to gamescope",
+    )
+    require(
+        re.search(r"/dev/dri/card[0-9]", entry_source) is None,
+        "guest real-kernel tier pins a DRM card index",
     )
 
     with open(os.path.join(HARNESS, "session", "driver.py"), "r", encoding="utf-8") as handle:

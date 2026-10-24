@@ -11,7 +11,10 @@ The guest tier packages the same clients and guarded `fake-input` into a
 separate, content-addressed, read-only arm64 squashfs attachment. pfvd mounts
 that attachment at `/opt/pf-input-harness` only for a requested harness
 session. The production image and its `/usr/bin/gamescope` remain byte-for-byte
-unchanged; the attachment never supplies gamescope.
+unchanged; the attachment never supplies gamescope. The guest launcher invokes
+the product image's `pf-gamescope-kms-select` policy and passes its
+driver-and-connector-selected node to Gamescope with `--prefer-drm`; it never
+assumes a DRM card index.
 
 One command builds the container, runs the whole session and prints the
 house verdict:

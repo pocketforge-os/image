@@ -81,7 +81,9 @@ cp -a "$repo/tests/input-harness/session/." "$stage/payload/session/"
 cp -a "$repo/tests/input-harness/report/." "$stage/payload/report/"
 cp -a "$repo/tests/input-harness/validate/." "$stage/payload/validate/"
 chmod 0755 "$stage/payload/guest/agent.py" "$stage/payload/run-guest.sh" \
-    "$stage/payload/session/entry-guest.sh" "$stage/payload/session/driver.py"
+    "$stage/payload/session/entry-guest.sh" \
+    "$stage/payload/session/select-product-kms.sh" \
+    "$stage/payload/session/driver.py"
 
 # mmdebstrap deliberately creates a usable root, which includes producer-host
 # identity, logs, caches and bytecode. None is a harness input; canonicalize it
