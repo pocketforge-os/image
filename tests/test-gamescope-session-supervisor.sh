@@ -445,7 +445,8 @@ PY
 # Force X0 to change between projection and connect. The helper must discard
 # the connection to the replacement until it has projected and bound that same
 # generation; only the retried connection may receive the ACL.
-python3 - "${authorization_helper}" "${scratch}/x11-generation.sock" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 - \
+    "${authorization_helper}" "${scratch}/x11-generation.sock" <<'PY'
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import os
