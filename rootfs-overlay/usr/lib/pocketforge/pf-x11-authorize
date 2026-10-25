@@ -19,6 +19,10 @@ USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 GROUP_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 
+class SocketGenerationChanged(Exception):
+    """The published pathname stopped naming the generation being authorized."""
+
+
 def fail(message: str) -> "None":
     raise SystemExit(f"x11-authorization-refused reason={message}")
 
@@ -48,7 +52,24 @@ def parse_mode(value: str) -> int:
     return int(value, 8)
 
 
-def project_socket(path: Path, gid: int, mode: int) -> None:
+def socket_identity(path: Path) -> tuple[int, int]:
+    try:
+        info = path.stat(follow_symlinks=False)
+    except FileNotFoundError as error:
+        raise SocketGenerationChanged from error
+    except OSError:
+        fail("socket_stat_failed")
+    if not stat.S_ISSOCK(info.st_mode):
+        fail("x11_path_not_socket")
+    return info.st_dev, info.st_ino
+
+
+def require_socket_identity(path: Path, expected: tuple[int, int]) -> None:
+    if socket_identity(path) != expected:
+        raise SocketGenerationChanged
+
+
+def project_socket(path: Path, gid: int, mode: int) -> tuple[int, int]:
     try:
         before = path.stat(follow_symlinks=False)
         if not stat.S_ISSOCK(before.st_mode):
@@ -56,14 +77,18 @@ def project_socket(path: Path, gid: int, mode: int) -> None:
         os.chown(path, -1, gid, follow_symlinks=False)
         os.chmod(path, mode, follow_symlinks=False)
         after = path.stat(follow_symlinks=False)
+    except FileNotFoundError as error:
+        raise SocketGenerationChanged from error
     except OSError:
         fail("socket_projection_failed")
     if not stat.S_ISSOCK(after.st_mode):
         fail("x11_path_not_socket")
-    if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
-        fail("socket_generation_changed")
+    identity = before.st_dev, before.st_ino
+    if (after.st_dev, after.st_ino) != identity:
+        raise SocketGenerationChanged
     if after.st_gid != gid or stat.S_IMODE(after.st_mode) != mode:
         fail("socket_projection_mismatch")
+    return identity
 
 
 def connect_authorized(
@@ -73,56 +98,61 @@ def connect_authorized(
         fail("unsupported_user")
     deadline = time.monotonic() + timeout
     while True:
+        client = socket.socket(socket.AF_UNIX)
         try:
-            client = socket.socket(socket.AF_UNIX)
+            # Project one named generation first, then prove that connect(2)
+            # and the acknowledged ACL both refer to that same generation.
+            # A replacement at any boundary is retried without publishing
+            # readiness for either the stale connection or the new pathname.
+            identity = project_socket(path, gid, mode)
             client.settimeout(max(0.1, deadline - time.monotonic()))
             client.connect(str(path))
-            break
+            require_socket_identity(path, identity)
+
+            # X11 setup with no authentication is admitted because this process
+            # runs as the Xwayland server owner, pf-gamescope.
+            client.sendall(struct.pack("<BBHHHHH", ord("l"), 0, 11, 0, 0, 0, 0))
+            header = recv_exact(client, 8)
+            if header[0] != 1:
+                fail("server_owner_connection_refused")
+            extra_words = struct.unpack_from("<H", header, 6)[0]
+            recv_exact(client, extra_words * 4)
+
+            # ChangeHosts(FamilyServerInterpreted, localuser, gamer). This is the
+            # same narrow ACL as a local-user server-interpreted grant, without
+            # invoking an unrestricted host-access tool or touching the abstract
+            # namespace.
+            address = b"localuser\0" + user.encode("ascii")
+            padding = b"\0" * ((-len(address)) & 3)
+            request_length = (8 + len(address) + len(padding)) // 4
+            client.sendall(
+                struct.pack("<BBHBBH", 109, 0, request_length, 5, 0, len(address))
+                + address
+                + padding
+            )
+            # Force the request through the server and fail closed on a protocol
+            # error. GetInputFocus is harmless and has a fixed-size reply.
+            client.sendall(struct.pack("<BBH", 43, 0, 1))
+            reply = recv_exact(client, 32)
+            if reply[0] == 0:
+                fail("server_rejected_acl")
+            if reply[0] != 1:
+                fail("unexpected_x11_reply")
+            require_socket_identity(path, identity)
+            return client
+        except SocketGenerationChanged:
+            client.close()
+            if time.monotonic() >= deadline:
+                fail("socket_generation_changed")
+            time.sleep(0.05)
         except OSError:
             client.close()
             if time.monotonic() >= deadline:
                 fail("x11_socket_timeout")
             time.sleep(0.05)
-
-    try:
-        # Keep the filesystem socket private to the compositor and the app
-        # session group. Xwayland can replace its child without replacing the
-        # supervising service, so projection belongs in this monitor.
-        project_socket(path, gid, mode)
-
-        # X11 setup with no authentication is admitted because this process
-        # runs as the Xwayland server owner, pf-gamescope.
-        client.sendall(struct.pack("<BBHHHHH", ord("l"), 0, 11, 0, 0, 0, 0))
-        header = recv_exact(client, 8)
-        if header[0] != 1:
-            fail("server_owner_connection_refused")
-        extra_words = struct.unpack_from("<H", header, 6)[0]
-        recv_exact(client, extra_words * 4)
-
-        # ChangeHosts(FamilyServerInterpreted, localuser, gamer). This is the
-        # same narrow ACL as a local-user server-interpreted grant, without
-        # invoking an unrestricted host-access tool or touching the abstract
-        # namespace.
-        address = b"localuser\0" + user.encode("ascii")
-        padding = b"\0" * ((-len(address)) & 3)
-        request_length = (8 + len(address) + len(padding)) // 4
-        client.sendall(
-            struct.pack("<BBHBBH", 109, 0, request_length, 5, 0, len(address))
-            + address
-            + padding
-        )
-        # Force the request through the server and fail closed on a protocol
-        # error. GetInputFocus is harmless and has a fixed-size reply.
-        client.sendall(struct.pack("<BBH", 43, 0, 1))
-        reply = recv_exact(client, 32)
-        if reply[0] == 0:
-            fail("server_rejected_acl")
-        if reply[0] != 1:
-            fail("unexpected_x11_reply")
-    except BaseException:
-        client.close()
-        raise
-    return client
+        except BaseException:
+            client.close()
+            raise
 
 
 def authorize(path: Path, user: str, gid: int, mode: int, timeout: float) -> None:

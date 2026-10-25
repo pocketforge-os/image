@@ -442,6 +442,91 @@ assert "unsupported_mode" in public_mode.stderr
 assert not public_mode.stdout
 PY
 
+# Force X0 to change between projection and connect. The helper must discard
+# the connection to the replacement until it has projected and bound that same
+# generation; only the retried connection may receive the ACL.
+python3 - "${authorization_helper}" "${scratch}/x11-generation.sock" <<'PY'
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+import os
+import socket
+import struct
+import sys
+import threading
+import types
+
+helper_path = sys.argv[1]
+path = Path(sys.argv[2])
+module = types.ModuleType("pf_x11_authorize")
+SourceFileLoader(module.__name__, helper_path).exec_module(module)
+
+old_listener = socket.socket(socket.AF_UNIX)
+old_listener.bind(str(path))
+old_listener.listen(1)
+replacement = None
+replacement_ready = threading.Event()
+original_project = module.project_socket
+projected = []
+
+def recv_exact(client, size):
+    data = bytearray()
+    while len(data) < size:
+        chunk = client.recv(size - len(data))
+        assert chunk
+        data.extend(chunk)
+    return bytes(data)
+
+def replace_after_projection(candidate, gid, mode):
+    global replacement
+    identity = original_project(candidate, gid, mode)
+    projected.append(identity)
+    if len(projected) == 1:
+        candidate.unlink()
+        replacement = socket.socket(socket.AF_UNIX)
+        replacement.bind(str(candidate))
+        replacement.listen(2)
+        replacement_ready.set()
+    return identity
+
+module.project_socket = replace_after_projection
+received = []
+
+def serve_replacement():
+    assert replacement_ready.wait(2)
+    first, _ = replacement.accept()
+    with first:
+        assert first.recv(1) == b""
+    second, _ = replacement.accept()
+    with second:
+        assert recv_exact(second, 12)[0] == ord("l")
+        second.sendall(struct.pack("<BBHHH", 1, 0, 11, 0, 0))
+        header = recv_exact(second, 8)
+        assert header[0] == 109
+        body = recv_exact(second, struct.unpack_from("<H", header, 2)[0] * 4 - 8)
+        address_length = struct.unpack_from("<H", header, 6)[0]
+        received.append((header[4], body[:address_length]))
+        assert recv_exact(second, 4) == struct.pack("<BBH", 43, 0, 1)
+        second.sendall(b"\1" + b"\0" * 31)
+
+server = threading.Thread(target=serve_replacement)
+server.start()
+gid = os.getgid()
+client = module.connect_authorized(
+    path, "gamer", gid, 0o660, 2,
+)
+client.close()
+server.join(2)
+assert not server.is_alive()
+assert len(projected) == 2
+assert projected[0] != projected[1]
+assert received == [(5, b"localuser\0gamer")]
+assert path.stat().st_gid == gid
+assert path.stat().st_mode & 0o777 == 0o660
+replacement.close()
+old_listener.close()
+path.unlink()
+PY
+
 # The Xwayland child can be replaced while Gamescope keeps X0 published. The
 # monitor must gate readiness on the first ACL and repeat the request for the
 # replacement socket.
