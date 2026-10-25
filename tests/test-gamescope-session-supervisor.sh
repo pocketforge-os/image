@@ -78,6 +78,10 @@ if "--socket /run/pocketforge/x11/.X11-unix/X0" not in auth:
     raise SystemExit("X11 ACL helper does not target the published socket")
 if "--user gamer" not in auth:
     raise SystemExit("X11 ACL helper does not grant only the app uid")
+if "SupplementaryGroups=pf-session" not in auth:
+    raise SystemExit("X11 ACL helper cannot project the private app socket group")
+if "--group pf-session" not in auth or "--mode 0660" not in auth:
+    raise SystemExit("X11 ACL helper does not enforce the private socket projection")
 if "Type=notify" not in auth or "NotifyAccess=main" not in auth:
     raise SystemExit("X11 ACL helper does not gate publication on initial authorization")
 if "--monitor" not in auth or "Restart=on-failure" not in auth:
@@ -363,6 +367,8 @@ import struct
 import subprocess
 import sys
 import threading
+import grp
+import os
 
 helper = sys.argv[1]
 path = Path(sys.argv[2])
@@ -400,19 +406,40 @@ thread = threading.Thread(target=serve)
 thread.start()
 assert ready.wait(2)
 positive = subprocess.run(
-    [helper, "--socket", str(path), "--user", "gamer", "--timeout", "2"],
+    [
+        helper, "--socket", str(path), "--user", "gamer",
+        "--group", grp.getgrgid(os.getgid()).gr_name,
+        "--mode", "0660", "--timeout", "2",
+    ],
     text=True, capture_output=True,
 )
 thread.join(2)
 assert positive.returncode == 0, positive.stderr
 assert seen == [(5, b"localuser\0gamer")]
+assert path.stat().st_gid == os.getgid()
+assert path.stat().st_mode & 0o777 == 0o660
 negative = subprocess.run(
-    [helper, "--socket", str(path), "--user", "unauthorized", "--timeout", "0"],
+    [
+        helper, "--socket", str(path), "--user", "unauthorized",
+        "--group", grp.getgrgid(os.getgid()).gr_name,
+        "--mode", "0660", "--timeout", "0",
+    ],
     text=True, capture_output=True,
 )
 assert negative.returncode != 0
 assert "unsupported_user" in negative.stderr
 assert not negative.stdout
+public_mode = subprocess.run(
+    [
+        helper, "--socket", str(path), "--user", "gamer",
+        "--group", grp.getgrgid(os.getgid()).gr_name,
+        "--mode", "0666", "--timeout", "0",
+    ],
+    text=True, capture_output=True,
+)
+assert public_mode.returncode != 0
+assert "unsupported_mode" in public_mode.stderr
+assert not public_mode.stdout
 PY
 
 # The Xwayland child can be replaced while Gamescope keeps X0 published. The
@@ -428,6 +455,7 @@ import subprocess
 import sys
 import threading
 import time
+import grp
 
 helper = sys.argv[1]
 scratch = Path(sys.argv[2])
@@ -452,9 +480,12 @@ def serve_x11() -> None:
             assert len(header) == 8 and header[0] == 109
             body = client.recv(struct.unpack_from("<H", header, 2)[0] * 4 - 8)
             accepted.append((header[4], body))
+            assert path.stat().st_gid == os.getgid()
+            assert path.stat().st_mode & 0o777 == 0o660
             assert client.recv(4) == struct.pack("<BBH", 43, 0, 1)
             client.sendall(b"\1" + b"\0" * 31)
         if generation == 0:
+            path.chmod(0o777)
             time.sleep(0.2)
     assert path.stat().st_ino == initial_inode
     listener.close()
@@ -467,7 +498,11 @@ server = threading.Thread(target=serve_x11, daemon=True)
 server.start()
 assert ready.wait(2)
 process = subprocess.Popen(
-    [helper, "--socket", str(path), "--user", "gamer", "--timeout", "2", "--monitor"],
+    [
+        helper, "--socket", str(path), "--user", "gamer",
+        "--group", grp.getgrgid(os.getgid()).gr_name,
+        "--mode", "0660", "--timeout", "2", "--monitor",
+    ],
     env=environment,
     text=True,
     stdout=subprocess.PIPE,
