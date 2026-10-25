@@ -16,6 +16,7 @@ required="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf"
 drm_systemd_rule="$root/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
 probe="$root/tools/open-gpu-probe.c"
 mainline_packages="$root/rootfs-packages-mainline.txt"
+platform_runtime_config="$root/build/app-platform-runtime-a133-open-v1.json"
 open_gpu_units='pocketforge-menu.service pf-shell-selected.service pf-foreground@.service'
 
 # Literal Dockerfile variables are intentional in these structural assertions.
@@ -123,6 +124,15 @@ grep -F 'libvulkan-dev:arm64' "$dockerfile" >/dev/null
 for wsi_runtime_package in libxcb-dri3-0 libxcb-present0 libxshmfence1; do
     grep -Fx "$wsi_runtime_package" "$mainline_packages" >/dev/null || {
         echo "open GPU rootfs lacks WSI runtime package: $wsi_runtime_package" >&2
+        exit 1
+    }
+done
+for x11_runtime_seed in \
+    usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0 \
+    usr/lib/aarch64-linux-gnu/libxcb-present.so.0 \
+    usr/lib/aarch64-linux-gnu/libxshmfence.so.1; do
+    grep -F "\"$x11_runtime_seed\"" "$platform_runtime_config" >/dev/null || {
+        echo "app platform runtime lacks X11 DRI3 seed: $x11_runtime_seed" >&2
         exit 1
     }
 done
