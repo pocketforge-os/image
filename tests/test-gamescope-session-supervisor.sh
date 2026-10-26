@@ -240,6 +240,7 @@ environment = [line.removeprefix("Environment=") for line in lines
                if line.startswith("Environment=")]
 required = {
     "VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json",
+    "PVR_I_WANT_A_BROKEN_VULKAN_DRIVER": "1",
     "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
     "LIBGL_DRIVERS_PATH": "/usr/local/lib/dri",
     "GBM_BACKENDS_PATH": "/usr/local/lib/gbm",
@@ -257,7 +258,8 @@ PY
 # server that started without a renderable GLX visual.
 check_xwayland_gpu_provider_contract "${owner}" \
     || fail "Gamescope does not pin the Xwayland GPU providers"
-for provider in VK_DRIVER_FILES __EGL_VENDOR_LIBRARY_FILENAMES \
+for provider in VK_DRIVER_FILES PVR_I_WANT_A_BROKEN_VULKAN_DRIVER \
+    __EGL_VENDOR_LIBRARY_FILENAMES \
     LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH; do
     mutant="${scratch}/owner-without-${provider}.service"
     cp "${owner}" "${mutant}"

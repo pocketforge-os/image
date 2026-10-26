@@ -26,6 +26,7 @@ Environment=XDG_RUNTIME_DIR=/run/pocketforge/gamescope
 # Gamescope owns Xwayland, so select the same open GPU providers before the
 # X11 server is created. Per-app provider variables are too late for GLX.
 Environment=VK_DRIVER_FILES=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json
+Environment=PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1
 Environment=__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
 Environment=LIBGL_DRIVERS_PATH=/usr/local/lib/dri
 Environment=GBM_BACKENDS_PATH=/usr/local/lib/gbm
