@@ -170,6 +170,105 @@ grep -Fxq '    Timeout "30";' "${transport}" \
     || fail "strip removed the sibling block-body Timeout option"
 
 # ---------------------------------------------------------------------------
+# Negative control 5: block and multiline forms (review r4374286544). apt
+# accepts a closing brace as the statement terminator ('{ Proxy DIRECT }'),
+# values terminated by '}' on a following line, and key/value splits across
+# lines — all confirmed with apt-config dump. The gate must reject every
+# variant and the strip must excise it while keeping non-proxy siblings and
+# balanced braces.
+# ---------------------------------------------------------------------------
+rootfs6="${scratch}/rootfs-blockforms"
+make_proxy_rootfs "${rootfs6}"
+find "${rootfs6}/etc/apt" -name 99mmdebstrap -delete
+cat > "${rootfs6}/etc/apt/apt.conf.d/20blocks" <<'EOF'
+Acquire::http { Proxy DIRECT }
+Acquire::https {
+    Proxy "http://cache.example.invalid:3142"
+};
+Acquire::file::Proxy
+    "DIRECT";
+Acquire::ftp {
+    Proxy::example.com DIRECT
+};
+Acquire::cdrom {
+    Proxy-Auto-Detect /usr/bin/foo
+};
+Acquire::gpgv {
+    Timeout "30";
+};
+EOF
+if "${verify}" "${rootfs6}" >"${scratch}/n5.out" 2>"${scratch}/n5.err"; then
+    fail "gate accepted block/multiline proxy directive forms"
+fi
+for needle in '{ Proxy DIRECT }' 'Proxy "http://cache.example.invalid:3142"' \
+              'Acquire::file::Proxy' 'Proxy::example.com DIRECT' \
+              'Proxy-Auto-Detect /usr/bin/foo'; do
+    grep -Fq "${needle}" "${scratch}/n5.err" \
+        || fail "gate stderr does not name ${needle} (got: $(cat "${scratch}/n5.err"))"
+done
+"${strip}" "${rootfs6}"
+"${verify}" "${rootfs6}" >"${scratch}/p5.out" 2>"${scratch}/p5.err" \
+    || fail "strip did not remove the block/multiline proxy directives: $(cat "${scratch}/p5.err")"
+blocks="${rootfs6}/etc/apt/apt.conf.d/20blocks"
+if grep -qi 'proxy' "${blocks}"; then
+    fail "strip left proxy content in 20blocks: $(cat "${blocks}")"
+fi
+grep -Fxq 'Acquire::http { }' "${blocks}" \
+    || fail "single-line block lost its braces: $(cat "${blocks}")"
+grep -Fxq '    Timeout "30";' "${blocks}" \
+    || fail "strip removed the sibling Timeout option in 20blocks"
+grep -Fxq 'Acquire::gpgv {' "${blocks}" \
+    || fail "strip removed the unrelated non-proxy block"
+[ "$(grep -c '{' "${blocks}")" -eq "$(grep -c '}' "${blocks}")" ] \
+    || fail "strip unbalanced the braces in 20blocks: $(cat "${blocks}")"
+before6="$(cd "${rootfs6}" && find etc -type f -exec sha256sum {} + | sha256sum)"
+"${strip}" "${rootfs6}"
+after6="$(cd "${rootfs6}" && find etc -type f -exec sha256sum {} + | sha256sum)"
+[ "${before6}" = "${after6}" ] || fail "second strip is not a byte-identical no-op"
+
+# ---------------------------------------------------------------------------
+# Negative control 6: invalid-but-tolerated forms. Two consecutive unterminated
+# proxy statements in one block are rejected by apt itself ('Extra junk after
+# value'), and an unterminated 'Proxy false' directly followed by a sibling
+# must not eat that sibling: the strip excises both proxy lines and keeps
+# 'Timeout "30";' and the braces (over-deletion protection).
+# ---------------------------------------------------------------------------
+rootfs7="${scratch}/rootfs-invalid-forms"
+make_proxy_rootfs "${rootfs7}"
+find "${rootfs7}/etc/apt" -name 99mmdebstrap -delete
+cat > "${rootfs7}/etc/apt/apt.conf.d/30invalid" <<'EOF'
+Acquire::ftp {
+    Proxy::example.com DIRECT
+    Proxy-Auto-Detect /usr/bin/foo
+};
+Acquire::https {
+    Proxy false
+    Timeout "30";
+};
+EOF
+if "${verify}" "${rootfs7}" >"${scratch}/n6.out" 2>"${scratch}/n6.err"; then
+    fail "gate accepted invalid-form proxy directives"
+fi
+for needle in 'Proxy::example.com DIRECT' 'Proxy-Auto-Detect /usr/bin/foo' \
+              'Proxy false'; do
+    grep -Fq "${needle}" "${scratch}/n6.err" \
+        || fail "gate stderr does not name ${needle} (got: $(cat "${scratch}/n6.err"))"
+done
+"${strip}" "${rootfs7}"
+"${verify}" "${rootfs7}" >"${scratch}/p6.out" 2>"${scratch}/p6.err" \
+    || fail "strip did not remove the invalid-form proxy directives: $(cat "${scratch}/p6.err")"
+invalid="${rootfs7}/etc/apt/apt.conf.d/30invalid"
+if grep -qi 'proxy' "${invalid}"; then
+    fail "strip left proxy content in 30invalid: $(cat "${invalid}")"
+fi
+grep -Fxq '    Timeout "30";' "${invalid}" \
+    || fail "strip over-deleted the sibling after an unterminated proxy line"
+grep -Fxq 'Acquire::ftp {' "${invalid}" \
+    || fail "strip removed the enclosing ftp block opener"
+[ "$(grep -c '};' "${invalid}")" -eq 2 ] \
+    || fail "strip unbalanced the block closers in 30invalid: $(cat "${invalid}")"
+
+# ---------------------------------------------------------------------------
 # Positive control 2: a clean rootfs (direct build, PF_APT_PROXY unset) passes
 # the gate untouched, and strip is a byte-identical no-op on it.
 # ---------------------------------------------------------------------------
@@ -217,4 +316,4 @@ assert_wired() {
 assert_wired "${repo_dir}/scripts/build-rootfs.sh" 'ROOTFS_EXTRACTED'
 assert_wired "${repo_dir}/scripts/build-rootfs-a523.sh" 'EXT'
 
-echo "rootfs-apt-policy=PASS positive=strip-then-verify-clean-proxied-and-direct-rootfs,block-sibling-timeout-kept negative=persisted-99mmdebstrap-proxy,apt.conf-proxy,bare-private-endpoint,unquoted-proxy-values"
+echo "rootfs-apt-policy=PASS positive=strip-then-verify-clean-proxied-and-direct-rootfs,block-sibling-timeout-kept,braces-balanced,second-strip-noop negative=persisted-99mmdebstrap-proxy,apt.conf-proxy,bare-private-endpoint,unquoted-proxy-values,block-brace-terminator,split-key-value,invalid-consecutive-forms"
