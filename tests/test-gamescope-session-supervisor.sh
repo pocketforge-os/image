@@ -80,6 +80,8 @@ if "--user gamer" not in auth:
     raise SystemExit("X11 ACL helper does not grant only the app uid")
 if "SupplementaryGroups=pf-session" not in auth:
     raise SystemExit("X11 ACL helper cannot project the private app socket group")
+if "ReadWritePaths=/run/pocketforge/x11/.X11-unix" not in auth:
+    raise SystemExit("X11 ACL helper cannot mutate the protected socket directory")
 if "--group pf-session" not in auth or "--mode 0660" not in auth:
     raise SystemExit("X11 ACL helper does not enforce the private socket projection")
 if "Type=notify" not in auth or "NotifyAccess=main" not in auth:

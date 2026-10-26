@@ -20,5 +20,6 @@ RestartSec=1s
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
+ReadWritePaths=/run/pocketforge/x11/.X11-unix
 ProtectHome=yes
 RestrictAddressFamilies=AF_UNIX
