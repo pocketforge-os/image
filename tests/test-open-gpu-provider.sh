@@ -485,6 +485,24 @@ printf '%s\n' "$positive_output" | grep -Fx \
     'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr+venus vulkan_manifests=2 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
     >/dev/null
 
+# The app-platform runtime is an isolated, content-addressed loader tree. It
+# intentionally carries its own EGL and Vulkan manifests, which must not be
+# counted as duplicates of the global provider-owned routes.
+candidate="$scratch/green-isolated-app-platform-runtime"
+cp -a "$rootfs" "$candidate"
+mkdir -p \
+    "$candidate/usr/lib/pocketforge/platform-runtimes/test/usr/share/glvnd/egl_vendor.d" \
+    "$candidate/usr/lib/pocketforge/platform-runtimes/test/usr/share/vulkan/icd.d"
+cp "$candidate/usr/share/glvnd/egl_vendor.d/50_mesa.json" \
+    "$candidate/usr/lib/pocketforge/platform-runtimes/test/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
+    "$candidate/usr/lib/pocketforge/platform-runtimes/test/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+isolated_output="$scratch/green-isolated-app-platform-runtime.out"
+"$verifier" "$candidate" "$producer" >"$isolated_output"
+grep -Fx \
+    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr+venus vulkan_manifests=2 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
+    "$isolated_output" >/dev/null
+
 # A stripped DSO has no static symbol table. In that case the verifier must
 # explicitly report that it used the recorded Zink build option, whose Mesa
 # build rule includes KMSRO whenever Zink is enabled.
