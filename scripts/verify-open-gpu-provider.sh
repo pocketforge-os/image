@@ -10,6 +10,8 @@ fi
 rootfs=$1
 producer=$2
 status_file="$rootfs/var/lib/dpkg/status"
+script_dir=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
+gpu_boundary_verifier="$script_dir/verify-no-gpu-artifacts.sh"
 
 fatal() {
     echo "FATAL: open GPU provider: $*" >&2
@@ -19,6 +21,8 @@ fatal() {
 [ -d "$rootfs" ] || fatal "rootfs is not a directory: $rootfs"
 [ -d "$producer/usr/local" ] || fatal "producer tree is missing: $producer/usr/local"
 [ -f "$status_file" ] || fatal "dpkg installed-state database is missing: $status_file"
+[ -x "$gpu_boundary_verifier" ] \
+    || fatal "shared GPU boundary verifier is missing: $gpu_boundary_verifier"
 
 package_is_installed() {
     awk -v wanted="$1" '
@@ -384,6 +388,17 @@ count_loader_manifests() {
     done | wc -l
 }
 
+count_loader_boundary_manifests() {
+    manifest_name=$1
+    boundaries=$2
+    for boundary in $boundaries; do
+        manifest_dir="$rootfs/$boundary"
+        [ -d "$manifest_dir" ] || continue
+        find "$manifest_dir" -maxdepth 1 \( -type f -o -type l \) \
+            -name "$manifest_name" -print
+    done | wc -l
+}
+
 # Count only manifests visible through the host loader's standard discovery
 # directories. Content-addressed app runtimes intentionally carry private
 # copies below /usr/lib/pocketforge/platform-runtimes; those are selected only
@@ -420,10 +435,10 @@ producer_venus_icd="$producer/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.js
 rootfs_venus_icd="$rootfs/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
 [ -f "$producer_icd" ] || fatal 'producer PowerVR ICD JSON is missing'
 [ -f "$producer_venus_icd" ] || fatal 'producer Venus ICD JSON is missing'
-rootfs_icd_count=$(count_loader_manifests '*.json' \
-    "$rootfs/etc/vulkan/icd.d" \
-    "$rootfs/usr/local/share/vulkan/icd.d" \
-    "$rootfs/usr/share/vulkan/icd.d")
+vulkan_icd_boundaries=$(
+    "$gpu_boundary_verifier" --print-vulkan-icd-boundaries
+)
+rootfs_icd_count=$(count_loader_boundary_manifests '*.json' "$vulkan_icd_boundaries")
 [ "$rootfs_icd_count" -eq 2 ] \
     || fatal "expected exactly two Vulkan ICD manifests, found $rootfs_icd_count"
 if [ ! -f "$rootfs_icd" ] || [ -L "$rootfs_icd" ]; then
