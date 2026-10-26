@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -322,12 +323,73 @@ class PlatformRuntimeBuilderTest(unittest.TestCase):
         self.assertEqual(len(stores), 1)
         store = stores[0]
         self.assertTrue((store / ".manifest-sha256").is_file())
+        entries = sorted(
+            store.rglob("*"), key=lambda path: path.relative_to(store).as_posix()
+        )
+        lines = []
+        for path in entries:
+            relative = path.relative_to(store).as_posix()
+            if path.is_dir() or relative == ".manifest-sha256":
+                continue
+            self.assertTrue(path.is_file(), relative)
+            lines.append(
+                f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {relative}\n"
+            )
+        expected_digest = hashlib.sha256("".join(lines).encode()).hexdigest()
+        self.assertEqual(
+            (store / ".manifest-sha256").read_text(encoding="utf-8").strip(),
+            expected_digest,
+        )
+        self.assertEqual(store.name, f"sha256-{expected_digest}")
         for relative in (
             "usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0",
             "usr/lib/aarch64-linux-gnu/libxcb-present.so.0",
             "usr/lib/aarch64-linux-gnu/libxshmfence.so.1",
         ):
             self.assertTrue((store / relative).is_file(), relative)
+
+    def test_installer_uses_global_relative_path_order_for_identity(self) -> None:
+        builder = self.work / "fake-builder.py"
+        builder.write_text(
+            textwrap.dedent(
+                """\
+                import pathlib
+                import sys
+
+                output = pathlib.Path(sys.argv[sys.argv.index("--output") + 1])
+                (output / "a/lib").mkdir(parents=True)
+                (output / "a/lib/z.so").write_bytes(b"nested")
+                (output / "z.txt").write_bytes(b"root")
+                """
+            ),
+            encoding="utf-8",
+        )
+        rootfs = self.work / "identity-rootfs"
+        rootfs.mkdir()
+        result = run(
+            [str(PLATFORM_INSTALLER), str(self.config), str(self.host), str(rootfs)],
+            env={
+                "PATH": os.environ["PATH"],
+                "PF_APP_RUNTIME_BUILDER": str(builder),
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        store = next(
+            (rootfs / "usr/lib/pocketforge/platform-runtimes/pocketforge-bookworm-aarch64").glob(
+                "sha256-*"
+            )
+        )
+        lines = [
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(store).as_posix()}\n"
+            for path in sorted(
+                (path for path in store.rglob("*") if path.is_file()),
+                key=lambda path: path.relative_to(store).as_posix(),
+            )
+            if path.name != ".manifest-sha256"
+        ]
+        expected_digest = hashlib.sha256("".join(lines).encode()).hexdigest()
+        self.assertEqual(store.name, f"sha256-{expected_digest}")
 
 
 class LoaderVerifierTest(unittest.TestCase):
