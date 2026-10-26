@@ -374,8 +374,24 @@ reject_symlinked_boundary() {
 }
 reject_symlinked_boundary usr/share/glvnd/egl_vendor.d
 
-vendor_json_count=$(find "$rootfs" \( -type f -o -type l \) \
-    -name '50_mesa.json' -print | wc -l)
+count_loader_manifests() {
+    manifest_name=$1
+    shift
+    for manifest_dir in "$@"; do
+        [ -d "$manifest_dir" ] || continue
+        find "$manifest_dir" -maxdepth 1 \( -type f -o -type l \) \
+            -name "$manifest_name" -print
+    done | wc -l
+}
+
+# Count only manifests visible through the host loader's standard discovery
+# directories. Content-addressed app runtimes intentionally carry private
+# copies below /usr/lib/pocketforge/platform-runtimes; those are selected only
+# after the launcher projects the runtime into its mount namespace.
+vendor_json_count=$(count_loader_manifests '50_mesa.json' \
+    "$rootfs/etc/glvnd/egl_vendor.d" \
+    "$rootfs/usr/local/share/glvnd/egl_vendor.d" \
+    "$rootfs/usr/share/glvnd/egl_vendor.d")
 [ "$vendor_json_count" -eq 1 ] \
     || fatal "expected exactly one 50_mesa.json, found $vendor_json_count"
 vendor_json="$rootfs/usr/share/glvnd/egl_vendor.d/50_mesa.json"
@@ -404,8 +420,10 @@ producer_venus_icd="$producer/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.js
 rootfs_venus_icd="$rootfs/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
 [ -f "$producer_icd" ] || fatal 'producer PowerVR ICD JSON is missing'
 [ -f "$producer_venus_icd" ] || fatal 'producer Venus ICD JSON is missing'
-rootfs_icd_count=$(find "$rootfs" \( -type f -o -type l \) \
-    -path '*/vulkan/icd.d/*.json' -print | wc -l)
+rootfs_icd_count=$(count_loader_manifests '*.json' \
+    "$rootfs/etc/vulkan/icd.d" \
+    "$rootfs/usr/local/share/vulkan/icd.d" \
+    "$rootfs/usr/share/vulkan/icd.d")
 [ "$rootfs_icd_count" -eq 2 ] \
     || fatal "expected exactly two Vulkan ICD manifests, found $rootfs_icd_count"
 if [ ! -f "$rootfs_icd" ] || [ -L "$rootfs_icd" ]; then
