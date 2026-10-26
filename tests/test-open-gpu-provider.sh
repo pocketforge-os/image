@@ -506,6 +506,7 @@ cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
 runtime_output=$("$verifier" "$candidate" "$producer")
 printf '%s\n' "$runtime_output"
 printf '%s\n' "$runtime_output" | grep -F 'open-gpu-provider=PASS ' >/dev/null
+test "$runtime_output" = "$positive_output"
 echo 'open-gpu-provider-isolated-runtime-manifests=PASS'
 
 # A stripped DSO has no static symbol table. In that case the verifier must
