@@ -9,14 +9,21 @@
 # cloud-config then talked to the unreachable private endpoint and failed.
 #
 # Contract under test:
-#   * scripts/verify-rootfs-apt-policy.sh fails closed on any persisted
-#     Acquire::*::Proxy directive or private build endpoint (10.x / 192.168.x /
-#     the apt-cacher-ng host:port) under etc/apt of the assembled rootfs.
-#   * scripts/strip-rootfs-apt-proxy.sh removes the mmdebstrap-persisted proxy
-#     directive wherever it lives under etc/apt, keeps the sibling build
-#     hardening options (Check-Valid-Until, Retries, Sandbox::User) and the
-#     pinned snapshot.debian.org source, and is a byte-identical no-op on a
-#     clean (direct, PF_APT_PROXY unset) rootfs.
+#   * scripts/verify-rootfs-apt-policy.sh parses the rootfs apt config with
+#     apt's OWN parser (apt-config dump pointed at the rootfs tree) and fails
+#     closed on any effective Acquire::*Proxy* key — quoting and layout forms
+#     a line matcher cannot enumerate must not slip through (review
+#     r4374477053) — plus on any private build endpoint (10.x / 192.168.x /
+#     the apt-cacher-ng host:port) under etc/apt as text.
+#   * The dump reads the rootfs etc/apt/apt.conf and apt.conf.d/* parts and
+#     never the host's /etc/apt (sentinel + host-key isolation proof below).
+#   * scripts/strip-rootfs-apt-proxy.sh removes exactly the builder-written
+#     persisted line(s) from the known mmdebstrap drop-in, keeps the sibling
+#     build hardening options (Check-Valid-Until, Retries, Sandbox::User) and
+#     the pinned snapshot.debian.org source, and is a byte-identical no-op and
+#     idempotent on a clean (direct, PF_APT_PROXY unset) rootfs. Proxy config
+#     the builder did not write is NOT laundered: the gate must still reject
+#     it so the build fails closed naming the offending file.
 #   * Both rootfs builders run strip-then-verify on the extracted tree before
 #     mke2fs, so no ext4 can be assembled with the proxy persisted.
 set -euo pipefail
@@ -29,6 +36,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -f "${strip}" ] || fail "missing ${strip} (base commit has no proxy-strip step)"
 [ -f "${verify}" ] || fail "missing ${verify} (base commit has no apt policy gate)"
+command -v apt-config >/dev/null 2>&1 \
+    || fail "this test requires apt-config (apt) on the host"
 
 scratch="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-rootfs-apt-policy.XXXXXX")"
 cleanup() {
@@ -37,10 +46,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Fixture: exactly what mmdebstrap 1.5.5 persists for build-rootfs.sh's
-# --aptopt set when PF_APT_PROXY=http://10.0.32.86:3142 (build-6 witness:
+# The exact line mmdebstrap 1.5.5 persists for build-rootfs.sh's
+# --aptopt='Acquire::http::Proxy "http://10.0.32.86:3142"' (it appends the
+# trailing ';' when missing). Build-6 witness:
 # /home/matt/recovery/tsp-mc9m.41.1002.4/, raw partition 5
-# /etc/apt/apt.conf.d/99mmdebstrap).
+# /etc/apt/apt.conf.d/99mmdebstrap.
+PERSISTED_LINE='Acquire::http::Proxy "http://10.0.32.86:3142";'
+
 make_proxy_rootfs() {
     local dir="$1"
     mkdir -p "${dir}/etc/apt/apt.conf.d" "${dir}/etc/apt/sources.list.d"
@@ -54,6 +66,58 @@ EOF
         > "${dir}/etc/apt/sources.list"
 }
 
+# Same mechanism the gate uses: point apt-config's Dir at a tree so it reads
+# only that tree's etc/apt config. apt_dump <rootfs> <out> <err>; returns rc.
+apt_dump() {
+    local rootfs="$1"
+    local cfg="${scratch}/aptcfg.$(basename "${rootfs}")"
+    local rc=0
+    printf 'Dir "%s";\n' "${rootfs}" > "${cfg}"
+    APT_CONFIG="${cfg}" apt-config dump >"$2" 2>"$3" || rc=$?
+    return "${rc}"
+}
+
+# ---------------------------------------------------------------------------
+# Isolation control: the rootfs-scoped dump must read the rootfs main file AND
+# its apt.conf.d parts, and must NOT read the host's /etc/apt. Proof: sentinel
+# keys in both fixture locations appear in the dump; every key the host config
+# adds over a built-in-defaults baseline (empty-tree dump) is absent from the
+# fixture dump.
+# ---------------------------------------------------------------------------
+rootfs0="${scratch}/rootfs-isolation"
+mkdir -p "${rootfs0}/etc/apt/apt.conf.d"
+echo 'PfPolicyTest::Sentinel::Main "main-read";' > "${rootfs0}/etc/apt/apt.conf"
+echo 'PfPolicyTest::Sentinel::Part "part-read";' > "${rootfs0}/etc/apt/apt.conf.d/05sentinel"
+empty0="${scratch}/rootfs-empty"
+mkdir -p "${empty0}"
+rc=0; apt_dump "${empty0}" "${scratch}/n0.base" "${scratch}/n0.base.err" || rc=$?
+[ "${rc}" -eq 0 ] || fail "apt-config rejected an empty-tree Dir override (rc=${rc}): $(cat "${scratch}/n0.base.err")"
+rc=0; apt_dump "${rootfs0}" "${scratch}/n0.fix" "${scratch}/n0.fix.err" || rc=$?
+[ "${rc}" -eq 0 ] || fail "apt-config rejected the sentinel fixture (rc=${rc}): $(cat "${scratch}/n0.fix.err")"
+grep -Fxq 'PfPolicyTest::Sentinel::Main "main-read";' "${scratch}/n0.fix" \
+    || fail "rootfs-scoped dump did not read the rootfs etc/apt/apt.conf"
+grep -Fxq 'PfPolicyTest::Sentinel::Part "part-read";' "${scratch}/n0.fix" \
+    || fail "rootfs-scoped dump did not read the rootfs apt.conf.d parts"
+rc=0; apt-config dump > "${scratch}/n0.host" 2>/dev/null || rc=$?
+if [ "${rc}" -eq 0 ]; then
+    rc=0
+    host_only="$(grep -Fxv -f "${scratch}/n0.base" "${scratch}/n0.host")" || rc=$?
+    case "${rc}" in
+        0) ;;
+        1) host_only="" ;;
+        *) fail "grep failed diffing host apt config vs baseline (rc=${rc})" ;;
+    esac
+    if [ -n "${host_only}" ]; then
+        rc=0
+        overlap="$(grep -Fx -f <(printf '%s\n' "${host_only}") "${scratch}/n0.fix")" || rc=$?
+        case "${rc}" in
+            0) fail "rootfs-scoped dump leaked host /etc/apt keys: ${overlap}" ;;
+            1) : ;;
+            *) fail "grep failed the host-leak check (rc=${rc})" ;;
+        esac
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # Negative control 1: the gate must REJECT the build-6 persisted shape as-is.
 # ---------------------------------------------------------------------------
@@ -62,16 +126,17 @@ make_proxy_rootfs "${rootfs}"
 if "${verify}" "${rootfs}" >"${scratch}/n1.out" 2>"${scratch}/n1.err"; then
     fail "verify-rootfs-apt-policy accepted the build-6 persisted proxy config"
 fi
-for needle in '99mmdebstrap' 'Proxy' '10.0.32.86:3142'; do
+for needle in 'Proxy' '10.0.32.86:3142' '99mmdebstrap'; do
     grep -Fq "${needle}" "${scratch}/n1.err" \
         || fail "gate stderr does not name ${needle} (got: $(cat "${scratch}/n1.err"))"
 done
 
 # ---------------------------------------------------------------------------
-# Positive control: strip removes the persisted proxy and the gate then passes;
-# the sibling aptopts and the pinned snapshot source are untouched.
+# Positive control 1: strip removes the builder-written persisted line and the
+# gate then passes; the sibling aptopts and the pinned snapshot source are
+# untouched; a second strip is a byte-identical no-op.
 # ---------------------------------------------------------------------------
-"${strip}" "${rootfs}"
+"${strip}" "${rootfs}" "${PERSISTED_LINE}"
 "${verify}" "${rootfs}" >"${scratch}/p1.out" 2>"${scratch}/p1.err" \
     || fail "strip+verify rejected its own cleaned rootfs: $(cat "${scratch}/p1.err")"
 conf="${rootfs}/etc/apt/apt.conf.d/99mmdebstrap"
@@ -85,17 +150,17 @@ done
 grep -Fxq 'deb http://snapshot.debian.org/archive/debian/20260601T000000Z/ bookworm main' \
     "${rootfs}/etc/apt/sources.list" \
     || fail "strip altered the pinned snapshot.debian.org source"
-
-# Idempotence: a second strip is a byte-identical no-op.
 before="$(sha256sum "${conf}" | cut -d' ' -f1)"
-"${strip}" "${rootfs}"
+"${strip}" "${rootfs}" "${PERSISTED_LINE}"
 after="$(sha256sum "${conf}" | cut -d' ' -f1)"
 [ "${before}" = "${after}" ] || fail "second strip mutated 99mmdebstrap"
 
 # ---------------------------------------------------------------------------
 # Negative control 2: the gate is not hardcoded to 99mmdebstrap. Proxy
 # directives in another etc/apt file — including the per-host Proxy::<host>
-# form — must also be rejected and stripped.
+# form — must be rejected, and strip must NOT launder files the builder did
+# not write: after strip the gate must still reject (the real build fails
+# closed here) with the file unchanged.
 # ---------------------------------------------------------------------------
 rootfs2="${scratch}/rootfs-elsewhere"
 make_proxy_rootfs "${rootfs2}"
@@ -109,9 +174,13 @@ if "${verify}" "${rootfs2}" >"${scratch}/n2.out" 2>"${scratch}/n2.err"; then
 fi
 grep -Fq 'etc/apt/apt.conf' "${scratch}/n2.err" \
     || fail "gate stderr does not name the offending file for apt.conf proxy"
+before2="$(sha256sum "${rootfs2}/etc/apt/apt.conf" | cut -d' ' -f1)"
 "${strip}" "${rootfs2}"
-"${verify}" "${rootfs2}" >"${scratch}/p2.out" 2>"${scratch}/p2.err" \
-    || fail "strip did not remove the apt.conf proxy directive: $(cat "${scratch}/p2.err")"
+after2="$(sha256sum "${rootfs2}/etc/apt/apt.conf" | cut -d' ' -f1)"
+[ "${before2}" = "${after2}" ] || fail "strip laundered a file the builder did not write"
+if "${verify}" "${rootfs2}" >"${scratch}/n2b.out" 2>"${scratch}/n2b.err"; then
+    fail "gate accepted the apt.conf proxy after strip (must stay rejected)"
+fi
 
 # ---------------------------------------------------------------------------
 # Negative control 3: a private build endpoint WITHOUT a proxy directive (e.g.
@@ -131,11 +200,10 @@ grep -Fq 'build-cache.list' "${scratch}/n3.err" \
     || fail "gate stderr does not name build-cache.list for the private endpoint"
 
 # ---------------------------------------------------------------------------
-# Negative control 4: unquoted value forms. apt accepts values without double
-# quotes, so gate and strip must match independent of quoting (review
-# r4374217256): plain DIRECT/false values, a block-body Proxy without quotes,
-# the per-host Proxy::<host> form with an unquoted value, and the
-# Proxy-Auto-Detect key.
+# Negative control 4: unquoted value forms (review r4374217256). apt accepts
+# values without double quotes; apt-config dump normalizes them, so the
+# parser-backed gate must reject every variant, and strip must not launder
+# the file.
 # ---------------------------------------------------------------------------
 rootfs5="${scratch}/rootfs-unquoted"
 make_proxy_rootfs "${rootfs5}"
@@ -153,29 +221,24 @@ EOF
 if "${verify}" "${rootfs5}" >"${scratch}/n4.out" 2>"${scratch}/n4.err"; then
     fail "gate accepted unquoted-value proxy directives"
 fi
-for needle in 'Acquire::http::Proxy DIRECT;' 'Acquire::ftp::Proxy false;' \
-              'Proxy::example.com DIRECT;' 'Proxy-Auto-Detect /usr/bin/foo;' \
-              'Proxy false;'; do
+for needle in 'Acquire::http::Proxy "DIRECT";' 'Acquire::ftp::Proxy "false";' \
+              'Acquire::http::Proxy::example.com "DIRECT";' \
+              'Acquire::http::Proxy-Auto-Detect "/usr/bin/foo";' \
+              'Acquire::https::Proxy "false";'; do
     grep -Fq "${needle}" "${scratch}/n4.err" \
         || fail "gate stderr does not name ${needle} (got: $(cat "${scratch}/n4.err"))"
 done
 "${strip}" "${rootfs5}"
-"${verify}" "${rootfs5}" >"${scratch}/p4.out" 2>"${scratch}/p4.err" \
-    || fail "strip did not remove the unquoted proxy directives: $(cat "${scratch}/p4.err")"
-transport="${rootfs5}/etc/apt/apt.conf.d/10transport"
-if grep -qi 'proxy' "${transport}"; then
-    fail "strip left proxy content in 10transport: $(cat "${transport}")"
+if "${verify}" "${rootfs5}" >"${scratch}/n4b.out" 2>"${scratch}/n4b.err"; then
+    fail "gate accepted the unquoted forms after strip (must stay rejected)"
 fi
-grep -Fxq '    Timeout "30";' "${transport}" \
-    || fail "strip removed the sibling block-body Timeout option"
 
 # ---------------------------------------------------------------------------
 # Negative control 5: block and multiline forms (review r4374286544). apt
 # accepts a closing brace as the statement terminator ('{ Proxy DIRECT }'),
 # values terminated by '}' on a following line, and key/value splits across
-# lines — all confirmed with apt-config dump. The gate must reject every
-# variant and the strip must excise it while keeping non-proxy siblings and
-# balanced braces.
+# lines — all confirmed with apt-config dump. The parser-backed gate must
+# reject every effective key; strip must not launder the file.
 # ---------------------------------------------------------------------------
 rootfs6="${scratch}/rootfs-blockforms"
 make_proxy_rootfs "${rootfs6}"
@@ -200,38 +263,23 @@ EOF
 if "${verify}" "${rootfs6}" >"${scratch}/n5.out" 2>"${scratch}/n5.err"; then
     fail "gate accepted block/multiline proxy directive forms"
 fi
-for needle in '{ Proxy DIRECT }' 'Proxy "http://cache.example.invalid:3142"' \
-              'Acquire::file::Proxy' 'Proxy::example.com DIRECT' \
-              'Proxy-Auto-Detect /usr/bin/foo'; do
+for needle in 'Acquire::http::Proxy "DIRECT";' \
+              'Acquire::https::Proxy "http://cache.example.invalid:3142";' \
+              'Acquire::file::Proxy "DIRECT";' \
+              'Acquire::ftp::Proxy::example.com "DIRECT";' \
+              'Acquire::cdrom::Proxy-Auto-Detect "/usr/bin/foo";'; do
     grep -Fq "${needle}" "${scratch}/n5.err" \
         || fail "gate stderr does not name ${needle} (got: $(cat "${scratch}/n5.err"))"
 done
 "${strip}" "${rootfs6}"
-"${verify}" "${rootfs6}" >"${scratch}/p5.out" 2>"${scratch}/p5.err" \
-    || fail "strip did not remove the block/multiline proxy directives: $(cat "${scratch}/p5.err")"
-blocks="${rootfs6}/etc/apt/apt.conf.d/20blocks"
-if grep -qi 'proxy' "${blocks}"; then
-    fail "strip left proxy content in 20blocks: $(cat "${blocks}")"
+if "${verify}" "${rootfs6}" >"${scratch}/n5b.out" 2>"${scratch}/n5b.err"; then
+    fail "gate accepted the block forms after strip (must stay rejected)"
 fi
-grep -Fxq 'Acquire::http { }' "${blocks}" \
-    || fail "single-line block lost its braces: $(cat "${blocks}")"
-grep -Fxq '    Timeout "30";' "${blocks}" \
-    || fail "strip removed the sibling Timeout option in 20blocks"
-grep -Fxq 'Acquire::gpgv {' "${blocks}" \
-    || fail "strip removed the unrelated non-proxy block"
-[ "$(grep -c '{' "${blocks}")" -eq "$(grep -c '}' "${blocks}")" ] \
-    || fail "strip unbalanced the braces in 20blocks: $(cat "${blocks}")"
-before6="$(cd "${rootfs6}" && find etc -type f -exec sha256sum {} + | sha256sum)"
-"${strip}" "${rootfs6}"
-after6="$(cd "${rootfs6}" && find etc -type f -exec sha256sum {} + | sha256sum)"
-[ "${before6}" = "${after6}" ] || fail "second strip is not a byte-identical no-op"
 
 # ---------------------------------------------------------------------------
-# Negative control 6: invalid-but-tolerated forms. Two consecutive unterminated
-# proxy statements in one block are rejected by apt itself ('Extra junk after
-# value'), and an unterminated 'Proxy false' directly followed by a sibling
-# must not eat that sibling: the strip excises both proxy lines and keeps
-# 'Timeout "30";' and the braces (over-deletion protection).
+# Negative control 6: syntactically invalid config (two consecutive
+# unterminated statements) makes apt-config itself fail; the gate must fail
+# closed on the non-zero exit and surface apt's error, which names the file.
 # ---------------------------------------------------------------------------
 rootfs7="${scratch}/rootfs-invalid-forms"
 make_proxy_rootfs "${rootfs7}"
@@ -247,30 +295,50 @@ Acquire::https {
 };
 EOF
 if "${verify}" "${rootfs7}" >"${scratch}/n6.out" 2>"${scratch}/n6.err"; then
-    fail "gate accepted invalid-form proxy directives"
+    fail "gate accepted a rootfs whose apt config apt-config cannot parse"
 fi
-for needle in 'Proxy::example.com DIRECT' 'Proxy-Auto-Detect /usr/bin/foo' \
-              'Proxy false'; do
+for needle in 'apt-config' 'Extra junk' '30invalid'; do
     grep -Fq "${needle}" "${scratch}/n6.err" \
-        || fail "gate stderr does not name ${needle} (got: $(cat "${scratch}/n6.err"))"
+        || fail "gate stderr does not name ${needle} for the parse failure (got: $(cat "${scratch}/n6.err"))"
 done
-"${strip}" "${rootfs7}"
-"${verify}" "${rootfs7}" >"${scratch}/p6.out" 2>"${scratch}/p6.err" \
-    || fail "strip did not remove the invalid-form proxy directives: $(cat "${scratch}/p6.err")"
-invalid="${rootfs7}/etc/apt/apt.conf.d/30invalid"
-if grep -qi 'proxy' "${invalid}"; then
-    fail "strip left proxy content in 30invalid: $(cat "${invalid}")"
+
+# ---------------------------------------------------------------------------
+# Negative control 7: quoted key components (review r4374477053). apt-config
+# accepts quotes around ANY config-key component and normalizes them in the
+# dump, so a matcher keyed on the literal token 'Proxy' after a boundary
+# misses every one of these. Each variant below was confirmed to parse and
+# dump as an Acquire::*Proxy* key (host apt 2.8.3, container apt 2.6.1).
+# ---------------------------------------------------------------------------
+rootfs8="${scratch}/rootfs-quoted-keys"
+make_proxy_rootfs "${rootfs8}"
+find "${rootfs8}/etc/apt" -name 99mmdebstrap -delete
+cat > "${rootfs8}/etc/apt/apt.conf.d/40quoted" <<'EOF'
+Acquire::"http"::Proxy "QV1";
+Acquire::https::"Proxy" "QV2";
+"Acquire"::ftp::Proxy "QV3";
+Acquire::file { "Proxy" false; }
+Acquire::cdrom::"Proxy-Auto-Detect" "/usr/bin/qfoo";
+Acquire::rsh::"Proxy::example.com" "DIRECT";
+EOF
+if "${verify}" "${rootfs8}" >"${scratch}/n7.out" 2>"${scratch}/n7.err"; then
+    fail "gate accepted quoted-key-component proxy directives"
 fi
-grep -Fxq '    Timeout "30";' "${invalid}" \
-    || fail "strip over-deleted the sibling after an unterminated proxy line"
-grep -Fxq 'Acquire::ftp {' "${invalid}" \
-    || fail "strip removed the enclosing ftp block opener"
-[ "$(grep -c '};' "${invalid}")" -eq 2 ] \
-    || fail "strip unbalanced the block closers in 30invalid: $(cat "${invalid}")"
+for needle in 'Acquire::http::Proxy "QV1";' 'Acquire::https::Proxy "QV2";' \
+              'Acquire::ftp::Proxy "QV3";' 'Acquire::file::Proxy "false";' \
+              'Acquire::cdrom::Proxy-Auto-Detect "/usr/bin/qfoo";' \
+              'Acquire::rsh::Proxy::example.com "DIRECT";'; do
+    grep -Fq "${needle}" "${scratch}/n7.err" \
+        || fail "gate stderr does not name ${needle} (got: $(cat "${scratch}/n7.err"))"
+done
+"${strip}" "${rootfs8}"
+if "${verify}" "${rootfs8}" >"${scratch}/n7b.out" 2>"${scratch}/n7b.err"; then
+    fail "gate accepted the quoted-key forms after strip (must stay rejected)"
+fi
 
 # ---------------------------------------------------------------------------
 # Positive control 2: a clean rootfs (direct build, PF_APT_PROXY unset) passes
-# the gate untouched, and strip is a byte-identical no-op on it.
+# the gate untouched, and strip is a byte-identical no-op on it — with no
+# persisted line argument and with one (absent line = idempotent skip).
 # ---------------------------------------------------------------------------
 rootfs4="${scratch}/rootfs-clean"
 make_proxy_rootfs "${rootfs4}"
@@ -283,12 +351,14 @@ EOF
 clean_before="$(find "${rootfs4}/etc/apt" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
 "${verify}" "${rootfs4}" || fail "gate rejected a clean direct-build rootfs"
 "${strip}" "${rootfs4}"
+"${strip}" "${rootfs4}" "${PERSISTED_LINE}"
 clean_after="$(find "${rootfs4}/etc/apt" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
 [ "${clean_before}" = "${clean_after}" ] || fail "strip mutated a clean rootfs"
 
 # ---------------------------------------------------------------------------
 # Wiring: both rootfs builders must run strip-then-verify on the tree that
-# actually gets assembled, before mke2fs.
+# actually gets assembled, before mke2fs; the a133 builder must hand strip the
+# exact line its PF_APT_PROXY --aptopt persists.
 # ---------------------------------------------------------------------------
 first_line_no() {
     # Prints the first matching line number, or nothing; never aborts set -e.
@@ -315,5 +385,13 @@ assert_wired() {
 }
 assert_wired "${repo_dir}/scripts/build-rootfs.sh" 'ROOTFS_EXTRACTED'
 assert_wired "${repo_dir}/scripts/build-rootfs-a523.sh" 'EXT'
+grep -Fxq '"${SRC_DIR}/scripts/strip-rootfs-apt-proxy.sh" "${ROOTFS_EXTRACTED}" "${APT_PROXY_PERSISTED}"' \
+    "${repo_dir}/scripts/build-rootfs.sh" \
+    || fail "build-rootfs.sh must pass its persisted PF_APT_PROXY aptopt line to the strip"
+grep -n 'APT_PROXY_PERSISTED=' "${repo_dir}/scripts/build-rootfs.sh" >/dev/null \
+    || fail "build-rootfs.sh does not derive APT_PROXY_PERSISTED from its --aptopt"
+grep -Fxq '"${SRC_DIR}/scripts/strip-rootfs-apt-proxy.sh" "${EXT}"' \
+    "${repo_dir}/scripts/build-rootfs-a523.sh" \
+    || fail "build-rootfs-a523.sh strip call changed shape; update this test deliberately"
 
-echo "rootfs-apt-policy=PASS positive=strip-then-verify-clean-proxied-and-direct-rootfs,block-sibling-timeout-kept,braces-balanced,second-strip-noop negative=persisted-99mmdebstrap-proxy,apt.conf-proxy,bare-private-endpoint,unquoted-proxy-values,block-brace-terminator,split-key-value,invalid-consecutive-forms"
+echo "rootfs-apt-policy=PASS positive=strip-then-verify-clean-proxied-and-direct-rootfs,apt-config-rootfs-isolation,second-strip-noop negative=persisted-99mmdebstrap-proxy,apt.conf-proxy,bare-private-endpoint,unquoted-proxy-values,block-brace-terminator,split-key-value,invalid-config-parse-failure,quoted-key-components,host-config-leak"
