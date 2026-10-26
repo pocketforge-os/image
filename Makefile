@@ -23,7 +23,7 @@ CURDIR_ABS := $(shell pwd)
 WORK       := $(CURDIR_ABS)/work
 
 # ---- hermetic build-file tests ----------------------------------------------
-.PHONY: test-app-runtime-root test-cts-bundle-image test-gles32-candidate-profile test-dockerfile-pf-transforms test-kernel-build-identity
+.PHONY: test-app-runtime-root test-cts-bundle-image test-gles32-candidate-profile test-dockerfile-pf-transforms test-kernel-build-identity test-memory-policy
 test-app-runtime-root:
 	@tests/test-app-runtime-root.sh
 
@@ -54,6 +54,9 @@ test-dockerfile-pf-transforms:
 test-kernel-build-identity:
 	@bash tests/test-kernel-build-identity.sh
 
+test-memory-policy:
+	@tests/test-memory-policy.sh
+
 # ---- clean ------------------------------------------------------------------
 .PHONY: clean clean-all
 clean clean-all:
@@ -77,6 +80,7 @@ help:
 	@echo "    test-app-runtime-root          Test proposed app-root rendering/isolation (no network)"
 	@echo "    test-dockerfile-pf-transforms  Test Dockerfile source transforms (no Docker/network)"
 	@echo "    test-kernel-build-identity    Test pinned kernel UTS identity (no Docker/network)"
+	@echo "    test-memory-policy            Test zram and cgroup memory policy (no Docker/network)"
 	@echo ""
 	@echo "  Cleanup:"
 	@echo "    clean / clean-all     Remove the work/ directory"

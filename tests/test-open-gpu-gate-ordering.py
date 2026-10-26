@@ -85,6 +85,9 @@ WORST_RENDER_NODE_S = 9.87
 DEFAULT_DEVICE_TIMEOUT_S = 90.0
 # The GPU-absent gate run must fail by name well inside this.
 ABSENT_FAIL_WITHIN_S = 5.0
+# Keep enough outer-unit headroom for shell setup, result validation and
+# failure reporting after the sequential, individually bounded virtual probes.
+GATE_PROBE_MARGIN_S = 15.0
 
 # Transaction model: overlay files an open-GPU display image with the shell
 # owner installs (scripts/build-rootfs.sh), copied byte for byte.
@@ -225,6 +228,32 @@ def timespan_s(value: str) -> float:
     return n / 1000 if unit == "ms" else n * 60 if unit in ("min", "m") else n
 
 
+def virtual_probe_budget_s(script: str) -> int:
+    """Return the sequential budget of the fail-closed virtual probes."""
+    match = re.search(
+        r'if \[ "\$node_driver" = virtio_gpu \]; then\n(?P<body>.*?)\nfi',
+        script,
+        re.DOTALL,
+    )
+    check(match is not None, "virtual open-GPU gate branch is missing")
+    body = match.group("body")
+    probes = re.findall(
+        r'timeout (\d+)s "\$probe" --(venus-readback|gles32-zink-readback)',
+        body,
+    )
+    check(
+        [name for _seconds, name in probes]
+        == ["venus-readback", "gles32-zink-readback"],
+        f"virtual probe timeout coverage changed: {probes}",
+    )
+    for marker in (
+        "PF-OPEN-GPU FAIL: Venus readback probe failed",
+        "PF-OPEN-GPU FAIL: GLES 3.2 Zink readback probe failed",
+    ):
+        check(marker in body, f"bounded virtual probe lacks clear failure marker: {marker}")
+    return sum(int(seconds) for seconds, _name in probes)
+
+
 def blocks(builder: str, start_line: str) -> list[str]:
     """The text of every top-level `if` block that opens with exactly start_line."""
     lines = builder.splitlines()
@@ -285,9 +314,20 @@ def phase_static(src: Source) -> list[str]:
 
     gate_timeout = [timespan_s(v) for s, k, v in directives(gate) if k == "TimeoutStartSec"]
     script = src.need(GATE_SCRIPT)
-    probe = re.search(r'timeout (\d+)s "\$probe"', script)
-    check(probe and gate_timeout and int(probe.group(1)) < gate_timeout[-1],
-          "the gate's probe timeout must sit inside its TimeoutStartSec")
+    probe_budget = virtual_probe_budget_s(script)
+    # Negative control: the production bug's 35 s deadline must not satisfy a
+    # sequential 30+60 s probe budget. This runs before checking the source so
+    # RED evidence still proves the control was exercised.
+    check(35 < probe_budget + GATE_PROBE_MARGIN_S,
+          "timeout-contract negative control no longer exercises an undersized unit deadline")
+    check(gate_timeout and gate_timeout[-1] >= probe_budget + GATE_PROBE_MARGIN_S,
+          f"gate TimeoutStartSec={gate_timeout[-1] if gate_timeout else 'missing'}s must cover "
+          f"the {probe_budget}s sequential virtual probe budget plus "
+          f"{GATE_PROBE_MARGIN_S:g}s reporting margin")
+    notes.append(
+        f"gate deadline {gate_timeout[-1]:g}s covers sequential virtual probe budget "
+        f"{probe_budget}s + {GATE_PROBE_MARGIN_S:g}s margin (35s negative control rejected)"
+    )
 
     builder = src.need(BUILDER)
     # The open-model block that installs the gate must install its bound too.

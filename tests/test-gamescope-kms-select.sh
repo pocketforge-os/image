@@ -6,6 +6,7 @@ selector="${root}/rootfs-overlay/usr/lib/pocketforge/pf-gamescope-kms-select"
 unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope.service"
 installer="${root}/scripts/install-gamescope-session.sh"
 workflow="${root}/.github/workflows/hermetic-tests.yml"
+harness_selector="${root}/tests/input-harness/session/select-product-kms.sh"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/gamescope-kms-select.XXXXXX")
 trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT
 
@@ -73,6 +74,20 @@ cmp -s "${selector}" "${installed_selector}" \
 run_positive kms_second 1 0
 run_positive kms_first 0 1
 
+# The guest/DUT harness consumes the exact same selector and must preserve its
+# probe-order-independent choice. This also exercises the parser which carries
+# the product selector's result into Gamescope's --prefer-drm argument.
+tree="${scratch}/harness-kms-second"
+make_card "${tree}" 1 sun4i-drm yes
+make_card "${tree}" 0 powervr no
+selected=$(
+    PF_DRM_DEV_ROOT="${tree}/dev/dri" \
+    PF_DRM_SYS_ROOT="${tree}/sys" \
+    "${harness_selector}" "${selector}" "${tree}/kms.env" "${tree}/dev/dri"
+)
+test "$selected" = "${tree}/dev/dri/card1" \
+    || fail "input harness did not consume the capability-selected KMS node"
+
 # Negative control: a render-only tree must refuse with a typed reason and must
 # not leave a stale selector EnvironmentFile behind.
 tree="${scratch}/no-kms"
@@ -90,6 +105,39 @@ grep -Fx 'PF_GAMESCOPE_KMS_SELECT state=REFUSED reason=no_kms_node' \
     || fail "render-only refusal did not preserve the typed reason"
 test ! -e "${tree}/kms.env" \
     || fail "render-only refusal retained a stale EnvironmentFile"
+if PF_DRM_DEV_ROOT="${tree}/dev/dri" \
+    PF_DRM_SYS_ROOT="${tree}/sys" \
+    "${harness_selector}" "${selector}" "${tree}/harness-kms.env" \
+    "${tree}/dev/dri" >"${tree}/harness-stdout" 2>"${tree}/harness-stderr"; then
+    fail "input harness accepted the selector's no-KMS refusal"
+fi
+
+# Negative controls for the harness-side data boundary. A selector is trusted
+# to choose topology, but its handoff must still be one non-injectable node.
+stub="${scratch}/malformed-selector"
+cat >"${stub}" <<'EOF'
+#!/bin/sh
+printf 'PF_GAMESCOPE_KMS_NODE=/dev/dri/card0\nunexpected=data\n' >"$PF_GAMESCOPE_KMS_ENV"
+EOF
+chmod 0755 "${stub}"
+if "${harness_selector}" "${stub}" "${scratch}/malformed.env" /dev/dri \
+    >"${scratch}/malformed.stdout" 2>"${scratch}/malformed.stderr"; then
+    fail "input harness accepted multi-line selector data"
+fi
+grep -F 'malformed selector data' "${scratch}/malformed.stderr" >/dev/null \
+    || fail "input harness malformed-data refusal lost its reason"
+
+cat >"${stub}" <<'EOF'
+#!/bin/sh
+printf 'PF_GAMESCOPE_KMS_NODE=/dev/dri/card1x\n' >"$PF_GAMESCOPE_KMS_ENV"
+EOF
+chmod 0755 "${stub}"
+if "${harness_selector}" "${stub}" "${scratch}/invalid.env" /dev/dri \
+    >"${scratch}/invalid.stdout" 2>"${scratch}/invalid.stderr"; then
+    fail "input harness accepted a non-numeric DRM node"
+fi
+grep -F 'invalid node' "${scratch}/invalid.stderr" >/dev/null \
+    || fail "input harness invalid-node refusal lost its reason"
 
 # Connector enablement reflects current display ownership, not KMS capability.
 # A connected panel must remain selectable after the previous owner releases it.

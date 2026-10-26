@@ -22,6 +22,7 @@ grep -Fq 'hw_used=yes' "${RUNNER}"
 grep -Fq 'frames" -eq 900' "${RUNNER}"
 
 grep -Fq 'sudo /usr/lib/pocketforge/cedar-spike.sh' "${DOC}"
+grep -Fq 'The preserved runner is not installed in current images' "${DOC}"
 # Hotfix tsp-h5ed.20 keeps the spike harness available for a clean re-land but
 # removes it from every image build graph until its owned dependencies can be
 # staged correctly and its profile gate can distinguish the closed DDK path.

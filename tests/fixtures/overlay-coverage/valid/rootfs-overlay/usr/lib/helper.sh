@@ -1,0 +1,1 @@
+valid sourced-helper fixture

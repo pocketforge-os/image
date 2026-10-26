@@ -1453,6 +1453,41 @@ if [ -f "${SHELL_BIN}" ] || [ -f "${AUTHORITY_BIN}" ] || [ -f "${HANG_SAMPLER_BI
     fi
 fi
 
+# The runtime pf-prefs generator is the source of this contract artifact. Keep
+# a pinned copy in the image tree until that runtime output is available, and
+# refuse to package a runtime artifact that silently disagrees with the pinned
+# schema. This makes a producer drift a build failure rather than a split-brain
+# first-run contract.
+PREFS_SCHEMA_RUNTIME="${RUNTIME_DIR}/share/pocketforge/prefs.schema.json"
+PREFS_SCHEMA_FALLBACK="/work/src/rootfs-overlay/usr/share/pocketforge/prefs.schema.json"
+[ -s "${PREFS_SCHEMA_FALLBACK}" ] || {
+    echo "FATAL: pinned pf-prefs seed schema is missing at ${PREFS_SCHEMA_FALLBACK}" >&2
+    exit 1
+}
+if [ -e "${PREFS_SCHEMA_RUNTIME}" ]; then
+    cmp -s "${PREFS_SCHEMA_RUNTIME}" "${PREFS_SCHEMA_FALLBACK}" || {
+        echo "FATAL: runtime pf-prefs schema drifted from pinned image schema" >&2
+        exit 1
+    }
+    install -D -m 0644 "${PREFS_SCHEMA_RUNTIME}" \
+        "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
+else
+    install -D -m 0644 "${PREFS_SCHEMA_FALLBACK}" \
+        "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
+fi
+PREFS_SCHEMA_XKB_RULES="${ROOTFS}/usr/share/X11/xkb/rules/evdev.xml"
+if [ -f "${PREFS_SCHEMA_XKB_RULES}" ]; then
+    python3 /work/src/scripts/verify-prefs-schema-xkb.py \
+        "${PREFS_SCHEMA_XKB_RULES}" \
+        "${ROOTFS}/usr/share/pocketforge/prefs.schema.json"
+elif [ "${PF_DISPLAY_PIPELINE}" = "none" ]; then
+    echo "[customize] pf-prefs schema XKB check NOT-SHIPPED (headless rootfs)"
+else
+    echo "FATAL: display rootfs is missing installed XKB rules: ${PREFS_SCHEMA_XKB_RULES}" >&2
+    exit 1
+fi
+echo "[customize] pf-prefs seed schema installed at /usr/share/pocketforge/prefs.schema.json"
+
 # --- W2c preference state authority (tsp-op5a.134) --------------------------
 PREFSD_BIN="${RUNTIME_DIR}/bin/pf-prefsd"
 if [ -f "${PREFSD_BIN}" ]; then
@@ -1461,6 +1496,9 @@ if [ -f "${PREFSD_BIN}" ]; then
     install -D -m 0755 "${PREFSD_BIN}" "${ROOTFS}/usr/bin/pf-prefsd"
     install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-prefsd.service" \
         "${ROOTFS}/etc/systemd/system/pf-prefsd.service"
+    install -D -m 0644 \
+        "/work/src/rootfs-overlay/etc/systemd/system/pf-prefsd.service.d/10-cloud-init-firstboot.conf" \
+        "${ROOTFS}/etc/systemd/system/pf-prefsd.service.d/10-cloud-init-firstboot.conf"
     install -D -m 0644 "/work/src/rootfs-overlay/etc/systemd/system/pf-broker.service.d/10-prefsd.conf" \
         "${ROOTFS}/etc/systemd/system/pf-broker.service.d/10-prefsd.conf"
     touch "${ROOTFS}/etc/environment"
@@ -1470,6 +1508,44 @@ if [ -f "${PREFSD_BIN}" ]; then
     ln -sf /etc/systemd/system/pf-prefsd.service \
         "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-prefsd.service"
     echo "[customize] pf-prefsd installed and enabled as the preference state authority"
+fi
+
+# --- system volume preference applier (tsp-ihne1.11) ------------------------
+VOLUMED_BIN="${RUNTIME_DIR}/bin/pf-volumed"
+if [ -f "${VOLUMED_BIN}" ]; then
+    [ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-volumed staged without pf-prefsd" >&2; exit 1; }
+    volumed_em="$(od -An -tx1 -j18 -N2 "${VOLUMED_BIN}" | tr -d ' ')"
+    [ "${volumed_em}" = "b700" ] || { echo "FATAL: ${VOLUMED_BIN} is not an aarch64 ELF (e_machine=${volumed_em}, want b700)" >&2; exit 1; }
+    install -D -m 0755 "${VOLUMED_BIN}" "${ROOTFS}/usr/bin/pf-volumed"
+    install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-volumed.service" \
+        "${ROOTFS}/etc/systemd/system/pf-volumed.service"
+    # pf-volumed learns the physical route from the codec's headphone-jack input switch, which
+    # only kernel-sunxi-7.x exposes (kernel#42); this rule gives that one node to the audio group
+    # (the unit's group) instead of widening to `input`.
+    if [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ]; then
+        install -D -m 0644 "/work/src/rootfs-overlay/etc/udev/rules.d/73-pocketforge-headphone-jack.rules" \
+            "${ROOTFS}/etc/udev/rules.d/73-pocketforge-headphone-jack.rules"
+    fi
+    install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+    ln -sf /etc/systemd/system/pf-volumed.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-volumed.service"
+    echo "[customize] pf-volumed installed and enabled as the per-output volume applier"
+fi
+
+# Hardware volume keys: always-on (the input broker only runs inside an app session), so the
+# keys work under the shell, the first-run sheet and menus too (tsp-ihne1.63).
+VOLUME_KEYS_BIN="${RUNTIME_DIR}/bin/pf-volume-keys"
+if [ -f "${VOLUME_KEYS_BIN}" ]; then
+    [ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-volume-keys staged without pf-prefsd" >&2; exit 1; }
+    volume_keys_em="$(od -An -tx1 -j18 -N2 "${VOLUME_KEYS_BIN}" | tr -d ' ')"
+    [ "${volume_keys_em}" = "b700" ] || { echo "FATAL: ${VOLUME_KEYS_BIN} is not an aarch64 ELF (e_machine=${volume_keys_em}, want b700)" >&2; exit 1; }
+    install -D -m 0755 "${VOLUME_KEYS_BIN}" "${ROOTFS}/usr/bin/pf-volume-keys"
+    install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-volume-keys.service" \
+        "${ROOTFS}/etc/systemd/system/pf-volume-keys.service"
+    install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+    ln -sf /etc/systemd/system/pf-volume-keys.service \
+        "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pf-volume-keys.service"
+    echo "[customize] pf-volume-keys installed and enabled as the hardware volume-key handler"
 fi
 
 # --- authenticated power action authority (tsp-mc9m.60.29.31) -------------
@@ -1838,8 +1914,31 @@ echo "[customize] Applying variant-specific config (variant=${VARIANT})..."
 install -d "${ROOTFS}/etc/systemd/journald.conf.d"
 install_low_battery_shutdown "${ROOTFS}" "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}" \
     "${PF_KERNEL_CAPABILITY_RECEIPT}" "${PF_DEVICE_ID}" /work/src
+/work/src/scripts/install-memory-policy.sh \
+    "${ROOTFS}" "${PF_KERNEL_REPO}" "${PF_DEVICE_ID}" /work/src
 
 if [ "${VARIANT}" = "dev" ]; then
+    case "${PF_DEVICE_ID}" in
+        trimui-smart-pro-a133|a133-open-7x|a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
+            install -D -o root -g root -m 0700 \
+                /work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage \
+                "${ROOTFS}/usr/lib/pocketforge/self-flash-v3-stage"
+            install -D -o root -g root -m 0700 \
+                /work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-grow \
+                "${ROOTFS}/usr/lib/pocketforge/self-flash-v3-grow"
+            install -D -o root -g root -m 0644 \
+                /work/src/rootfs-overlay/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg \
+                "${ROOTFS}/etc/cloud/cloud.cfg.d/99-pocketforge-self-flash-v3.cfg"
+            install -D -o root -g root -m 0644 \
+                /work/src/rootfs-overlay/etc/systemd/system/pocketforge-self-flash-v3-grow.service \
+                "${ROOTFS}/etc/systemd/system/pocketforge-self-flash-v3-grow.service"
+            install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+            ln -sf /etc/systemd/system/pocketforge-self-flash-v3-grow.service \
+                "${ROOTFS}/etc/systemd/system/multi-user.target.wants/pocketforge-self-flash-v3-grow.service"
+            echo "[customize] dev: self-flash v3 root helpers and capped-growth policy installed"
+            ;;
+    esac
+
     # Dev: persistent journald (logs survive reboots for bug-report capture)
     install -m 0644 "/work/src/rootfs-overlay/etc/systemd/journald.conf.d/pocketforge-dev.conf" \
         "${ROOTFS}/etc/systemd/journald.conf.d/pocketforge.conf"
@@ -1959,9 +2058,14 @@ chmod +x "${CUSTOMIZE_SCRIPT}"
 # HIT and a direct fetch yield identical rootfs contents). Empty by default = direct
 # snapshot. Not recorded in provenance; it never affects output bytes.
 APT_PROXY_OPT=()
+APT_PROXY_PERSISTED=""
 if [ -n "${PF_APT_PROXY:-}" ]; then
     echo "  apt proxy: ${PF_APT_PROXY} (transparent cache; bytes verified vs signed index)"
-    APT_PROXY_OPT=( --aptopt="Acquire::http::Proxy \"${PF_APT_PROXY}\"" )
+    apt_proxy_aptopt="Acquire::http::Proxy \"${PF_APT_PROXY}\""
+    APT_PROXY_OPT=( --aptopt="${apt_proxy_aptopt}" )
+    # mmdebstrap persists this --aptopt verbatim (plus ';') into the target's
+    # etc/apt/apt.conf.d/99mmdebstrap; the strip step removes exactly this line.
+    APT_PROXY_PERSISTED="${apt_proxy_aptopt};"
 fi
 # ---- Cross-compile the boot animator (bd: tsp-3rd3.4) ----------------------
 # Built before mmdebstrap so the customize hook (which cannot see the outer
@@ -2176,6 +2280,15 @@ python3 "${SRC_DIR}/scripts/verify-rootfs-usbnet-bench.py" \
 # structural image check; lease population itself is verified on tsp-f956's boot.
 "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${ROOTFS_EXTRACTED}"
 
+# mmdebstrap permanently persists every --aptopt into the target's
+# etc/apt/apt.conf.d/99mmdebstrap, so the PF_APT_PROXY build transport would
+# otherwise ship in the release image (build-6: first-boot cloud-config died
+# on the unreachable 10.0.32.86:3142). Strip exactly the line this builder
+# persisted, then fail closed on anything left under etc/apt using apt's own
+# parser plus the private-endpoint policy (bd tsp-mc9m.41.1002.5).
+"${SRC_DIR}/scripts/strip-rootfs-apt-proxy.sh" "${ROOTFS_EXTRACTED}" "${APT_PROXY_PERSISTED}"
+"${SRC_DIR}/scripts/verify-rootfs-apt-policy.sh" "${ROOTFS_EXTRACTED}"
+
 # fontconfig writes this cache diagnostic while packages are configured. It is
 # build-host/run evidence, not device runtime state. Remove the known producer,
 # then fail closed if any other non-empty build log remains.
@@ -2222,6 +2335,30 @@ if [ "${ROOTFS_DU}" -gt 768 ]; then
 fi
 EXT4_SIZE_BLOCKS=$(( EXT4_SIZE_MB * 1024 ))   # 1K blocks for mke2fs
 echo "  ext4 target: ${EXT4_SIZE_MB} MiB (${EXT4_SIZE_BLOCKS} x 1K blocks)"
+
+# The marker binds the contract to the baked partition-5 geometry. genimage's
+# fixed layout starts userdata at sector 251904; its sectors equal the exact
+# ext4 byte length assembled below. Emit this only when the dev-only helper was
+# installed, after sizing is final and before the ext4 is created.
+if [ -x "${ROOTFS_EXTRACTED}/usr/lib/pocketforge/self-flash-v3-stage" ]; then
+    SELF_FLASH_V3_CONTRACT_SHA="$(sha256sum "${SRC_DIR}/docs/SELF-FLASH-V3.md" | awk '{print $1}')"
+    SELF_FLASH_V3_BAKED_ROOT_SECTORS=$(( EXT4_SIZE_MB * 2048 ))
+    cat >"${ROOTFS_EXTRACTED}/etc/pocketforge-selfflash-v3" <<EOF
+Schema=pocketforge.self-flash-capability/v3
+ContractSHA256=${SELF_FLASH_V3_CONTRACT_SHA}
+CardController=04020000
+AlignmentBytes=4194304
+ReserveBytes=1073741824
+GuardBytes=4194304
+ControlBytes=4194304
+SeedMaxBytes=16777216
+SlotBytes=65536
+BakedRootPartitionStartSector=251904
+BakedRootPartitionSectors=${SELF_FLASH_V3_BAKED_ROOT_SECTORS}
+EOF
+    chown root:root "${ROOTFS_EXTRACTED}/etc/pocketforge-selfflash-v3"
+    chmod 0644 "${ROOTFS_EXTRACTED}/etc/pocketforge-selfflash-v3"
+fi
 
 # Pre-stage: clamp mtimes for reproducibility (Reproducible-Builds recipe).
 # We operate on the extracted directory tree directly — mke2fs -d <directory>

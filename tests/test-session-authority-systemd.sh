@@ -16,23 +16,24 @@ platform_renderer="${root}/scripts/render-platform-capabilities.py"
 nonproduction_platform_renderer="${root}/tests/session-authority-systemd/make-nonproduction-platform.py"
 owner_dropin="${root}/rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf"
 resident_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-resident.service"
+authorization_unit="${root}/rootfs-overlay/etc/systemd/system/pocketforge-gamescope-x11-authorize.service"
 broker_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
+broker_supervisor="${root}/rootfs-overlay/usr/lib/pocketforge/pf-input-broker-supervisor"
 shell_dropin="${root}/rootfs-overlay/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
 containerfile="${fixtures}/Containerfile"
 gamescope_tmpfiles="${root}/rootfs-overlay/usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf"
 ephemeral_marker=/etc/pocketforge/ephemeral-runner.conf
 run_label_key=org.pocketforge.session-authority-run
 
-runtime_sha=0b36a9e880d7294677e899b2f6db03262cdc7774
+runtime_sha=1640d5ec5b0a02b27a51615f176fae9aef784311
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=dc0931940164e368766ea9d6d5d1333354691f08390d7ea34678b6c6e9f8d5e3
-# B4 (tsp-f3fm.202.1.4): the app-session broker wiring under test. The runtime unit
-# is taken verbatim from the pinned runtime clone; the two drop-ins from this tree.
-# The input-broker unit is unchanged through 511109df (runtime#141); the later
-# runtime changes are confined to the session authority, so the broker unit
-# digest is unchanged.
-broker_unit_sha256=6fd5a41bb742b86a91c2b28e0f240e8d2bc95615dabcf3e033bf3644f9909dd8
-broker_dropin_sha256=50ea0bb37187860b71dd24d619fe3c3bcb6c2248d0b45eae6574193b21e77e1b
+app_unit_sha256=c9459665638bf7d04faf6bbfea99899ed7ed5ab3d535a4930e377ba6a85337e6
+# tsp-ihne1.7: the session-wide broker wiring under test. The runtime unit
+# is taken verbatim from the paired runtime router head; the two drop-ins come
+# from this image tree. These pins make the real-systemd fixture test the same
+# unit contract as the related runtime PR instead of silently exercising v2.
+broker_unit_sha256=e6834f966ed070b5bb2cab9ed1464d5cdd55c78e7587b9931149a43ed9631f66
+broker_dropin_sha256=03891f234b39b1e62dd944aa890295b05e81dbb3a22849d83a6833714a0bac47
 shell_dropin_sha256=992b84d9e4578712d50e2f4bc02537610e297ca54d4d54150cd4c4af7fca047f
 gib=$((1024 * 1024 * 1024))
 disk_preflight_bytes=$((8 * gib))
@@ -685,6 +686,19 @@ install -m 0644 "${resident_unit}" \
     "${context}/pocketforge-gamescope-resident.service"
 install -m 0644 "${fixtures}/pocketforge-gamescope.service" \
     "${context}/pocketforge-gamescope.service"
+install -m 0644 "${authorization_unit}" \
+    "${context}/pocketforge-gamescope-x11-authorize.service"
+install -m 0755 "${fixtures}/fake-x11-authorize" \
+    "${context}/fake-x11-authorize"
+sed -i \
+    -e 's#^ExecStart=/usr/lib/pocketforge/pf-x11-authorize .*#ExecStart=/usr/local/libexec/fake-x11-authorize#' \
+    -e 's#^User=pf-gamescope$#User=root#' \
+    -e 's#^Group=pf-gamescope$#Group=root#' \
+    "${context}/pocketforge-gamescope-x11-authorize.service"
+grep -Fqx 'User=root' "${context}/pocketforge-gamescope-x11-authorize.service" \
+    || fail 'AUTH_FIXTURE_IDENTITY_MISSING: fake notifier must run as root in the hermetic container'
+grep -Fqx 'Group=root' "${context}/pocketforge-gamescope-x11-authorize.service" \
+    || fail 'AUTH_FIXTURE_IDENTITY_MISSING: fake notifier group missing in the hermetic container'
 install -m 0644 \
     "${root}/rootfs-overlay/etc/systemd/system/pocketforge-session-publisher.service" \
     "${context}/pocketforge-session-publisher.service"
@@ -698,6 +712,7 @@ install -m 0644 "${fixtures}/pf-shell-selected.service" \
     "${context}/pf-shell-selected.service"
 install -m 0644 "${fixtures}/pf-prefsd.service" "${context}/pf-prefsd.service"
 install -m 0644 "${broker_dropin}" "${context}/10-app-session.conf"
+install -m 0755 "${broker_supervisor}" "${context}/pf-input-broker-supervisor"
 install -m 0644 "${shell_dropin}" "${context}/10-input-broker.conf"
 install -m 0755 "${fixtures}/fake-input-broker" "${context}/fake-input-broker"
 install -m 0755 "${fixtures}/fake-prefsd" "${context}/fake-prefsd"
@@ -864,6 +879,7 @@ if ! docker_checked exec "${systemd_container}" \
         --unit pf-app@org.pocketforge.fixture.service \
         --unit pf-input-broker.service \
         --unit pocketforge-gamescope.service \
+        --unit pocketforge-gamescope-x11-authorize.service \
         --unit pocketforge-gamescope-fallback.service \
         --unit pocketforge-gamescope-resident.service \
         --unit pocketforge-session-publisher.service \

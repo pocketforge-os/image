@@ -17,8 +17,9 @@ from pathlib import Path
 expected = """[Unit]
 Description=PocketForge default application %i
 Requires=pocketforge-gamescope-session.target
-BindsTo=pf-input-broker.service pf-prefsd.service
-After=local-fs.target pocketforge-gamescope-session.target pf-input-broker.service pf-prefsd.service
+PartOf=pocketforge-gamescope-session.target
+BindsTo=pf-prefsd.service
+After=local-fs.target pocketforge-gamescope-session.target pf-prefsd.service
 Conflicts=shutdown.target
 Before=shutdown.target
 
@@ -31,6 +32,7 @@ WorkingDirectory=/opt/pocketforge/apps/%i
 Environment=XDG_CONFIG_HOME=/var/lib/pocketforge/apps/%i/config
 Environment=XDG_STATE_HOME=/var/lib/pocketforge/apps/%i/state
 Environment=XDG_CACHE_HOME=/var/cache/pocketforge/apps/%i
+Environment=XDG_RUNTIME_DIR=/run/pf-app/%i
 Environment=PF_DESCRIPTOR=/usr/share/pocketforge/device/capabilities.toml
 Environment=PF_BROKER_SOCK=/run/pocketforge/input-broker.sock
 EnvironmentFile=/run/pocketforge/session/environment
@@ -40,12 +42,14 @@ StateDirectory=pocketforge/apps/%i
 StateDirectoryMode=0700
 CacheDirectory=pocketforge/apps/%i
 CacheDirectoryMode=0700
+RuntimeDirectory=pf-app/%i
+RuntimeDirectoryMode=0700
 ProtectSystem=strict
 ProtectHome=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
 ReadOnlyPaths=/opt/pocketforge/apps/%i
-ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i
+ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i /run/pf-app/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
 InaccessiblePaths=-/dev/uinput
 InaccessiblePaths=/run/pocketforge/prefsd.sock
@@ -64,7 +68,11 @@ KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=2s
 Restart=no
-MemoryMax=256M
+# Apps share the machine and zram without a fixed per-process ceiling. Keep
+# systemd's default system-pf\\x2dapp.slice placement: runtime peer identity
+# derives the app ID from that cgroup path. Under global pressure the kernel
+# selects apps before the protected session.
+OOMScoreAdjust=300
 Nice=-5
 """
 actual = Path(sys.argv[1]).read_text()
@@ -144,6 +152,13 @@ cmp "${overlay}/pf-input-broker.service.d/10-app-session.conf" \
     "${rootfs}/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 cmp "${overlay}/pf-shell-selected.service.d/10-input-broker.conf" \
     "${rootfs}/etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf"
+cmp "${root}/rootfs-overlay/usr/lib/sysusers.d/pf-input.conf" \
+    "${rootfs}/usr/lib/sysusers.d/pf-input.conf"
+cmp "${root}/rootfs-overlay/usr/lib/tmpfiles.d/pf-input.conf" \
+    "${rootfs}/usr/lib/tmpfiles.d/pf-input.conf"
+cmp "${root}/rootfs-overlay/usr/lib/pocketforge/pf-input-broker-supervisor" \
+    "${rootfs}/usr/lib/pocketforge/pf-input-broker-supervisor"
+test -x "${rootfs}/usr/lib/pocketforge/pf-input-broker-supervisor"
 cmp "${runtime}/lib/libpocketforge.so.1" \
     "${rootfs}/usr/lib/aarch64-linux-gnu/libpocketforge.so.1"
 cmp "${runtime}/share/devices/a133/capabilities.toml" \

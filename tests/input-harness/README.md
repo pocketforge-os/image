@@ -11,7 +11,10 @@ The guest tier packages the same clients and guarded `fake-input` into a
 separate, content-addressed, read-only arm64 squashfs attachment. pfvd mounts
 that attachment at `/opt/pf-input-harness` only for a requested harness
 session. The production image and its `/usr/bin/gamescope` remain byte-for-byte
-unchanged; the attachment never supplies gamescope.
+unchanged; the attachment never supplies gamescope. The guest launcher invokes
+the product image's `pf-gamescope-kms-select` policy and passes its
+driver-and-connector-selected node to Gamescope with `--prefer-drm`; it never
+assumes a DRM card index.
 
 One command builds the container, runs the whole session and prints the
 house verdict:
@@ -299,7 +302,7 @@ repo-wide uinput occurrence inventory with seeded red controls.
    environment; neither path patches gamescope source.
 9. **The laptop harness and the device provenance pipeline pin the same
    gamescope commit.** The harness uses
-   `0b03a62e720ae93afbd5e59167c8774f8ad74f0c` (pocketforge-linear tip, matching
+   `cf4475a73409295b06ec352f18497fef23422a72` (pocketforge-linear tip, matching
    `build/produce-gamescope-pvr-cache.sh`), carrying gamescope#15–#21:
    current lavapipe can start headless without
    `VK_KHR_external_semaphore_fd`; a headless client commit with no fence is

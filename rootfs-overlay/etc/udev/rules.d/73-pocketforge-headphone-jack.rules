@@ -1,0 +1,4 @@
+# The codec's headphone-jack input switch (kernel-sunxi-7.x#42, SW_HEADPHONE_INSERT) is read by
+# pf-volumed to learn the physical audio route. Give just that node to the audio group so the
+# service needs no access to the other input devices (rule 61 would otherwise leave it group input).
+SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{name}=="H616 Audio Codec Headphone Jack", GROUP="audio", MODE="0660", SYMLINK+="input/pf-headphone-jack"

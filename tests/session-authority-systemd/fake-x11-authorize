@@ -1,0 +1,33 @@
+#!/usr/bin/python3
+"""Notify readiness without speaking X11 in the real-systemd lifecycle fixture."""
+
+from __future__ import annotations
+
+import os
+import signal
+import socket
+import threading
+
+
+stopping = threading.Event()
+
+
+def stop(*_args: object) -> None:
+    stopping.set()
+
+
+def main() -> None:
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    address = os.environ.get("NOTIFY_SOCKET", "")
+    if not address:
+        raise SystemExit("fake x11 authorization: NOTIFY_SOCKET unset")
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+        notify.sendto(b"READY=1\nSTATUS=fake Xwayland ACL ready", address)
+    stopping.wait()
+
+
+if __name__ == "__main__":
+    main()

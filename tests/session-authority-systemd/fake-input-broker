@@ -44,6 +44,7 @@ EXPECTED = {
     "--source": "/dev/input/pf-gamepad",
     "--safe-return-sock": "/run/pocketforge/session-authority.sock",
     "--system-menu-sock": "/run/pocketforge/system-menu.sock",
+    "--compositor-sock": "/run/pocketforge/input/compositor.sock",
 }
 stop = threading.Event()
 
@@ -58,6 +59,19 @@ def unit_state(unit: str) -> str:
         ["systemctl", "show", "--property", "ActiveState", "--value", unit],
         check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     ).stdout.strip()
+
+
+def unit_has_start_job(unit: str) -> bool:
+    jobs = subprocess.run(
+        ["systemctl", "list-jobs", "--no-legend", "--no-pager", "--plain", "--full"],
+        check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    if jobs.returncode != 0:
+        return False
+    return any(
+        len(fields) >= 3 and fields[1] == unit and fields[2] == "start"
+        for fields in (line.split() for line in jobs.stdout.splitlines())
+    )
 
 
 def parse(argv: list[str]) -> dict[str, str]:
@@ -108,6 +122,9 @@ def main() -> int:
         "shell": unit_state("pf-shell-selected.service"),
         "foreground_target": unit_state("pocketforge-foreground.target"),
         "session_target": unit_state("pocketforge-gamescope-session.target"),
+        "session_target_start_job": unit_has_start_job(
+            "pocketforge-gamescope-session.target"
+        ),
     }
     os.umask(int(record["umask"], 8))
     for flag, value in EXPECTED.items():

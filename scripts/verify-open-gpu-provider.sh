@@ -243,6 +243,22 @@ if ! egl_symbols=$($readelf_command -Ws \
 fi
 printf '%s\n' "$egl_symbols" | grep -Eq '[[:space:]]__egl_Main$' \
     || fatal 'GLVND EGL vendor does not export __egl_Main'
+if ! egl_vendor_strings=$(strings "$rootfs/usr/local/lib/libEGL_mesa.so.0" 2>&1); then
+    printf '%s\n' "$egl_vendor_strings" >&2
+    fatal 'cannot inspect GLVND EGL vendor strings'
+fi
+printf '%s\n' "$egl_vendor_strings" | grep -F 'EGL_MESA_platform_surfaceless' >/dev/null \
+    || fatal 'Mesa EGL vendor does not advertise EGL_MESA_platform_surfaceless'
+# Mesa's GLVND vendor advertises platform support through __egl_Main; the
+# public eglGetPlatformDisplay entrypoint is supplied by the neutral client.
+egl_client="$rootfs/usr/lib/aarch64-linux-gnu/libEGL.so.1"
+if ! egl_client_symbols=$($readelf_command -Ws "$egl_client" 2>&1); then
+    printf '%s\n' "$egl_client_symbols" >&2
+    fatal 'cannot inspect GLVND EGL client symbols'
+fi
+printf '%s\n' "$egl_client_symbols" | \
+    grep -Eq '[[:space:]]eglGetPlatformDisplay(@@[^[:space:]]+)?([[:space:]]|$)' \
+    || fatal 'GLVND EGL client does not export eglGetPlatformDisplay'
 if ! glx_symbols=$($readelf_command -Ws \
     "$rootfs/usr/local/lib/libGLX_mesa.so.0" 2>&1); then
     printf '%s\n' "$glx_symbols" >&2
@@ -429,4 +445,4 @@ glx_vendor_count=$(find "$rootfs" \( -type f -o -type l \) \
 [ -e "$rootfs/usr/local/lib/libGLX_mesa.so.0" ] \
     || fatal 'canonical GLVND Mesa GLX vendor is missing from /usr/local/lib'
 
-echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=${kmsro_evidence} vulkan=powervr+venus vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
+echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=${kmsro_evidence} vulkan=powervr+venus vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"

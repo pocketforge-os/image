@@ -64,6 +64,8 @@ COPY pocketforge-foreground.target /etc/systemd/system/pocketforge-foreground.ta
 COPY pocketforge-gamescope-session.target /etc/systemd/system/pocketforge-gamescope-session.target
 COPY pocketforge-gamescope-resident.service /etc/systemd/system/pocketforge-gamescope-resident.service
 COPY pocketforge-gamescope.service /etc/systemd/system/pocketforge-gamescope.service
+COPY pocketforge-gamescope-x11-authorize.service /etc/systemd/system/pocketforge-gamescope-x11-authorize.service
+COPY fake-x11-authorize /usr/local/libexec/fake-x11-authorize
 COPY pocketforge-session-publisher.service /etc/systemd/system/pocketforge-session-publisher.service
 COPY pocketforge-gamescope-fallback.service /etc/systemd/system/pocketforge-gamescope-fallback.service
 COPY pf-session-publish /usr/lib/pocketforge/pf-session-publish
@@ -74,6 +76,7 @@ COPY runtime/crates/pf-input-broker/systemd/pf-input-broker.service /etc/systemd
 COPY 10-app-session.conf /etc/systemd/system/pf-input-broker.service.d/10-app-session.conf
 COPY 10-input-broker.conf /etc/systemd/system/pf-shell-selected.service.d/10-input-broker.conf
 COPY fake-input-broker /usr/bin/pf-input-broker
+COPY pf-input-broker-supervisor /usr/lib/pocketforge/pf-input-broker-supervisor
 COPY fake-prefsd /usr/local/libexec/fake-prefsd
 COPY fake-shell /usr/local/libexec/fake-shell
 COPY fake-gamescope /usr/local/libexec/fake-gamescope
@@ -92,9 +95,11 @@ RUN chmod 0755 \
         /usr/bin/pf-session-authorityd \
         /usr/bin/pf-app-launch \
         /usr/bin/pf-input-broker \
+        /usr/lib/pocketforge/pf-input-broker-supervisor \
         /usr/local/libexec/fake-prefsd \
         /usr/local/libexec/fake-shell \
         /usr/local/libexec/fake-gamescope \
+        /usr/local/libexec/fake-x11-authorize \
         /usr/lib/pocketforge/pf-session-publish \
         /opt/pocketforge/apps/org.pocketforge.fixture/fixture \
         /usr/local/libexec/drive.py \
@@ -108,6 +113,7 @@ RUN chmod 0755 \
         /etc/systemd/system/pocketforge-gamescope-session.target \
         /etc/systemd/system/pocketforge-gamescope-resident.service \
         /etc/systemd/system/pocketforge-gamescope.service \
+        /etc/systemd/system/pocketforge-gamescope-x11-authorize.service \
         /etc/systemd/system/pocketforge-session-publisher.service \
         /etc/systemd/system/pocketforge-gamescope-fallback.service \
         /etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf \
@@ -134,6 +140,7 @@ RUN chmod 0755 \
         /etc/systemd/system/pocketforge-gamescope-session.target \
         /etc/systemd/system/pocketforge-gamescope-resident.service \
         /etc/systemd/system/pocketforge-gamescope.service \
+        /etc/systemd/system/pocketforge-gamescope-x11-authorize.service \
         /etc/systemd/system/pocketforge-session-publisher.service \
         /etc/systemd/system/pocketforge-gamescope-fallback.service \
     && ! find /etc/systemd/system -path '*.wants/*' -name pf-input-broker.service | grep -q .

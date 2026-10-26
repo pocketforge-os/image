@@ -33,7 +33,8 @@ test -z "$(find "${scratch}/absent" -mindepth 1 -print -quit)" \
 "${installer}" g1 "${scratch}/g1"
 unit_root="${scratch}/g1/etc/systemd/system"
 for unit in pocketforge-gamescope-session.target pocketforge-gamescope.service \
-    pocketforge-session-publisher.service pocketforge-gamescope-fallback.service \
+    pocketforge-gamescope-x11-authorize.service pocketforge-session-publisher.service \
+    pocketforge-gamescope-fallback.service \
     pocketforge-gamescope-resident.service; do
     test -f "${unit_root}/${unit}" || fail "g1 install omitted ${unit}"
 done
@@ -48,6 +49,73 @@ owner="${unit_root}/pocketforge-gamescope.service"
 publisher_unit="${unit_root}/pocketforge-session-publisher.service"
 x11_tmpfiles="${scratch}/g1/usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf"
 drm_systemd_rule="${root}/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
+
+# Xwayland's default uid check is the only authorization primitive provided by
+# the pinned wlroots launch path. Keep the compositor owner uid isolated, but
+# add exactly the app uid through the X11 server-interpreted local-user ACL.
+# There is deliberately no cookie producer or xhost-all grant. Keep the
+# negative control in this invocation: an ACL for another uid must fail.
+check_xwayland_authorization_contract() {
+    local owner_unit=$1
+    local publisher_service=$2
+    local auth_unit=$3
+    local helper=$4
+
+    python3 - "${owner_unit}" "${publisher_service}" "${auth_unit}" \
+        "${helper}" <<'PY'
+import pathlib
+import sys
+
+owner_path, publisher_path, auth_path, helper_path = map(pathlib.Path, sys.argv[1:])
+owner = owner_path.read_text(encoding="utf-8")
+publisher = publisher_path.read_text(encoding="utf-8")
+auth = auth_path.read_text(encoding="utf-8")
+if "User=pf-gamescope" not in owner or "Group=pf-gamescope" not in owner:
+    raise SystemExit("Gamescope no longer owns the Xwayland server")
+if "User=pf-gamescope" not in auth or "Group=pf-gamescope" not in auth:
+    raise SystemExit("X11 ACL helper is not confined to the compositor uid")
+if "--socket /run/pocketforge/x11/.X11-unix/X0" not in auth:
+    raise SystemExit("X11 ACL helper does not target the published socket")
+if "--user gamer" not in auth:
+    raise SystemExit("X11 ACL helper does not grant only the app uid")
+if "SupplementaryGroups=pf-session" not in auth:
+    raise SystemExit("X11 ACL helper cannot project the private app socket group")
+if "ReadWritePaths=/run/pocketforge/x11/.X11-unix" not in auth:
+    raise SystemExit("X11 ACL helper cannot mutate the protected socket directory")
+if "--group pf-session" not in auth or "--mode 0660" not in auth:
+    raise SystemExit("X11 ACL helper does not enforce the private socket projection")
+if "Type=notify" not in auth or "NotifyAccess=main" not in auth:
+    raise SystemExit("X11 ACL helper does not gate publication on initial authorization")
+if "--monitor" not in auth or "Restart=on-failure" not in auth:
+    raise SystemExit("X11 ACL helper does not re-authorize restarted Xwayland children")
+if "RemainAfterExit=yes" in auth:
+    raise SystemExit("X11 ACL helper is a one-shot authorization")
+if "Requires=pocketforge-gamescope-x11-authorize.service" not in publisher:
+    raise SystemExit("publisher does not require X11 authorization")
+if "After=pocketforge-gamescope-x11-authorize.service" not in publisher:
+    raise SystemExit("publisher can race X11 authorization")
+if not helper_path.is_file() or not (helper_path.stat().st_mode & 0o111):
+    raise SystemExit("X11 ACL helper is missing or not executable")
+xhost_name = "x" + "host"
+if xhost_name in helper_path.read_text(encoding="utf-8"):
+    raise SystemExit("X11 ACL helper delegates to an unrestricted host tool")
+PY
+}
+
+authorization_unit="${unit_root}/pocketforge-gamescope-x11-authorize.service"
+authorization_helper="${root}/rootfs-overlay/usr/lib/pocketforge/pf-x11-authorize"
+check_xwayland_authorization_contract "${owner}" "${publisher_unit}" \
+    "${authorization_unit}" "${authorization_helper}" \
+    || fail "Xwayland authorization projection contract is incomplete"
+cp "${authorization_unit}" "${scratch}/authorization-for-unauthorized-user.service"
+sed -i 's/--user gamer/--user unauthorized/' \
+    "${scratch}/authorization-for-unauthorized-user.service"
+if check_xwayland_authorization_contract "${owner}" \
+    "${publisher_unit}" "${scratch}/authorization-for-unauthorized-user.service" \
+    "${authorization_helper}"; then
+    fail "authorization check accepted an ACL for an unauthorized uid"
+fi
+
 check_xwayland_write_contract() {
     local owner_unit=$1
     local publisher_service=$2
@@ -201,7 +269,8 @@ check_resident_hold() {
     local unit=$1
 
     grep -Fx 'BindsTo=pocketforge-gamescope-session.target' "${unit}" >/dev/null \
-        && grep -Fx 'After=pocketforge-gamescope-session.target' "${unit}" >/dev/null \
+        && grep -Fx 'Before=pocketforge-gamescope-session.target' "${unit}" >/dev/null \
+        && ! grep -Fx 'After=pocketforge-gamescope-session.target' "${unit}" >/dev/null \
         && grep -Fx 'Type=oneshot' "${unit}" >/dev/null \
         && grep -Fx 'ExecStart=/usr/bin/true' "${unit}" >/dev/null \
         && grep -Fx 'RemainAfterExit=yes' "${unit}" >/dev/null \
@@ -213,6 +282,11 @@ cp "${resident}" "${scratch}/resident-without-bind.service"
 sed -i '/^BindsTo=/d' "${scratch}/resident-without-bind.service"
 if check_resident_hold "${scratch}/resident-without-bind.service"; then
     fail "resident hold check accepted a unit without BindsTo"
+fi
+cp "${resident}" "${scratch}/resident-after-target.service"
+sed -i 's/^Before=/After=/' "${scratch}/resident-after-target.service"
+if check_resident_hold "${scratch}/resident-after-target.service"; then
+    fail "resident hold check accepted the StopWhenUnneeded startup race"
 fi
 if grep -Eq 'pocketforge-gamescope-resident\.service' \
     "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service" \
@@ -273,7 +347,8 @@ for target in sysinit.target basic.target shutdown.target; do
 done
 if ! systemd-analyze verify --man=no --root="${verify_root}" \
     pocketforge-gamescope-session.target pocketforge-gamescope.service \
-    pocketforge-session-publisher.service pocketforge-gamescope-fallback.service \
+    pocketforge-gamescope-x11-authorize.service pocketforge-session-publisher.service \
+    pocketforge-gamescope-fallback.service \
     pocketforge-gamescope-resident.service \
     >"${scratch}/systemd-verify.out" 2>&1; then
     cat "${scratch}/systemd-verify.out" >&2
@@ -283,6 +358,260 @@ if test -s "${scratch}/systemd-verify.out"; then
     cat "${scratch}/systemd-verify.out" >&2
     fail "systemd-analyze reported a Gamescope session warning"
 fi
+
+# Exercise the ACL helper's real X11 request shape against a hermetic server
+# stub. The positive control must request only localuser:gamer; the negative
+# control must refuse another uid before it can connect.
+python3 - "${authorization_helper}" "${scratch}/x11-authorize.sock" <<'PY'
+from pathlib import Path
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import grp
+import os
+
+helper = sys.argv[1]
+path = Path(sys.argv[2])
+seen = []
+ready = threading.Event()
+
+def recv_exact(client, size):
+    data = bytearray()
+    while len(data) < size:
+        chunk = client.recv(size - len(data))
+        assert chunk
+        data.extend(chunk)
+    return bytes(data)
+
+def serve():
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(path))
+    listener.listen(1)
+    ready.set()
+    with listener:
+        client, _ = listener.accept()
+        with client:
+            assert recv_exact(client, 12)[0] == ord("l")
+            client.sendall(struct.pack("<BBHHH", 1, 0, 11, 0, 0))
+            header = recv_exact(client, 8)
+            assert header[0] == 109
+            request_length = struct.unpack_from("<H", header, 2)[0]
+            body = recv_exact(client, request_length * 4 - 8)
+            address_length = struct.unpack_from("<H", header, 6)[0]
+            seen.append((header[4], body[:address_length]))
+            assert recv_exact(client, 4) == struct.pack("<BBH", 43, 0, 1)
+            client.sendall(b"\1" + b"\0" * 31)
+
+thread = threading.Thread(target=serve)
+thread.start()
+assert ready.wait(2)
+positive = subprocess.run(
+    [
+        helper, "--socket", str(path), "--user", "gamer",
+        "--group", grp.getgrgid(os.getgid()).gr_name,
+        "--mode", "0660", "--timeout", "2",
+    ],
+    text=True, capture_output=True,
+)
+thread.join(2)
+assert positive.returncode == 0, positive.stderr
+assert seen == [(5, b"localuser\0gamer")]
+assert path.stat().st_gid == os.getgid()
+assert path.stat().st_mode & 0o777 == 0o660
+negative = subprocess.run(
+    [
+        helper, "--socket", str(path), "--user", "unauthorized",
+        "--group", grp.getgrgid(os.getgid()).gr_name,
+        "--mode", "0660", "--timeout", "0",
+    ],
+    text=True, capture_output=True,
+)
+assert negative.returncode != 0
+assert "unsupported_user" in negative.stderr
+assert not negative.stdout
+public_mode = subprocess.run(
+    [
+        helper, "--socket", str(path), "--user", "gamer",
+        "--group", grp.getgrgid(os.getgid()).gr_name,
+        "--mode", "0666", "--timeout", "0",
+    ],
+    text=True, capture_output=True,
+)
+assert public_mode.returncode != 0
+assert "unsupported_mode" in public_mode.stderr
+assert not public_mode.stdout
+PY
+
+# Force X0 to change between projection and connect. The helper must discard
+# the connection to the replacement until it has projected and bound that same
+# generation; only the retried connection may receive the ACL.
+PYTHONDONTWRITEBYTECODE=1 python3 - \
+    "${authorization_helper}" "${scratch}/x11-generation.sock" <<'PY'
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+import os
+import socket
+import struct
+import sys
+import threading
+import types
+
+helper_path = sys.argv[1]
+path = Path(sys.argv[2])
+module = types.ModuleType("pf_x11_authorize")
+SourceFileLoader(module.__name__, helper_path).exec_module(module)
+
+old_listener = socket.socket(socket.AF_UNIX)
+old_listener.bind(str(path))
+old_listener.listen(1)
+replacement = None
+replacement_ready = threading.Event()
+original_project = module.project_socket
+projected = []
+
+def recv_exact(client, size):
+    data = bytearray()
+    while len(data) < size:
+        chunk = client.recv(size - len(data))
+        assert chunk
+        data.extend(chunk)
+    return bytes(data)
+
+def replace_after_projection(candidate, gid, mode):
+    global replacement
+    identity = original_project(candidate, gid, mode)
+    projected.append(identity)
+    if len(projected) == 1:
+        candidate.unlink()
+        replacement = socket.socket(socket.AF_UNIX)
+        replacement.bind(str(candidate))
+        replacement.listen(2)
+        replacement_ready.set()
+    return identity
+
+module.project_socket = replace_after_projection
+received = []
+
+def serve_replacement():
+    assert replacement_ready.wait(2)
+    first, _ = replacement.accept()
+    with first:
+        assert first.recv(1) == b""
+    second, _ = replacement.accept()
+    with second:
+        assert recv_exact(second, 12)[0] == ord("l")
+        second.sendall(struct.pack("<BBHHH", 1, 0, 11, 0, 0))
+        header = recv_exact(second, 8)
+        assert header[0] == 109
+        body = recv_exact(second, struct.unpack_from("<H", header, 2)[0] * 4 - 8)
+        address_length = struct.unpack_from("<H", header, 6)[0]
+        received.append((header[4], body[:address_length]))
+        assert recv_exact(second, 4) == struct.pack("<BBH", 43, 0, 1)
+        second.sendall(b"\1" + b"\0" * 31)
+
+server = threading.Thread(target=serve_replacement)
+server.start()
+gid = os.getgid()
+client = module.connect_authorized(
+    path, "gamer", gid, 0o660, 2,
+)
+client.close()
+server.join(2)
+assert not server.is_alive()
+assert len(projected) == 2
+assert projected[0] != projected[1]
+assert received == [(5, b"localuser\0gamer")]
+assert path.stat().st_gid == gid
+assert path.stat().st_mode & 0o777 == 0o660
+replacement.close()
+old_listener.close()
+path.unlink()
+PY
+
+# The Xwayland child can be replaced while Gamescope keeps X0 published. The
+# monitor must gate readiness on the first ACL and repeat the request for the
+# replacement socket.
+python3 - "${authorization_helper}" "${scratch}" <<'PY'
+import os
+from pathlib import Path
+import select
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+import grp
+
+helper = sys.argv[1]
+scratch = Path(sys.argv[2])
+path = scratch / "x11-monitor.sock"
+notify_path = scratch / "x11-notify.sock"
+ready = threading.Event()
+accepted = []
+
+def serve_x11() -> None:
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(path))
+    listener.listen(1)
+    initial_inode = path.stat().st_ino
+    ready.set()
+    for generation in range(2):
+        client, _ = listener.accept()
+        with client:
+            setup = client.recv(12)
+            assert len(setup) == 12 and setup[0] == ord("l")
+            client.sendall(struct.pack("<BBHHH", 1, 0, 11, 0, 0))
+            header = client.recv(8)
+            assert len(header) == 8 and header[0] == 109
+            body = client.recv(struct.unpack_from("<H", header, 2)[0] * 4 - 8)
+            accepted.append((header[4], body))
+            assert path.stat().st_gid == os.getgid()
+            assert path.stat().st_mode & 0o777 == 0o660
+            assert client.recv(4) == struct.pack("<BBH", 43, 0, 1)
+            client.sendall(b"\1" + b"\0" * 31)
+        if generation == 0:
+            path.chmod(0o777)
+            time.sleep(0.2)
+    assert path.stat().st_ino == initial_inode
+    listener.close()
+    path.unlink()
+
+notify = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+notify.bind(str(notify_path))
+environment = dict(os.environ, NOTIFY_SOCKET=str(notify_path))
+server = threading.Thread(target=serve_x11, daemon=True)
+server.start()
+assert ready.wait(2)
+process = subprocess.Popen(
+    [
+        helper, "--socket", str(path), "--user", "gamer",
+        "--group", grp.getgrgid(os.getgid()).gr_name,
+        "--mode", "0660", "--timeout", "2", "--monitor",
+    ],
+    env=environment,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+try:
+    notify.settimeout(2)
+    assert notify.recv(256).startswith(b"READY=1")
+    readable, _, _ = select.select([process.stdout], [], [], 2)
+    assert readable, "x11 ready marker was not flushed while monitor remained active"
+    assert process.stdout.readline().strip() == "x11-authorization-ready user=gamer"
+    server.join(4)
+    assert not server.is_alive()
+    assert len(accepted) == 2
+    assert all(family == 5 and b"localuser\0gamer" in body for family, body in accepted)
+finally:
+    process.terminate()
+    process.wait(timeout=2)
+    notify.close()
+assert process.returncode == -15
+PY
 
 # Exercise publication with real filesystem Unix sockets and a controlled
 # /proc/net/unix view. The helper owns the atomic generation and projection.
@@ -343,7 +672,7 @@ assert (generation.stat().st_mode & 0o777) == 0o755
 assert (generation / "environment").read_text() == (
     "POCKETFORGE_SESSION=/run/pocketforge/session\n"
     "POCKETFORGE_SESSION_GENERATION=1\n"
-    "WAYLAND_DISPLAY=wayland-0\n"
+    "WAYLAND_DISPLAY=/run/pocketforge/session/wayland-0\n"
 )
 assert not any(
     line.startswith(("DISPLAY=", "XAUTHORITY="))

@@ -223,6 +223,7 @@ def section_asset_audit(work):
         "guest/agent.py",
         "guest/build-tools.sh",
         "session/entry-guest.sh",
+        "session/select-product-kms.sh",
         "selftest/uinput-domain-v1.SOURCE",
         "selftest/uinput-domain-v1.tsv",
     ]
@@ -619,6 +620,18 @@ def section_asset_audit(work):
         and "--backend headless" not in entry_source,
         "guest real-kernel tier must use product gamescope's libinput-capable DRM session",
     )
+    require(
+        "/usr/lib/pocketforge/pf-gamescope-kms-select" in entry_source,
+        "guest real-kernel tier bypasses the product KMS-node selector",
+    )
+    require(
+        '--prefer-drm "$PF_GAMESCOPE_KMS_NODE"' in entry_source,
+        "guest real-kernel tier does not pass the selected KMS node to gamescope",
+    )
+    require(
+        re.search(r"/dev/dri/card[0-9]", entry_source) is None,
+        "guest real-kernel tier pins a DRM card index",
+    )
 
     with open(os.path.join(HARNESS, "session", "driver.py"), "r", encoding="utf-8") as handle:
         driver_source = handle.read()
@@ -745,7 +758,7 @@ def section_asset_audit(work):
         )
         require(
             pins.get("GAMESCOPE_COMMIT")
-            == "0b03a62e720ae93afbd5e59167c8774f8ad74f0c",
+            == "cf4475a73409295b06ec352f18497fef23422a72",
             f"pins.env lost the producer-verified gamescope pin: {pins.get('GAMESCOPE_COMMIT')!r}",
         )
         require(
@@ -762,7 +775,7 @@ def section_asset_audit(work):
         with open(os.path.join(HARNESS, "Containerfile"), "r", encoding="utf-8") as handle:
             containerfile = handle.read()
         require(
-            'ARG GAMESCOPE_COMMIT=0b03a62e720ae93afbd5e59167c8774f8ad74f0c'
+            'ARG GAMESCOPE_COMMIT=cf4475a73409295b06ec352f18497fef23422a72'
             in containerfile,
             "Containerfile does not default to the headless-safe gamescope pin",
         )

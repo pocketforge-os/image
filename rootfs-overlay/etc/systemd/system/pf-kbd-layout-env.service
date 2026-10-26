@@ -23,7 +23,8 @@
 # =============================================================================
 [Unit]
 Description=PocketForge: render keyboardLayout preference into XKB_DEFAULT_* env
-After=local-fs.target
+Wants=cloud-config.service
+After=cloud-config.service local-fs.target
 Before=pf-shell-selected.service
 
 [Service]

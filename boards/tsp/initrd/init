@@ -483,6 +483,16 @@ pf_first_frame_start
 # =============================================================================
 SF_BS=4194304          # 4 MiB transfer block
 
+# The v3 engine is dev-initrd-only and has no definition-time side effects.
+# Its separate marker is checked again before any tail record is read.
+if [ -f /lib/pocketforge-self-flash-v3.sh ]; then
+    SF_V3_WORK=/run/pocketforge-self-flash-v3
+    mkdir -p "$SF_V3_WORK" \
+        || fail "self-flash v3 work directory initialization failed"
+    export SF_V3_WORK
+    . /lib/pocketforge-self-flash-v3.sh
+fi
+
 # BEGIN POCKETFORGE SELF-FLASH V2 FUNCTIONS
 # This block is executed directly by tests/test-initrd-selfflash-v2.sh. Keep it
 # POSIX/BusyBox-ash compatible and free of boot-time side effects at definition.
@@ -605,7 +615,9 @@ sf_v2_stage_ram() {
     SF_STAGED_XZ="$SF_RAM_ROOT/sf-staged.xz"
     SF_SEED_RAM="$SF_RAM_ROOT/sf-seed"
     rm -f "$SF_STAGED_XZ" "$SF_RAM_ROOT/sf-phase.log"
-    [ ! -d "$SF_SEED_RAM" ] || { find "$SF_SEED_RAM" -mindepth 1 -delete; rmdir "$SF_SEED_RAM"; }
+    if [ -d "$SF_SEED_RAM" ]; then
+        rm -r "$SF_SEED_RAM" || return 1
+    fi
     mkdir -p "$SF_SEED_RAM" || return 1
     sf_v2_phase ram_copy_start
     sf_v2_src_xz="$sf_v2_mnt$SF_XZ_FILE"
@@ -753,6 +765,76 @@ sf_v2_selected_card_unmounted() {
 # fresh fetch from the device. Cheap and harmless if it was never the cause.
 sf_drop_cache() { sync 2>/dev/null; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; }
 
+# BEGIN POCKETFORGE SELF-FLASH V3 GATE
+# A zero arm slot is the normal no-op state. A clearly uninitialized baked-image
+# partition layout also continues to normal root without reading the raw tail;
+# the first-boot grow unit owns its exact validation and initialization. Any
+# near-capped drift, nonzero malformed arm, or valid arm paired with a non-ready
+# receipt is terminal: it must never fall through or retry a transaction.
+sf_v3_terminal_recovery() {
+    log "selfflash-v3: TERMINAL recovery state — $*; host FEL recovery required"
+    sync 2>/dev/null
+    exec /bin/sh
+}
+
+if [ "$PF_ROOT_MODE" != volatile ] \
+        && [ -f /lib/pocketforge-self-flash-v3.sh ]; then
+    watchdog_ping
+    log "STAGE: self-flash v3 gate — waiting for SD enumeration"
+    if sf_wait_for_root; then
+        watchdog_ping
+        if sf_v3_load_armed_transaction; then
+            log "selfflash-v3: admitted generation=$SF_V3_GENERATION"
+            pf_first_frame_reap
+            if [ -n "$PFLOG" ]; then
+                sync
+                if ! umount /pflog 2>/dev/null; then
+                    sf_v3_terminal_recovery "boot FAT log unmount failed"
+                fi
+                PFLOG=""
+            fi
+            if ! sf_v3_selected_card_unmounted; then
+                case "$SF_V3_UNMOUNT_REASON" in
+                    mounted)
+                        sf_v3_terminal_recovery \
+                            "selected SD remains mounted dev=$SF_V3_MOUNTED_DEV mnt=$SF_V3_MOUNTED_PATH"
+                        ;;
+                    mount_state_unavailable)
+                        sf_v3_terminal_recovery \
+                            "selected SD mount state unavailable"
+                        ;;
+                    stale_card_identity)
+                        sf_v3_terminal_recovery \
+                            "selected SD card identity changed"
+                        ;;
+                    *)
+                        sf_v3_terminal_recovery "selected SD has no card identity"
+                        ;;
+                esac
+            fi
+            watchdog_disarm_for_selfflash
+            if sf_v3_run_armed_transaction; then
+                sync
+                reboot -f
+                sf_v3_terminal_recovery "target reboot returned"
+            fi
+            sf_v3_terminal_recovery "transaction failed"
+        fi
+        case "$SF_V3_LOAD_STATE" in
+            absent)
+                log "STAGE: self-flash v3 gate — no arm record — normal boot"
+                ;;
+            uninitialized)
+                log "STAGE: self-flash v3 gate — fresh image layout — normal boot for capped growth"
+                ;;
+            *)
+                sf_v3_terminal_recovery "arm/receipt state refused ($SF_V3_LOAD_STATE)"
+                ;;
+        esac
+    fi
+fi
+# END POCKETFORGE SELF-FLASH V3 GATE
+
 # Perform recovery. FILE-BASED (tsp-bcx.17): the flag + staged .img.xz are FILES on
 # the rootfs partition (p5), which the initramfs PROVABLY mounts every boot — so we
 # never depend on the unreliable early-boot RAW high-sector read that defeated the
@@ -780,8 +862,7 @@ selfflash_recover() {
         watchdog_ping
         mount -o remount,rw "$MNT" 2>/dev/null
         rm -f "$MNT/var/tmp/pf-selfflash.flag" "$SRC"
-        find "$MNT$SF_SEED_DIR" -mindepth 1 -delete 2>/dev/null
-        rmdir "$MNT$SF_SEED_DIR" 2>/dev/null
+        rm -r "$MNT$SF_SEED_DIR" 2>/dev/null || :
         sync
         watchdog_ping
         return 1

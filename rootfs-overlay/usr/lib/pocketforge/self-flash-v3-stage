@@ -1,0 +1,794 @@
+#!/usr/bin/python3
+"""Stage one self-flash v3 transaction in the validated SD raw tail.
+
+The production CLI intentionally has no device or byte-position option.  Its
+only write positions are derived from the selected card's geometry and the v3
+constants below.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+from typing import BinaryIO, Iterable, Mapping, Sequence
+
+
+ALIGNMENT_BYTES = 4_194_304
+RESERVE_BYTES = 1_073_741_824
+GUARD_BYTES = 4_194_304
+CONTROL_BYTES = 4_194_304
+SEED_MAX_BYTES = 16_777_216
+SLOT_BYTES = 65_536
+LOGICAL_SECTOR_BYTES = 512
+CONTROLLER = "04020000"
+REQUEST_SCHEMA = "pocketforge.self-flash-stage-request/v3"
+ARM_SCHEMA = "pocketforge.self-flash-arm/v3"
+RECEIPT_SCHEMA = "pocketforge.self-flash-receipt/v3"
+MARKER_PATH = Path("/etc/pocketforge-selfflash-v3")
+SYS_BLOCK = Path("/sys/class/block")
+DEV_ROOT = Path("/dev")
+GROWTH_RECEIPT_PATH = Path("/var/lib/pocketforge/self-flash-v3-growth")
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
+SYSTEMCTL_PATH = Path("/usr/bin/systemctl")
+GROWTH_UNIT = "pocketforge-self-flash-v3-grow.service"
+GROWTH_PASS_FIELDS = (
+    "GPTRelocation",
+    "PartitionGrowth",
+    "PartitionTableReread",
+    "Ext4Growth",
+    "ControlSlotsInitialized",
+)
+
+REQUEST_KEYS = {
+    "Schema",
+    "Generation",
+    "ContractSHA256",
+    "BaseDescriptorSHA256",
+    "BaseRawSHA256",
+    "BaseRawBytes",
+    "TargetDescriptorSHA256",
+    "TargetRawSHA256",
+    "TargetRawBytes",
+    "CompressedSHA256",
+    "CompressedBytes",
+    "SeedSHA256",
+    "SeedBytes",
+    "CardSerial",
+    "CardBytes",
+    "RootPartitionStartSector",
+    "PartitionLayoutSHA256",
+}
+
+
+class Refusal(RuntimeError):
+    """A fail-closed contract refusal safe to report to the caller."""
+
+
+def _valid_boot_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 36
+        and all(value[index] == "-" for index in (8, 13, 18, 23))
+        and all(
+            character in "0123456789abcdef"
+            for index, character in enumerate(value)
+            if index not in (8, 13, 18, 23)
+        )
+    )
+
+
+def _valid_invocation_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 32
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def validate_growth_receipt(
+    receipt: Mapping[str, object],
+    boot_id: str,
+    invocation_id: str,
+    result: str,
+    active_state: str,
+) -> None:
+    """Accept only positive evidence from this boot's successful activation."""
+    if active_state in ("activating", "reloading") or invocation_id == "":
+        raise Refusal("growth_pending")
+    if not _valid_boot_id(boot_id):
+        raise Refusal("boot_id_invalid")
+    if not _valid_invocation_id(invocation_id):
+        raise Refusal("growth_invocation_id_invalid")
+    if result != "success" or active_state not in ("active", "inactive"):
+        raise Refusal("growth_unit_not_successful")
+    if receipt.get("Schema") != "pocketforge.self-flash-growth/v3":
+        raise Refusal("growth_receipt_schema_invalid")
+    if receipt.get("BootID") != boot_id:
+        raise Refusal("growth_receipt_boot_mismatch")
+    if receipt.get("InvocationID") != invocation_id:
+        raise Refusal("growth_receipt_invocation_mismatch")
+    if any(receipt.get(field) != "pass" for field in GROWTH_PASS_FIELDS[:-1]):
+        raise Refusal("growth_receipt_not_pass")
+    if receipt.get("ControlSlotsInitialized") not in (
+        "zeroed-and-read-back",
+        "consumed-completed-handoff",
+    ):
+        raise Refusal("growth_receipt_not_pass")
+
+
+def _growth_unit_state() -> tuple[str, str, str]:
+    try:
+        completed = subprocess.run(
+            [
+                str(SYSTEMCTL_PATH),
+                "show",
+                "--property=InvocationID",
+                "--property=Result",
+                "--property=ActiveState",
+                GROWTH_UNIT,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=5,
+            encoding="ascii",
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError) as error:
+        raise Refusal("growth_unit_state_unreadable") from error
+    if completed.returncode != 0 or len(completed.stdout) > 1024:
+        raise Refusal("growth_unit_state_unreadable")
+    fields: dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        if "=" not in line:
+            raise Refusal("growth_unit_state_invalid")
+        key, value = line.split("=", 1)
+        if key in fields or key not in ("InvocationID", "Result", "ActiveState"):
+            raise Refusal("growth_unit_state_invalid")
+        fields[key] = value
+    if set(fields) != {"InvocationID", "Result", "ActiveState"}:
+        raise Refusal("growth_unit_state_invalid")
+    return fields["InvocationID"], fields["Result"], fields["ActiveState"]
+
+
+def _require_current_growth_receipt() -> None:
+    invocation_id, result, active_state = _growth_unit_state()
+    if active_state in ("activating", "reloading") or invocation_id == "":
+        raise Refusal("growth_pending")
+    try:
+        boot_id = BOOT_ID_PATH.read_text(encoding="ascii").strip()
+        receipt = json.loads(GROWTH_RECEIPT_PATH.read_text(encoding="ascii"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise Refusal("growth_receipt_unreadable") from error
+    if not isinstance(receipt, dict):
+        raise Refusal("growth_receipt_invalid")
+    validate_growth_receipt(receipt, boot_id, invocation_id, result, active_state)
+
+
+def _uint(name: str, value: object, *, nonzero: bool = True) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise Refusal(f"{name}_not_integer")
+    if value < int(nonzero):
+        raise Refusal(f"{name}_out_of_range")
+    if value > (1 << 63) - 1:
+        raise Refusal(f"{name}_overflow")
+    return value
+
+
+def _sha(name: str, value: object) -> str:
+    if not isinstance(value, str) or len(value) != 64:
+        raise Refusal(f"{name}_invalid")
+    if any(character not in "0123456789abcdef" for character in value):
+        raise Refusal(f"{name}_invalid")
+    return value
+
+
+def _align_up(value: int, alignment: int) -> int:
+    if value > (1 << 63) - alignment:
+        raise Refusal("alignment_overflow")
+    return ((value + alignment - 1) // alignment) * alignment
+
+
+def _align_down(value: int, alignment: int) -> int:
+    return (value // alignment) * alignment
+
+
+def derive_layout(
+    *,
+    card_bytes: int,
+    base_raw_bytes: int,
+    target_raw_bytes: int,
+    compressed_bytes: int,
+    seed_bytes: int,
+) -> dict[str, int]:
+    """Derive and validate all byte positions; never accepts positions."""
+    card_bytes = _uint("card_bytes", card_bytes)
+    base_raw_bytes = _uint("base_raw_bytes", base_raw_bytes)
+    target_raw_bytes = _uint("target_raw_bytes", target_raw_bytes)
+    compressed_bytes = _uint("compressed_bytes", compressed_bytes)
+    seed_bytes = _uint("seed_bytes", seed_bytes)
+    if card_bytes % LOGICAL_SECTOR_BYTES:
+        raise Refusal("card_alignment")
+    if seed_bytes > SEED_MAX_BYTES:
+        raise Refusal("seed_too_large")
+    if card_bytes <= RESERVE_BYTES + GUARD_BYTES + CONTROL_BYTES:
+        raise Refusal("reserve_underflow")
+
+    image_floor = _align_up(max(base_raw_bytes, target_raw_bytes), ALIGNMENT_BYTES)
+    tail_start = _align_down(card_bytes - RESERVE_BYTES, ALIGNMENT_BYTES)
+    stage_offset = tail_start + GUARD_BYTES
+    stage_end = stage_offset + compressed_bytes
+    seed_offset = _align_up(stage_end, 4096)
+    seed_end = seed_offset + seed_bytes
+    end_guard_start = _align_down(card_bytes - GUARD_BYTES, ALIGNMENT_BYTES)
+    control_offset = end_guard_start - CONTROL_BYTES
+    receipt_offset = control_offset + SLOT_BYTES
+    control_end = end_guard_start
+
+    values = (
+        image_floor,
+        tail_start,
+        stage_offset,
+        stage_end,
+        seed_offset,
+        seed_end,
+        end_guard_start,
+        control_offset,
+        receipt_offset,
+        control_end,
+    )
+    if any(value < 0 or value > card_bytes for value in values):
+        raise Refusal("layout_card_overflow")
+    if image_floor > tail_start:
+        raise Refusal("image_floor_overlap")
+    if stage_offset < tail_start + GUARD_BYTES:
+        raise Refusal("stage_underflow")
+    if seed_end > control_offset:
+        raise Refusal("payload_control_overlap")
+    if receipt_offset + SLOT_BYTES > control_end:
+        raise Refusal("receipt_control_overflow")
+    if control_end > card_bytes - GUARD_BYTES:
+        raise Refusal("backup_gpt_guard_overlap")
+    for value in (tail_start, stage_offset, control_offset, receipt_offset, control_end):
+        if value % LOGICAL_SECTOR_BYTES:
+            raise Refusal("layout_sector_alignment")
+
+    return {
+        "card_bytes": card_bytes,
+        "image_floor": image_floor,
+        "tail_start": tail_start,
+        "stage_offset": stage_offset,
+        "stage_end": stage_end,
+        "seed_offset": seed_offset,
+        "seed_end": seed_end,
+        "control_offset": control_offset,
+        "arm_offset": control_offset,
+        "receipt_offset": receipt_offset,
+        "control_end": control_end,
+    }
+
+
+def validate_partition_bounds(layout: Mapping[str, int], partitions: Iterable[Mapping[str, int]]) -> None:
+    seen_five = False
+    previous_end = 0
+    seen_numbers: set[int] = set()
+    normalized = sorted(partitions, key=lambda item: int(item["start"]))
+    if not normalized:
+        raise Refusal("partition_table_empty")
+    for partition in normalized:
+        number = _uint("partition_number", partition["number"])
+        start = _uint("partition_start", partition["start"], nonzero=False)
+        end = _uint("partition_end", partition["end"])
+        if number in seen_numbers or end <= start:
+            raise Refusal("partition_geometry_invalid")
+        if start < previous_end:
+            raise Refusal("partition_overlap")
+        if end > layout["tail_start"] or end >= layout["stage_offset"]:
+            raise Refusal("partition_tail_overlap")
+        if number == 5:
+            seen_five = True
+            if end != layout["tail_start"]:
+                raise Refusal("root_not_capped")
+        seen_numbers.add(number)
+        previous_end = end
+    if not seen_five:
+        raise Refusal("root_partition_missing")
+
+
+def select_sd(cards: Sequence[Mapping[str, object]], *, root_major_minor: str) -> Mapping[str, object]:
+    eligible = [
+        card
+        for card in cards
+        if card.get("controller") == CONTROLLER
+        and card.get("card_type") == "SD"
+        and card.get("logical_sector_bytes") == LOGICAL_SECTOR_BYTES
+        and card.get("partition5_major_minor") == root_major_minor
+    ]
+    if len(eligible) != 1:
+        raise Refusal("sd_selection_not_unique")
+    selected = eligible[0]
+    if not selected.get("serial"):
+        raise Refusal("card_serial_missing")
+    _uint("card_bytes", selected.get("bytes"))
+    return selected
+
+
+def copy_exact_stream(source: BinaryIO, destination: BinaryIO, *, offset: int, expected_bytes: int) -> int:
+    """Copy exactly N bytes and reject a missing or additional source byte."""
+    _uint("offset", offset, nonzero=False)
+    expected_bytes = _uint("expected_bytes", expected_bytes)
+    destination.seek(offset)
+    remaining = expected_bytes
+    observed = 0
+    while remaining:
+        chunk = source.read(min(1024 * 1024, remaining))
+        if not chunk:
+            raise Refusal("stream_short")
+        written = destination.write(chunk)
+        if written != len(chunk):
+            raise Refusal("write_short")
+        observed += written
+        remaining -= written
+    if source.read(1):
+        raise Refusal("stream_long")
+    destination.flush()
+    os.fsync(destination.fileno())
+    return observed
+
+
+def _ordered_record(fields: Sequence[tuple[str, str]], digest_field: str) -> tuple[bytes, str]:
+    prefix = "".join(f"{name}={value}\n" for name, value in fields).encode("utf-8")
+    digest = hashlib.sha256(prefix).hexdigest()
+    payload = prefix + f"{digest_field}={digest}\n\n".encode("ascii")
+    if len(payload) > SLOT_BYTES:
+        raise Refusal("record_too_large")
+    return payload + bytes(SLOT_BYTES - len(payload)), digest
+
+
+def _sha_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _require_secure_regular(path: Path, expected_bytes: int) -> None:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise Refusal("input_file_not_root_owned")
+    if info.st_size != expected_bytes:
+        raise Refusal("input_file_size_mismatch")
+
+
+def _read_marker(contract_sha256: str) -> None:
+    info = MARKER_PATH.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise Refusal("marker_not_root_owned")
+    lines = MARKER_PATH.read_text(encoding="ascii").splitlines()
+    fields: list[tuple[str, str]] = []
+    for line in lines:
+        if "=" not in line:
+            raise Refusal("marker_mismatch")
+        fields.append(tuple(line.split("=", 1)))
+    expected_keys = (
+        "Schema",
+        "ContractSHA256",
+        "CardController",
+        "AlignmentBytes",
+        "ReserveBytes",
+        "GuardBytes",
+        "ControlBytes",
+        "SeedMaxBytes",
+        "SlotBytes",
+        "BakedRootPartitionStartSector",
+        "BakedRootPartitionSectors",
+    )
+    if tuple(key for key, _value in fields) != expected_keys:
+        raise Refusal("marker_mismatch")
+    marker = dict(fields)
+    expected = {
+        "Schema": "pocketforge.self-flash-capability/v3",
+        "ContractSHA256": contract_sha256,
+        "CardController": CONTROLLER,
+        "AlignmentBytes": str(ALIGNMENT_BYTES),
+        "ReserveBytes": str(RESERVE_BYTES),
+        "GuardBytes": str(GUARD_BYTES),
+        "ControlBytes": str(CONTROL_BYTES),
+        "SeedMaxBytes": str(SEED_MAX_BYTES),
+        "SlotBytes": str(SLOT_BYTES),
+    }
+    if any(marker.get(key) != value for key, value in expected.items()):
+        raise Refusal("marker_mismatch")
+    try:
+        _uint("baked_root_partition_start", int(marker["BakedRootPartitionStartSector"], 10))
+        _uint("baked_root_partition_sectors", int(marker["BakedRootPartitionSectors"], 10))
+    except ValueError as error:
+        raise Refusal("marker_mismatch") from error
+
+
+def _controller(real_device_path: str) -> str | None:
+    for component in Path(real_device_path).parts:
+        prefix = component.split(".", 1)[0].lower().lstrip("0")
+        if prefix == "4020000" and component.endswith(".mmc"):
+            return CONTROLLER
+        if component.endswith(".mmc"):
+            return component.split(".", 1)[0].zfill(8)
+    return None
+
+
+def _read_int(path: Path, name: str) -> int:
+    try:
+        return int(path.read_text(encoding="ascii").strip(), 10)
+    except (OSError, ValueError) as error:
+        raise Refusal(f"{name}_unreadable") from error
+
+
+def _read_optional_card_text(path: Path) -> str | None:
+    try:
+        value = path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return None
+    return value or None
+
+
+def _card_type(device_link: Path) -> str:
+    primary = _read_optional_card_text(device_link / "type")
+    uevent = _read_optional_card_text(device_link / "uevent")
+    alternate: str | None = None
+    if uevent is not None:
+        values = [
+            line.removeprefix("MMC_TYPE=")
+            for line in uevent.splitlines()
+            if line.startswith("MMC_TYPE=")
+        ]
+        if len(values) == 1 and values[0]:
+            alternate = values[0]
+        elif values:
+            raise Refusal("card_type_unreadable")
+    if primary is not None and alternate is not None and primary != alternate:
+        raise Refusal("card_type_mismatch")
+    card_type = primary or alternate
+    if card_type is None:
+        raise Refusal("card_type_unreadable")
+    return card_type
+
+
+def _card_serial(device_link: Path) -> str:
+    serial = _read_optional_card_text(device_link / "serial")
+    if serial is not None:
+        return serial
+    cid = _read_optional_card_text(device_link / "cid")
+    if (
+        cid is None
+        or len(cid) != 32
+        or any(character not in "0123456789abcdefABCDEF" for character in cid)
+    ):
+        raise Refusal("card_serial_unreadable")
+    return f"cid:{cid.lower()}"
+
+
+def _root_major_minor() -> str:
+    import subprocess
+
+    result = subprocess.run(
+        ["/usr/bin/findmnt", "-n", "-o", "MAJ:MIN", "/"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    value = result.stdout.strip()
+    if result.returncode != 0 or not value or "\n" in value:
+        raise Refusal("root_device_unresolved")
+    return value
+
+
+def _is_mmc_user_area(entry: Path, device_link: Path) -> bool:
+    block_path = Path(os.path.realpath(entry))
+    card_path = Path(os.path.realpath(device_link))
+    return block_path.parent.name == "block" and block_path.parent.parent == card_path
+
+
+def _discover_cards() -> list[dict[str, object]]:
+    cards: list[dict[str, object]] = []
+    for entry in sorted(SYS_BLOCK.iterdir()):
+        device_link = entry / "device"
+        if not device_link.exists() or (entry / "partition").exists():
+            continue
+        real_device = os.path.realpath(device_link)
+        controller = _controller(real_device)
+        if controller is None:
+            continue
+        # The kernel exposes an MMC user-area disk directly below the card's
+        # block directory.  eMMC boot and RPMB hardware areas instead live
+        # below that user-area disk and point their device link at the block
+        # disk, where card identity is intentionally absent.  Select by this
+        # sysfs relationship before requiring the card's identity below.
+        if not _is_mmc_user_area(entry, device_link):
+            continue
+        card_type = _card_type(device_link)
+        serial = _card_serial(device_link)
+        sectors = _read_int(entry / "size", "card_size")
+        logical = _read_int(entry / "queue/logical_block_size", "logical_sector")
+        partitions: list[dict[str, int | str]] = []
+        partition5_major_minor = ""
+        card_real = os.path.realpath(entry)
+        for possible in sorted(SYS_BLOCK.iterdir()):
+            if not (possible / "partition").exists():
+                continue
+            if not os.path.realpath(possible).startswith(card_real + os.sep):
+                continue
+            number = _read_int(possible / "partition", "partition_number")
+            start_sector = _read_int(possible / "start", "partition_start")
+            size_sectors = _read_int(possible / "size", "partition_size")
+            major_minor = (possible / "dev").read_text(encoding="ascii").strip()
+            partitions.append(
+                {
+                    "number": number,
+                    "start": start_sector * LOGICAL_SECTOR_BYTES,
+                    "end": (start_sector + size_sectors) * LOGICAL_SECTOR_BYTES,
+                    "start_sector": start_sector,
+                    "sectors": size_sectors,
+                    "major_minor": major_minor,
+                }
+            )
+            if number == 5:
+                partition5_major_minor = major_minor
+        cards.append(
+            {
+                "name": entry.name,
+                "controller": controller,
+                "card_type": card_type,
+                "serial": serial,
+                "bytes": sectors * logical,
+                "logical_sector_bytes": logical,
+                "partition5_major_minor": partition5_major_minor,
+                "partitions": partitions,
+                "path": str(DEV_ROOT / entry.name),
+            }
+        )
+    return cards
+
+
+def _partition_layout_sha(partitions: Sequence[Mapping[str, object]]) -> str:
+    canonical = "".join(
+        f"{item['number']}:{item['start_sector']}:{item['sectors']}\n"
+        for item in sorted(partitions, key=lambda value: int(value["number"]))
+    )
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def _load_request(path: Path) -> dict[str, object]:
+    _require_secure_regular(path, path.stat().st_size)
+    try:
+        request = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise Refusal("request_invalid_json") from error
+    if not isinstance(request, dict) or set(request) != REQUEST_KEYS:
+        raise Refusal("request_fields_invalid")
+    if request["Schema"] != REQUEST_SCHEMA:
+        raise Refusal("request_schema_invalid")
+    generation = request["Generation"]
+    if not isinstance(generation, str) or len(generation) != 32 or any(c not in "0123456789abcdef" for c in generation):
+        raise Refusal("generation_invalid")
+    for key in (
+        "ContractSHA256",
+        "BaseDescriptorSHA256",
+        "BaseRawSHA256",
+        "TargetDescriptorSHA256",
+        "TargetRawSHA256",
+        "CompressedSHA256",
+        "SeedSHA256",
+        "PartitionLayoutSHA256",
+    ):
+        _sha(key, request[key])
+    for key in (
+        "BaseRawBytes",
+        "TargetRawBytes",
+        "CompressedBytes",
+        "SeedBytes",
+        "CardBytes",
+        "RootPartitionStartSector",
+    ):
+        _uint(key, request[key])
+    if request["BaseRawSHA256"] == request["TargetRawSHA256"]:
+        raise Refusal("base_target_equal")
+    if not isinstance(request["CardSerial"], str) or not request["CardSerial"]:
+        raise Refusal("card_serial_invalid")
+    return request
+
+
+def _write_record(device: BinaryIO, offset: int, record: bytes) -> None:
+    device.seek(offset)
+    if device.write(record) != len(record):
+        raise Refusal("record_write_short")
+    device.flush()
+    os.fsync(device.fileno())
+    device.seek(offset)
+    if device.read(len(record)) != record:
+        raise Refusal("record_readback_mismatch")
+
+
+def _require_empty_slot(device: BinaryIO, offset: int, name: str) -> None:
+    device.seek(offset)
+    content = device.read(SLOT_BYTES)
+    if len(content) != SLOT_BYTES or any(content):
+        raise Refusal(f"stale_{name}_slot")
+
+
+def _arm_record(request: Mapping[str, object], selected: Mapping[str, object], layout: Mapping[str, int]) -> tuple[bytes, str]:
+    partition5 = next(item for item in selected["partitions"] if item["number"] == 5)
+    fields = [
+        ("Schema", ARM_SCHEMA),
+        ("State", "armed"),
+        ("Generation", str(request["Generation"])),
+        ("BaseDescriptorSHA256", str(request["BaseDescriptorSHA256"])),
+        ("BaseRawSHA256", str(request["BaseRawSHA256"])),
+        ("BaseRawBytes", str(request["BaseRawBytes"])),
+        ("TargetDescriptorSHA256", str(request["TargetDescriptorSHA256"])),
+        ("TargetRawSHA256", str(request["TargetRawSHA256"])),
+        ("TargetRawBytes", str(request["TargetRawBytes"])),
+        ("CompressedSHA256", str(request["CompressedSHA256"])),
+        ("CompressedBytes", str(request["CompressedBytes"])),
+        ("SeedSHA256", str(request["SeedSHA256"])),
+        ("SeedBytes", str(request["SeedBytes"])),
+        ("CardController", CONTROLLER),
+        ("CardType", "SD"),
+        ("CardSerial", str(selected["serial"])),
+        ("CardBytes", str(selected["bytes"])),
+        ("LogicalSectorBytes", str(LOGICAL_SECTOR_BYTES)),
+        ("RootPartitionStartSector", str(partition5["start_sector"])),
+        ("RootPartitionSectors", str(partition5["sectors"])),
+        ("PartitionLayoutSHA256", str(request["PartitionLayoutSHA256"])),
+        ("TailStart", str(layout["tail_start"])),
+        ("StageOffset", str(layout["stage_offset"])),
+        ("SeedOffset", str(layout["seed_offset"])),
+        ("ArmOffset", str(layout["arm_offset"])),
+        ("ReceiptOffset", str(layout["receipt_offset"])),
+        ("ReceiptBytes", str(SLOT_BYTES)),
+    ]
+    return _ordered_record(fields, "ArmRecordSHA256")
+
+
+def _ready_receipt(request: Mapping[str, object]) -> tuple[bytes, str]:
+    fields = [
+        ("Schema", RECEIPT_SCHEMA),
+        ("State", "ready"),
+        ("Generation", str(request["Generation"])),
+        ("TargetDescriptorSHA256", str(request["TargetDescriptorSHA256"])),
+        ("TargetRawSHA256", str(request["TargetRawSHA256"])),
+        ("TargetRawBytes", str(request["TargetRawBytes"])),
+        ("CompressedExpectedSHA256", str(request["CompressedSHA256"])),
+        ("CompressedExpectedBytes", str(request["CompressedBytes"])),
+        ("CompressedVerifiedHost", "matt-laptop"),
+        ("CompressedHostVerification", "sha256-and-byte-count-before-arm"),
+        ("DUTCompressedHash", "not-performed"),
+        ("XzIntegrity", "not-run"),
+        ("RawStreamSHA256", "not-run"),
+        ("RawStreamBytes", "unknown"),
+        ("RawStreamHashMatch", "not-run"),
+        ("RawStreamCountMatch", "not-run"),
+        ("WriteMethod", "not-run"),
+        ("WriteResult", "not-run"),
+        ("FullDeviceReadback", "not-performed"),
+        ("SeedResult", "not-run"),
+        ("StampResult", "not-run"),
+        ("FailurePhase", "none"),
+        ("FailureReason", "none"),
+        ("InitrdStartMonotonicMs", "unknown"),
+        ("WriteStartMonotonicMs", "unknown"),
+        ("WriteEndMonotonicMs", "unknown"),
+        ("SeedEndMonotonicMs", "unknown"),
+        ("StampEndMonotonicMs", "unknown"),
+        ("ReceiptWrittenMonotonicMs", "unknown"),
+    ]
+    return _ordered_record(fields, "ReceiptRecordSHA256")
+
+
+def stage(request_path: Path, seed_path: Path, source: BinaryIO) -> dict[str, object]:
+    _require_current_growth_receipt()
+    request = _load_request(request_path)
+    _read_marker(str(request["ContractSHA256"]))
+    _require_secure_regular(seed_path, int(request["SeedBytes"]))
+    if _sha_file(seed_path) != request["SeedSHA256"]:
+        raise Refusal("seed_sha_mismatch")
+
+    selected = select_sd(_discover_cards(), root_major_minor=_root_major_minor())
+    if selected["serial"] != request["CardSerial"] or selected["bytes"] != request["CardBytes"]:
+        raise Refusal("card_identity_changed")
+    partitions = selected["partitions"]
+    if _partition_layout_sha(partitions) != request["PartitionLayoutSHA256"]:
+        raise Refusal("partition_layout_changed")
+    partition5 = next((item for item in partitions if item["number"] == 5), None)
+    if partition5 is None or partition5["start_sector"] != request["RootPartitionStartSector"]:
+        raise Refusal("root_partition_changed")
+    layout = derive_layout(
+        card_bytes=int(request["CardBytes"]),
+        base_raw_bytes=int(request["BaseRawBytes"]),
+        target_raw_bytes=int(request["TargetRawBytes"]),
+        compressed_bytes=int(request["CompressedBytes"]),
+        seed_bytes=int(request["SeedBytes"]),
+    )
+    validate_partition_bounds(layout, partitions)
+
+    device_path = Path(str(selected["path"]))
+    info = device_path.stat()
+    if not stat.S_ISBLK(info.st_mode):
+        raise Refusal("selected_target_not_block_device")
+    with device_path.open("r+b", buffering=0) as device:
+        try:
+            fcntl.flock(device.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise Refusal("staging_writer_busy") from error
+        _require_empty_slot(device, layout["arm_offset"], "arm")
+        _require_empty_slot(device, layout["receipt_offset"], "receipt")
+        observed = copy_exact_stream(
+            source,
+            device,
+            offset=layout["stage_offset"],
+            expected_bytes=int(request["CompressedBytes"]),
+        )
+        with seed_path.open("rb", buffering=0) as seed:
+            seed_observed = copy_exact_stream(
+                seed,
+                device,
+                offset=layout["seed_offset"],
+                expected_bytes=int(request["SeedBytes"]),
+            )
+        device.seek(layout["seed_offset"])
+        staged_seed = device.read(int(request["SeedBytes"]))
+        if hashlib.sha256(staged_seed).hexdigest() != request["SeedSHA256"]:
+            raise Refusal("seed_readback_mismatch")
+        receipt, receipt_sha = _ready_receipt(request)
+        arm, arm_sha = _arm_record(request, selected, layout)
+        _write_record(device, layout["receipt_offset"], receipt)
+        _write_record(device, layout["arm_offset"], arm)
+
+    return {
+        "Schema": "pocketforge.self-flash-stage-result/v3",
+        "Generation": request["Generation"],
+        "Card": selected["name"],
+        "StageOffset": layout["stage_offset"],
+        "CompressedBytes": observed,
+        "CompressedHash": "not-performed",
+        "SeedOffset": layout["seed_offset"],
+        "SeedBytes": seed_observed,
+        "ReceiptRecordSHA256": receipt_sha,
+        "ArmRecordSHA256": arm_sha,
+        "State": "armed",
+    }
+
+
+def make_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--request", required=True, type=Path)
+    parser.add_argument("--seed", required=True, type=Path)
+    return parser
+
+
+def main() -> int:
+    arguments = make_argument_parser().parse_args()
+    if os.geteuid() != 0:
+        print("PF_SELF_FLASH_V3_STAGE state=REFUSED reason=not_root", file=sys.stderr)
+        return 2
+    try:
+        result = stage(arguments.request, arguments.seed, sys.stdin.buffer)
+    except (OSError, Refusal) as error:
+        reason = str(error) if isinstance(error, Refusal) else "io_error"
+        print(f"PF_SELF_FLASH_V3_STAGE state=REFUSED reason={reason}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    print("PF_SELF_FLASH_V3_STAGE state=PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -76,7 +76,7 @@ for invalid_sha in '' abcdef ABCDEF1234567890ABCDEF1234567890ABCDEF12 \
     fi
 done
 test ! -e "${calls}"
-g1_sha=0b03a62e720ae93afbd5e59167c8774f8ad74f0c
+g1_sha=cf4475a73409295b06ec352f18497fef23422a72
 g1_root=${scratch}/g1
 mkdir -p "${g1_root}"
 SOURCE_DATE_EPOCH=1700000000 PRODUCER_CALLS=${calls} "${mode_runner}" g1 "${fake_producer}" \
@@ -132,7 +132,7 @@ grep -F 'run-gamescope-pvr-cache.sh' "${dockerfile}" >/dev/null
 grep -F 'ARG PF_GAMESCOPE_MODE=not-shipped' "${dockerfile}" >/dev/null
 grep -F 'PF_GAMESCOPE_SHA' "${dockerfile}" >/dev/null
 grep -F '22.102.54.38' "${producer}" >/dev/null
-grep -F '0b03a62e720ae93afbd5e59167c8774f8ad74f0c' "${producer}" >/dev/null
+grep -F 'cf4475a73409295b06ec352f18497fef23422a72' "${producer}" >/dev/null
 grep -F 'MESA_DISK_CACHE_SINGLE_FILE=${single_file}' "${producer}" >/dev/null
 grep -F 'MESA_DISK_CACHE_COMBINE_RW_WITH_RO_FOZ=$(' "${producer}" >/dev/null
 grep -F 'MESA_DISK_CACHE_READ_ONLY_FOZ_DBS=${ro_name}' "${producer}" >/dev/null

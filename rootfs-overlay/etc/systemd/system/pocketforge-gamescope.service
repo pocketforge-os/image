@@ -1,6 +1,6 @@
 [Unit]
 Description=PocketForge Gamescope display owner
-After=dev-dri-renderD128.device pf-kbd-layout-env.service pf-open-gpu-gate.service pocketforge-boot-animator.service pf-shell-selected.service systemd-tmpfiles-setup.service
+After=dev-dri-renderD128.device pf-input-broker.service pf-kbd-layout-env.service pf-open-gpu-gate.service pocketforge-boot-animator.service pf-shell-selected.service systemd-tmpfiles-setup.service
 Wants=dev-dri-renderD128.device pf-kbd-layout-env.service
 PartOf=pocketforge-gamescope-session.target
 Conflicts=pf-shell-selected.service pocketforge-foreground.target
@@ -11,6 +11,8 @@ StartLimitBurst=1
 
 [Service]
 Type=simple
+Slice=pfsession.slice
+OOMScoreAdjust=-900
 User=pf-gamescope
 Group=pf-gamescope
 SupplementaryGroups=video render pf-compositor-input

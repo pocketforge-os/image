@@ -1,0 +1,16 @@
+[Unit]
+Description=Cap PocketForge root growth below the self-flash v3 reserve
+ConditionPathExists=/etc/pocketforge-selfflash-v3
+After=local-fs.target
+Before=cloud-final.service
+
+[Service]
+Type=oneshot
+# Bound the best-effort mutation window. cloud-final observes a terminal typed
+# result, but this unit is not required by it and a refusal cannot block boot.
+ExecStart=/usr/lib/pocketforge/self-flash-v3-grow
+TimeoutStartSec=90s
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
