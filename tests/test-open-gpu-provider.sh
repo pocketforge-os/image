@@ -4,6 +4,7 @@ set -eu
 root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 packager="$root/build/package-open-gpu-stack.sh"
 verifier="$root/scripts/verify-open-gpu-provider.sh"
+gpu_boundary_verifier="$root/scripts/verify-no-gpu-artifacts.sh"
 platform_verifier="$root/scripts/verify-open-gpu-probe-platforms.sh"
 control="$root/packages/pocketforge-open-gpu-stack/DEBIAN/control"
 zink_policy="$root/packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf"
@@ -18,6 +19,10 @@ test -x "$packager" || {
 }
 test -x "$verifier" || {
     echo "FAIL: built-image open GPU provider gate is missing: $verifier" >&2
+    exit 1
+}
+test -x "$gpu_boundary_verifier" || {
+    echo "FAIL: shared GPU boundary verifier is missing: $gpu_boundary_verifier" >&2
     exit 1
 }
 test -x "$platform_verifier" || {
@@ -632,6 +637,26 @@ cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
     "$candidate/usr/share/vulkan/icd.d/powervr_alias.json"
 expect_rejection red-duplicate-vulkan-alias "$candidate" \
     'expected exactly two Vulkan ICD manifests, found 3'
+
+# Keep the provider's uniqueness check aligned with every loader-visible
+# discovery directory owned by the shared Vulkan boundary policy. Exercise each
+# directory omitted by the original host-only check as an independent red case.
+boundary_number=0
+for boundary in $("$gpu_boundary_verifier" --print-vulkan-icd-boundaries); do
+    case "$boundary" in
+        etc/vulkan/icd.d|usr/local/share/vulkan/icd.d|usr/share/vulkan/icd.d)
+            continue
+            ;;
+    esac
+    boundary_number=$((boundary_number + 1))
+    candidate="$scratch/red-vulkan-boundary-$boundary_number"
+    cp -a "$rootfs" "$candidate"
+    mkdir -p "$candidate/$boundary"
+    cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
+        "$candidate/$boundary/foreign.json"
+    expect_rejection "red-vulkan-boundary-$boundary_number" "$candidate" \
+        'expected exactly two Vulkan ICD manifests, found 3'
+done
 
 candidate="$scratch/red-relative-egl-json"
 cp -a "$rootfs" "$candidate"
