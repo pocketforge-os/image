@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static contract for the session-wide controller owner (tsp-ihne1.7)."""
 
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -41,10 +42,21 @@ gamescope = unit(SYSTEMD / "pocketforge-gamescope.service")
 shell = unit(SYSTEMD / "pf-shell-selected.service.d/10-input-broker.conf")
 
 
-def requests_broker(capabilities: list[str]) -> bool:
-    return any(
-        capability in {"input", "rumble", "vibration"}
-        for capability in capabilities
+def selects_input_broker(
+    capabilities: list[str], resources: dict[str, list[str]]
+) -> bool:
+    requested_input = {"input", "rumble", "vibration"}.intersection(capabilities)
+    requested_brokered = {
+        "accelerometer",
+        "gnss",
+        "gyroscope",
+        "imu",
+        "leds",
+        "location",
+        "magnetometer",
+    }.intersection(capabilities)
+    return bool(resources.get("broker-sockets")) and bool(
+        requested_input or requested_brokered
     )
 
 
@@ -52,12 +64,25 @@ fixture_manifest = tomllib.loads(
     (ROOT / "tests/session-authority-systemd/app.toml").read_text()
 )
 fixture_capabilities = fixture_manifest["app"]["use"]
+inventory = json.loads(
+    (ROOT / "build/app-policy-a133-open-g1-v1.json").read_text()
+)["resources"]
+drive = (ROOT / "tests/session-authority-systemd/drive.py").read_text()
 
-# The live fixture asserts a successful broker connection, so it must request a
-# capability that selects the broker route. An app requesting no input authority
-# is the negative control: the launcher must scrub its ambient broker selector.
-assert requests_broker(fixture_capabilities), fixture_capabilities
-assert not requests_broker([])
+# The signed G1 inventory selects raw input for this fixture. The live collector
+# must therefore prove that pf-app-launch scrubs its ambient broker selector.
+assert fixture_capabilities == ["input"], fixture_capabilities
+assert inventory.get("input-devices"), inventory
+assert not selects_input_broker(fixture_capabilities, inventory), inventory
+assert 'probe["PF_BROKER_SOCK"] == ""' in drive
+assert 'probe["broker_connect"] == "unset"' in drive
+
+# Positive and negative controls in the same invocation: adding the canonical
+# broker inventory selects it for input, while no input authority selects none.
+broker_inventory = dict(inventory)
+broker_inventory["broker-sockets"] = ["/run/pocketforge/input-broker.sock"]
+assert selects_input_broker(fixture_capabilities, broker_inventory)
+assert not selects_input_broker([], broker_inventory)
 
 # One broker spans the complete compositor session. App churn cannot stop or restart it.
 assert "pf-input-broker.service" in words(session, "Unit", "Requires")
