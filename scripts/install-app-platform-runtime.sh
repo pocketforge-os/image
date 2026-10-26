@@ -36,27 +36,23 @@ python3 "$BUILDER" \
 
 DIGEST=$(python3 - "$OUTPUT" <<'PY'
 import hashlib
-import os
 from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
 digest = hashlib.sha256()
-for directory, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
-    dirnames.sort()
-    filenames.sort()
-    for name in (*dirnames, *filenames):
-        path = Path(directory) / name
-        relative = path.relative_to(root).as_posix()
-        if path.is_symlink():
-            raise SystemExit(f"app-platform-runtime: symlink in staged runtime: {relative}")
-        if path.is_dir():
-            continue
-        if not path.is_file():
-            raise SystemExit(f"app-platform-runtime: non-regular staged runtime file: {relative}")
-        if relative == ".manifest-sha256":
-            continue
-        digest.update(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {relative}\n".encode())
+entries = sorted(root.rglob("*"), key=lambda path: path.relative_to(root).as_posix())
+for path in entries:
+    relative = path.relative_to(root).as_posix()
+    if path.is_symlink():
+        raise SystemExit(f"app-platform-runtime: symlink in staged runtime: {relative}")
+    if path.is_dir():
+        continue
+    if not path.is_file():
+        raise SystemExit(f"app-platform-runtime: non-regular staged runtime file: {relative}")
+    if relative == ".manifest-sha256":
+        continue
+    digest.update(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {relative}\n".encode())
 print(digest.hexdigest())
 PY
 )
