@@ -485,6 +485,24 @@ printf '%s\n' "$positive_output" | grep -Fx \
     'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr+venus vulkan_manifests=2 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
     >/dev/null
 
+# The app runtime keeps private copies of its loader manifests beneath the
+# content-addressed runtime store. They are outside every host loader search
+# path and must not be mistaken for duplicate system providers.
+candidate="$scratch/green-isolated-app-runtime-manifests"
+cp -a "$rootfs" "$candidate"
+runtime_share="$candidate/usr/lib/pocketforge/platform-runtimes/pocketforge-bookworm-aarch64/sha256-fixture/usr/share"
+mkdir -p \
+    "$runtime_share/glvnd/egl_vendor.d" \
+    "$runtime_share/vulkan/icd.d"
+cp "$candidate/usr/share/glvnd/egl_vendor.d/50_mesa.json" \
+    "$runtime_share/glvnd/egl_vendor.d/50_mesa.json"
+cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
+    "$runtime_share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+runtime_output=$("$verifier" "$candidate" "$producer")
+printf '%s\n' "$runtime_output"
+printf '%s\n' "$runtime_output" | grep -F 'open-gpu-provider=PASS ' >/dev/null
+echo 'open-gpu-provider-isolated-runtime-manifests=PASS'
+
 # A stripped DSO has no static symbol table. In that case the verifier must
 # explicitly report that it used the recorded Zink build option, whose Mesa
 # build rule includes KMSRO whenever Zink is enabled.
