@@ -4,6 +4,7 @@ set -eu
 root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 packager="$root/build/package-open-gpu-stack.sh"
 verifier="$root/scripts/verify-open-gpu-provider.sh"
+gpu_boundary_verifier="$root/scripts/verify-no-gpu-artifacts.sh"
 platform_verifier="$root/scripts/verify-open-gpu-probe-platforms.sh"
 control="$root/packages/pocketforge-open-gpu-stack/DEBIAN/control"
 zink_policy="$root/packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf"
@@ -18,6 +19,10 @@ test -x "$packager" || {
 }
 test -x "$verifier" || {
     echo "FAIL: built-image open GPU provider gate is missing: $verifier" >&2
+    exit 1
+}
+test -x "$gpu_boundary_verifier" || {
+    echo "FAIL: shared GPU boundary verifier is missing: $gpu_boundary_verifier" >&2
     exit 1
 }
 test -x "$platform_verifier" || {
@@ -485,23 +490,23 @@ printf '%s\n' "$positive_output" | grep -Fx \
     'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr+venus vulkan_manifests=2 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
     >/dev/null
 
-# The app-platform runtime is an isolated, content-addressed loader tree. It
-# intentionally carries its own EGL and Vulkan manifests, which must not be
-# counted as duplicates of the global provider-owned routes.
-candidate="$scratch/green-isolated-app-platform-runtime"
+# The app runtime keeps private copies of its loader manifests beneath the
+# content-addressed runtime store. They are outside every host loader search
+# path and must not be mistaken for duplicate system providers.
+candidate="$scratch/green-isolated-app-runtime-manifests"
 cp -a "$rootfs" "$candidate"
+runtime_share="$candidate/usr/lib/pocketforge/platform-runtimes/pocketforge-bookworm-aarch64/sha256-fixture/usr/share"
 mkdir -p \
-    "$candidate/usr/lib/pocketforge/platform-runtimes/test/usr/share/glvnd/egl_vendor.d" \
-    "$candidate/usr/lib/pocketforge/platform-runtimes/test/usr/share/vulkan/icd.d"
+    "$runtime_share/glvnd/egl_vendor.d" \
+    "$runtime_share/vulkan/icd.d"
 cp "$candidate/usr/share/glvnd/egl_vendor.d/50_mesa.json" \
-    "$candidate/usr/lib/pocketforge/platform-runtimes/test/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+    "$runtime_share/glvnd/egl_vendor.d/50_mesa.json"
 cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
-    "$candidate/usr/lib/pocketforge/platform-runtimes/test/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
-isolated_output="$scratch/green-isolated-app-platform-runtime.out"
-"$verifier" "$candidate" "$producer" >"$isolated_output"
-grep -Fx \
-    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr+venus vulkan_manifests=2 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
-    "$isolated_output" >/dev/null
+    "$runtime_share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+runtime_output=$("$verifier" "$candidate" "$producer")
+printf '%s\n' "$runtime_output"
+printf '%s\n' "$runtime_output" | grep -F 'open-gpu-provider=PASS ' >/dev/null
+echo 'open-gpu-provider-isolated-runtime-manifests=PASS'
 
 # A stripped DSO has no static symbol table. In that case the verifier must
 # explicitly report that it used the recorded Zink build option, whose Mesa
@@ -632,6 +637,26 @@ cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
     "$candidate/usr/share/vulkan/icd.d/powervr_alias.json"
 expect_rejection red-duplicate-vulkan-alias "$candidate" \
     'expected exactly two Vulkan ICD manifests, found 3'
+
+# Keep the provider's uniqueness check aligned with every loader-visible
+# discovery directory owned by the shared Vulkan boundary policy. Exercise each
+# directory omitted by the original host-only check as an independent red case.
+boundary_number=0
+for boundary in $("$gpu_boundary_verifier" --print-vulkan-icd-boundaries); do
+    case "$boundary" in
+        etc/vulkan/icd.d|usr/local/share/vulkan/icd.d|usr/share/vulkan/icd.d)
+            continue
+            ;;
+    esac
+    boundary_number=$((boundary_number + 1))
+    candidate="$scratch/red-vulkan-boundary-$boundary_number"
+    cp -a "$rootfs" "$candidate"
+    mkdir -p "$candidate/$boundary"
+    cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
+        "$candidate/$boundary/foreign.json"
+    expect_rejection "red-vulkan-boundary-$boundary_number" "$candidate" \
+        'expected exactly two Vulkan ICD manifests, found 3'
+done
 
 candidate="$scratch/red-relative-egl-json"
 cp -a "$rootfs" "$candidate"
