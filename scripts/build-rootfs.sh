@@ -121,6 +121,7 @@ LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 POOLSUITE_DIR="${POOLSUITE_DIR:-/work/poolsuite}"
 PLATFORM_RUNTIME_DIR="${PLATFORM_RUNTIME_DIR:-/work/platform-runtime}"
+APP_PLATFORM_RUNTIME_CONFIG="${APP_PLATFORM_RUNTIME_CONFIG:-}"
 CURSOR_THEME_DIR="${CURSOR_THEME_DIR:-/work/cursor-theme}"
 PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE:-not-shipped}"
 GAMESCOPE_DIR="${GAMESCOPE_DIR:-/work/gamescope-package}"
@@ -2259,6 +2260,12 @@ fi
     "${ROOTFS_EXTRACTED}" "${VARIANT}" "${PF_DEVICE_ID}"
 
 if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
+    [ -n "${APP_PLATFORM_RUNTIME_CONFIG}" ] || {
+        echo "FATAL: APP_PLATFORM_RUNTIME_CONFIG is required for A133 open GPU images" >&2
+        exit 2
+    }
+    "${SRC_DIR}/scripts/install-app-platform-runtime.sh" \
+        "${APP_PLATFORM_RUNTIME_CONFIG}" "${ROOTFS_EXTRACTED}" "${ROOTFS_EXTRACTED}"
     "${SRC_DIR}/scripts/verify-mesa-shader-cache.sh" \
         "${GPU_UM_MESA_DIR}/usr/local/lib/libgallium_dri.so"
     "${SRC_DIR}/scripts/verify-open-gpu-provider.sh" \
