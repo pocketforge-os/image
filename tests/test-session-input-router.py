@@ -2,6 +2,7 @@
 """Static contract for the session-wide controller owner (tsp-ihne1.7)."""
 
 import re
+import tomllib
 from pathlib import Path
 
 
@@ -38,6 +39,25 @@ app = unit(SYSTEMD / "pf-app@.service")
 session = unit(SYSTEMD / "pocketforge-gamescope-session.target")
 gamescope = unit(SYSTEMD / "pocketforge-gamescope.service")
 shell = unit(SYSTEMD / "pf-shell-selected.service.d/10-input-broker.conf")
+
+
+def requests_broker(capabilities: list[str]) -> bool:
+    return any(
+        capability in {"input", "rumble", "vibration"}
+        for capability in capabilities
+    )
+
+
+fixture_manifest = tomllib.loads(
+    (ROOT / "tests/session-authority-systemd/app.toml").read_text()
+)
+fixture_capabilities = fixture_manifest["app"]["use"]
+
+# The live fixture asserts a successful broker connection, so it must request a
+# capability that selects the broker route. An app requesting no input authority
+# is the negative control: the launcher must scrub its ambient broker selector.
+assert requests_broker(fixture_capabilities), fixture_capabilities
+assert not requests_broker([])
 
 # One broker spans the complete compositor session. App churn cannot stop or restart it.
 assert "pf-input-broker.service" in words(session, "Unit", "Requires")
