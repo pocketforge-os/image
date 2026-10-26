@@ -115,6 +115,15 @@ done
 # build-run log content before finalization and ext4 assembly.
 "${SRC_DIR}/build/prepare-rootfs-build-logs.sh" "${EXT}"
 
+# mmdebstrap permanently persists every --aptopt into the target's
+# etc/apt/apt.conf.d/99mmdebstrap. No proxy transport is plumbed into this
+# builder today (PF_APT_PROXY is a133-only until tsp-1dl.14), but the release
+# policy is platform-independent: strip any persisted proxy directive, then
+# fail closed on any proxy directive or private build endpoint under etc/apt
+# (bd tsp-mc9m.41.1002.5, build-6 cloud-config regression).
+"${SRC_DIR}/scripts/strip-rootfs-apt-proxy.sh" "${EXT}"
+"${SRC_DIR}/scripts/verify-rootfs-apt-policy.sh" "${EXT}"
+
 # --- ELF build-ids, debuginfo split, image build-id manifest (bd tsp-ihne1.33) ---
 # Gate: every ELF in the assembled rootfs outside the closed vendor dirs must
 # carry a GNU build-id, or the build fails. DWARF-carrying owned binaries are

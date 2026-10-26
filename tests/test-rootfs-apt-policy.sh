@@ -93,14 +93,16 @@ after="$(sha256sum "${conf}" | cut -d' ' -f1)"
 [ "${before}" = "${after}" ] || fail "second strip mutated 99mmdebstrap"
 
 # ---------------------------------------------------------------------------
-# Negative control 2: the gate is not hardcoded to 99mmdebstrap. A proxy
-# directive in another etc/apt file must also be rejected and stripped.
+# Negative control 2: the gate is not hardcoded to 99mmdebstrap. Proxy
+# directives in another etc/apt file — including the per-host Proxy::<host>
+# form — must also be rejected and stripped.
 # ---------------------------------------------------------------------------
 rootfs2="${scratch}/rootfs-elsewhere"
 make_proxy_rootfs "${rootfs2}"
 find "${rootfs2}/etc/apt" -name 99mmdebstrap -delete
 cat > "${rootfs2}/etc/apt/apt.conf" <<'EOF'
 Acquire::https::Proxy "http://192.168.7.1:3142";
+Acquire::http::Proxy::10.0.32.86 "DIRECT";
 EOF
 if "${verify}" "${rootfs2}" >"${scratch}/n2.out" 2>"${scratch}/n2.err"; then
     fail "gate accepted Acquire::https::Proxy in etc/apt/apt.conf"

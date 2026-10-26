@@ -2275,6 +2275,15 @@ python3 "${SRC_DIR}/scripts/verify-rootfs-usbnet-bench.py" \
 # structural image check; lease population itself is verified on tsp-f956's boot.
 "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${ROOTFS_EXTRACTED}"
 
+# mmdebstrap permanently persists every --aptopt into the target's
+# etc/apt/apt.conf.d/99mmdebstrap, so the PF_APT_PROXY build transport would
+# otherwise ship in the release image (build-6: first-boot cloud-config died on
+# the unreachable 10.0.32.86:3142). Strip the persisted proxy directives from
+# the assembled tree, then fail closed on any proxy directive or private build
+# endpoint left under etc/apt (bd tsp-mc9m.41.1002.5).
+"${SRC_DIR}/scripts/strip-rootfs-apt-proxy.sh" "${ROOTFS_EXTRACTED}"
+"${SRC_DIR}/scripts/verify-rootfs-apt-policy.sh" "${ROOTFS_EXTRACTED}"
+
 # fontconfig writes this cache diagnostic while packages are configured. It is
 # build-host/run evidence, not device runtime state. Remove the known producer,
 # then fail closed if any other non-empty build log remains.
