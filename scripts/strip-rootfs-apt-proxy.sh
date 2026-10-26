@@ -23,11 +23,13 @@ APT_DIR="${ROOTFS}/etc/apt"
 [ -d "${APT_DIR}" ] \
     || { echo "FATAL: rootfs apt strip: ${APT_DIR} is missing" >&2; exit 1; }
 
-# apt config keys are matched case-insensitively: Acquire::<method>::Proxy
-# "...", the per-host Acquire::<method>::Proxy::<host> "...", the shorthand
-# <method>::Proxy "..." and the block-body Proxy "..."; all reduce to a
-# Proxy* key followed by a quoted value.
-PROXY_RE='(^|[[:space:]])([[:alnum:]_+.-]+::)*[Pp][Rr][Oo][Xx][Yy]([[:alnum:]_.-]+|::)*[[:space:]]*"'
+# apt config keys are matched case-insensitively and values may be quoted or
+# unquoted (Acquire::<method>::Proxy, the per-host
+# Acquire::<method>::Proxy::<host>, the shorthand <method>::Proxy, the
+# block-body Proxy and suffix keys like Proxy-Auto-Detect); all reduce to a
+# Proxy* key, a value and the statement's terminating semicolon, so matching
+# is independent of quoting (review r4374217256).
+PROXY_RE='(^|[[:space:]])([[:alnum:]_+.-]+::)*[Pp][Rr][Oo][Xx][Yy]([[:alnum:]_.-]+|::)*[[:space:]]*("[^"]*"|[^[:space:];"]+)[[:space:]]*;'
 
 # grep -I skips binaries (trusted.gpg.d keyrings); rc=1 (no match) is the
 # clean-tree fast path, rc>=2 is a real error and must not be swallowed.

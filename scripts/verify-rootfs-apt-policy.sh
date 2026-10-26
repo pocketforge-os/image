@@ -6,8 +6,9 @@
 # /etc/apt/apt.conf.d/99mmdebstrap; first-boot cloud-config tried to reach
 # 10.0.32.86:3142, got "Network is unreachable" and cloud-config.service
 # failed. This gate rejects any release rootfs whose etc/apt still carries:
-#   1. an apt proxy directive (Acquire::<method>::Proxy "...", the shorthand
-#      <method>::Proxy "..." or a block-body Proxy "...") in ANY file — the
+#   1. an apt proxy directive (Acquire::<method>::Proxy, the shorthand
+#      <method>::Proxy or a block-body Proxy, with a quoted or unquoted
+#      value) in ANY file — the
 #      policy is not hardcoded to 99mmdebstrap; or
 #   2. a private build endpoint: an RFC1918 10.x / 192.168.x / 172.16-31.x
 #      address (the apt-cacher-ng build cache 10.0.32.86:3142 included),
@@ -23,7 +24,7 @@ APT_DIR="${ROOTFS}/etc/apt"
 [ -d "${APT_DIR}" ] \
     || { echo "FATAL: rootfs apt policy: ${APT_DIR} is missing" >&2; exit 1; }
 
-PROXY_RE='(^|[[:space:]])([[:alnum:]_+.-]+::)*[Pp][Rr][Oo][Xx][Yy]([[:alnum:]_.-]+|::)*[[:space:]]*"'
+PROXY_RE='(^|[[:space:]])([[:alnum:]_+.-]+::)*[Pp][Rr][Oo][Xx][Yy]([[:alnum:]_.-]+|::)*[[:space:]]*("[^"]*"|[^[:space:];"]+)[[:space:]]*;'
 ENDPOINT_RE='(^|[^[:alnum:].])(10(\.[0-9]{1,3}){3}|192\.168(\.[0-9]{1,3}){2}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2})([^0-9.]|$)'
 
 # Relative paths in the report (etc/apt/...) by grepping from the rootfs root.

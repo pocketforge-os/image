@@ -131,6 +131,45 @@ grep -Fq 'build-cache.list' "${scratch}/n3.err" \
     || fail "gate stderr does not name build-cache.list for the private endpoint"
 
 # ---------------------------------------------------------------------------
+# Negative control 4: unquoted value forms. apt accepts values without double
+# quotes, so gate and strip must match independent of quoting (review
+# r4374217256): plain DIRECT/false values, a block-body Proxy without quotes,
+# the per-host Proxy::<host> form with an unquoted value, and the
+# Proxy-Auto-Detect key.
+# ---------------------------------------------------------------------------
+rootfs5="${scratch}/rootfs-unquoted"
+make_proxy_rootfs "${rootfs5}"
+find "${rootfs5}/etc/apt" -name 99mmdebstrap -delete
+cat > "${rootfs5}/etc/apt/apt.conf.d/10transport" <<'EOF'
+Acquire::http::Proxy DIRECT;
+Acquire::ftp::Proxy false;
+Acquire::http::Proxy::example.com DIRECT;
+Acquire::http::Proxy-Auto-Detect /usr/bin/foo;
+Acquire::https {
+    Proxy false;
+    Timeout "30";
+};
+EOF
+if "${verify}" "${rootfs5}" >"${scratch}/n4.out" 2>"${scratch}/n4.err"; then
+    fail "gate accepted unquoted-value proxy directives"
+fi
+for needle in 'Acquire::http::Proxy DIRECT;' 'Acquire::ftp::Proxy false;' \
+              'Proxy::example.com DIRECT;' 'Proxy-Auto-Detect /usr/bin/foo;' \
+              'Proxy false;'; do
+    grep -Fq "${needle}" "${scratch}/n4.err" \
+        || fail "gate stderr does not name ${needle} (got: $(cat "${scratch}/n4.err"))"
+done
+"${strip}" "${rootfs5}"
+"${verify}" "${rootfs5}" >"${scratch}/p4.out" 2>"${scratch}/p4.err" \
+    || fail "strip did not remove the unquoted proxy directives: $(cat "${scratch}/p4.err")"
+transport="${rootfs5}/etc/apt/apt.conf.d/10transport"
+if grep -qi 'proxy' "${transport}"; then
+    fail "strip left proxy content in 10transport: $(cat "${transport}")"
+fi
+grep -Fxq '    Timeout "30";' "${transport}" \
+    || fail "strip removed the sibling block-body Timeout option"
+
+# ---------------------------------------------------------------------------
 # Positive control 2: a clean rootfs (direct build, PF_APT_PROXY unset) passes
 # the gate untouched, and strip is a byte-identical no-op on it.
 # ---------------------------------------------------------------------------
@@ -178,4 +217,4 @@ assert_wired() {
 assert_wired "${repo_dir}/scripts/build-rootfs.sh" 'ROOTFS_EXTRACTED'
 assert_wired "${repo_dir}/scripts/build-rootfs-a523.sh" 'EXT'
 
-echo "rootfs-apt-policy=PASS positive=strip-then-verify-clean-proxied-and-direct-rootfs negative=persisted-99mmdebstrap-proxy,apt.conf-proxy,bare-private-endpoint"
+echo "rootfs-apt-policy=PASS positive=strip-then-verify-clean-proxied-and-direct-rootfs,block-sibling-timeout-kept negative=persisted-99mmdebstrap-proxy,apt.conf-proxy,bare-private-endpoint,unquoted-proxy-values"
