@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Static contract for the session-wide controller owner (tsp-ihne1.7)."""
 
+import json
 import re
+import tomllib
 from pathlib import Path
 
 
@@ -39,6 +41,49 @@ session = unit(SYSTEMD / "pocketforge-gamescope-session.target")
 gamescope = unit(SYSTEMD / "pocketforge-gamescope.service")
 shell = unit(SYSTEMD / "pf-shell-selected.service.d/10-input-broker.conf")
 
+
+def selects_input_broker(
+    capabilities: list[str], resources: dict[str, list[str]]
+) -> bool:
+    requested_input = {"input", "rumble", "vibration"}.intersection(capabilities)
+    requested_brokered = {
+        "accelerometer",
+        "gnss",
+        "gyroscope",
+        "imu",
+        "leds",
+        "location",
+        "magnetometer",
+    }.intersection(capabilities)
+    return bool(resources.get("broker-sockets")) and bool(
+        requested_input or requested_brokered
+    )
+
+
+fixture_manifest = tomllib.loads(
+    (ROOT / "tests/session-authority-systemd/app.toml").read_text()
+)
+fixture_capabilities = fixture_manifest["app"]["use"]
+inventory = json.loads(
+    (ROOT / "build/app-policy-a133-open-g1-v1.json").read_text()
+)["resources"]
+drive = (ROOT / "tests/session-authority-systemd/drive.py").read_text()
+
+# The signed G1 inventory selects raw input for this fixture. The live collector
+# must therefore prove that pf-app-launch scrubs its ambient broker selector.
+assert fixture_capabilities == ["input"], fixture_capabilities
+assert inventory.get("input-devices"), inventory
+assert not selects_input_broker(fixture_capabilities, inventory), inventory
+assert 'probe["PF_BROKER_SOCK"] == ""' in drive
+assert 'probe["broker_connect"] == "unset"' in drive
+
+# Positive and negative controls in the same invocation: adding the canonical
+# broker inventory selects it for input, while no input authority selects none.
+broker_inventory = dict(inventory)
+broker_inventory["broker-sockets"] = ["/run/pocketforge/input-broker.sock"]
+assert selects_input_broker(fixture_capabilities, broker_inventory)
+assert not selects_input_broker([], broker_inventory)
+
 # One broker spans the complete compositor session. App churn cannot stop or restart it.
 assert "pf-input-broker.service" in words(session, "Unit", "Requires")
 assert "pf-input-broker.service" in words(session, "Unit", "After")
@@ -65,7 +110,7 @@ dockerfile = (ROOT / "build/Dockerfile.pf").read_text()
 runtime_pins = re.findall(
     r'^\[ "\$\{PF_RUNTIME_SHA\}" = "([0-9a-f]{40})" \]', dockerfile, flags=re.MULTILINE
 )
-assert runtime_pins == ["e6d3290c60581695f5a113e245e3ab17cbf6f33c"], runtime_pins
+assert runtime_pins == ["1640d5ec5b0a02b27a51615f176fae9aef784311"], runtime_pins
 
 # The image's systemd predates RestartMode=direct. The supervisor owns exactly one retry,
 # so successful session churn cannot consume a global systemd start-rate counter.

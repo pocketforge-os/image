@@ -311,7 +311,7 @@ expected_live["production"] = False
 expected_live["landlock_mode"] = "best_effort"
 raise SystemExit(
     0 if (
-        manifest.get("app", {}).get("use") == []
+        manifest.get("app", {}).get("use") == ["input"]
         and production.get("production") is True
         and production.get("landlock_mode") == "required"
         and production.get("landlock_full_min_abi") == 10
