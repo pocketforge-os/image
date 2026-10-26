@@ -117,10 +117,10 @@ done
 
 # mmdebstrap permanently persists every --aptopt into the target's
 # etc/apt/apt.conf.d/99mmdebstrap. No proxy transport is plumbed into this
-# builder today (PF_APT_PROXY is a133-only until tsp-1dl.14), but the release
-# policy is platform-independent: strip any persisted proxy directive, then
-# fail closed on any proxy directive or private build endpoint under etc/apt
-# (bd tsp-mc9m.41.1002.5, build-6 cloud-config regression).
+# builder today (PF_APT_PROXY is a133-only until tsp-1dl.14), so the strip is
+# a no-op guard; the release policy is platform-independent and the gate
+# fails closed on any effective proxy key (parsed with apt-config) or private
+# build endpoint under etc/apt (bd tsp-mc9m.41.1002.5, build-6 regression).
 "${SRC_DIR}/scripts/strip-rootfs-apt-proxy.sh" "${EXT}"
 "${SRC_DIR}/scripts/verify-rootfs-apt-policy.sh" "${EXT}"
 
