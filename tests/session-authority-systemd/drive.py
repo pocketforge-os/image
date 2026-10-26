@@ -706,8 +706,18 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     )
     require(probe["PF_DESCRIPTOR"] == DESCRIPTOR, f"PF_DESCRIPTOR: {probe}")
     require(probe["descriptor_readable"] is True, f"descriptor unreadable in app sandbox: {probe}")
-    require(probe["PF_BROKER_SOCK"] == str(BROKER_SOCKET), f"PF_BROKER_SOCK: {probe}")
-    require(probe["broker_connect"] == "ok", f"app cannot reach the broker acquire socket: {probe}")
+    # The signed G1 inventory grants this input-capable fixture the raw
+    # /dev/input/event0 route, not broker-sockets. The launcher must make that
+    # compiled route authoritative by removing the unit's ambient selector.
+    # Broker service lifetime and controller ownership are asserted separately.
+    require(
+        probe["PF_BROKER_SOCK"] == "",
+        f"raw input route leaked PF_BROKER_SOCK: {probe}",
+    )
+    require(
+        probe["broker_connect"] == "unset",
+        f"raw input route attempted a broker connection: {probe}",
+    )
     require(
         probe["prefsd_connect"] != "ok",
         f"app can reach prefsd (InaccessiblePaths ineffective): {probe}",
