@@ -249,10 +249,25 @@ cat > "${fixture_src}/scripts/install-cursor-theme.sh" <<'EOF'
 #!/bin/sh
 echo 'cursor-theme fixture=SKIP scope=usbnet-final-rootfs-ordering'
 EOF
+# A133 open images now require the app-platform runtime configuration at the
+# final-rootfs assembly boundary. This test is intentionally about USB-net
+# guard ordering, so provide a hermetic runtime input and stub the independently
+# tested installer rather than allowing that unrelated contract to abort first.
+cat > "${fixture}/app-platform-runtime.json" <<'EOF'
+{"runtime_id":"usbnet-fixture"}
+EOF
+cat > "${fixture_src}/scripts/install-app-platform-runtime.sh" <<'EOF'
+#!/bin/sh
+set -eu
+[ "$#" -eq 3 ]
+[ -s "$1" ]
+echo 'app-platform-runtime fixture=SKIP scope=usbnet-final-rootfs-ordering'
+EOF
 chmod 0755 "${fixture_src}/scripts/verify-open-gpu-tools.sh" \
     "${fixture_src}/scripts/verify-open-gpu-provider.sh" \
     "${fixture_src}/scripts/verify-mesa-shader-cache.sh" \
-    "${fixture_src}/scripts/install-cursor-theme.sh"
+    "${fixture_src}/scripts/install-cursor-theme.sh" \
+    "${fixture_src}/scripts/install-app-platform-runtime.sh"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829_bt.bin"
 for library in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so gbm/dri_gbm.so; do
@@ -323,6 +338,7 @@ run_build() {
     GPU_UM_MESA_DIR="${fixture}/mesa" WPA_DIR="${fixture}/wpa" \
     CLOUD_INIT_DIR="${fixture}/cloud-init" \
     KERNEL_TSP_DIR="${fixture}/kernel" GPU_KM_TSP_DIR="${fixture}/unused-gpu" \
+    APP_PLATFORM_RUNTIME_CONFIG="${fixture}/app-platform-runtime.json" \
     OUT_DIR="${fixture}/out" SOURCE_DATE_EPOCH=1700000000 \
     PF_DEVICE_ID=a133-open-7x-gpu PF_KERNEL_REPO=kernel-sunxi-7.x PF_GPU_MODEL=open \
     PF_CLOUD_INIT_SHA=5656565656565656565656565656565656565656 \
@@ -348,6 +364,9 @@ build_case() {
     elif grep -F -- "${dns_stop}" "${fixture}/${label}.err" >/dev/null; then
         fail "build ${label}: continued past a failing guard"
     fi
+    grep -F -- 'app-platform-runtime fixture=SKIP scope=usbnet-final-rootfs-ordering' \
+        "${fixture}/${label}.out" >/dev/null \
+        || fail "build ${label}: app-platform runtime fixture was not invoked"
     echo "build-rootfs.sh ${label} (--variant ${variant}): '${want}'"
 }
 build_case release-clean release none \
