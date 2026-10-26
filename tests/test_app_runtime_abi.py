@@ -15,6 +15,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_BUILDER = ROOT / "scripts" / "build-debian-app-root.sh"
 PLATFORM_BUILDER = ROOT / "scripts" / "build-app-platform-runtime.py"
+PLATFORM_INSTALLER = ROOT / "scripts" / "install-app-platform-runtime.sh"
 LOADER_VERIFIER = ROOT / "scripts" / "verify-app-runtime-loader.py"
 
 
@@ -257,6 +258,76 @@ class PlatformRuntimeBuilderTest(unittest.TestCase):
         self.assertNotEqual(escaped.returncode, 0)
         self.assertIn("non-canonical platform runtime library path", escaped.stderr)
         self.assertFalse((self.work / "escaped").exists())
+
+    def test_installer_publishes_dri3_closure_into_shipped_store(self) -> None:
+        for relative in (
+            "usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0",
+            "usr/lib/aarch64-linux-gnu/libxcb-present.so.0",
+            "usr/lib/aarch64-linux-gnu/libxshmfence.so.1",
+        ):
+            path = self.host / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(relative.encode())
+        config = self.work / "dri3-config.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "host_distribution": "debian-12",
+                    "library_dirs": ["usr/lib/aarch64-linux-gnu"],
+                    "base_sonames": ["libc.so.6"],
+                    "seeds": [
+                        "usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0",
+                        "usr/lib/aarch64-linux-gnu/libxcb-present.so.0",
+                        "usr/lib/aarch64-linux-gnu/libxshmfence.so.1",
+                    ],
+                    "data": [],
+                    "json_library_paths": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        readelf = self.work / "dri3-readelf"
+        readelf.write_text(
+            textwrap.dedent(
+                """#!/bin/sh
+                set -eu
+                for file in "$@"; do :; done
+                case "$file" in
+                  *libxcb-dri3.so.0) soname=libxcb-dri3.so.0 ;;
+                  *libxcb-present.so.0) soname=libxcb-present.so.0 ;;
+                  *libxshmfence.so.1) soname=libxshmfence.so.1 ;;
+                  *) soname=libc.so.6 ;;
+                esac
+                printf ' 0x (SONAME) Library soname: [%s]\n' "$soname"
+                printf ' 0x (NEEDED) Shared library: [libc.so.6]\n'
+                """
+            ),
+            encoding="utf-8",
+        )
+        readelf.chmod(0o755)
+        rootfs = self.work / "rootfs"
+        rootfs.mkdir()
+        result = run(
+            [str(PLATFORM_INSTALLER), str(config), str(self.host), str(rootfs)],
+            env={"PATH": os.environ["PATH"], "PF_APP_RUNTIME_READELF": str(readelf)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("app-platform-runtime=PASS", result.stdout)
+        stores = list(
+            (rootfs / "usr/lib/pocketforge/platform-runtimes/pocketforge-bookworm-aarch64").glob(
+                "sha256-*"
+            )
+        )
+        self.assertEqual(len(stores), 1)
+        store = stores[0]
+        self.assertTrue((store / ".manifest-sha256").is_file())
+        for relative in (
+            "usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0",
+            "usr/lib/aarch64-linux-gnu/libxcb-present.so.0",
+            "usr/lib/aarch64-linux-gnu/libxshmfence.so.1",
+        ):
+            self.assertTrue((store / relative).is_file(), relative)
 
 
 class LoaderVerifierTest(unittest.TestCase):
