@@ -374,8 +374,13 @@ reject_symlinked_boundary() {
 }
 reject_symlinked_boundary usr/share/glvnd/egl_vendor.d
 
-vendor_json_count=$(find "$rootfs" \( -type f -o -type l \) \
-    -name '50_mesa.json' -print | wc -l)
+# The content-addressed app-platform runtime is an isolated loader tree and
+# may carry a second copy of the manifests for its own runtime environment.
+# Count only the global rootfs provider routes here; duplicates in global
+# loader directories (including /usr/local) remain a hard failure.
+vendor_json_count=$(find "$rootfs" \
+    -path "$rootfs/usr/lib/pocketforge/platform-runtimes" -prune -o \
+    \( -type f -o -type l \) -name '50_mesa.json' -print | wc -l)
 [ "$vendor_json_count" -eq 1 ] \
     || fatal "expected exactly one 50_mesa.json, found $vendor_json_count"
 vendor_json="$rootfs/usr/share/glvnd/egl_vendor.d/50_mesa.json"
@@ -404,8 +409,9 @@ producer_venus_icd="$producer/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.js
 rootfs_venus_icd="$rootfs/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
 [ -f "$producer_icd" ] || fatal 'producer PowerVR ICD JSON is missing'
 [ -f "$producer_venus_icd" ] || fatal 'producer Venus ICD JSON is missing'
-rootfs_icd_count=$(find "$rootfs" \( -type f -o -type l \) \
-    -path '*/vulkan/icd.d/*.json' -print | wc -l)
+rootfs_icd_count=$(find "$rootfs" \
+    -path "$rootfs/usr/lib/pocketforge/platform-runtimes" -prune -o \
+    \( -type f -o -type l \) -path '*/vulkan/icd.d/*.json' -print | wc -l)
 [ "$rootfs_icd_count" -eq 2 ] \
     || fatal "expected exactly two Vulkan ICD manifests, found $rootfs_icd_count"
 if [ ! -f "$rootfs_icd" ] || [ -L "$rootfs_icd" ]; then
