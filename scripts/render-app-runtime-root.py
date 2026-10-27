@@ -641,6 +641,7 @@ def render(
         lines.extend(
             [
                 'Environment="VK_DRIVER_FILES=/run/pocketforge/platform-runtime/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"',
+                'Environment="PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1"',
                 'Environment="__EGL_VENDOR_LIBRARY_FILENAMES=/run/pocketforge/platform-runtime/usr/share/glvnd/egl_vendor.d/50_mesa.json"',
                 'Environment="LIBGL_DRIVERS_PATH=/run/pocketforge/platform-runtime/usr/local/lib/dri"',
                 'Environment="GBM_BACKENDS_PATH=/run/pocketforge/platform-runtime/usr/local/lib/gbm"',
