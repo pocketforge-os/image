@@ -354,6 +354,10 @@ class RendererTest(unittest.TestCase):
             unit,
         )
         self.assertIn(
+            'Environment="PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1"',
+            unit,
+        )
+        self.assertIn(
             'Environment="__EGL_VENDOR_LIBRARY_FILENAMES=/run/pocketforge/platform-runtime/usr/share/glvnd/egl_vendor.d/50_mesa.json"',
             unit,
         )
