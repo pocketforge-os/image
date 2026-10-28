@@ -98,6 +98,7 @@ jobs:
           tests=(
             tests/test-a133-battery-model-firmware.sh
             tests/test-a133-cma-bootargs.sh
+            tests/test-a-cts-dynamic-drm-nodes.sh
             tests/test-a-cts-label-case-identity.sh
             tests/test-a-cts-worker-evidence-first.sh
             tests/test-a-cts-worker-recovery.sh
