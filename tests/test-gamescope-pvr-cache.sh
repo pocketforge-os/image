@@ -191,6 +191,210 @@ test -e "${failure_control}/finished-2"
 grep -F 'one or more Gamescope PVR cache seed compiles failed' \
     "${scratch}/seed-failure.log" >/dev/null
 
+# Exercise the real producer around its fake-qemu seam. The fake cross compiler
+# installs a host shell harness while fake qemu applies the target -E settings
+# before executing it. PF_GAMESCOPE_LIMIT_TEST_CASES lets RED evidence run each
+# contract independently against the pre-fix producer.
+limit_source=${scratch}/limit-source
+limit_build=${scratch}/limit-build
+limit_fake_bin=${scratch}/limit-fake-bin
+limit_harness=${scratch}/limit-harness
+limit_fixture=${limit_source}/ci/pco-gamescope/spirv/fixture.spv
+mkdir -p \
+    "$(dirname "${limit_fixture}")" \
+    "${limit_build}/src/imagination/drm-shim" \
+    "${limit_build}/src/imagination/vulkan" \
+    "${limit_fake_bin}"
+printf 'fixture\n' >"${limit_fixture}"
+printf '%s  %s\n' "$(sha256sum "${limit_fixture}" | cut -d' ' -f1)" \
+    "${limit_fixture}" >"${limit_source}/ci/pco-gamescope/spirv.sha256"
+printf 'fixture-manifest\n' \
+    >"${limit_source}/ci/pco-gamescope/gamescope-binaries.sha256"
+cat >"${limit_source}/ci/pco-gamescope/verify-binaries.py" <<'PY'
+#!/usr/bin/env python3
+import sys
+
+sys.exit(0)
+PY
+touch "${limit_build}/src/imagination/drm-shim/libpowervr_noop_drm_shim.so"
+printf '{}\n' \
+    >"${limit_build}/src/imagination/vulkan/powervr_mesa_devenv_icd.aarch64.json"
+printf 'fake-icd\n' \
+    >"${limit_build}/src/imagination/vulkan/libvulkan_powervr_mesa.so"
+
+cat >"${limit_harness}" <<'HARNESS'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "${MESA_DISK_CACHE_SINGLE_FILE:-}" = 1 ]; then
+    case "${PF_TEST_HARNESS_MODE:?}" in
+        slow)
+            echo 'fake_harness_marker=wall_slow_cpu_cheap'
+            sleep 2
+            ;;
+        cpu)
+            echo 'fake_harness_marker=cpu_budget_exceeded'
+            while :; do :; done
+            ;;
+        hang)
+            echo 'fake_harness_marker=wall_backstop_exceeded'
+            sleep 5
+            ;;
+        *)
+            echo "unknown fake harness mode: ${PF_TEST_HARNESS_MODE}" >&2
+            exit 2
+            ;;
+    esac
+fi
+
+driver_id=$(printf 'a%.0s' {1..64})
+device_id=$(printf 'b%.0s' {1..64})
+cache_dir=${MESA_SHADER_CACHE_DIR}/mesa_shader_cache_sf/${driver_id}/${device_id}
+mkdir -p "${cache_dir}"
+printf 'deterministic-foz\n' >"${cache_dir}/foz_cache.foz"
+printf 'deterministic-index\n' >"${cache_dir}/foz_cache_idx.foz"
+if [ "${MESA_DISK_CACHE_SINGLE_FILE:-}" = 1 ]; then
+    echo 'disk shader cache:  hits = 0, misses = 108'
+elif [ "$#" -eq 3 ]; then
+    echo 'disk shader cache:  hits = 0, misses = 1'
+    echo 'SUMMARY,compiled,1,fake'
+    echo 'shader binary after encoding: fake'
+else
+    echo 'disk shader cache:  hits = 108, misses = 0'
+fi
+HARNESS
+chmod 0755 "${limit_harness}"
+
+cat >"${limit_fake_bin}/aarch64-linux-gnu-gcc" <<'EOF'
+#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = -o ]; then
+        output=$2
+        break
+    fi
+    shift
+done
+: "${output:?fake gcc did not receive -o}"
+install -m 0755 "${PF_TEST_HARNESS_TEMPLATE:?}" "${output}"
+EOF
+cat >"${limit_fake_bin}/readelf" <<'EOF'
+#!/bin/sh
+set -eu
+case "$1" in
+    -h) echo '  Machine:                           AArch64' ;;
+    -n) echo '    Build ID: 0123456789abcdef' ;;
+    *) exit 2 ;;
+esac
+EOF
+cat >"${limit_fake_bin}/dpkg-query" <<'EOF'
+#!/bin/sh
+set -eu
+echo 'qemu-user-static=fixture'
+EOF
+cat >"${limit_fake_bin}/fake-qemu-aarch64" <<'EOF'
+#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -L)
+            shift 2
+            ;;
+        -E)
+            case "$2" in
+                LD_PRELOAD=*|VK_ICD_FILENAMES=*) ;;
+                *) export "$2" ;;
+            esac
+            shift 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+exec "$@"
+EOF
+chmod 0755 "${limit_fake_bin}"/*
+
+run_limit_producer() {
+    local mode=$1
+    local legacy_wall=$2
+    local wall=$3
+    local cpu=$4
+    local output=$5
+
+    PATH="${limit_fake_bin}:${PATH}" \
+    PF_TEST_HARNESS_TEMPLATE=${limit_harness} \
+    PF_TEST_HARNESS_MODE=${mode} \
+    PF_GAMESCOPE_CACHE_TIMEOUT_SECONDS=${legacy_wall} \
+    PF_GAMESCOPE_CACHE_WALL_SECONDS=${wall} \
+    PF_GAMESCOPE_CACHE_CPU_SECONDS=${cpu} \
+    QEMU_AARCH64=${limit_fake_bin}/fake-qemu-aarch64 \
+    SOURCE_DATE_EPOCH=1700000000 \
+        "${producer}" "${limit_source}" "${limit_build}" "${output}" "${g1_sha}"
+}
+
+require_limit_log() {
+    local pattern=$1
+    local log=$2
+    local failure=$3
+
+    if ! grep -E "${pattern}" "${log}" >/dev/null; then
+        cat "${log}" >&2
+        echo "${failure}" >&2
+        exit 1
+    fi
+}
+
+for limit_case in ${PF_GAMESCOPE_LIMIT_TEST_CASES:-slow cpu hang}; do
+    limit_output=${scratch}/limit-output-${limit_case}
+    limit_log=${scratch}/limit-${limit_case}.log
+    mkdir -p "${limit_output}"
+    case "${limit_case}" in
+        slow)
+            if ! run_limit_producer slow 1 4 1 "${limit_output}" \
+                >"${limit_log}" 2>&1; then
+                cat "${limit_log}" >&2
+                echo 'CPU-cheap wall-slow seed did not survive the wall backstop' >&2
+                exit 1
+            fi
+            grep -F 'gamescope-pvr-cache=PASS' "${limit_log}" >/dev/null
+            ;;
+        cpu)
+            set +e
+            run_limit_producer cpu 2 4 1 "${limit_output}" \
+                >"${limit_log}" 2>&1
+            limit_rc=$?
+            set -e
+            test "${limit_rc}" -ne 0
+            require_limit_log \
+                'gamescope_pvr_seed_failed seed=[12] rc=(137|152) kind=cpu_limit' \
+                "${limit_log}" 'CPU limit failure lacked typed seed diagnostics'
+            grep -F 'fake_harness_marker=cpu_budget_exceeded' "${limit_log}" >/dev/null
+            require_limit_log 'elapsed_wall_seconds=[0-9.]+ cpu_seconds=[0-9.]+' \
+                "${limit_log}" 'CPU limit failure lacked elapsed wall/CPU diagnostics'
+            ;;
+        hang)
+            set +e
+            run_limit_producer hang 1 1 3 "${limit_output}" \
+                >"${limit_log}" 2>&1
+            limit_rc=$?
+            set -e
+            test "${limit_rc}" -ne 0
+            require_limit_log \
+                'gamescope_pvr_seed_failed seed=[12] rc=124 kind=timeout' \
+                "${limit_log}" 'wall timeout lacked typed seed diagnostics'
+            grep -F 'fake_harness_marker=wall_backstop_exceeded' "${limit_log}" >/dev/null
+            require_limit_log 'elapsed_wall_seconds=[0-9.]+ cpu_seconds=[0-9.]+' \
+                "${limit_log}" 'wall timeout lacked elapsed wall/CPU diagnostics'
+            ;;
+        *)
+            echo "unknown PF_GAMESCOPE_LIMIT_TEST_CASES entry: ${limit_case}" >&2
+            exit 2
+            ;;
+    esac
+done
+
 # The generated pair and provenance are package-owned, never copied around
 # dpkg by the rootfs builder.
 for name in \
