@@ -87,6 +87,16 @@ grep -F '@PROVIDER_VERSION@' "$stage/DEBIAN/control" >/dev/null && {
 # exception is GLVND's vendor manifest: normalize it into the system discovery
 # directory below so the image has exactly one canonical route.
 cp -a "$producer/usr/local" "$stage/usr/local"
+# Xwayland names its GLVND screen vendor after a non-"drm" GBM backend.  The
+# open PowerVR GBM backend therefore asks clients for libGLX_powervr.so.0 even
+# though Mesa builds this provider with its canonical GLVND vendor name.  Keep
+# one implementation and provide the exact vendor-name alias Xwayland exports.
+powervr_glx_alias="$stage/usr/local/lib/libGLX_powervr.so.0"
+if [ -e "$powervr_glx_alias" ] || [ -L "$powervr_glx_alias" ]; then
+    echo "gpu-um-tsp producer unexpectedly supplies the PowerVR GLX vendor alias: $powervr_glx_alias" >&2
+    exit 1
+fi
+ln -s libGLX_mesa.so.0 "$powervr_glx_alias"
 if [ -d "$stage/usr/local/share/glvnd/egl_vendor.d" ]; then
     find "$stage/usr/local/share/glvnd/egl_vendor.d" -mindepth 1 \
         -maxdepth 1 -name '50_mesa.json' -delete

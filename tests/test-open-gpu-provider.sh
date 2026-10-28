@@ -297,10 +297,20 @@ SOURCE_DATE_EPOCH=1700000000 "$scratch/baseline-packager.sh" \
     1234567890abcdef1234567890abcdef12345678 "$scratch/provider-baseline.deb"
 dpkg-deb -x "$scratch/provider-baseline.deb" "$scratch/baseline-x"
 dpkg-deb -x "$scratch/provider-a.deb" "$scratch/a-x"
+[ -L "$scratch/a-x/usr/local/lib/libGLX_powervr.so.0" ] || {
+    echo 'FAIL: provider package omits the Xwayland PowerVR GLVND vendor alias' >&2
+    exit 1
+}
+[ "$(readlink "$scratch/a-x/usr/local/lib/libGLX_powervr.so.0")" = \
+  'libGLX_mesa.so.0' ] || {
+    echo 'FAIL: Xwayland PowerVR GLVND vendor alias does not select Mesa' >&2
+    exit 1
+}
 [ -f "$scratch/a-x/usr/share/vulkan/icd.d/virtio_icd.aarch64.json" ] \
     || { echo 'FAIL: g1 package lost the canonical Venus ICD manifest' >&2; exit 1; }
 rm -f "$scratch/baseline-x/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.json"
 rm -f "$scratch/a-x/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
+rm "$scratch/a-x/usr/local/lib/libGLX_powervr.so.0"
 if ! diff -r "$scratch/baseline-x" "$scratch/a-x"; then
     echo 'FAIL: g1 package content drifted from the pre-mode-guard baseline' >&2
     exit 1
@@ -367,6 +377,13 @@ expect_packager_rejection absent-unknown-mode "$absent_producer" future \
     'invalid Gamescope mode for provider package: future'
 expect_packager_rejection g1-cache-missing "$absent_producer" g1 \
     'Gamescope PVR cache artifact is missing or not regular:'
+
+producer_glx_alias="$scratch/producer-with-glx-alias"
+cp -a "$producer" "$producer_glx_alias"
+ln -s libGLX_mesa.so.0 \
+    "$producer_glx_alias/usr/local/lib/libGLX_powervr.so.0"
+expect_packager_rejection producer-glx-alias "$producer_glx_alias" g1 \
+    'gpu-um-tsp producer unexpectedly supplies the PowerVR GLX vendor alias:'
 
 test "$(dpkg-deb -f "$scratch/provider-a.deb" Package)" = pocketforge-open-gpu-stack
 test "$(dpkg-deb -f "$scratch/provider-a.deb" Architecture)" = arm64
@@ -487,7 +504,7 @@ dpkg-deb --fsys-tarfile "$scratch/provider-a.deb" | tar -tf - | \
 positive_output=$("$verifier" "$rootfs" "$producer")
 printf '%s\n' "$positive_output"
 printf '%s\n' "$positive_output" | grep -Fx \
-    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr+venus vulkan_manifests=2 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
+    'open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=1234567890abcdef1234567890abcdef12345678 egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 glx_xwayland_vendor_alias=/usr/local/lib/libGLX_powervr.so.0->libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=static-symtab vulkan=powervr+venus vulkan_manifests=2 vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent' \
     >/dev/null
 
 # The app runtime keeps private copies of its loader manifests beneath the
@@ -506,6 +523,7 @@ cp "$candidate/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json" \
 runtime_output=$("$verifier" "$candidate" "$producer")
 printf '%s\n' "$runtime_output"
 printf '%s\n' "$runtime_output" | grep -F 'open-gpu-provider=PASS ' >/dev/null
+test "$runtime_output" = "$positive_output"
 echo 'open-gpu-provider-isolated-runtime-manifests=PASS'
 
 # A stripped DSO has no static symbol table. In that case the verifier must
@@ -691,6 +709,13 @@ rm "$candidate/usr/local/lib/libGLX_mesa.so.0"
 expect_rejection red-missing-glx-vendor "$candidate" \
     'rootfs gpu-um-tsp artifact is missing: usr/local/lib/libGLX_mesa.so.0'
 
+candidate="$scratch/red-wrong-xwayland-glx-vendor-alias"
+cp -a "$rootfs" "$candidate"
+rm "$candidate/usr/local/lib/libGLX_powervr.so.0"
+ln -s libGLX_missing.so.0 "$candidate/usr/local/lib/libGLX_powervr.so.0"
+expect_rejection red-wrong-xwayland-glx-vendor-alias "$candidate" \
+    'Xwayland PowerVR GLX vendor alias must select libGLX_mesa.so.0'
+
 candidate="$scratch/red-missing-glx-probe"
 cp -a "$rootfs" "$candidate"
 rm "$candidate/usr/local/libexec/pocketforge/glx-readback-probe"
@@ -815,4 +840,4 @@ grep -F 'Mesa build option mismatch: xmlconfig expected=enabled actual=disabled'
 
 PF_DESKTOP_GLX_PROVIDER_NESTED=1 "$root/tests/test-desktop-glx-acceptance.sh"
 
-echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+glxinfo+glx-probe+drirc-powervr+kmsro+zink-renderonly+static-symtab+stripped-build-options-fallback red=loader-environment,missing-zink-policy,old-two-block-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,missing-glx-probe,nonexec-glx-probe,missing-glxinfo,missing-mesa-utils,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,no-kmsro-symbols,stripped-without-kmsro,glx-disabled,xmlconfig-disabled'
+echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+xwayland-powervr-alias+glxinfo+glx-probe+drirc-powervr+kmsro+zink-renderonly+static-symtab+stripped-build-options-fallback red=loader-environment,missing-zink-policy,old-two-block-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,wrong-xwayland-glx-vendor-alias,producer-glx-alias,missing-glx-probe,nonexec-glx-probe,missing-glxinfo,missing-mesa-utils,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,no-kmsro-symbols,stripped-without-kmsro,glx-disabled,xmlconfig-disabled'

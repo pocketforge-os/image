@@ -50,6 +50,41 @@ publisher_unit="${unit_root}/pocketforge-session-publisher.service"
 x11_tmpfiles="${scratch}/g1/usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf"
 drm_systemd_rule="${root}/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
 
+extract_drm_access_rules() {
+    sed -n \
+        "/^cat > .*60-pocketforge-dri.rules.*UDEV_DRI_EOF/,/^UDEV_DRI_EOF$/p" \
+        "${builder}" | sed '1d;$d'
+}
+
+check_drm_access_contract() {
+    local rules=$1
+
+    grep -Fx 'SUBSYSTEM=="drm", KERNEL=="card[0-9]*", MODE="0660", GROUP="video"' \
+        "${rules}" >/dev/null \
+        && grep -Fx 'SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", MODE="0660", GROUP="render"' \
+            "${rules}" >/dev/null \
+        && ! grep -F 'KERNEL=="card0"' "${rules}" >/dev/null
+}
+
+# The KMS selector deliberately resolves a connector-bearing card by driver,
+# not by enumeration number. Its udev access policy must therefore follow the
+# selected card and render nodes instead of granting only card0/renderD128.
+drm_access_rules="${scratch}/60-pocketforge-dri.rules"
+extract_drm_access_rules >"${drm_access_rules}"
+check_drm_access_contract "${drm_access_rules}" \
+    || fail "DRM access policy is pinned to one enumeration"
+cat >"${scratch}/drm-access-positive.rules" <<'EOF'
+SUBSYSTEM=="drm", KERNEL=="card[0-9]*", MODE="0660", GROUP="video"
+SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", MODE="0660", GROUP="render"
+EOF
+check_drm_access_contract "${scratch}/drm-access-positive.rules" \
+    || fail "DRM access positive control was rejected"
+sed 's/card\[0-9\]\*/card0/' "${scratch}/drm-access-positive.rules" \
+    >"${scratch}/drm-access-card0-only.rules"
+if check_drm_access_contract "${scratch}/drm-access-card0-only.rules"; then
+    fail "DRM access negative control accepted card0-only ownership"
+fi
+
 # Xwayland's default uid check is the only authorization primitive provided by
 # the pinned wlroots launch path. Keep the compositor owner uid isolated, but
 # add exactly the app uid through the X11 server-interpreted local-user ACL.
