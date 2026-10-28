@@ -240,6 +240,10 @@ if [ "${MESA_DISK_CACHE_SINGLE_FILE:-}" = 1 ]; then
             echo 'fake_harness_marker=wall_backstop_exceeded'
             sleep 5
             ;;
+        exit)
+            echo 'fake_harness_marker=ordinary_failure'
+            exit 23
+            ;;
         *)
             echo "unknown fake harness mode: ${PF_TEST_HARNESS_MODE}" >&2
             exit 2
@@ -255,7 +259,7 @@ printf 'deterministic-foz\n' >"${cache_dir}/foz_cache.foz"
 printf 'deterministic-index\n' >"${cache_dir}/foz_cache_idx.foz"
 if [ "${MESA_DISK_CACHE_SINGLE_FILE:-}" = 1 ]; then
     echo 'disk shader cache:  hits = 0, misses = 108'
-elif [ "$#" -eq 3 ]; then
+elif [ "$#" -eq 2 ]; then
     echo 'disk shader cache:  hits = 0, misses = 1'
     echo 'SUMMARY,compiled,1,fake'
     echo 'shader binary after encoding: fake'
@@ -295,6 +299,10 @@ EOF
 cat >"${limit_fake_bin}/fake-qemu-aarch64" <<'EOF'
 #!/bin/sh
 set -eu
+if [ "${1:-}" = --version ]; then
+    echo 'qemu-aarch64 version 9.9.9 (fake)'
+    exit 0
+fi
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -L)
@@ -346,7 +354,7 @@ require_limit_log() {
     fi
 }
 
-for limit_case in ${PF_GAMESCOPE_LIMIT_TEST_CASES:-slow cpu hang}; do
+for limit_case in ${PF_GAMESCOPE_LIMIT_TEST_CASES:-slow cpu hang exit}; do
     limit_output=${scratch}/limit-output-${limit_case}
     limit_log=${scratch}/limit-${limit_case}.log
     mkdir -p "${limit_output}"
@@ -387,6 +395,20 @@ for limit_case in ${PF_GAMESCOPE_LIMIT_TEST_CASES:-slow cpu hang}; do
             grep -F 'fake_harness_marker=wall_backstop_exceeded' "${limit_log}" >/dev/null
             require_limit_log 'elapsed_wall_seconds=[0-9.]+ cpu_seconds=[0-9.]+' \
                 "${limit_log}" 'wall timeout lacked elapsed wall/CPU diagnostics'
+            ;;
+        exit)
+            set +e
+            run_limit_producer exit 2 4 3 "${limit_output}" \
+                >"${limit_log}" 2>&1
+            limit_rc=$?
+            set -e
+            test "${limit_rc}" -eq 23
+            require_limit_log \
+                'gamescope_pvr_seed_failed seed=[12] rc=23 kind=exit' \
+                "${limit_log}" 'ordinary failure lacked typed seed diagnostics'
+            grep -F 'fake_harness_marker=ordinary_failure' "${limit_log}" >/dev/null
+            require_limit_log 'elapsed_wall_seconds=[0-9.]+ cpu_seconds=[0-9.]+' \
+                "${limit_log}" 'ordinary failure lacked elapsed wall/CPU diagnostics'
             ;;
         *)
             echo "unknown PF_GAMESCOPE_LIMIT_TEST_CASES entry: ${limit_case}" >&2
