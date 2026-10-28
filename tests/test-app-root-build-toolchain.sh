@@ -59,10 +59,20 @@ for fragment in (
     "--build-context image-src=.",
     "build/Dockerfile.pf",
     "scripts/build-debian-app-root.sh",
+    "scripts/build-steamlink-app-root-prototype.sh",
     "tests/test-app-root-build-toolchain.sh",
+    "tests/test-app-root-mksquashfs-epoch.sh",
 ):
     if fragment not in workflow:
         raise SystemExit(f"real-container CI preflight missing {fragment}")
+
+for fragment in (
+    "scripts/build-steamlink-app-root-prototype.sh",
+    "tests/test-app-root-mksquashfs-epoch.sh",
+    "test-app-root-mksquashfs-epoch.sh",
+):
+    if fragment not in dockerfile:
+        raise SystemExit(f"real-container epoch test missing {fragment}")
 PY
 }
 
@@ -76,15 +86,17 @@ RUN mksquashfs -version
 EOF
 cat >"${scratch}/Dockerfile.pf" <<'EOF'
 FROM pf-build-base AS app-root-tools
-COPY --from=image-src scripts/build-debian-app-root.sh /usr/local/libexec/build-debian-app-root.sh
-RUN /usr/local/libexec/build-debian-app-root.sh --preflight-only
+COPY --from=image-src scripts/build-debian-app-root.sh /usr/local/libexec/scripts/build-debian-app-root.sh
+COPY --from=image-src scripts/build-steamlink-app-root-prototype.sh /usr/local/libexec/scripts/build-steamlink-app-root-prototype.sh
+COPY --from=image-src tests/test-app-root-mksquashfs-epoch.sh /usr/local/libexec/tests/test-app-root-mksquashfs-epoch.sh
+RUN /usr/local/libexec/scripts/build-debian-app-root.sh --preflight-only && /usr/local/libexec/tests/test-app-root-mksquashfs-epoch.sh
 FROM app-root-tools AS rootfs
 EOF
 cat >"${scratch}/builder.sh" <<'EOF'
 case "$1" in --preflight-only) echo app-root-preflight=PASS ;; esac
 EOF
 cat >"${scratch}/workflow.yml" <<'EOF'
-paths: [build/Dockerfile.pf, scripts/build-debian-app-root.sh, tests/test-app-root-build-toolchain.sh]
+paths: [build/Dockerfile.pf, scripts/build-debian-app-root.sh, scripts/build-steamlink-app-root-prototype.sh, tests/test-app-root-build-toolchain.sh, tests/test-app-root-mksquashfs-epoch.sh]
 run: docker buildx build --target app-root-tools --build-context image-src=. .
 EOF
 check_contract "${scratch}/Dockerfile.base" "${scratch}/Dockerfile.pf" \

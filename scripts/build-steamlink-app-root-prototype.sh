@@ -256,7 +256,7 @@ done < <(find "${platform_root}" -type f -print0 | sort -z) > "${platform_manife
 platform_sha="$(sha256sum "${platform_manifest}" | awk '{print $1}')"
 
 root_image="${output}/steam-link.root.raw"
-mksquashfs "${app_root}" "${root_image}" -noappend -all-root -no-xattrs \
+env -u SOURCE_DATE_EPOCH mksquashfs "${app_root}" "${root_image}" -noappend -all-root -no-xattrs \
     -all-time 0 -mkfs-time 0 -comp zstd -Xcompression-level 15 \
     -processors 1 -no-progress >/dev/null
 root_sha="$(sha256sum "${root_image}" | awk '{print $1}')"

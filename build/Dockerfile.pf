@@ -2290,14 +2290,17 @@ FROM scratch AS component-test-cursor-theme
 COPY --from=cursor-theme /tmp/out /
 
 # =============================================================================
-# app-root-tools — run the real preflight against the digest-pinned owned build
-# container when an app declares [runtime.root]. OS image builds never fetch
-# producer tools from apt; a missing binary fails before the expensive rootfs
-# vertex begins.
+# app-root-tools — run the real preflight and reproducibility test against the
+# digest-pinned owned build container when an app declares [runtime.root]. OS
+# image builds never fetch producer tools from apt; a missing or incompatible
+# binary fails before the expensive rootfs vertex begins.
 # =============================================================================
 FROM pf-build-base AS app-root-tools
-COPY --from=image-src scripts/build-debian-app-root.sh /usr/local/libexec/build-debian-app-root.sh
-RUN /usr/local/libexec/build-debian-app-root.sh --preflight-only
+COPY --from=image-src scripts/build-debian-app-root.sh /usr/local/libexec/scripts/build-debian-app-root.sh
+COPY --from=image-src scripts/build-steamlink-app-root-prototype.sh /usr/local/libexec/scripts/build-steamlink-app-root-prototype.sh
+COPY --from=image-src tests/test-app-root-mksquashfs-epoch.sh /usr/local/libexec/tests/test-app-root-mksquashfs-epoch.sh
+RUN /usr/local/libexec/scripts/build-debian-app-root.sh --preflight-only && \
+    /usr/local/libexec/tests/test-app-root-mksquashfs-epoch.sh
 
 # =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by

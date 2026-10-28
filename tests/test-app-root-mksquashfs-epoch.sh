@@ -62,7 +62,7 @@ check_script() {
 }
 
 check_script build-debian-app-root \
-    "${root}/scripts/build-debian-app-root.sh" "${scratch}/debian.raw"
+    "${root}/scripts/build-debian-app-root.sh" "${scratch}/stage/root.raw"
 check_script build-steamlink-app-root-prototype \
     "${root}/scripts/build-steamlink-app-root-prototype.sh" "${scratch}/prototype.raw"
 echo 'app-root-mksquashfs-epoch=PASS scripts=2 byte_identity=preserved'
