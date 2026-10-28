@@ -55,7 +55,7 @@
 
 # The owned, digest-pinned build container (image/container.pin). Overridable so a dev
 # can point at a locally-built tag; CI/`pf build` pass the pinned digest.
-ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
+ARG PF_CONTAINER=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r5@sha256:efba926c5e796abe1c0fddd39fe45dcee80a2dc5247a104400eac99e05ddddba
 ARG PF_CURSOR_TOOLS_IMAGE=10.0.32.86:5555/pocketforge/ci-tools@sha256:2ff536627228c90e5c32b7d6345b21600a38a17481c075b41683db47ead3e862
 ARG PF_CURSOR_TOOLS_RECIPE_SHA=ec5b2621f636261978d3bb4fd9843ae22a59c320
 

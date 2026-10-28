@@ -12,4 +12,6 @@
 # configuration for hermetic runtime builds.
 # Re-pinned 2026-09-05: added the checksum-verified aarch64-unknown-linux-musl std
 # for hermetic static runtime builds.
-10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
+# Re-pinned 2026-10-28: image#336 / tsp-mc9m.41.996.4 adds the
+# snapshot-pinned squashfs-tools used to assemble per-app runtime roots.
+10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r5@sha256:efba926c5e796abe1c0fddd39fe45dcee80a2dc5247a104400eac99e05ddddba
