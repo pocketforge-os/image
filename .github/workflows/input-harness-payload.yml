@@ -17,6 +17,7 @@ on:
       - scripts/pf-artifact-intake-put
       - scripts/lib/artifact-store-config.sh
       - build/Dockerfile.pf
+      - build/Dockerfile
       - scripts/build-debian-app-root.sh
       - tests/test-app-root-build-toolchain.sh
   push:
@@ -36,6 +37,7 @@ on:
       - scripts/pf-artifact-intake-put
       - scripts/lib/artifact-store-config.sh
       - build/Dockerfile.pf
+      - build/Dockerfile
       - scripts/build-debian-app-root.sh
       - tests/test-app-root-build-toolchain.sh
 

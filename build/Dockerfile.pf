@@ -2290,19 +2290,13 @@ FROM scratch AS component-test-cursor-theme
 COPY --from=cursor-theme /tmp/out /
 
 # =============================================================================
-# app-root-tools — stage-local tools needed only when an app declares
-# [runtime.root]. The inherited apt sources are frozen by APT_SNAPSHOT_DATE in
-# the digest-pinned pf-build-base, so squashfs-tools resolves reproducibly.
-# Running the real builder's preflight here makes a missing binary fail before
-# the expensive rootfs vertex begins.
+# app-root-tools — run the real preflight against the digest-pinned owned build
+# container when an app declares [runtime.root]. OS image builds never fetch
+# producer tools from apt; a missing binary fails before the expensive rootfs
+# vertex begins.
 # =============================================================================
 FROM pf-build-base AS app-root-tools
 COPY --from=image-src scripts/build-debian-app-root.sh /usr/local/libexec/build-debian-app-root.sh
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        squashfs-tools \
- && apt-get clean \
- && find /var/lib/apt/lists -mindepth 1 -delete
 RUN /usr/local/libexec/build-debian-app-root.sh --preflight-only
 
 # =============================================================================
