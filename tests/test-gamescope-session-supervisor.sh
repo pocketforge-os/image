@@ -150,6 +150,14 @@ if check_xwayland_authorization_contract "${owner}" \
     "${authorization_helper}"; then
     fail "authorization check accepted an ACL for an unauthorized uid"
 fi
+cp "${authorization_unit}" "${scratch}/authorization-with-read-only-socket.service"
+sed -i '/^ReadWritePaths=\/run\/pocketforge\/x11\/\.X11-unix$/d' \
+    "${scratch}/authorization-with-read-only-socket.service"
+if check_xwayland_authorization_contract "${owner}" \
+    "${publisher_unit}" "${scratch}/authorization-with-read-only-socket.service" \
+    "${authorization_helper}"; then
+    fail "authorization check accepted a read-only projected socket"
+fi
 
 check_xwayland_write_contract() {
     local owner_unit=$1

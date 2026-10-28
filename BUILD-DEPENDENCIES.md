@@ -155,9 +155,10 @@ image). Documented bind-mount paths:
   the container by `@sha256:digest` from `image/container.pin`, never by `:tag`.
   Tag-pinning lets a base-layer rebuild silently break reproducibility.
 
-`container.pin` was re-pinned on 2026-09-22 after publishing the dtschema-enabled
-`10.3-2021.07-bookworm-rust-1.88.0-r4` container. Its current registry digest is
-`sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e`.
+`container.pin` was re-pinned on 2026-10-28 after publishing the
+`10.3-2021.07-bookworm-rust-1.88.0-r5` container with snapshot-pinned
+`squashfs-tools` for per-app runtime roots. Its current registry digest is
+`sha256:efba926c5e796abe1c0fddd39fe45dcee80a2dc5247a104400eac99e05ddddba`.
 
 ## Fallback if the container becomes burdensome
 

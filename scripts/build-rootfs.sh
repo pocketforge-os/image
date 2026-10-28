@@ -2267,6 +2267,11 @@ if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
     }
     "${SRC_DIR}/scripts/install-app-platform-runtime.sh" \
         "${APP_PLATFORM_RUNTIME_CONFIG}" "${ROOTFS_EXTRACTED}" "${ROOTFS_EXTRACTED}"
+    if [ "${PF_STEAMLINK_FFMPEG59_MODE}" = v1 ] && [ "${PF_GAMESCOPE_MODE}" = g1 ]; then
+        RUNTIME_DIR="${RUNTIME_DIR}" \
+            "${SRC_DIR}/scripts/install-steamlink-first-run.sh" \
+            "${ROOTFS_EXTRACTED}" "${SNAPSHOT_DATE}" root
+    fi
     "${SRC_DIR}/scripts/verify-mesa-shader-cache.sh" \
         "${GPU_UM_MESA_DIR}/usr/local/lib/libgallium_dri.so"
     "${SRC_DIR}/scripts/verify-open-gpu-provider.sh" \

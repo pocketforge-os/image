@@ -289,6 +289,7 @@ RUN dpkg --add-architecture arm64 \
 #   Archive handling:     xz-utils zstd cpio
 #   DT compilation:       device-tree-compiler  (provides `dtc` binary)
 #   Image composition:    abootimg genimage dosfstools mtools sunxi-tools parted
+#                         squashfs-tools (per-app runtime roots)
 #   Debian rootfs:        debootstrap mmdebstrap (>=1.5 from backports)
 #                         qemu-user-static binfmt-support arch-test
 #   Reproducibility (M1.E): faketime disorderfs e2fsprogs (>=1.47.1 from backports)
@@ -343,6 +344,7 @@ RUN apt-get update \
         mtools \
         sunxi-tools \
         parted \
+        squashfs-tools \
         debootstrap \
         qemu-user-static \
         binfmt-support \
@@ -551,6 +553,7 @@ RUN set -eux; \
 #   parted         any (3.5+ is fine)
 #   gpg            (gnupg)
 #   mke2fs         >= 1.47.1
+#   mksquashfs     (squashfs-tools)
 #   genimage, abootimg, dtc, sunxi-tools, qemu-aarch64-static — Phase 0 carry-overs
 #   bc, bison, flex, openssl headers, elf headers — Phase 2 kernel build
 COPY tests/known-good-binding.yaml /tmp/pocketforge,container-test.yaml
@@ -561,6 +564,7 @@ RUN set -eux; \
     parted --version | head -1; \
     gpg --version | head -1; \
     mke2fs -V 2>&1 | head -1; \
+    mksquashfs -version 2>&1 | head -1; \
     genimage --version || true; \
     abootimg -h >/dev/null 2>&1 || abootimg 2>&1 | head -1 || true; \
     dtc --version | head -1; \
