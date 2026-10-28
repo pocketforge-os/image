@@ -502,6 +502,39 @@ def receipt_version(build: Path | None) -> str | None:
     return version if isinstance(version, str) and VERSION_RE.fullmatch(version) else None
 
 
+def fallback_build(state: Path, args: argparse.Namespace) -> Path | None:
+    for link_name in ("current", "last-good"):
+        try:
+            selected = selected_build(state, link_name, args)
+        except Refusal as error:
+            detail = re.sub(r"\s+", "_", error.detail.strip())[:160]
+            print(
+                f"STEAMFETCH selection={link_name} result=invalid "
+                f"reason={error.reason} detail={detail}",
+                file=sys.stderr,
+            )
+            continue
+        if selected is not None:
+            return selected
+    return None
+
+
+def prune_builds(state: Path, keep: set[Path]) -> None:
+    builds = state / "builds"
+    name_pattern = re.compile(r"^[0-9]+(?:\.[0-9]+){3}-[0-9a-f]{64}$")
+    try:
+        for child in builds.iterdir():
+            if child in keep:
+                continue
+            if child.is_symlink() or not child.is_dir() or not name_pattern.fullmatch(child.name):
+                refuse("state_invalid", f"unexpected entry in builds: {child.name}")
+            shutil.rmtree(child)
+    except Refusal:
+        raise
+    except OSError as error:
+        refuse("state_invalid", f"cannot prune historical build: {error}")
+
+
 def install_candidate(args: argparse.Namespace, state: Path, stage: Path, version: str) -> Path:
     archive_name = f"steamlink-rpi-bookworm-arm64-{version}.tar.gz"
     archive = stage / archive_name
@@ -548,6 +581,12 @@ def install_candidate(args: argparse.Namespace, state: Path, stage: Path, versio
     else:
         os.replace(payload, installed)
     previous = selected_build(state, "current", args)
+    if previous is None:
+        previous = selected_build(state, "last-good", args)
+    keep = {installed}
+    if previous is not None:
+        keep.add(previous)
+    prune_builds(state, keep)
     if previous is not None and previous != installed:
         atomic_symlink(state, "last-good", previous.relative_to(state).as_posix())
     atomic_symlink(state, "current", relative)
@@ -640,9 +679,7 @@ def main() -> int:
             except Refusal as error:
                 if error.reason == "abi_mismatch":
                     raise
-                fallback = selected_build(args.state_root, "current", args) or selected_build(
-                    args.state_root, "last-good", args
-                )
+                fallback = fallback_build(args.state_root, args)
                 if fallback is not None:
                     report_success("fallback", fallback, reason=error.reason, fallback=True)
                     launch_if_requested(fallback, args.launch)
