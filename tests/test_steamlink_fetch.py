@@ -347,6 +347,36 @@ class SteamLinkFetchTests(unittest.TestCase):
         self.assertNotIn("result=cached", tampered.stdout)
         self.assertNotIn("result=fallback", tampered.stdout)
 
+    def test_corrupt_current_falls_back_to_verified_last_good(self) -> None:
+        with fixture_server() as url:
+            good = self.run_fetch(url)
+        self.assertEqual(good.returncode, 0, good.stderr)
+        valid_target = os.readlink(self.state / "current")
+        (self.state / "last-good").symlink_to(valid_target)
+        (self.state / "current").unlink()
+        (self.state / "current").symlink_to("builds/corrupt-current")
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            unavailable = f"http://127.0.0.1:{probe.getsockname()[1]}"
+        fallback = self.run_fetch(unavailable)
+        self.assertEqual(fallback.returncode, 0, fallback.stderr)
+        self.assertIn("result=fallback", fallback.stdout)
+        self.assertIn("fallback=last_good", fallback.stdout)
+        self.assertIn(str(self.state / valid_target), fallback.stdout)
+
+    def test_successful_install_prunes_unreferenced_builds(self) -> None:
+        with fixture_server() as url:
+            good = self.run_fetch(url)
+            self.assertEqual(good.returncode, 0, good.stderr)
+            historical = self.state / "builds" / ("1.3.32.314-" + "1" * 64)
+            historical.mkdir()
+            (historical / "stale").write_text("stale\n", encoding="ascii")
+            (self.state / "current").unlink()
+            repaired = self.run_fetch(url)
+        self.assertEqual(repaired.returncode, 0, repaired.stderr)
+        self.assertFalse(historical.exists())
+        self.assertEqual(len(list((self.state / "builds").iterdir())), 1)
+
     def test_offline_first_run_has_clear_reason(self) -> None:
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
