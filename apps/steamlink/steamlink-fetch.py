@@ -314,6 +314,103 @@ def safe_extract(archive: Path, destination: Path, expected_version: str) -> Non
         refuse("archive_invalid", "steamlink/bin/shell is not a regular executable")
 
 
+def archive_manifest(archive: Path, expected_version: str) -> dict[str, dict[str, object]]:
+    """Describe the signed archive in the normalized form safe_extract installs."""
+    result: dict[str, dict[str, object]] = {}
+    total = 0
+    count = 0
+    version_body: bytes | None = None
+    try:
+        with tarfile.open(archive, mode="r:gz") as bundle:
+            for member in bundle:
+                count += 1
+                if count > MAX_ARCHIVE_MEMBERS:
+                    refuse("archive_invalid", "archive has too many members")
+                pure = PurePosixPath(member.name)
+                if (
+                    pure.is_absolute()
+                    or not pure.parts
+                    or pure.parts[0] != "steamlink"
+                    or any(part in {"", ".", ".."} for part in pure.parts)
+                ):
+                    refuse("archive_invalid", f"unsafe archive path: {member.name!r}")
+                name = pure.as_posix()
+                if member.isdir():
+                    continue
+                if name in result:
+                    refuse("archive_invalid", f"duplicate archive member: {name}")
+                if member.issym():
+                    link = PurePosixPath(member.linkname)
+                    if len(link.parts) != 1 or link.name in {"", ".", ".."} or link.is_absolute():
+                        refuse("archive_invalid", f"unsafe archive symlink: {name} -> {member.linkname}")
+                    result[name] = {"type": "symlink", "target": link.name}
+                    continue
+                if not member.isfile():
+                    refuse("archive_invalid", f"non-regular archive member: {name}")
+                total += member.size
+                if total > MAX_EXTRACTED_BYTES:
+                    refuse("archive_invalid", "archive expands beyond the size limit")
+                source = bundle.extractfile(member)
+                if source is None:
+                    refuse("archive_invalid", f"cannot read archive member: {name}")
+                digest = hashlib.sha256()
+                body = bytearray() if name == "steamlink/version.txt" else None
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+                    if body is not None:
+                        body.extend(chunk)
+                if body is not None:
+                    version_body = bytes(body)
+                result[name] = {
+                    "type": "file",
+                    "sha256": digest.hexdigest(),
+                    "executable": bool(member.mode & 0o111),
+                }
+    except Refusal:
+        raise
+    except (OSError, tarfile.TarError, EOFError) as error:
+        refuse("archive_invalid", str(error))
+    try:
+        actual_version = version_body.decode("ascii").strip() if version_body is not None else None
+    except UnicodeError as error:
+        refuse("archive_invalid", f"version.txt: {error}")
+    if actual_version != expected_version:
+        refuse("version_mismatch", f"archive version is {actual_version!r}")
+    for name, entry in result.items():
+        if entry["type"] == "symlink":
+            target = str(PurePosixPath(name).parent / str(entry["target"]))
+            if result.get(target, {}).get("type") != "file":
+                refuse("archive_invalid", f"archive symlink target is not a regular file: {name}")
+    return result
+
+
+def canonical_json(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def installed_manifest(build: Path) -> dict[str, dict[str, object]]:
+    top = build / "steamlink"
+    if not top.is_dir() or top.is_symlink():
+        refuse("state_invalid", "installed steamlink tree is not a real directory")
+    result: dict[str, dict[str, object]] = {}
+    try:
+        for path in top.rglob("*"):
+            name = path.relative_to(build).as_posix()
+            if path.is_symlink():
+                result[name] = {"type": "symlink", "target": os.readlink(path)}
+            elif path.is_file():
+                result[name] = {
+                    "type": "file",
+                    "sha256": sha256_file(path),
+                    "executable": bool(path.stat().st_mode & 0o111),
+                }
+            elif not path.is_dir():
+                refuse("state_invalid", f"unsupported installed node: {name}")
+    except OSError as error:
+        refuse("state_invalid", str(error))
+    return result
+
+
 def atomic_symlink(state: Path, name: str, target: str) -> None:
     temporary = state / f".{name}.{secrets.token_hex(8)}"
     try:
@@ -326,28 +423,72 @@ def atomic_symlink(state: Path, name: str, target: str) -> None:
             pass
 
 
-def selected_build(state: Path, link_name: str) -> Path | None:
+def validate_build(build: Path, args: argparse.Namespace) -> Path:
+    if not build.is_dir() or build.is_symlink():
+        refuse("state_invalid", f"build is not a real directory: {build}")
+    receipt_path = build / "receipt.json"
+    manifest_path = build / "payload-manifest.json"
+    archive = build / "verified-source" / "archive.tar.gz"
+    signature = build / "verified-source" / "archive.tar.gz.sig"
+    for path in (receipt_path, manifest_path, archive, signature):
+        if not path.is_file() or path.is_symlink():
+            refuse("state_invalid", f"build metadata is not a regular file: {path.name}")
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        stored_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        refuse("state_invalid", str(error))
+    version = receipt.get("version")
+    digest = receipt.get("archive_sha256")
+    manifest_digest = receipt.get("payload_manifest_sha256")
+    if (
+        receipt.get("schema_version") != 2
+        or not isinstance(version, str)
+        or not VERSION_RE.fullmatch(version)
+        or not isinstance(digest, str)
+        or not SHA256_RE.fullmatch(digest)
+        or not isinstance(manifest_digest, str)
+        or not SHA256_RE.fullmatch(manifest_digest)
+        or receipt.get("signing_fingerprint") != args.trusted_fingerprint
+    ):
+        refuse("state_invalid", "build receipt fields differ")
+    if build.name != f"{version}-{digest}":
+        refuse("state_invalid", "build directory identity differs from receipt")
+    if sha256_file(archive) != digest:
+        refuse("state_invalid", "retained archive digest differs")
+    manifest_bytes = canonical_json(stored_manifest)
+    if hashlib.sha256(manifest_bytes).hexdigest() != manifest_digest:
+        refuse("state_invalid", "payload manifest digest differs")
+    with tempfile.TemporaryDirectory(prefix=".verify.", dir=build.parent.parent) as stage_name:
+        verify_signature(
+            archive,
+            signature,
+            args.trusted_key,
+            args.trusted_fingerprint,
+            Path(stage_name),
+        )
+    expected_manifest = archive_manifest(archive, version)
+    if stored_manifest != expected_manifest:
+        refuse("state_invalid", "payload manifest is not bound to retained signed archive")
+    if installed_manifest(build) != expected_manifest:
+        refuse("state_invalid", "installed payload differs from signed archive")
+    shell = build / "steamlink" / "bin" / "shell"
+    if not shell.is_file() or shell.is_symlink() or not os.access(shell, os.X_OK):
+        refuse("state_invalid", "installed shell is not executable")
+    return build
+
+
+def selected_build(state: Path, link_name: str, args: argparse.Namespace) -> Path | None:
     link = state / link_name
-    if not link.is_symlink():
+    if not link.exists() and not link.is_symlink():
         return None
+    if not link.is_symlink():
+        refuse("state_invalid", f"{link_name} is not a symlink")
     target = os.readlink(link)
     pure = PurePosixPath(target)
     if len(pure.parts) != 2 or pure.parts[0] != "builds" or any(part in {"", ".", ".."} for part in pure.parts):
-        return None
-    build = state / target
-    receipt = build / "receipt.json"
-    shell = build / "steamlink" / "bin" / "shell"
-    if not build.is_dir() or build.is_symlink() or not receipt.is_file() or receipt.is_symlink():
-        return None
-    if not shell.is_file() or shell.is_symlink() or not os.access(shell, os.X_OK):
-        return None
-    try:
-        value = json.loads(receipt.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
-    if value.get("schema_version") != 1 or not SHA256_RE.fullmatch(str(value.get("archive_sha256", ""))):
-        return None
-    return build
+        refuse("state_invalid", f"{link_name} target is invalid")
+    return validate_build(state / target, args)
 
 
 def receipt_version(build: Path | None) -> str | None:
@@ -378,13 +519,21 @@ def install_candidate(args: argparse.Namespace, state: Path, stage: Path, versio
     digest = sha256_file(archive)
     if version == args.minimum_version and digest != args.bootstrap_sha256:
         refuse("digest_mismatch", "minimum release archive digest differs")
+    manifest = archive_manifest(archive, version)
     payload = stage / "payload"
     safe_extract(archive, payload, version)
     validate_platform_runtime(args.platform_runtime)
+    manifest_bytes = canonical_json(manifest)
+    (payload / "payload-manifest.json").write_bytes(manifest_bytes)
+    source = payload / "verified-source"
+    source.mkdir(mode=0o700)
+    os.replace(archive, source / "archive.tar.gz")
+    os.replace(signature, source / "archive.tar.gz.sig")
     receipt = {
-        "schema_version": 1,
+        "schema_version": 2,
         "version": version,
         "archive_sha256": digest,
+        "payload_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "signing_fingerprint": args.trusted_fingerprint,
         "archive_url": f"{base}/{archive_name}",
         "signature_url": f"{base}/{archive_name}.sig",
@@ -395,24 +544,14 @@ def install_candidate(args: argparse.Namespace, state: Path, stage: Path, versio
     relative = f"builds/{version}-{digest}"
     installed = state / relative
     if installed.exists() or installed.is_symlink():
-        existing = selected_build_for_path(installed)
-        if existing is None:
-            refuse("state_invalid", f"existing build is invalid: {installed}")
+        validate_build(installed, args)
     else:
         os.replace(payload, installed)
-    previous = selected_build(state, "current")
+    previous = selected_build(state, "current", args)
     if previous is not None and previous != installed:
         atomic_symlink(state, "last-good", previous.relative_to(state).as_posix())
     atomic_symlink(state, "current", relative)
     return installed
-
-
-def selected_build_for_path(build: Path) -> Path | None:
-    receipt = build / "receipt.json"
-    shell = build / "steamlink" / "bin" / "shell"
-    if build.is_dir() and not build.is_symlink() and receipt.is_file() and shell.is_file() and os.access(shell, os.X_OK):
-        return build
-    return None
 
 
 def report_success(result: str, build: Path, *, reason: str | None = None, fallback: bool = False) -> None:
@@ -427,8 +566,26 @@ def report_success(result: str, build: Path, *, reason: str | None = None, fallb
 
 def launch_if_requested(build: Path, launch: bool) -> None:
     if launch:
-        shell = build / "steamlink" / "bin" / "shell"
-        os.execv(shell, [str(shell)])
+        top = build / "steamlink"
+        shell = top / "bin" / "shell"
+        qt = top / "Qt-5.14.1"
+        environment = os.environ.copy()
+        environment["PATH"] = ":".join(
+            part for part in (str(top / "bin"), environment.get("PATH", "")) if part
+        )
+        environment["QTDIR"] = str(qt)
+        environment["QT_PLUGIN_PATH"] = str(qt / "plugins")
+        environment["LD_LIBRARY_PATH"] = ":".join(
+            part
+            for part in (str(top / "lib"), str(qt / "lib"), environment.get("LD_LIBRARY_PATH", ""))
+            if part
+        )
+        data_home = environment.get("XDG_DATA_HOME", str(Path(environment.get("HOME", "/")) / ".local/share"))
+        environment["SDL_GAMECONTROLLERCONFIG_FILE"] = str(
+            Path(data_home) / "Valve Corporation/SteamLink/controller_map.txt"
+        )
+        os.chdir(top)
+        os.execve(shell, [str(shell)], environment)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -467,7 +624,7 @@ def main() -> int:
                 candidate_tuple = version_tuple(candidate)
                 if candidate_tuple < minimum:
                     refuse("version_below_floor", f"candidate {candidate} is below {args.minimum_version}")
-                current = selected_build(args.state_root, "current")
+                current = selected_build(args.state_root, "current", args)
                 current_version = receipt_version(current)
                 if current_version is not None and candidate_tuple < version_tuple(current_version):
                     refuse("version_below_floor", f"candidate {candidate} is older than last-good {current_version}")
@@ -481,7 +638,11 @@ def main() -> int:
                 launch_if_requested(installed, args.launch)
                 return 0
             except Refusal as error:
-                fallback = selected_build(args.state_root, "current") or selected_build(args.state_root, "last-good")
+                if error.reason == "abi_mismatch":
+                    raise
+                fallback = selected_build(args.state_root, "current", args) or selected_build(
+                    args.state_root, "last-good", args
+                )
                 if fallback is not None:
                     report_success("fallback", fallback, reason=error.reason, fallback=True)
                     launch_if_requested(fallback, args.launch)

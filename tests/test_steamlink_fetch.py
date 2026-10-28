@@ -289,7 +289,15 @@ class SteamLinkFetchTests(unittest.TestCase):
         self.assertEqual(environment["QT_PLUGIN_PATH"], str(top / "Qt-5.14.1" / "plugins"))
         self.assertEqual(
             environment["LD_LIBRARY_PATH"].split(":"),
-            [str(top / "lib"), str(top / "Qt-5.14.1" / "lib"), os.environ.get("LD_LIBRARY_PATH", "")],
+            [
+                part
+                for part in (
+                    str(top / "lib"),
+                    str(top / "Qt-5.14.1" / "lib"),
+                    os.environ.get("LD_LIBRARY_PATH", ""),
+                )
+                if part
+            ],
         )
         self.assertEqual(environment["PATH"].split(":", 1)[0], str(top / "bin"))
 
