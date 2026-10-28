@@ -31,8 +31,8 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-overlay="${work}/overlay"
-app_overlay="${overlay}/opt/pocketforge/apps/${app_id}"
+app_root_overlay="${work}/overlay"
+app_overlay="${app_root_overlay}/opt/pocketforge/apps/${app_id}"
 mkdir -p "${app_overlay}"
 install -m 0755 "${app_source}/pf-launch" "${app_overlay}/pf-launch"
 install -m 0755 "${app_source}/steamlink-fetch.py" "${app_overlay}/steamlink-fetch.py"
@@ -47,7 +47,7 @@ root_output="${work}/root-output"
     --mode "${builder_mode}" \
     --package python3-minimal \
     --package gnupg \
-    --overlay "${overlay}" \
+    --overlay "${app_root_overlay}" \
     --output "${root_output}"
 
 root_digest=$(sha256sum "${root_output}/root.raw" | awk '{print $1}')
