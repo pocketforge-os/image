@@ -524,13 +524,20 @@ def optional_rollback_build(state: Path, args: argparse.Namespace) -> Path | Non
         return selected_build(state, "last-good", args)
     except Refusal as error:
         link = state / "last-good"
+        quarantine_root = state / "quarantine"
         try:
-            link.unlink()
-        except OSError as unlink_error:
-            refuse("state_invalid", f"cannot discard invalid last-good: {unlink_error}")
+            quarantine_root.mkdir(mode=0o700, exist_ok=True)
+            if quarantine_root.is_symlink() or not quarantine_root.is_dir():
+                refuse("state_invalid", "quarantine is not a real directory")
+            quarantine = Path(tempfile.mkdtemp(prefix="last-good.", dir=quarantine_root))
+            os.replace(link, quarantine / "entry")
+        except Refusal:
+            raise
+        except OSError as quarantine_error:
+            refuse("state_invalid", f"cannot quarantine invalid last-good: {quarantine_error}")
         detail = re.sub(r"\s+", "_", error.detail.strip())[:160]
         print(
-            f"STEAMFETCH selection=last-good result=discarded "
+            f"STEAMFETCH selection=last-good result=quarantined "
             f"reason={error.reason} detail={detail}",
             file=sys.stderr,
         )
