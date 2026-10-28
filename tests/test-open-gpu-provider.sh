@@ -297,10 +297,20 @@ SOURCE_DATE_EPOCH=1700000000 "$scratch/baseline-packager.sh" \
     1234567890abcdef1234567890abcdef12345678 "$scratch/provider-baseline.deb"
 dpkg-deb -x "$scratch/provider-baseline.deb" "$scratch/baseline-x"
 dpkg-deb -x "$scratch/provider-a.deb" "$scratch/a-x"
+[ -L "$scratch/a-x/usr/local/lib/libGLX_powervr.so.0" ] || {
+    echo 'FAIL: provider package omits the Xwayland PowerVR GLVND vendor alias' >&2
+    exit 1
+}
+[ "$(readlink "$scratch/a-x/usr/local/lib/libGLX_powervr.so.0")" = \
+  'libGLX_mesa.so.0' ] || {
+    echo 'FAIL: Xwayland PowerVR GLVND vendor alias does not select Mesa' >&2
+    exit 1
+}
 [ -f "$scratch/a-x/usr/share/vulkan/icd.d/virtio_icd.aarch64.json" ] \
     || { echo 'FAIL: g1 package lost the canonical Venus ICD manifest' >&2; exit 1; }
 rm -f "$scratch/baseline-x/usr/local/share/vulkan/icd.d/virtio_icd.aarch64.json"
 rm -f "$scratch/a-x/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
+rm "$scratch/a-x/usr/local/lib/libGLX_powervr.so.0"
 if ! diff -r "$scratch/baseline-x" "$scratch/a-x"; then
     echo 'FAIL: g1 package content drifted from the pre-mode-guard baseline' >&2
     exit 1
@@ -691,6 +701,13 @@ cp -a "$rootfs" "$candidate"
 rm "$candidate/usr/local/lib/libGLX_mesa.so.0"
 expect_rejection red-missing-glx-vendor "$candidate" \
     'rootfs gpu-um-tsp artifact is missing: usr/local/lib/libGLX_mesa.so.0'
+
+candidate="$scratch/red-wrong-xwayland-glx-vendor-alias"
+cp -a "$rootfs" "$candidate"
+rm "$candidate/usr/local/lib/libGLX_powervr.so.0"
+ln -s libGLX_missing.so.0 "$candidate/usr/local/lib/libGLX_powervr.so.0"
+expect_rejection red-wrong-xwayland-glx-vendor-alias "$candidate" \
+    'Xwayland PowerVR GLX vendor alias must select libGLX_mesa.so.0'
 
 candidate="$scratch/red-missing-glx-probe"
 cp -a "$rootfs" "$candidate"
