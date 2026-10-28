@@ -1146,9 +1146,10 @@ chmod 0644 "${ROOTFS}/etc/pocketforge/display-env.sh"
 install -d "${ROOTFS}/etc/udev/rules.d"
 
 cat > "${ROOTFS}/etc/udev/rules.d/60-pocketforge-dri.rules" << 'UDEV_DRI_EOF'
-# GPU nodes for the kiosk user.
-KERNEL=="card0",      SUBSYSTEM=="drm", MODE="0660", GROUP="video"
-KERNEL=="renderD128", SUBSYSTEM=="drm", MODE="0660", GROUP="render"
+# GPU nodes for the kiosk user. Enumeration is not stable when the image has
+# both a display controller and an isolated app-platform GPU manifest.
+SUBSYSTEM=="drm", KERNEL=="card[0-9]*", MODE="0660", GROUP="video"
+SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", MODE="0660", GROUP="render"
 UDEV_DRI_EOF
 
 cat > "${ROOTFS}/etc/udev/rules.d/61-pocketforge-input.rules" << 'UDEV_INPUT_EOF'
