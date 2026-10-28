@@ -68,9 +68,9 @@ grep -Fxq 'gamer:x:1000:1000::/home/gamer:/bin/bash' "$S/rootfs/etc/passwd" \
     || fail gamer_passwd
 grep -Eq '^video:x:[0-9]+:.*\bgamer\b' "$S/rootfs/etc/group" || fail gamer_video_group
 grep -Eq '^render:x:[0-9]+:.*\bgamer\b' "$S/rootfs/etc/group" || fail gamer_render_group
-grep -Fxq 'KERNEL=="card0",      SUBSYSTEM=="drm", MODE="0660", GROUP="video"' \
-    "$S/rootfs/etc/udev/rules.d/60-pocketforge-dri.rules" || fail card0_udev
-grep -Fxq 'KERNEL=="renderD128", SUBSYSTEM=="drm", MODE="0660", GROUP="render"' \
+grep -Fxq 'SUBSYSTEM=="drm", KERNEL=="card[0-9]*", MODE="0660", GROUP="video"' \
+    "$S/rootfs/etc/udev/rules.d/60-pocketforge-dri.rules" || fail card_udev
+grep -Fxq 'SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", MODE="0660", GROUP="render"' \
     "$S/rootfs/etc/udev/rules.d/60-pocketforge-dri.rules" || fail render_udev
 grep -Fq 'groups: [audio, input, video, render]' "$S/rootfs/etc/cloud/cloud.cfg" \
     || fail cloud_init_groups
@@ -95,7 +95,7 @@ done
 strings -a "$S/rootfs/usr/local/lib/libvulkan_powervr_mesa.so" \
     | grep -F 'PVR_I_WANT_A_BROKEN_VULKAN_DRIVER' >"$S/out/pvr-opt-in-marker.txt" \
     || fail pvr_opt_in_marker
-log "gpu_access=PASS user=gamer groups=video,render udev=card0:root:video:0660,renderD128:root:render:0660 egl=mesa dri=zink vulkan=powervr firmware=readable"
+log "gpu_access=PASS user=gamer groups=video,render udev=card[0-9]*:root:video:0660,renderD[0-9]*:root:render:0660 egl=mesa dri=zink vulkan=powervr firmware=readable"
 
 CTS=$S/rootfs/opt/pocketforge/cts
 PROV=$S/rootfs/usr/share/pocketforge/cts-provenance

@@ -20,6 +20,7 @@ VK_PROBE=${PF_ACTS_VK_PROBE:-/run/pf-probes/pf-pvr-vk-tex-discriminator}
 GLCTS=${PF_ACTS_GLCTS:-$BUNDLE/bin/glcts}
 TAB=$(printf '\t')
 RECOVERY_RESET_CAP=64
+drm_root=${PF_ACTS_DRM_DEV_ROOT:-/dev/dri}
 
 end() { printf 'A_CTS_END mode=%s\n' "$mode"; }
 die() { printf 'A_CTS_ERROR mode=%s %s\n' "$mode" "$*" >&2; exit 1; }
@@ -400,32 +401,62 @@ egl_preflight() {
             >"$dir/control.identity"
         printf 'uid=1000(gamer) gid=1000(gamer) groups=1000(gamer),44(video),107(render)\n' \
             >"$dir/identity.txt"
-        printf '/dev/dri/card0 mode=0660 owner=root group=video readable=yes\n/dev/dri/renderD128 mode=0660 owner=root group=render readable=yes\n/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json readable=yes\n/lib/firmware/powervr/rogue_22.102.54.38_v1.fw readable=yes\n' \
-            >"$dir/node-stat.txt"
+        fixture=${PF_ACTS_PREFLIGHT_DRM_FIXTURE:-card1:video,renderD129:render}
+        printf '%s\n' "$fixture" | /usr/bin/tr ',' '\n' | while IFS=: read -r node group; do
+            case "$node" in
+                card*) suffix=${node#card}; expected_group=video ;;
+                renderD*) suffix=${node#renderD}; expected_group=render ;;
+                *) suffix=; expected_group= ;;
+            esac
+            case "$suffix" in ''|*[!0-9]*) die 'reason=invalid_drm_fixture' ;; esac
+            [ "$group" = "$expected_group" ] || die 'reason=invalid_drm_fixture'
+            printf '/dev/dri/%s mode=0660 owner=root group=%s readable=yes\n' "$node" "$group"
+        done >"$dir/node-stat.txt"
+        printf '/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json readable=yes\n/lib/firmware/powervr/rogue_22.102.54.38_v1.fw readable=yes\n' \
+            >>"$dir/node-stat.txt"
     else
         /usr/bin/id >"$dir/control.identity"
         # The privileged harness shell owns the receipt; sudo selects only the observed identity.
         # shellcheck disable=SC2024
         sudo -n -u gamer /usr/bin/id >"$dir/identity.txt"
         if [ "${PF_ACTS_PREFLIGHT_NODE_FIXTURE:-}" = 1 ]; then
-            printf '/dev/dri/card0 mode=0660 owner=root group=video readable=yes\n/dev/dri/renderD128 mode=0660 owner=root group=render readable=yes\n/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json readable=yes\n/lib/firmware/powervr/rogue_22.102.54.38_v1.fw readable=yes\n' \
-                >"$dir/node-stat.txt"
+            fixture=${PF_ACTS_PREFLIGHT_DRM_FIXTURE:-card1:video,renderD129:render}
+            printf '%s\n' "$fixture" | /usr/bin/tr ',' '\n' | while IFS=: read -r node group; do
+                case "$node" in
+                    card*) suffix=${node#card}; expected_group=video ;;
+                    renderD*) suffix=${node#renderD}; expected_group=render ;;
+                    *) suffix=; expected_group= ;;
+                esac
+                case "$suffix" in ''|*[!0-9]*) die 'reason=invalid_drm_fixture' ;; esac
+                [ "$group" = "$expected_group" ] || die 'reason=invalid_drm_fixture'
+                printf '/dev/dri/%s mode=0660 owner=root group=%s readable=yes\n' "$node" "$group"
+            done >"$dir/node-stat.txt"
+            printf '/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json readable=yes\n/lib/firmware/powervr/rogue_22.102.54.38_v1.fw readable=yes\n' \
+                >>"$dir/node-stat.txt"
         else
             # The privileged harness shell owns the receipt; the checks themselves run as gamer.
             # shellcheck disable=SC2024
-            sudo -n -u gamer /bin/sh -c '
-            for spec in \
-                /dev/dri/card0:video \
-                /dev/dri/renderD128:render; do
-                path=${spec%%:*}; group=${spec#*:}
-                [ -r "$path" ] || exit 21
-                [ "$(/usr/bin/stat -c %a "$path")" = 660 ] || exit 22
-                [ "$(/usr/bin/stat -c %U "$path")" = root ] || exit 23
-                [ "$(/usr/bin/stat -c %G "$path")" = "$group" ] || exit 24
-                printf "%s mode=0%s owner=%s group=%s readable=yes\n" "$path" \
-                    "$(/usr/bin/stat -c %a "$path")" "$(/usr/bin/stat -c %U "$path")" \
-                    "$(/usr/bin/stat -c %G "$path")"
-            done
+            sudo -n -u gamer env PF_ACTS_DRM_DEV_ROOT="$drm_root" /bin/sh -c '
+            drm_root=$PF_ACTS_DRM_DEV_ROOT
+            record_class() {
+                group=$1
+                shift
+                found=0
+                for path in "$@"; do
+                    [ -e "$path" ] || continue
+                    found=1
+                    [ -r "$path" ] || exit 21
+                    [ "$(/usr/bin/stat -c %a "$path")" = 660 ] || exit 22
+                    [ "$(/usr/bin/stat -c %U "$path")" = root ] || exit 23
+                    [ "$(/usr/bin/stat -c %G "$path")" = "$group" ] || exit 24
+                    printf "%s mode=0%s owner=%s group=%s readable=yes\n" "$path" \
+                        "$(/usr/bin/stat -c %a "$path")" "$(/usr/bin/stat -c %U "$path")" \
+                        "$(/usr/bin/stat -c %G "$path")"
+                done
+                [ "$found" -eq 1 ] || exit 26
+            }
+            record_class video "$drm_root"/card[0-9]*
+            record_class render "$drm_root"/renderD[0-9]*
             for path in \
                 /usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json \
                 /lib/firmware/powervr/rogue_22.102.54.38_v1.fw; do

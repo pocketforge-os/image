@@ -9,10 +9,10 @@ check_contract() {
     smoke=$1
     dut=$2
 
-    grep -F 'KERNEL=="card[0-9]*"' "$smoke" >/dev/null
-    grep -F 'KERNEL=="renderD[0-9]*"' "$smoke" >/dev/null
-    grep -F '"$drm_root"/card[0-9]*' "$dut" >/dev/null
-    grep -F '"$drm_root"/renderD[0-9]*' "$dut" >/dev/null
+    grep -F 'KERNEL=="card[0-9]*"' "$smoke" >/dev/null || return 1
+    grep -F 'KERNEL=="renderD[0-9]*"' "$smoke" >/dev/null || return 1
+    grep -F '"$drm_root"/card[0-9]*' "$dut" >/dev/null || return 1
+    grep -F '"$drm_root"/renderD[0-9]*' "$dut" >/dev/null || return 1
     if grep -Eq '/dev/dri/(card0|renderD128)([^0-9]|$)' "$dut"; then
         return 1
     fi
