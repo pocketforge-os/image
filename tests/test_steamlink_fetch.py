@@ -377,6 +377,19 @@ class SteamLinkFetchTests(unittest.TestCase):
         self.assertFalse(historical.exists())
         self.assertEqual(len(list((self.state / "builds").iterdir())), 1)
 
+    def test_valid_candidate_replaces_invalid_optional_last_good(self) -> None:
+        with fixture_server() as url:
+            good = self.run_fetch(url)
+            self.assertEqual(good.returncode, 0, good.stderr)
+            expected = os.readlink(self.state / "current")
+            (self.state / "current").unlink()
+            (self.state / "last-good").symlink_to("builds/missing-last-good")
+            repaired = self.run_fetch(url)
+        self.assertEqual(repaired.returncode, 0, repaired.stderr)
+        self.assertEqual(os.readlink(self.state / "current"), expected)
+        self.assertFalse((self.state / "last-good").exists())
+        self.assertFalse((self.state / "last-good").is_symlink())
+
     def test_offline_first_run_has_clear_reason(self) -> None:
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
