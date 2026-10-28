@@ -84,8 +84,6 @@ if "ReadWritePaths=/run/pocketforge/x11/.X11-unix" not in auth:
     raise SystemExit("X11 ACL helper cannot mutate the protected socket directory")
 if "--group pf-session" not in auth or "--mode 0660" not in auth:
     raise SystemExit("X11 ACL helper does not enforce the private socket projection")
-if "ReadWritePaths=/run/pocketforge/x11/.X11-unix" not in auth:
-    raise SystemExit("X11 ACL helper cannot mutate the projected socket under ProtectSystem=strict")
 if "Type=notify" not in auth or "NotifyAccess=main" not in auth:
     raise SystemExit("X11 ACL helper does not gate publication on initial authorization")
 if "--monitor" not in auth or "Restart=on-failure" not in auth:
