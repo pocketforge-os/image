@@ -16,6 +16,9 @@ on:
       - .github/workflows/input-harness-payload.yml
       - scripts/pf-artifact-intake-put
       - scripts/lib/artifact-store-config.sh
+      - build/Dockerfile.pf
+      - scripts/build-debian-app-root.sh
+      - tests/test-app-root-build-toolchain.sh
   push:
     branches: [main]
     paths:
@@ -32,6 +35,9 @@ on:
       - .github/workflows/input-harness-payload.yml
       - scripts/pf-artifact-intake-put
       - scripts/lib/artifact-store-config.sh
+      - build/Dockerfile.pf
+      - scripts/build-debian-app-root.sh
+      - tests/test-app-root-build-toolchain.sh
 
 permissions:
   contents: read
@@ -52,6 +58,14 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Verify the runner's approved insecure-registry builder
         run: docker buildx inspect pf-insecure --bootstrap
+      - name: Prove app-root tools in the real image build container
+        run: |
+          docker buildx build --builder pf-insecure --pull=false --progress=plain \
+            --build-arg PF_CONTAINER="$PF_BUILD_IMAGE" \
+            --build-context image-src=. \
+            --target app-root-tools \
+            --label pf.bead=tsp-mc9m.41.996.4 \
+            -f build/Dockerfile.pf .
       - name: Stage pinned source contexts outside BuildKit
         run: |
           set -euo pipefail

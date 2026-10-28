@@ -2290,11 +2290,27 @@ FROM scratch AS component-test-cursor-theme
 COPY --from=cursor-theme /tmp/out /
 
 # =============================================================================
+# app-root-tools — stage-local tools needed only when an app declares
+# [runtime.root]. The inherited apt sources are frozen by APT_SNAPSHOT_DATE in
+# the digest-pinned pf-build-base, so squashfs-tools resolves reproducibly.
+# Running the real builder's preflight here makes a missing binary fail before
+# the expensive rootfs vertex begins.
+# =============================================================================
+FROM pf-build-base AS app-root-tools
+COPY --from=image-src scripts/build-debian-app-root.sh /usr/local/libexec/build-debian-app-root.sh
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        squashfs-tools \
+ && apt-get clean \
+ && find /var/lib/apt/lists -mindepth 1 -delete
+RUN /usr/local/libexec/build-debian-app-root.sh --preflight-only
+
+# =============================================================================
 # rootfs — SoC-agnostic Debian rootfs (mmdebstrap), parameterized by
 # rootfs-packages-<id>.txt (tsp-1dl.4.5 unifies the two forked build-rootfs scripts).
 # Composes the kernel modules + GPU .ko + libSDL3 + owned wpa_supplicant + fetched firmware.
 # =============================================================================
-FROM pf-build-base AS rootfs
+FROM app-root-tools AS rootfs
 ARG PF_DEVICE_ID
 ARG PF_ARCH
 ARG PF_SOC
