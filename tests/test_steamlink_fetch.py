@@ -390,6 +390,26 @@ class SteamLinkFetchTests(unittest.TestCase):
         self.assertFalse((self.state / "last-good").exists())
         self.assertFalse((self.state / "last-good").is_symlink())
 
+    def test_valid_candidate_quarantines_directory_at_optional_last_good(self) -> None:
+        with fixture_server() as url:
+            good = self.run_fetch(url)
+            self.assertEqual(good.returncode, 0, good.stderr)
+            expected = os.readlink(self.state / "current")
+            (self.state / "current").unlink()
+            invalid = self.state / "last-good"
+            invalid.mkdir()
+            (invalid / "owner-data").write_text("preserve me\n", encoding="ascii")
+            repaired = self.run_fetch(url)
+        self.assertEqual(repaired.returncode, 0, repaired.stderr)
+        self.assertEqual(os.readlink(self.state / "current"), expected)
+        self.assertFalse(invalid.exists())
+        quarantined = list((self.state / "quarantine").glob("last-good.*/entry"))
+        self.assertEqual(len(quarantined), 1)
+        self.assertEqual(
+            (quarantined[0] / "owner-data").read_text(encoding="ascii"),
+            "preserve me\n",
+        )
+
     def test_offline_first_run_has_clear_reason(self) -> None:
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
