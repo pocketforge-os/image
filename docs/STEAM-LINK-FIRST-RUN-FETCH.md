@@ -59,13 +59,16 @@ Content-Length disagreement or premature EOF is `reason=download_truncated`.
 Network unavailability is `reason=offline`. Neither changes `current` or
 `last-good`, and staging is removed on every exit.
 
-The detached signature is checked before extraction. Archive members must be
-regular files or directories with canonical relative paths below the single
-`steamlink/` directory. Absolute paths, `..`, links, devices, FIFOs, and sockets
-are rejected. The extracted `version.txt` must equal the discovered version and
-`bin/shell` must be a regular executable. The completed directory is renamed
-into `builds` atomically. An atomic relative-symlink replacement moves the old
-`current` to `last-good`, then selects the new build.
+The detached signature is checked before extraction. Archive members must have
+canonical relative paths below the single `steamlink/` directory. Regular files
+and directories are extracted first. Valve's library-name symlinks are created
+only afterward, and only when a single-component relative target names an
+already extracted regular file in the same directory. Absolute paths, `..`,
+hard links, escaping/dangling symlinks, devices, FIFOs, and sockets are rejected.
+The extracted `version.txt` must equal the discovered version and `bin/shell`
+must be a regular executable. The completed directory is renamed into `builds`
+atomically. An atomic relative-symlink replacement moves the old `current` to
+`last-good`, then selects the new build.
 
 ## Platform ABI gate and fallback
 

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+app=/opt/pocketforge/apps/org.pocketforge.steamlink
+state=${XDG_STATE_HOME:-/var/lib/pocketforge/apps/org.pocketforge.steamlink/state}
+
+exec /usr/bin/python3 "${app}/steamlink-fetch.py" \
+    --state-root "${state}/steamlink-fetch" \
+    --platform-runtime /usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1 \
+    --trusted-key "${app}/valve-steamlink-release-key.asc" \
+    --launch

@@ -6,10 +6,13 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import http.server
+import io
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -29,6 +32,60 @@ ARCHIVE_NAME = f"steamlink-rpi-bookworm-arm64-{VERSION}.tar.gz"
 SIGNATURE_NAME = f"{ARCHIVE_NAME}.sig"
 ARCHIVE_SHA256 = "6e1e431265da01b85a7a2fb2ef652f822eb16c5b78aca03f0d0d500dc29b93d3"
 FINGERPRINT = "BA23DAE64102FBE0BB140CE5387C648A24C0E740"
+
+
+def make_synthetic_signed_fixture(root: Path) -> tuple[Path, str, str]:
+    """Create CI-only inputs; developer runs exercise the preserved Valve files."""
+    if shutil.which("gpg") is None:
+        raise AssertionError("gpg is required for Steam Link signature tests")
+    archive = root / ARCHIVE_NAME
+    with tarfile.open(archive, "w:gz") as bundle:
+        files = {
+            "steamlink/version.txt": (f"{VERSION}\n".encode("ascii"), 0o644),
+            "steamlink/bin/shell": (b"#!/bin/sh\nexit 0\n", 0o755),
+        }
+        for name, (body, mode) in files.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(body)
+            member.mode = mode
+            member.mtime = 0
+            bundle.addfile(member, io.BytesIO(body))
+
+    gnupg = root / "fixture-gnupg"
+    gnupg.mkdir(mode=0o700)
+    common = ["gpg", "--batch", "--homedir", str(gnupg), "--pinentry-mode", "loopback"]
+    subprocess.run(
+        [*common, "--passphrase", "", "--quick-gen-key", "Steam Link CI Fixture", "rsa2048", "sign", "0"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    listing = subprocess.run(
+        [*common, "--with-colons", "--list-keys"],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+    fingerprint = next(
+        line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")
+    )
+    key = root / "fixture-release-key.asc"
+    key.write_bytes(
+        subprocess.run(
+            [*common, "--armor", "--export", fingerprint],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout
+    )
+    subprocess.run(
+        [*common, "--local-user", fingerprint, "--detach-sign", "--output", str(root / SIGNATURE_NAME), str(archive)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return key, fingerprint, hashlib.sha256(archive.read_bytes()).hexdigest()
 
 
 class FixtureHandler(http.server.BaseHTTPRequestHandler):
@@ -134,13 +191,22 @@ def write_platform_runtime(root: Path) -> Path:
 class SteamLinkFetchTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        global ARCHIVE_SHA256, FINGERPRINT, TRUSTED_KEY, VENDOR
         for name in (ARCHIVE_NAME, SIGNATURE_NAME):
             path = VENDOR / name
             if not path.is_file():
-                raise unittest.SkipTest(f"preserved Valve fixture absent: {path}")
+                cls.fixture_temp = tempfile.TemporaryDirectory(prefix="steamlink-signed-fixture.")
+                VENDOR = Path(cls.fixture_temp.name)
+                TRUSTED_KEY, FINGERPRINT, ARCHIVE_SHA256 = make_synthetic_signed_fixture(VENDOR)
+                return
         digest = hashlib.sha256((VENDOR / ARCHIVE_NAME).read_bytes()).hexdigest()
         if digest != ARCHIVE_SHA256:
             raise AssertionError(f"preserved archive digest differs: {digest}")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if hasattr(cls, "fixture_temp"):
+            cls.fixture_temp.cleanup()
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="steamlink-fetch-test.")
