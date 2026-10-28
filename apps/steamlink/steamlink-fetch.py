@@ -519,6 +519,24 @@ def fallback_build(state: Path, args: argparse.Namespace) -> Path | None:
     return None
 
 
+def optional_rollback_build(state: Path, args: argparse.Namespace) -> Path | None:
+    try:
+        return selected_build(state, "last-good", args)
+    except Refusal as error:
+        link = state / "last-good"
+        try:
+            link.unlink()
+        except OSError as unlink_error:
+            refuse("state_invalid", f"cannot discard invalid last-good: {unlink_error}")
+        detail = re.sub(r"\s+", "_", error.detail.strip())[:160]
+        print(
+            f"STEAMFETCH selection=last-good result=discarded "
+            f"reason={error.reason} detail={detail}",
+            file=sys.stderr,
+        )
+        return None
+
+
 def prune_builds(state: Path, keep: set[Path]) -> None:
     builds = state / "builds"
     name_pattern = re.compile(r"^[0-9]+(?:\.[0-9]+){3}-[0-9a-f]{64}$")
@@ -582,7 +600,7 @@ def install_candidate(args: argparse.Namespace, state: Path, stage: Path, versio
         os.replace(payload, installed)
     previous = selected_build(state, "current", args)
     if previous is None:
-        previous = selected_build(state, "last-good", args)
+        previous = optional_rollback_build(state, args)
     keep = {installed}
     if previous is not None:
         keep.add(previous)
