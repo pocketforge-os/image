@@ -14,7 +14,15 @@ gamescope_sha=$4
 expected_gamescope_sha=cf4475a73409295b06ec352f18497fef23422a72
 cache_name=pocketforge-gamescope-ge8300
 cache_limit_bytes=16777216
-timeout_seconds=${PF_GAMESCOPE_CACHE_TIMEOUT_SECONDS:-900}
+# PR build 40770175474's two parallel, CPU-bound seeds completed within 446 s
+# wall time on an uncontended host. Use that as a conservative derived per-seed
+# CPU estimate: 900 s is 2.02x measured, while the 2700 s hang backstop is
+# 3.00x the CPU budget (6.05x measured). TERM gets a 10 s grace before KILL,
+# making the absolute wall bound 2710 s. The legacy timeout override remains a
+# lower-precedence compatibility alias for the wall backstop.
+cpu_seconds=${PF_GAMESCOPE_CACHE_CPU_SECONDS:-900}
+wall_seconds=${PF_GAMESCOPE_CACHE_WALL_SECONDS:-${PF_GAMESCOPE_CACHE_TIMEOUT_SECONDS:-2700}}
+kill_after_seconds=${PF_GAMESCOPE_CACHE_KILL_AFTER_SECONDS:-10}
 qemu=${QEMU_AARCH64:-/usr/bin/qemu-aarch64-static}
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/gamescope-pvr-cache.XXXXXX")
 
@@ -24,8 +32,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-case "${timeout_seconds}" in
-    ''|*[!0-9]*|0) echo 'PF_GAMESCOPE_CACHE_TIMEOUT_SECONDS must be a positive integer' >&2; exit 2 ;;
+case "${cpu_seconds}" in
+    ''|*[!0-9]*|0) echo 'PF_GAMESCOPE_CACHE_CPU_SECONDS must be a positive integer' >&2; exit 2 ;;
+esac
+# Force base 10 before using the override in arithmetic (for example, 08).
+cpu_seconds=$((10#${cpu_seconds}))
+(( cpu_seconds > 0 )) || {
+    echo 'PF_GAMESCOPE_CACHE_CPU_SECONDS must be a positive integer' >&2
+    exit 2
+}
+case "${wall_seconds}" in
+    ''|*[!0-9]*|0) echo 'PF_GAMESCOPE_CACHE_WALL_SECONDS must be a positive integer' >&2; exit 2 ;;
+esac
+case "${kill_after_seconds}" in
+    ''|*[!0-9]*|0) echo 'PF_GAMESCOPE_CACHE_KILL_AFTER_SECONDS must be a positive integer' >&2; exit 2 ;;
 esac
 [ "${gamescope_sha}" = "${expected_gamescope_sha}" ] || {
     echo "Gamescope source ${gamescope_sha} does not match cache corpus ${expected_gamescope_sha}" >&2
@@ -59,14 +79,26 @@ run_target() {
     local single_file=$3
     local ro_name=$4
     local max_pipelines=$5
+    local timing=$6
+    local target_cpu_seconds=$7
+    local -a target_command
     local -a target_args=("${harness}" "${fixture_dir}")
+    local TIMEFORMAT='elapsed_wall_seconds=%3R cpu_user_seconds=%3U cpu_system_seconds=%3S'
 
     if [ -n "${max_pipelines}" ]; then
         target_args+=("${max_pipelines}")
     fi
 
-    timeout --signal=TERM "${timeout_seconds}s" \
-        "${qemu}" -L / \
+    target_command=("${qemu}")
+    if [ -n "${target_cpu_seconds}" ]; then
+        target_command=(prlimit \
+            "--cpu=${target_cpu_seconds}:$((target_cpu_seconds + 1))" -- \
+            "${target_command[@]}")
+    fi
+
+    { time timeout --signal=TERM --kill-after="${kill_after_seconds}s" \
+        "${wall_seconds}s" \
+        "${target_command[@]}" -L / \
         -E "LD_PRELOAD=${shim}" \
         -E "VK_ICD_FILENAMES=${icd}" \
         -E PVR_SHIM_DEVICE_BVNC=22.102.54.38 \
@@ -76,19 +108,77 @@ run_target() {
         -E "MESA_DISK_CACHE_COMBINE_RW_WITH_RO_FOZ=$([ -n "${ro_name}" ] && printf 1 || printf 0)" \
         -E "MESA_DISK_CACHE_READ_ONLY_FOZ_DBS=${ro_name}" \
         -E PCO_DEBUG_PRINT=binary \
-        "${target_args[@]}" >"${log}" 2>&1
+        "${target_args[@]}" >"${log}" 2>&1; } 2>"${timing}"
+}
+
+report_seed_failure() {
+    local number=$1
+    local rc=$2
+    local log=$3
+    local timing=$4
+    local kind=exit
+    local elapsed_wall_seconds=unknown
+    local cpu_user_seconds=unknown
+    local cpu_system_seconds=unknown
+    local cpu_total_seconds=unknown
+    local elapsed_field
+    local user_field
+    local system_field
+    local timing_line
+
+    timing_line=$(sed -n '/^elapsed_wall_seconds=/p' "${timing}" | tail -n 1)
+    if [ -n "${timing_line}" ] && \
+       read -r elapsed_field user_field system_field <<<"${timing_line}"; then
+        elapsed_wall_seconds=${elapsed_field#elapsed_wall_seconds=}
+        cpu_user_seconds=${user_field#cpu_user_seconds=}
+        cpu_system_seconds=${system_field#cpu_system_seconds=}
+        cpu_total_seconds=$(awk -v user_cpu="${cpu_user_seconds}" \
+            -v system_cpu="${cpu_system_seconds}" \
+            'BEGIN { printf "%.3f", user_cpu + system_cpu }')
+    fi
+    case "${rc}" in
+        124) kind=timeout ;;
+        152) kind=cpu_limit ;;
+        137)
+            # KILL is either timeout's hard wall backstop or RLIMIT_CPU's hard
+            # limit after SIGXCPU. Accounted CPU distinguishes the two.
+            if [ "${cpu_total_seconds}" != unknown ] && \
+               awk -v used="${cpu_total_seconds}" -v budget="${cpu_seconds}" \
+                   'BEGIN { exit !(used >= budget) }'; then
+                kind=cpu_limit
+            else
+                kind=timeout
+            fi
+            ;;
+    esac
+
+    echo "gamescope_pvr_seed_failed seed=${number} rc=${rc} kind=${kind}" >&2
+    if [ -f "${log}" ]; then
+        tail -n 40 "${log}" >&2
+    else
+        echo "seed ${number} log is missing: ${log}" >&2
+    fi
+    echo "gamescope_pvr_seed_timing seed=${number} elapsed_wall_seconds=${elapsed_wall_seconds} cpu_seconds=${cpu_total_seconds}" >&2
 }
 
 seed_pair() {
     local number=$1
     local cache_root=${scratch}/seed-${number}
     local log=${scratch}/seed-${number}.log
+    local timing=${scratch}/seed-${number}.timing
+    local target_rc
     local data_file
     local index_file
     local relative_dir
 
     mkdir -p "${cache_root}"
-    run_target "${cache_root}" "${log}" 1 '' ''
+    if run_target "${cache_root}" "${log}" 1 '' '' "${timing}" "${cpu_seconds}"; then
+        :
+    else
+        target_rc=$?
+        report_seed_failure "${number}" "${target_rc}" "${log}" "${timing}"
+        return "${target_rc}"
+    fi
     python3 "${verifier}" gamescope "${log}" "${binary_manifest}"
     grep -F 'disk shader cache:  hits = 0, misses = 108' "${log}" >/dev/null || {
         tail -n 40 "${log}" >&2
@@ -143,7 +233,8 @@ replay_foz_dir=${replay_root}/${relative_dir}
 mkdir -p "${replay_foz_dir}"
 ln -s "${scratch}/seed-1.foz" "${replay_foz_dir}/${cache_name}.foz"
 ln -s "${scratch}/seed-1_idx.foz" "${replay_foz_dir}/${cache_name}_idx.foz"
-run_target "${replay_root}" "${scratch}/replay.log" 0 "${cache_name}" ''
+run_target "${replay_root}" "${scratch}/replay.log" 0 "${cache_name}" '' \
+    "${scratch}/replay.timing" ''
 python3 "${verifier}" gamescope-cache-hit "${scratch}/replay.log"
 grep -F 'disk shader cache:  hits = 108, misses = 0' "${scratch}/replay.log" >/dev/null || {
     tail -n 40 "${scratch}/replay.log" >&2
@@ -155,7 +246,8 @@ grep -F 'disk shader cache:  hits = 108, misses = 0' "${scratch}/replay.log" >/d
 # the normal writable cache instead of failing pipeline creation.
 negative_root=${scratch}/negative
 mkdir -p "${negative_root}"
-run_target "${negative_root}" "${scratch}/negative.log" 0 invalidated-gamescope-cache 1
+run_target "${negative_root}" "${scratch}/negative.log" 0 invalidated-gamescope-cache 1 \
+    "${scratch}/negative.timing" ''
 grep -F 'disk shader cache:  hits = 0, misses = 1' "${scratch}/negative.log" >/dev/null
 grep -F 'SUMMARY,compiled,1,' "${scratch}/negative.log" >/dev/null
 [ "$(grep -Fc 'shader binary after encoding:' "${scratch}/negative.log")" -eq 1 ] || {
