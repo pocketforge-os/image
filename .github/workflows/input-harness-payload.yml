@@ -19,7 +19,9 @@ on:
       - build/Dockerfile.pf
       - build/Dockerfile
       - scripts/build-debian-app-root.sh
+      - scripts/build-steamlink-app-root-prototype.sh
       - tests/test-app-root-build-toolchain.sh
+      - tests/test-app-root-mksquashfs-epoch.sh
   push:
     branches: [main]
     paths:
@@ -39,7 +41,9 @@ on:
       - build/Dockerfile.pf
       - build/Dockerfile
       - scripts/build-debian-app-root.sh
+      - scripts/build-steamlink-app-root-prototype.sh
       - tests/test-app-root-build-toolchain.sh
+      - tests/test-app-root-mksquashfs-epoch.sh
 
 permissions:
   contents: read

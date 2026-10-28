@@ -134,7 +134,7 @@ if [[ -n "${overlay}" ]]; then
 fi
 
 find "${stage}/rootfs" -print0 | LC_ALL=C sort -z | xargs -0 touch -h --date='@0'
-mksquashfs "${stage}/rootfs" "${stage}/root.raw" \
+env -u SOURCE_DATE_EPOCH mksquashfs "${stage}/rootfs" "${stage}/root.raw" \
     -noappend -all-root -no-xattrs -all-time 0 -mkfs-time 0 \
     -comp zstd -Xcompression-level 15 -processors 1 -no-progress >/dev/null
 root_sha=$(sha256sum "${stage}/root.raw" | awk '{print $1}')
