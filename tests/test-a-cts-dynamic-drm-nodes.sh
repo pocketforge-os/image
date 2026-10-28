@@ -13,6 +13,8 @@ check_contract() {
     grep -F 'KERNEL=="renderD[0-9]*"' "$smoke" >/dev/null || return 1
     grep -F '"$drm_root"/card[0-9]*' "$dut" >/dev/null || return 1
     grep -F '"$drm_root"/renderD[0-9]*' "$dut" >/dev/null || return 1
+    [ "$(grep -Fc 'write_drm_fixture "$fixture" "$dir/node-stat.txt"' "$dut")" -eq 2 ] \
+        || return 1
     if grep -Eq '/dev/dri/(card0|renderD128)([^0-9]|$)' "$dut"; then
         return 1
     fi

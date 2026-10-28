@@ -333,6 +333,64 @@ preflight_qpa_case_pass() {
     ' "$qpa"
 }
 
+write_drm_fixture() {
+    fixture=$1
+    output=$2
+    fixture_tmp=$output.tmp
+    card_seen=0
+    render_seen=0
+    fixture_error=
+
+    for stale in "$output" "$fixture_tmp"; do
+        [ ! -e "$stale" ] || find "$stale" -maxdepth 0 -type f -delete
+    done
+    : >"$fixture_tmp"
+    case "$fixture" in
+        ''|,*|*,|*,,*) fixture_error=invalid ;;
+    esac
+    remaining=$fixture
+    while [ -n "$remaining" ] && [ -z "$fixture_error" ]; do
+        case "$remaining" in
+            *,*) entry=${remaining%%,*}; remaining=${remaining#*,} ;;
+            *) entry=$remaining; remaining= ;;
+        esac
+        node=${entry%%:*}
+        group=${entry#*:}
+        case "$group" in *:*) fixture_error=invalid; continue ;; esac
+        case "$node" in
+            card*)
+                suffix=${node#card}
+                expected_group=video
+                card_seen=1
+                ;;
+            renderD*)
+                suffix=${node#renderD}
+                expected_group=render
+                render_seen=1
+                ;;
+            *) fixture_error=invalid; continue ;;
+        esac
+        case "$suffix" in
+            ''|*[!0-9]*) fixture_error=invalid; continue ;;
+        esac
+        if [ "$group" != "$expected_group" ]; then
+            fixture_error=invalid
+            continue
+        fi
+        printf '/dev/dri/%s mode=0660 owner=root group=%s readable=yes\n' \
+            "$node" "$group" >>"$fixture_tmp"
+    done
+    if [ -n "$fixture_error" ]; then
+        find "$fixture_tmp" -maxdepth 0 -type f -delete
+        die 'reason=invalid_drm_fixture'
+    fi
+    if [ "$card_seen" -ne 1 ] || [ "$render_seen" -ne 1 ]; then
+        find "$fixture_tmp" -maxdepth 0 -type f -delete
+        die 'reason=incomplete_drm_fixture required=card+render'
+    fi
+    mv "$fixture_tmp" "$output"
+}
+
 run_preflight_arm() {
     arm=$1 opt_in=$2 dir=$ROOT/egl-preflight arm_work=$ROOT/egl-preflight/$1-work
     eglinfo=${PF_ACTS_EGLINFO:-/usr/bin/eglinfo}
@@ -402,16 +460,7 @@ egl_preflight() {
         printf 'uid=1000(gamer) gid=1000(gamer) groups=1000(gamer),44(video),107(render)\n' \
             >"$dir/identity.txt"
         fixture=${PF_ACTS_PREFLIGHT_DRM_FIXTURE:-card1:video,renderD129:render}
-        printf '%s\n' "$fixture" | /usr/bin/tr ',' '\n' | while IFS=: read -r node group; do
-            case "$node" in
-                card*) suffix=${node#card}; expected_group=video ;;
-                renderD*) suffix=${node#renderD}; expected_group=render ;;
-                *) suffix=; expected_group= ;;
-            esac
-            case "$suffix" in ''|*[!0-9]*) die 'reason=invalid_drm_fixture' ;; esac
-            [ "$group" = "$expected_group" ] || die 'reason=invalid_drm_fixture'
-            printf '/dev/dri/%s mode=0660 owner=root group=%s readable=yes\n' "$node" "$group"
-        done >"$dir/node-stat.txt"
+        write_drm_fixture "$fixture" "$dir/node-stat.txt"
         printf '/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json readable=yes\n/lib/firmware/powervr/rogue_22.102.54.38_v1.fw readable=yes\n' \
             >>"$dir/node-stat.txt"
     else
@@ -421,16 +470,7 @@ egl_preflight() {
         sudo -n -u gamer /usr/bin/id >"$dir/identity.txt"
         if [ "${PF_ACTS_PREFLIGHT_NODE_FIXTURE:-}" = 1 ]; then
             fixture=${PF_ACTS_PREFLIGHT_DRM_FIXTURE:-card1:video,renderD129:render}
-            printf '%s\n' "$fixture" | /usr/bin/tr ',' '\n' | while IFS=: read -r node group; do
-                case "$node" in
-                    card*) suffix=${node#card}; expected_group=video ;;
-                    renderD*) suffix=${node#renderD}; expected_group=render ;;
-                    *) suffix=; expected_group= ;;
-                esac
-                case "$suffix" in ''|*[!0-9]*) die 'reason=invalid_drm_fixture' ;; esac
-                [ "$group" = "$expected_group" ] || die 'reason=invalid_drm_fixture'
-                printf '/dev/dri/%s mode=0660 owner=root group=%s readable=yes\n' "$node" "$group"
-            done >"$dir/node-stat.txt"
+            write_drm_fixture "$fixture" "$dir/node-stat.txt"
             printf '/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json readable=yes\n/lib/firmware/powervr/rogue_22.102.54.38_v1.fw readable=yes\n' \
                 >>"$dir/node-stat.txt"
         else
