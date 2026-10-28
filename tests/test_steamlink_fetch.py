@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import http.server
+import importlib.util
 import io
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ import tarfile
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -259,6 +261,38 @@ class SteamLinkFetchTests(unittest.TestCase):
         self.assertTrue((installed / "steamlink" / "bin" / "shell").is_file())
         self.assertTrue((installed / "receipt.json").is_file())
 
+    def test_launch_uses_archive_runtime_paths_and_working_directory(self) -> None:
+        spec = importlib.util.spec_from_file_location("steamlink_fetch", FETCHER)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        build = self.work / "build"
+        top = build / "steamlink"
+        (top / "bin").mkdir(parents=True)
+        (top / "lib").mkdir()
+        (top / "Qt-5.14.1" / "lib").mkdir(parents=True)
+        (top / "Qt-5.14.1" / "plugins").mkdir()
+        shell = top / "bin" / "shell"
+        shell.write_text("#!/bin/sh\n", encoding="ascii")
+        shell.chmod(0o755)
+        with mock.patch.object(module.os, "chdir") as chdir, mock.patch.object(
+            module.os, "execv"
+        ) as execv, mock.patch.object(module.os, "execve") as execve:
+            module.launch_if_requested(build, True)
+        execv.assert_not_called()
+        chdir.assert_called_once_with(top)
+        executable, argv, environment = execve.call_args.args
+        self.assertEqual(executable, shell)
+        self.assertEqual(argv, [str(shell)])
+        self.assertEqual(environment["QTDIR"], str(top / "Qt-5.14.1"))
+        self.assertEqual(environment["QT_PLUGIN_PATH"], str(top / "Qt-5.14.1" / "plugins"))
+        self.assertEqual(
+            environment["LD_LIBRARY_PATH"].split(":"),
+            [str(top / "lib"), str(top / "Qt-5.14.1" / "lib"), os.environ.get("LD_LIBRARY_PATH", "")],
+        )
+        self.assertEqual(environment["PATH"].split(":", 1)[0], str(top / "bin"))
+
     def test_bad_signature_refuses(self) -> None:
         with fixture_server(bad_signature=True) as url:
             result = self.run_fetch(url)
@@ -288,10 +322,22 @@ class SteamLinkFetchTests(unittest.TestCase):
                 b"wrong ABI\n"
             )
             bad = self.run_fetch(url)
-        self.assertEqual(bad.returncode, 0, bad.stderr)
-        self.assertIn("reason=abi_mismatch", bad.stdout)
-        self.assertIn("fallback=last_good", bad.stdout)
+        self.assert_refused(bad, "abi_mismatch")
+        self.assertNotIn("result=fallback", bad.stdout)
         self.assertEqual(os.readlink(self.state / "current"), before)
+
+    def test_tampered_cached_build_is_refused(self) -> None:
+        with fixture_server() as url:
+            good = self.run_fetch(url)
+            self.assertEqual(good.returncode, 0, good.stderr)
+            installed = self.state / os.readlink(self.state / "current")
+            (installed / "steamlink" / "bin" / "shell").write_text(
+                "#!/bin/sh\nexit 23\n", encoding="ascii"
+            )
+            tampered = self.run_fetch(url)
+        self.assert_refused(tampered, "state_invalid")
+        self.assertNotIn("result=cached", tampered.stdout)
+        self.assertNotIn("result=fallback", tampered.stdout)
 
     def test_offline_first_run_has_clear_reason(self) -> None:
         with socket.socket() as probe:
