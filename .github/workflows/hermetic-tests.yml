@@ -179,6 +179,7 @@ jobs:
             tests/test-shell-fonts.sh
             tests/test-steamlink-ffmpeg59-config-normalizer.sh
             tests/test-steamlink-ffmpeg59-runtime.sh
+            tests/test-steamlink-first-run-install.sh
             tests/test_steamlink_fetch.py
             tests/test-userdata-partition.sh
             tests/test-uboot-logo.sh

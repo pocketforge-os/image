@@ -5,11 +5,12 @@ distribution=
 architecture=
 snapshot=
 output=
+overlay=
 mode=unshare
 packages=(ca-certificates libc6 libgcc-s1 libstdc++6)
 
 usage() {
-    echo "usage: $0 --distribution debian-12|debian-13 --architecture arm64 --snapshot YYYYMMDDTHHMMSSZ [--mode unshare|fakechroot] [--package NAME]... --output DIR" >&2
+    echo "usage: $0 --distribution debian-12|debian-13 --architecture arm64 --snapshot YYYYMMDDTHHMMSSZ [--mode root|unshare|fakechroot] [--package NAME]... [--overlay DIR] --output DIR" >&2
     exit 64
 }
 
@@ -20,6 +21,7 @@ while (($#)); do
         --snapshot) snapshot=${2-}; shift 2 ;;
         --mode) mode=${2-}; shift 2 ;;
         --package) packages+=("${2-}"); shift 2 ;;
+        --overlay) overlay=${2-}; shift 2 ;;
         --output) output=${2-}; shift 2 ;;
         *) usage ;;
     esac
@@ -35,8 +37,8 @@ esac
     exit 64
 }
 case "${mode}" in
-    unshare|fakechroot) ;;
-    *) echo "app-root build: unsupported rootless mode: ${mode}" >&2; exit 64 ;;
+    root|unshare|fakechroot) ;;
+    *) echo "app-root build: unsupported mode: ${mode}" >&2; exit 64 ;;
 esac
 [[ "${snapshot}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || {
     echo "app-root build: invalid snapshot: ${snapshot:-<empty>}" >&2
@@ -49,7 +51,17 @@ for package in "${packages[@]}"; do
         exit 64
     }
 done
-for tool in awk basename dirname find grep mkdir mktemp mmdebstrap mksquashfs mv paste \
+if [[ -n "${overlay}" ]]; then
+    [[ -d "${overlay}" && ! -L "${overlay}" ]] || {
+        echo "app-root build: overlay is not a real directory: ${overlay}" >&2
+        exit 66
+    }
+    if find "${overlay}" -mindepth 1 \( -type l -o ! -type d ! -type f \) -print -quit | grep -q .; then
+        echo "app-root build: overlay contains a link or special file" >&2
+        exit 65
+    fi
+fi
+for tool in awk basename cp dirname find grep mkdir mktemp mmdebstrap mksquashfs mv paste \
             python3 rmdir sha256sum sort tar touch xargs; do
     command -v "${tool}" >/dev/null || {
         echo "app-root build: required tool unavailable: ${tool}" >&2
@@ -97,6 +109,16 @@ grep -Fqx "VERSION_CODENAME=${suite}" "${os_release}" || {
     echo "app-root build: mmdebstrap suite identity is not ${suite}" >&2
     exit 65
 }
+if [[ -n "${overlay}" ]]; then
+    while IFS= read -r -d '' source; do
+        relative=${source#"${overlay}/"}
+        [[ ! -e "${stage}/rootfs/${relative}" && ! -L "${stage}/rootfs/${relative}" ]] || {
+            echo "app-root build: overlay file collides with base root: ${relative}" >&2
+            exit 65
+        }
+    done < <(find "${overlay}" -type f -print0)
+    cp -a "${overlay}/." "${stage}/rootfs/"
+fi
 
 find "${stage}/rootfs" -print0 | LC_ALL=C sort -z | xargs -0 touch -h --date='@0'
 mksquashfs "${stage}/rootfs" "${stage}/root.raw" \
