@@ -40,7 +40,7 @@ printf '{"schema_version":1,"distribution":"debian-13","suite":"trixie","archite
 EOF
 cat >"${bin}/root-renderer" <<'EOF'
 #!/usr/bin/env python3
-import argparse, os, pathlib, runpy, tomllib
+import argparse, json, os, pathlib, runpy, tomllib
 p = argparse.ArgumentParser()
 for name in ("manifest", "inventory", "platform-contract", "policy-renderer", "policy-output", "output", "app-root-store", "platform-runtime-store"):
     p.add_argument("--" + name, required=True)
@@ -54,7 +54,37 @@ assert runtime["platform-runtime-version"] != "sha256:" + "0" * 64
 renderer = runpy.run_path(os.environ["PF_REAL_ROOT_RENDERER"])
 inventory = renderer["load_inventory"](pathlib.Path(a.inventory))
 assert inventory["platform_runtime_version"] == runtime["platform-runtime-version"]
-for target, body in ((a.output, "[Service]\nRootImage=fixture\n"), (a.policy_output, "{}\n")):
+assert inventory["platform_runtime"] == runtime["platform-runtime"]
+assert inventory["platform_runtime_abi"] == runtime["platform-runtime-abi"]
+assert all(inventory["resources"].values())
+
+# Exercise the remaining descriptor/inventory validation and render path using
+# the installer's exact transformed inputs. Artifact integrity and Rust policy
+# compilation have their own hermetic suites; replacing only those two leaves
+# this test focused on the producer boundary that failed the owned image build.
+globals_ = renderer["render"].__globals__
+globals_["require_artifacts"] = lambda **kwargs: None
+globals_["compile_policy"] = lambda **kwargs: (
+    {"schema_version": 1, "manifest_sha256": "fixture"},
+    ["SupplementaryGroups=audio input pf-session video"],
+)
+rendered = renderer["render"](
+    renderer["load_toml"](pathlib.Path(a.manifest)),
+    inventory,
+    pathlib.Path(a.app_root_store),
+    pathlib.Path(a.platform_runtime_store),
+    manifest_path=pathlib.Path(a.manifest),
+    platform_contract=pathlib.Path(a.platform_contract),
+    policy_renderer=pathlib.Path(a.policy_renderer),
+)
+assert rendered is not None
+assert "# runtime root distribution: debian-13 (trixie)" in rendered
+assert "SupplementaryGroups=audio input pf-session video" in rendered
+resources = json.dumps({
+    "platform_runtime": "/run/pocketforge/platform-runtime",
+    "resources": inventory["resources"],
+}, sort_keys=True, separators=(",", ":")) + "\n"
+for target, body in ((a.output, rendered), (a.policy_output, resources)):
     path = pathlib.Path(target)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body)

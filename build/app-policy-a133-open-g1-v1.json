@@ -5,7 +5,6 @@
       "/dev/snd/controlC0",
       "/dev/snd/pcmC0D0p"
     ],
-    "audio-sockets": [],
     "display-sockets": [
       "/run/pocketforge/session/wayland-0"
     ],
