@@ -12,6 +12,18 @@ family = "pocketforge/a133-powervr"
 abi = "1"
 platform-version = "20"
 
+# The image builder replaces both sentinel digests with artifacts produced and
+# verified in the same build before this descriptor can reach a rootfs.
+[runtime.root]
+schema = 1
+format = "squashfs"
+distribution = "debian-13"
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+platform-runtime = "pocketforge/bookworm-aarch64"
+platform-runtime-abi = "1"
+platform-runtime-version = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+library-paths = []
+
 [launch]
 exec = "bin/pf-launch"
 needs_network = true

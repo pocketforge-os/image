@@ -2346,6 +2346,7 @@ ARG PF_APT_PROXY
 # precedent the sdl stage set (it runs the driver repo's own build-libsdl3.sh). SUBSTRATE=owned wires
 # the kernel/GPU modules from the kernel + gpu-km stages, never vendor blobs.
 COPY --from=image-src . /work/src
+COPY --from=image-src build/app-platform-runtime-a133-open-v1.json /work/app-platform-runtime-a133-open-v1.json
 COPY --from=fetch  /out /work/blobs
 COPY --from=kernel /out/lib/modules /work/kernel-tsp
 COPY --from=kernel /out/build/capabilities /work/kernel-capabilities
@@ -2384,6 +2385,7 @@ case "${PF_SOC}" in
       RUNTIME_DIR=/work/runtime LAUNCHER_DIR=/work/launcher HWPROBE_DIR=/work/hwprobe \
       POOLSUITE_DIR=/work/poolsuite \
       PLATFORM_RUNTIME_DIR=/work/platform-runtime \
+      APP_PLATFORM_RUNTIME_CONFIG=/work/app-platform-runtime-a133-open-v1.json \
       GAMESCOPE_DIR=/work/gamescope-package \
       CTS_BUNDLE_DIR=/work/cts-bundle \
       CURSOR_THEME_DIR=/work/cursor-theme \

@@ -16,6 +16,7 @@ required="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-required.conf"
 drm_systemd_rule="$root/rootfs-overlay/etc/udev/rules.d/70-pocketforge-drm-systemd.rules"
 probe="$root/tools/open-gpu-probe.c"
 mainline_packages="$root/rootfs-packages-mainline.txt"
+platform_runtime_config="$root/build/app-platform-runtime-a133-open-v1.json"
 open_gpu_units='pocketforge-menu.service pf-shell-selected.service pf-foreground@.service'
 
 # Literal Dockerfile variables are intentional in these structural assertions.
@@ -126,6 +127,26 @@ for wsi_runtime_package in libxcb-dri3-0 libxcb-present0 libxshmfence1; do
         exit 1
     }
 done
+for x11_runtime_seed in \
+    usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0 \
+    usr/lib/aarch64-linux-gnu/libxcb-present.so.0 \
+    usr/lib/aarch64-linux-gnu/libxshmfence.so.1; do
+    grep -F "\"$x11_runtime_seed\"" "$platform_runtime_config" >/dev/null || {
+        echo "app platform runtime lacks X11 DRI3 seed: $x11_runtime_seed" >&2
+        exit 1
+    }
+done
+# The DRI3 closure must be built from the actual extracted rootfs and installed
+# into the shipped content-addressed app-runtime store. Merely seeding the
+# config is insufficient: the production Docker path must copy the config into
+# the rootfs stage and pass it to the installer.
+grep -F 'COPY --from=image-src build/app-platform-runtime-a133-open-v1.json /work/app-platform-runtime-a133-open-v1.json' \
+    "$dockerfile" >/dev/null
+grep -F 'APP_PLATFORM_RUNTIME_CONFIG=/work/app-platform-runtime-a133-open-v1.json' \
+    "$dockerfile" >/dev/null
+grep -F 'install-app-platform-runtime.sh' "$customize" >/dev/null
+grep -F 'platform-runtimes/pocketforge-bookworm-aarch64' \
+    "$root/scripts/install-app-platform-runtime.sh" >/dev/null
 # shellcheck disable=SC2016 # Dockerfile variable is intentionally literal.
 grep -F 'FROM pf-build-base AS gpu-um-build' "$dockerfile" >/dev/null
 grep -F 'gpu_um_toolchain_probe=ok distro=debian-bookworm' "$dockerfile" >/dev/null

@@ -121,6 +121,7 @@ LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
 POOLSUITE_DIR="${POOLSUITE_DIR:-/work/poolsuite}"
 PLATFORM_RUNTIME_DIR="${PLATFORM_RUNTIME_DIR:-/work/platform-runtime}"
+APP_PLATFORM_RUNTIME_CONFIG="${APP_PLATFORM_RUNTIME_CONFIG:-}"
 CURSOR_THEME_DIR="${CURSOR_THEME_DIR:-/work/cursor-theme}"
 PF_STEAMLINK_FFMPEG59_MODE="${PF_STEAMLINK_FFMPEG59_MODE:-not-shipped}"
 GAMESCOPE_DIR="${GAMESCOPE_DIR:-/work/gamescope-package}"
@@ -2058,9 +2059,14 @@ chmod +x "${CUSTOMIZE_SCRIPT}"
 # HIT and a direct fetch yield identical rootfs contents). Empty by default = direct
 # snapshot. Not recorded in provenance; it never affects output bytes.
 APT_PROXY_OPT=()
+APT_PROXY_PERSISTED=""
 if [ -n "${PF_APT_PROXY:-}" ]; then
     echo "  apt proxy: ${PF_APT_PROXY} (transparent cache; bytes verified vs signed index)"
-    APT_PROXY_OPT=( --aptopt="Acquire::http::Proxy \"${PF_APT_PROXY}\"" )
+    apt_proxy_aptopt="Acquire::http::Proxy \"${PF_APT_PROXY}\""
+    APT_PROXY_OPT=( --aptopt="${apt_proxy_aptopt}" )
+    # mmdebstrap persists this --aptopt verbatim (plus ';') into the target's
+    # etc/apt/apt.conf.d/99mmdebstrap; the strip step removes exactly this line.
+    APT_PROXY_PERSISTED="${apt_proxy_aptopt};"
 fi
 # ---- Cross-compile the boot animator (bd: tsp-3rd3.4) ----------------------
 # Built before mmdebstrap so the customize hook (which cannot see the outer
@@ -2254,6 +2260,17 @@ fi
     "${ROOTFS_EXTRACTED}" "${VARIANT}" "${PF_DEVICE_ID}"
 
 if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
+    [ -n "${APP_PLATFORM_RUNTIME_CONFIG}" ] || {
+        echo "FATAL: APP_PLATFORM_RUNTIME_CONFIG is required for A133 open GPU images" >&2
+        exit 2
+    }
+    "${SRC_DIR}/scripts/install-app-platform-runtime.sh" \
+        "${APP_PLATFORM_RUNTIME_CONFIG}" "${ROOTFS_EXTRACTED}" "${ROOTFS_EXTRACTED}"
+    if [ "${PF_STEAMLINK_FFMPEG59_MODE}" = v1 ] && [ "${PF_GAMESCOPE_MODE}" = g1 ]; then
+        RUNTIME_DIR="${RUNTIME_DIR}" \
+            "${SRC_DIR}/scripts/install-steamlink-first-run.sh" \
+            "${ROOTFS_EXTRACTED}" "${SNAPSHOT_DATE}" root
+    fi
     "${SRC_DIR}/scripts/verify-mesa-shader-cache.sh" \
         "${GPU_UM_MESA_DIR}/usr/local/lib/libgallium_dri.so"
     "${SRC_DIR}/scripts/verify-open-gpu-provider.sh" \
@@ -2274,6 +2291,15 @@ python3 "${SRC_DIR}/scripts/verify-rootfs-usbnet-bench.py" \
 # Fail the build before ext4 assembly if DHCP DNS cannot reach libc. This is a
 # structural image check; lease population itself is verified on tsp-f956's boot.
 "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${ROOTFS_EXTRACTED}"
+
+# mmdebstrap permanently persists every --aptopt into the target's
+# etc/apt/apt.conf.d/99mmdebstrap, so the PF_APT_PROXY build transport would
+# otherwise ship in the release image (build-6: first-boot cloud-config died
+# on the unreachable 10.0.32.86:3142). Strip exactly the line this builder
+# persisted, then fail closed on anything left under etc/apt using apt's own
+# parser plus the private-endpoint policy (bd tsp-mc9m.41.1002.5).
+"${SRC_DIR}/scripts/strip-rootfs-apt-proxy.sh" "${ROOTFS_EXTRACTED}" "${APT_PROXY_PERSISTED}"
+"${SRC_DIR}/scripts/verify-rootfs-apt-policy.sh" "${ROOTFS_EXTRACTED}"
 
 # fontconfig writes this cache diagnostic while packages are configured. It is
 # build-host/run evidence, not device runtime state. Remove the known producer,

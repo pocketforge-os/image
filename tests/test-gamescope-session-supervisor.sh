@@ -80,6 +80,8 @@ if "--user gamer" not in auth:
     raise SystemExit("X11 ACL helper does not grant only the app uid")
 if "SupplementaryGroups=pf-session" not in auth:
     raise SystemExit("X11 ACL helper cannot project the private app socket group")
+if "ReadWritePaths=/run/pocketforge/x11/.X11-unix" not in auth:
+    raise SystemExit("X11 ACL helper cannot mutate the protected socket directory")
 if "--group pf-session" not in auth or "--mode 0660" not in auth:
     raise SystemExit("X11 ACL helper does not enforce the private socket projection")
 if "ReadWritePaths=/run/pocketforge/x11/.X11-unix" not in auth:
@@ -235,6 +237,48 @@ if check_xwayland_write_contract "${owner}" \
     "${scratch}/publisher-private-x11.service" "${x11_tmpfiles}"; then
     fail "Xwayland write check accepted a publisher-invisible socket path"
 fi
+
+check_xwayland_gpu_provider_contract() {
+    local unit=$1
+
+    python3 - "${unit}" <<'PY'
+import pathlib
+import sys
+
+lines = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+environment = [line.removeprefix("Environment=") for line in lines
+               if line.startswith("Environment=")]
+required = {
+    "VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json",
+    "PVR_I_WANT_A_BROKEN_VULKAN_DRIVER": "1",
+    "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+    "LIBGL_DRIVERS_PATH": "/usr/local/lib/dri",
+    "GBM_BACKENDS_PATH": "/usr/local/lib/gbm",
+}
+for key, value in required.items():
+    if environment.count(f"{key}={value}") != 1:
+        raise SystemExit(1)
+    if sum(entry.startswith(f"{key}=") for entry in environment) != 1:
+        raise SystemExit(1)
+PY
+}
+
+# Gamescope creates Xwayland, so the compositor service must select the open
+# GPU providers explicitly. App-unit provider selection cannot repair an X11
+# server that started without a renderable GLX visual.
+check_xwayland_gpu_provider_contract "${owner}" \
+    || fail "Gamescope does not pin the Xwayland GPU providers"
+for provider in VK_DRIVER_FILES PVR_I_WANT_A_BROKEN_VULKAN_DRIVER \
+    __EGL_VENDOR_LIBRARY_FILENAMES \
+    LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH; do
+    mutant="${scratch}/owner-without-${provider}.service"
+    cp "${owner}" "${mutant}"
+    sed -i "/^Environment=${provider}=/d" "${mutant}"
+    if check_xwayland_gpu_provider_contract "${mutant}"; then
+        fail "GPU provider check accepted a unit without ${provider}"
+    fi
+done
+
 check_drm_readiness_contract() {
     local unit=$1
     local rule=$2

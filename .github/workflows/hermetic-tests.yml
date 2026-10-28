@@ -166,6 +166,7 @@ jobs:
             tests/test-recovery-entry.sh
             tests/test-runtime-path-producers.sh
             tests/test-rootfs-abi-check.sh
+            tests/test-rootfs-apt-policy.sh
             tests/test-rootfs-build-logs.sh
             tests/test-rootfs-bluetooth.sh
             tests/test-rootfs-dns.sh
@@ -178,6 +179,8 @@ jobs:
             tests/test-shell-fonts.sh
             tests/test-steamlink-ffmpeg59-config-normalizer.sh
             tests/test-steamlink-ffmpeg59-runtime.sh
+            tests/test-steamlink-first-run-install.sh
+            tests/test_steamlink_fetch.py
             tests/test-userdata-partition.sh
             tests/test-uboot-logo.sh
             tests/test-usbnet-bench-role.sh
