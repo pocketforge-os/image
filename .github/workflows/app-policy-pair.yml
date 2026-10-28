@@ -57,12 +57,12 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/launcher
-          ref: fb570a088e69921d5d2442c63ae5f97f68a3e1f0
+          ref: e6bb7b43cb7372f4b7a744a0033b260aacc90420
           path: launcher-pair
       - name: Prove exact runtime, launcher, and image candidates together
         run: |
           test "$(git -C runtime-pair rev-parse HEAD)" = 1640d5ec5b0a02b27a51615f176fae9aef784311
-          test "$(git -C launcher-pair rev-parse HEAD)" = fb570a088e69921d5d2442c63ae5f97f68a3e1f0
+          test "$(git -C launcher-pair rev-parse HEAD)" = e6bb7b43cb7372f4b7a744a0033b260aacc90420
           scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
             pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
             pf-framehost-wayland pf-hang-trigger pf-theme pf-input-map pf-prefs pf-prefs-port \
