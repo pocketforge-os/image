@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-ARG PF_BUILD_IMAGE=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r4@sha256:b4616c62629d24f2ccf72935ab9db2303457954a756d59c929121e873d23390e
+ARG PF_BUILD_IMAGE=10.0.32.86:5555/pocketforge/build:10.3-2021.07-bookworm-rust-1.88.0-r5@sha256:efba926c5e796abe1c0fddd39fe45dcee80a2dc5247a104400eac99e05ddddba
 FROM ${PF_BUILD_IMAGE} AS builder
 ARG PF_APT_PROXY
 COPY tests/input-harness/tools/require-apt-proxy.sh /usr/local/libexec/require-apt-proxy.sh
