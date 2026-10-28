@@ -478,4 +478,15 @@ glx_vendor_count=$(find "$rootfs" \( -type f -o -type l \) \
 [ -e "$rootfs/usr/local/lib/libGLX_mesa.so.0" ] \
     || fatal 'canonical GLVND Mesa GLX vendor is missing from /usr/local/lib'
 
-echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=${kmsro_evidence} vulkan=powervr+venus vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
+# Xwayland exports the nonstandard GBM backend name as its GLVND screen vendor.
+# On PowerVR that makes neutral GLVND clients load libGLX_powervr.so.0.  It must
+# be a package-owned, relative alias to the one Mesa implementation above.
+powervr_glx_alias=usr/local/lib/libGLX_powervr.so.0
+[ -L "$rootfs/$powervr_glx_alias" ] \
+    || fatal 'Xwayland PowerVR GLX vendor alias is missing or not a symlink'
+[ "$(readlink "$rootfs/$powervr_glx_alias")" = 'libGLX_mesa.so.0' ] \
+    || fatal 'Xwayland PowerVR GLX vendor alias must select libGLX_mesa.so.0'
+grep -Fx "/$powervr_glx_alias" "$provider_list" >/dev/null \
+    || fatal 'provider does not own Xwayland PowerVR GLX vendor alias'
+
+echo "open-gpu-provider=PASS provider=pocketforge-open-gpu-stack source=${source_sha} egl=glvnd:mesa vendor_json=/usr/share/glvnd/egl_vendor.d/50_mesa.json vendor_library=/usr/local/lib/libEGL_mesa.so.0 surfaceless=mesa-extension+glvnd-platform-display glx=glvnd:mesa glx_vendor_library=/usr/local/lib/libGLX_mesa.so.0 glx_xwayland_vendor_alias=/usr/local/lib/libGLX_powervr.so.0->libGLX_mesa.so.0 gbm=owned dri=zink zink_policy=drirc:powervr kmsro=present zink_renderonly=present kmsro_evidence=${kmsro_evidence} vulkan=powervr+venus vulkan_manifests=${rootfs_icd_count} vulkan_json=/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json venus_json=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json xwayland=glamor-capable debian_mesa=absent"
