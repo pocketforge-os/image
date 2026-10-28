@@ -17,10 +17,12 @@ cache_limit_bytes=16777216
 # PR build 40770175474's two parallel, CPU-bound seeds completed within 446 s
 # wall time on an uncontended host. Use that as a conservative derived per-seed
 # CPU estimate: 900 s is 2.02x measured, while the 2700 s hang backstop is
-# 3.00x the CPU budget (6.05x measured). The legacy timeout override remains a
+# 3.00x the CPU budget (6.05x measured). TERM gets a 10 s grace before KILL,
+# making the absolute wall bound 2710 s. The legacy timeout override remains a
 # lower-precedence compatibility alias for the wall backstop.
 cpu_seconds=${PF_GAMESCOPE_CACHE_CPU_SECONDS:-900}
 wall_seconds=${PF_GAMESCOPE_CACHE_WALL_SECONDS:-${PF_GAMESCOPE_CACHE_TIMEOUT_SECONDS:-2700}}
+kill_after_seconds=${PF_GAMESCOPE_CACHE_KILL_AFTER_SECONDS:-10}
 qemu=${QEMU_AARCH64:-/usr/bin/qemu-aarch64-static}
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/gamescope-pvr-cache.XXXXXX")
 
@@ -33,8 +35,17 @@ trap cleanup EXIT
 case "${cpu_seconds}" in
     ''|*[!0-9]*|0) echo 'PF_GAMESCOPE_CACHE_CPU_SECONDS must be a positive integer' >&2; exit 2 ;;
 esac
+# Force base 10 before using the override in arithmetic (for example, 08).
+cpu_seconds=$((10#${cpu_seconds}))
+(( cpu_seconds > 0 )) || {
+    echo 'PF_GAMESCOPE_CACHE_CPU_SECONDS must be a positive integer' >&2
+    exit 2
+}
 case "${wall_seconds}" in
     ''|*[!0-9]*|0) echo 'PF_GAMESCOPE_CACHE_WALL_SECONDS must be a positive integer' >&2; exit 2 ;;
+esac
+case "${kill_after_seconds}" in
+    ''|*[!0-9]*|0) echo 'PF_GAMESCOPE_CACHE_KILL_AFTER_SECONDS must be a positive integer' >&2; exit 2 ;;
 esac
 [ "${gamescope_sha}" = "${expected_gamescope_sha}" ] || {
     echo "Gamescope source ${gamescope_sha} does not match cache corpus ${expected_gamescope_sha}" >&2
@@ -85,7 +96,8 @@ run_target() {
             "${target_command[@]}")
     fi
 
-    { time timeout --signal=TERM "${wall_seconds}s" \
+    { time timeout --signal=TERM --kill-after="${kill_after_seconds}s" \
+        "${wall_seconds}s" \
         "${target_command[@]}" -L / \
         -E "LD_PRELOAD=${shim}" \
         -E "VK_ICD_FILENAMES=${icd}" \
@@ -114,10 +126,6 @@ report_seed_failure() {
     local system_field
     local timing_line
 
-    case "${rc}" in
-        124) kind=timeout ;;
-        137|152) kind=cpu_limit ;;
-    esac
     timing_line=$(sed -n '/^elapsed_wall_seconds=/p' "${timing}" | tail -n 1)
     if [ -n "${timing_line}" ] && \
        read -r elapsed_field user_field system_field <<<"${timing_line}"; then
@@ -128,6 +136,21 @@ report_seed_failure() {
             -v system_cpu="${cpu_system_seconds}" \
             'BEGIN { printf "%.3f", user_cpu + system_cpu }')
     fi
+    case "${rc}" in
+        124) kind=timeout ;;
+        152) kind=cpu_limit ;;
+        137)
+            # KILL is either timeout's hard wall backstop or RLIMIT_CPU's hard
+            # limit after SIGXCPU. Accounted CPU distinguishes the two.
+            if [ "${cpu_total_seconds}" != unknown ] && \
+               awk -v used="${cpu_total_seconds}" -v budget="${cpu_seconds}" \
+                   'BEGIN { exit !(used >= budget) }'; then
+                kind=cpu_limit
+            else
+                kind=timeout
+            fi
+            ;;
+    esac
 
     echo "gamescope_pvr_seed_failed seed=${number} rc=${rc} kind=${kind}" >&2
     if [ -f "${log}" ]; then

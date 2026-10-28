@@ -238,11 +238,15 @@ if [ "${MESA_DISK_CACHE_SINGLE_FILE:-}" = 1 ]; then
             ;;
         hang)
             echo 'fake_harness_marker=wall_backstop_exceeded'
-            sleep 5
+            trap '' TERM
+            exec tail -f /dev/null
             ;;
         exit)
             echo 'fake_harness_marker=ordinary_failure'
             exit 23
+            ;;
+        quick)
+            echo 'fake_harness_marker=leading_zero_normalized'
             ;;
         *)
             echo "unknown fake harness mode: ${PF_TEST_HARNESS_MODE}" >&2
@@ -336,6 +340,7 @@ run_limit_producer() {
     PF_TEST_HARNESS_MODE=${mode} \
     PF_GAMESCOPE_CACHE_TIMEOUT_SECONDS=${legacy_wall} \
     PF_GAMESCOPE_CACHE_WALL_SECONDS=${wall} \
+    PF_GAMESCOPE_CACHE_KILL_AFTER_SECONDS=1 \
     PF_GAMESCOPE_CACHE_CPU_SECONDS=${cpu} \
     QEMU_AARCH64=${limit_fake_bin}/fake-qemu-aarch64 \
     SOURCE_DATE_EPOCH=1700000000 \
@@ -354,7 +359,7 @@ require_limit_log() {
     fi
 }
 
-for limit_case in ${PF_GAMESCOPE_LIMIT_TEST_CASES:-slow cpu hang exit}; do
+for limit_case in ${PF_GAMESCOPE_LIMIT_TEST_CASES:-slow cpu hang exit leading_zero}; do
     limit_output=${scratch}/limit-output-${limit_case}
     limit_log=${scratch}/limit-${limit_case}.log
     mkdir -p "${limit_output}"
@@ -390,7 +395,7 @@ for limit_case in ${PF_GAMESCOPE_LIMIT_TEST_CASES:-slow cpu hang exit}; do
             set -e
             test "${limit_rc}" -ne 0
             require_limit_log \
-                'gamescope_pvr_seed_failed seed=[12] rc=124 kind=timeout' \
+                'gamescope_pvr_seed_failed seed=[12] rc=137 kind=timeout' \
                 "${limit_log}" 'wall timeout lacked typed seed diagnostics'
             grep -F 'fake_harness_marker=wall_backstop_exceeded' "${limit_log}" >/dev/null
             require_limit_log 'elapsed_wall_seconds=[0-9.]+ cpu_seconds=[0-9.]+' \
@@ -409,6 +414,15 @@ for limit_case in ${PF_GAMESCOPE_LIMIT_TEST_CASES:-slow cpu hang exit}; do
             grep -F 'fake_harness_marker=ordinary_failure' "${limit_log}" >/dev/null
             require_limit_log 'elapsed_wall_seconds=[0-9.]+ cpu_seconds=[0-9.]+' \
                 "${limit_log}" 'ordinary failure lacked elapsed wall/CPU diagnostics'
+            ;;
+        leading_zero)
+            if ! run_limit_producer quick 2 4 08 "${limit_output}" \
+                >"${limit_log}" 2>&1; then
+                cat "${limit_log}" >&2
+                echo 'leading-zero CPU override was not normalized as decimal' >&2
+                exit 1
+            fi
+            grep -F 'gamescope-pvr-cache=PASS' "${limit_log}" >/dev/null
             ;;
         *)
             echo "unknown PF_GAMESCOPE_LIMIT_TEST_CASES entry: ${limit_case}" >&2
