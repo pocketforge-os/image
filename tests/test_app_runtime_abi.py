@@ -71,6 +71,9 @@ class DebianRootBuilderTest(unittest.TestCase):
                 source=$1
                 output=$2
                 test -f "$source/etc/os-release"
+                if [ -n "${PF_TEST_OVERLAY_EXPECT:-}" ]; then
+                    test -f "$source/$PF_TEST_OVERLAY_EXPECT"
+                fi
                 cp "$source/etc/os-release" "$output"
                 """
             ),
@@ -133,6 +136,35 @@ class DebianRootBuilderTest(unittest.TestCase):
         self.assertIn("unsupported distribution", invalid.stderr)
         self.assertEqual(self.log.read_bytes(), before)
         self.assertFalse((self.work / "invalid").exists())
+
+    def test_overlay_is_included_and_symlinks_are_refused(self) -> None:
+        overlay = self.work / "overlay"
+        (overlay / "opt/app").mkdir(parents=True)
+        (overlay / "opt/app/fetcher").write_text("source-owned\n", encoding="utf-8")
+        env = dict(self.env)
+        env["PF_TEST_OVERLAY_EXPECT"] = "opt/app/fetcher"
+        result = run(
+            [
+                str(ROOT_BUILDER), "--distribution", "debian-13", "--architecture", "arm64",
+                "--snapshot", "20261010T000000Z", "--overlay", str(overlay),
+                "--output", str(self.work / "overlay-root"),
+            ],
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        (overlay / "unsafe").symlink_to("fetcher")
+        refused = run(
+            [
+                str(ROOT_BUILDER), "--distribution", "debian-13", "--architecture", "arm64",
+                "--snapshot", "20261010T000000Z", "--overlay", str(overlay),
+                "--output", str(self.work / "unsafe-root"),
+            ],
+            env=self.env,
+        )
+        self.assertEqual(refused.returncode, 65)
+        self.assertIn("overlay contains a link", refused.stderr)
+        self.assertFalse((self.work / "unsafe-root").exists())
 
 
 class PlatformRuntimeBuilderTest(unittest.TestCase):
