@@ -40,7 +40,7 @@ printf '{"schema_version":1,"distribution":"debian-13","suite":"trixie","archite
 EOF
 cat >"${bin}/root-renderer" <<'EOF'
 #!/usr/bin/env python3
-import argparse, json, pathlib, tomllib
+import argparse, os, pathlib, runpy, tomllib
 p = argparse.ArgumentParser()
 for name in ("manifest", "inventory", "platform-contract", "policy-renderer", "policy-output", "output", "app-root-store", "platform-runtime-store"):
     p.add_argument("--" + name, required=True)
@@ -51,7 +51,8 @@ runtime = manifest["runtime"]["root"]
 assert runtime["distribution"] == "debian-13"
 assert runtime["digest"] != "sha256:" + "0" * 64
 assert runtime["platform-runtime-version"] != "sha256:" + "0" * 64
-inventory = json.loads(pathlib.Path(a.inventory).read_text())
+renderer = runpy.run_path(os.environ["PF_REAL_ROOT_RENDERER"])
+inventory = renderer["load_inventory"](pathlib.Path(a.inventory))
 assert inventory["platform_runtime_version"] == runtime["platform-runtime-version"]
 for target, body in ((a.output, "[Service]\nRootImage=fixture\n"), (a.policy_output, "{}\n")):
     path = pathlib.Path(target)
@@ -86,6 +87,7 @@ make_rootfs "${rootfs}"
 PF_STEAMLINK_ROOT_BUILDER="${bin}/root-builder" \
 PF_STEAMLINK_ROOT_RENDERER="${bin}/root-renderer" \
 PF_STEAMLINK_POLICY_RENDERER="${bin}/policy-renderer" \
+PF_REAL_ROOT_RENDERER="${root}/scripts/render-app-runtime-root.py" \
     "${installer}" "${rootfs}" 20261010T000000Z root
 
 manifest="${rootfs}/opt/pocketforge/apps/org.pocketforge.steamlink/app.toml"
@@ -110,6 +112,7 @@ if PF_TEST_BAD_METADATA=1 \
     PF_STEAMLINK_ROOT_BUILDER="${bin}/root-builder" \
     PF_STEAMLINK_ROOT_RENDERER="${bin}/root-renderer" \
     PF_STEAMLINK_POLICY_RENDERER="${bin}/policy-renderer" \
+    PF_REAL_ROOT_RENDERER="${root}/scripts/render-app-runtime-root.py" \
         "${installer}" "${bad_rootfs}" 20261010T000000Z root \
         >"${scratch}/bad.out" 2>"${scratch}/bad.err"; then
     echo 'metadata mismatch was accepted' >&2
