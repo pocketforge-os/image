@@ -72,6 +72,7 @@ run_label=
 systemd_container=
 test_image=
 pass_fields=
+root_image_phase=0
 
 record_failure_reason() {
     local reason="$1"
@@ -554,6 +555,10 @@ case "${1:-}" in
         run_completed=1
         exit 0
         ;;
+    --root-image-writable-dirs)
+        [ "$#" -eq 1 ] || fail 'USAGE: --root-image-writable-dirs'
+        root_image_phase=1
+        ;;
     '')
         ;;
     *)
@@ -565,6 +570,17 @@ esac
 # the host is both non-graphical and a one-job ephemeral Actions runner.
 assert_safe_host /
 assert_real_ephemeral_slot
+
+if [ "${root_image_phase}" -eq 1 ]; then
+    for command_name in sudo python3 mksquashfs unsquashfs losetup; do
+        command -v "${command_name}" >/dev/null 2>&1 \
+            || fail "MISSING_PREREQUISITE: ${command_name}"
+    done
+    PF_TEST_REQUIRE_REAL_SQUASHFS=1 "${root}/tests/test-steamlink-first-run-install.sh"
+    sudo -n env GITHUB_ACTIONS=true python3 \
+        "${fixtures}/root-image-writable-dirs.py" --template "${app_unit}"
+    exit 0
+fi
 
 for command_name in docker git python3 sha256sum; do
     command -v "${command_name}" >/dev/null 2>&1 \

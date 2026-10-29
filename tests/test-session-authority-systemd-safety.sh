@@ -743,6 +743,11 @@ printf 'sentinel=%s\n' "$*" >>"${DOCKER_SENTINEL_LOG:?}"
 exit 97
 EOF
 
+cat >"${fake_bin}/sudo" <<'EOF'
+#!/bin/sh
+printf 'UNEXPECTED_PRIVILEGED_ACTION\n' >>"${DOCKER_CALL_LOG:?}"
+exit 98
+EOF
 chmod +x "${fake_bin}"/* "${sentinel_bin}/docker"
 
 reset_logs() {
@@ -1135,6 +1140,74 @@ PY
     grep -Fq 'INTERACTIVE_WORKSTATION: graphical socket=' "${stderr_log}" || exit 1
     find "$(dirname "${x_socket}")" -mindepth 1 -delete
 done
+
+# The real RootImage phase shares the immutable guard. Neither graphical nor
+# non-Actions hosts may reach sudo or any build/device command.
+for refusal in graphical non-actions; do
+    reset_logs
+    if [ "${refusal}" = graphical ]; then
+        FAKE_GRAPHICAL=1
+        FAKE_GITHUB_ACTIONS=true
+        expected=INTERACTIVE_WORKSTATION
+    else
+        FAKE_GRAPHICAL=0
+        FAKE_GITHUB_ACTIONS=false
+        expected='UNAPPROVED_HOST|INTERACTIVE_WORKSTATION'
+    fi
+    if run_fake --root-image-writable-dirs >"${stdout_log}" 2>"${stderr_log}"; then
+        echo "RootImage phase accepted ${refusal} host" >&2; exit 1
+    fi
+    grep -Eq "${expected}" "${stderr_log}"
+    [ ! -s "${call_log}" ] || { echo 'RootImage refusal reached privileged action' >&2; exit 1; }
+done
+FAKE_GRAPHICAL=0
+FAKE_GITHUB_ACTIONS=true
+
+# Exercise real resource cleanup after an exception, and prove that an attached
+# loop preserves its backing bytes instead of deleting an in-use image.
+python3 - "${root}/tests/session-authority-systemd/root-image-writable-dirs.py" "${tmp}" <<'PYCLEAN'
+import importlib.util, pathlib, subprocess, sys, tempfile
+spec = importlib.util.spec_from_file_location("rootimage", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.time.sleep = lambda _: None
+calls = []
+def fake_run(*args, **kwargs):
+    calls.append(args)
+    return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+module.run = fake_run
+base = pathlib.Path(tempfile.mkdtemp(dir=sys.argv[2]))
+scope = base / "scope"
+scope.mkdir()
+image = scope / "root.raw"
+image.touch()
+unit = base / "own.service"
+unit.touch()
+directories = [base / name for name in ("state", "cache", "runtime")]
+for directory in directories:
+    directory.mkdir()
+try:
+    try:
+        raise ValueError("injected acceptance failure")
+    finally:
+        module.cleanup("own.service", unit, directories, scope, [], [image])
+except ValueError:
+    pass
+assert not scope.exists() and not unit.exists() and not any(p.exists() for p in directories)
+assert calls[:2] == [("systemctl", "stop", "own.service"), ("systemctl", "reset-failed", "own.service")]
+scope.mkdir()
+image.touch()
+unit.touch()
+module.run = lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout="/dev/loop99\n" if args[0] == "losetup" else "", stderr="")
+try:
+    module.cleanup("own.service", unit, [], scope, [], [image])
+except RuntimeError as error:
+    assert "attached loop remains" in str(error)
+else:
+    raise AssertionError("cleanup erased a mounted image")
+assert image.exists() and not unit.exists()
+print("RootImage cleanup controls: PASS failure=cleaned attached-image=preserved")
+PYCLEAN
 
 reset_logs
 FAKE_DISK_MODE=preflight-low

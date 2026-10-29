@@ -7,6 +7,9 @@ on:
     paths:
       - .github/workflows/session-authority-systemd.yml
       - tests/test-session-authority-systemd.sh
+      - scripts/install-steamlink-first-run.sh
+      - scripts/check-app-root-bind-targets.py
+      - tests/test-steamlink-first-run-install.sh
       - tests/test-session-authority-systemd-safety.sh
       - tests/probe-session-authority-docker-systemd.sh
       - tests/verify-session-authority-systemd-preconditions.py
@@ -97,6 +100,12 @@ jobs:
           tests/test-session-authority-systemd.sh 2>&1 |
             tee "$RUNNER_TEMP/session-authority-systemd-live.log"
 
+      - name: Run real read-only SquashFS writable-directory lifecycle
+        run: |
+          set -o pipefail
+          tests/test-session-authority-systemd.sh --root-image-writable-dirs 2>&1 |
+            tee "$RUNNER_TEMP/root-image-writable-dirs.log"
+
       - name: Publish live evidence
         if: always()
         run: |
@@ -106,5 +115,8 @@ jobs:
             grep -E '^(evidence:|session-authority real-systemd: (PASS|FAIL))' \
               "$RUNNER_TEMP/session-authority-systemd-live.log" 2>/dev/null ||
               echo 'live harness produced no receipt'
+            grep -E '^(evidence: rootimage|root-image writable-dirs:)' \
+              "$RUNNER_TEMP/root-image-writable-dirs.log" 2>/dev/null ||
+              echo 'RootImage harness produced no receipt'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
