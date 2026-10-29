@@ -8,6 +8,8 @@ on:
       - 'scripts/render-platform-capabilities.py'
       - 'scripts/install-poolsuite.sh'
       - 'scripts/check-runtime-path-producers.py'
+      - 'scripts/check-app-root-bind-targets.py'
+      - 'scripts/install-steamlink-first-run.sh'
       - 'build/app-policy-a133-open-v1.json'
       - 'build/app-policy-a133-open-g1-v1.json'
       - 'build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf'
@@ -20,6 +22,7 @@ on:
       - 'tests/test-default-app-platform.sh'
       - 'tests/test-poolsuite-app-policy.sh'
       - 'tests/test-steamlink-app-policy.sh'
+      - 'tests/test-steamlink-first-run-install.sh'
       - 'apps/steamlink/app.toml'
       - 'tests/test-poolsuite-rootfs-install.sh'
       - 'tests/test-poolsuite-variant-stage.sh'
@@ -80,6 +83,7 @@ jobs:
             "$(sha256sum "$PF_APP_POLICY_RENDER" | cut -d' ' -f1)"
           tests/test-app-runtime-root.sh
           tests/test-steamlink-app-policy.sh "$PF_APP_POLICY_RENDER"
+          tests/test-steamlink-first-run-install.sh
           tests/test-default-app-platform.sh
           PF_RUNTIME_UNITS_DIR="$GITHUB_WORKSPACE/runtime-pair/systemd" \
             tests/test-runtime-path-producers.sh

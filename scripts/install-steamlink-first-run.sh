@@ -33,7 +33,29 @@ trap cleanup EXIT HUP INT TERM
 
 app_root_overlay="${work}/overlay"
 app_overlay="${app_root_overlay}/opt/pocketforge/apps/${app_id}"
-mkdir -p "${app_overlay}"
+
+# systemd requires bind destinations to exist inside a RootImage before it can
+# construct the app's mount namespace.  The final app.toml contains the digest
+# of this image, so embedding that final manifest here would be self-referential;
+# an empty regular file is the producer-owned, immutable mountpoint instead.
+install -d -m 0755 \
+    "${app_overlay}" \
+    "${app_root_overlay}/run/pocketforge/platform-runtime" \
+    "${app_root_overlay}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1"
+for mountpoint in \
+    /usr/bin/pf-app-launch \
+    /usr/share/pocketforge/platform-capabilities.toml \
+    "/usr/share/pocketforge/app-policy/${app_id}.resources.json" \
+    "/opt/pocketforge/apps/${app_id}/app.toml" \
+    /dev/input/event0 \
+    /dev/dri/renderD128 \
+    /dev/snd/controlC0 \
+    /dev/snd/pcmC0D0p \
+    /run/pocketforge/session/environment \
+    /run/pocketforge/session/wayland-0 \
+    /tmp/.X11-unix/X0; do
+    install -D -m 0644 /dev/null "${app_root_overlay}${mountpoint}"
+done
 install -m 0755 "${app_source}/pf-launch" "${app_overlay}/pf-launch"
 install -m 0755 "${app_source}/steamlink-fetch.py" "${app_overlay}/steamlink-fetch.py"
 install -m 0644 "${app_source}/valve-steamlink-release-key.asc" \

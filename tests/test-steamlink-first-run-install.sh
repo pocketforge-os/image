@@ -3,6 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 installer="${root}/scripts/install-steamlink-first-run.sh"
+bind_checker="${root}/scripts/check-app-root-bind-targets.py"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/steamlink-first-run-install.XXXXXX")
 cleanup() {
     find "${scratch}" -mindepth 1 -delete
@@ -32,7 +33,8 @@ if find "${overlay}" -name '*.tar.gz' -o -name '*.sig' | grep -q .; then
     exit 1
 fi
 mkdir -p "${output}"
-printf '%s\n' source-owned-fetch-root >"${output}/root.raw"
+mksquashfs "${overlay}" "${output}/root.raw" \
+    -noappend -all-root -no-progress -no-xattrs -mkfs-time 0 >/dev/null
 digest=$(sha256sum "${output}/root.raw" | awk '{print $1}')
 [ "${PF_TEST_BAD_METADATA:-0}" = 0 ] || digest=$(printf '%064d' 0)
 printf '{"schema_version":1,"distribution":"debian-13","suite":"trixie","architecture":"arm64","sha256":"%s"}\n' \
@@ -64,9 +66,13 @@ assert all(inventory["resources"].values())
 # this test focused on the producer boundary that failed the owned image build.
 globals_ = renderer["render"].__globals__
 globals_["require_artifacts"] = lambda **kwargs: None
+policy_lines = [
+    line for line in pathlib.Path(os.environ["PF_REAL_POLICY_FRAGMENT"])
+    .read_text(encoding="utf-8").splitlines()
+    if line and line != "[Service]"
+]
 globals_["compile_policy"] = lambda **kwargs: (
-    {"schema_version": 1, "manifest_sha256": "fixture"},
-    ["SupplementaryGroups=audio input pf-session video"],
+    {"schema_version": 1, "manifest_sha256": "fixture"}, policy_lines
 )
 rendered = renderer["render"](
     renderer["load_toml"](pathlib.Path(a.manifest)),
@@ -118,6 +124,7 @@ PF_STEAMLINK_ROOT_BUILDER="${bin}/root-builder" \
 PF_STEAMLINK_ROOT_RENDERER="${bin}/root-renderer" \
 PF_STEAMLINK_POLICY_RENDERER="${bin}/policy-renderer" \
 PF_REAL_ROOT_RENDERER="${root}/scripts/render-app-runtime-root.py" \
+PF_REAL_POLICY_FRAGMENT="${root}/build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
     "${installer}" "${rootfs}" 20261010T000000Z root
 
 manifest="${rootfs}/opt/pocketforge/apps/org.pocketforge.steamlink/app.toml"
@@ -135,6 +142,7 @@ dropin="${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/
 grep -Fx 'BindReadOnlyPaths=/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1' "${dropin}" >/dev/null
 grep -F 'steamlink-ffmpeg59/v1/lib/aarch64-linux-gnu' "${dropin}" >/dev/null
 test ! -e "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf"
+python3 "${bind_checker}" --root "${rootfs}"
 
 bad_rootfs="${scratch}/bad-rootfs"
 make_rootfs "${bad_rootfs}"
@@ -143,6 +151,7 @@ if PF_TEST_BAD_METADATA=1 \
     PF_STEAMLINK_ROOT_RENDERER="${bin}/root-renderer" \
     PF_STEAMLINK_POLICY_RENDERER="${bin}/policy-renderer" \
     PF_REAL_ROOT_RENDERER="${root}/scripts/render-app-runtime-root.py" \
+    PF_REAL_POLICY_FRAGMENT="${root}/build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
         "${installer}" "${bad_rootfs}" 20261010T000000Z root \
         >"${scratch}/bad.out" 2>"${scratch}/bad.err"; then
     echo 'metadata mismatch was accepted' >&2
