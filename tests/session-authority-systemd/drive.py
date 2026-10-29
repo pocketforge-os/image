@@ -690,8 +690,9 @@ def launch_held(mode: str) -> SessionEventScope:
 def assert_rooted_prefsd_denial() -> None:
     """Exercise the production deny directive with a real rooted mount namespace.
 
-    The host producer stays healthy throughout. Only the app root omits its
-    socket, matching the Build 56 failure before ExecStartPre.
+    RootImage automatically prefixes access-control paths with the image root.
+    RootDirectory needs an explicit '+' for equivalent semantics (systemd 252).
+    The host producer stays healthy while the app root omits its socket.
     """
     base = Path("/run/prefsd-namespace-control")
     root = base / "root"
@@ -703,14 +704,15 @@ def assert_rooted_prefsd_denial() -> None:
         (root / name).symlink_to(f"usr/{name}")
     probe = base / "probe.py"
     probe.write_text(
-        "import pathlib, socket\n"
+        "import errno, pathlib, socket\n"
         "s = socket.socket(socket.AF_UNIX)\n"
         "try:\n"
         "    s.connect('/run/pocketforge/prefsd.sock')\n"
-        "except OSError:\n"
-        "    pathlib.Path('/evidence/payload').write_text('blocked\\n')\n"
+        "except OSError as error:\n"
+        "    result = errno.errorcode[error.errno]\n"
         "else:\n"
-        "    raise SystemExit('prefsd accessible inside rooted app')\n"
+        "    result = 'ok'\n"
+        "pathlib.Path('/evidence/payload').write_text(result + chr(10))\n"
     )
     required = base / "session-environment"
     required.write_text("fixture session\n")
@@ -723,31 +725,53 @@ def assert_rooted_prefsd_denial() -> None:
     unit_file = Path("/run/systemd/system") / unit
 
     def run_case(name: str, directive: str, *, present: bool = False,
-                 missing_required: bool = False, succeeds: bool) -> None:
+                 missing_required: bool = False, succeeds: bool,
+                 expected: str = "ENOENT") -> None:
         command("systemctl", "stop", unit, check=False)
         command("systemctl", "reset-failed", unit, check=False)
         for marker in (results / "prestart", results / "payload"):
             marker.unlink(missing_ok=True)
         source = str(required) + ("-missing" if missing_required else "")
+        path = directive.removeprefix("InaccessiblePaths=")
+        # RootDirectory's host-relative default would drop this path as outside
+        # the root; preserve '-' ordering while selecting RootImage semantics.
+        rooted_path = "-+" + path[1:] if path.startswith("-") else "+" + path if path else ""
+        listener = socket.socket(socket.AF_UNIX)
+        rooted_socket = root / str(PREFSD_SOCKET).lstrip("/")
+        if present:
+            listener.bind(str(rooted_socket))
+            rooted_socket.chmod(0o666)
+            listener.listen(16)
+            outside_root = command(
+                "setpriv", "--reuid=gamer", "--regid=gamer", "--init-groups", "python3", "-c",
+                "import socket; s=socket.socket(socket.AF_UNIX); "
+                f"s.connect({str(rooted_socket)!r}); print('ok')",
+            )
+            require(outside_root.stdout.strip() == "ok", "rooted socket outside control failed")
+        else:
+            require(not rooted_socket.exists(), "absent-deny fixture unexpectedly contains prefsd")
         lines = [
             "[Service]", "Type=oneshot", "RemainAfterExit=yes", "User=gamer", "Group=gamer",
             f"RootDirectory={root}", "ProtectSystem=strict", "ProtectHome=yes",
-            "NoNewPrivileges=yes", "PrivateTmp=yes", "ReadWritePaths=/evidence",
+            "NoNewPrivileges=yes", "PrivateTmp=yes", "ReadWritePaths=+/evidence",
             "BindReadOnlyPaths=/usr", f"BindReadOnlyPaths={probe}:/probe.py",
             f"BindReadOnlyPaths={source}:/run/pocketforge/session/environment",
-            f"BindPaths={results}:/evidence", directive,
+            f"BindPaths={results}:/evidence", f"InaccessiblePaths={rooted_path}",
             "ExecStartPre=/usr/bin/touch /evidence/prestart",
             "ExecStart=/usr/bin/python3 /probe.py",
         ]
-        if present:
-            lines.append(f"BindReadOnlyPaths={PREFSD_SOCKET}")
         unit_file.write_text("\n".join(lines) + "\n")
         command("systemctl", "daemon-reload")
-        started = command("systemctl", "start", unit, check=False)
+        try:
+            started = command("systemctl", "start", unit, check=False)
+        finally:
+            listener.close()
+            if present:
+                rooted_socket.unlink(missing_ok=True)
         if succeeds:
             require(started.returncode == 0 and (results / "prestart").exists()
-                    and (results / "payload").read_text() == "blocked\n",
-                    f"rooted prefsd {name} did not execute prestart and denied payload: "
+                    and (results / "payload").read_text() == expected + "\n",
+                    f"rooted prefsd {name} did not execute prestart and payload={expected}: "
                     f"{started.stderr}")
         else:
             prestart = property_value(unit, "ExecStartPre")
@@ -765,10 +789,13 @@ def assert_rooted_prefsd_denial() -> None:
         require(outside.stdout.strip() == "ok", "host prefsd positive control failed")
         run_case("old-absent-red", f"InaccessiblePaths={PREFSD_SOCKET}", succeeds=False)
         run_case("fixed-absent-green", deny, succeeds=True)
-        run_case("fixed-present-denied", deny, present=True, succeeds=True)
+        run_case("rooted-present-positive", "InaccessiblePaths=", present=True,
+                 succeeds=True, expected="ok")
+        run_case("fixed-present-denied", deny, present=True, succeeds=True, expected="EACCES")
         run_case("required-session-absent", deny, missing_required=True, succeeds=False)
         evidence("prefsd_rooted old_absent=226/NAMESPACE fixed_absent=prestart+payload "
-                 "present_outside=ok present_inside=blocked required_session_absent=226/NAMESPACE")
+                 "present_outside=ok present_inside_without_deny=ok present_inside=EACCES "
+                 "required_session_absent=226/NAMESPACE")
     finally:
         command("systemctl", "stop", unit, check=False)
         unit_file.unlink(missing_ok=True)
