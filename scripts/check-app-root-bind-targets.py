@@ -152,6 +152,13 @@ def audit(root: pathlib.Path, unsquashfs: str) -> list[str]:
                 if target not in contents:
                     errors.append(f"app={instance}: {directive} destination missing from RootImage: {target} (binding {value!r})")
                     continue
+                source = None
+                if directive in BIND_KEYS:
+                    source = host_path(root, value.lstrip("-+!").split(":", 1)[0])
+                    if source.exists():
+                        directory = source.is_dir()
+                        if not directory and contents[target] == "d":
+                            errors.append(f"app={instance}: {directive} file destination is a directory: {target}")
                 if directory and contents[target] != "d":
                     errors.append(f"app={instance}: {directive} destination is not a directory: {target}")
                 for parent in pathlib.PurePosixPath(target).parents:

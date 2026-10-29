@@ -61,7 +61,7 @@ for raw in image.read_text(encoding="utf-8").splitlines():
     if not relative or "/" + relative == drop:
         continue
     if os.environ.get("PF_TEST_WRONG_TYPE") == "/" + relative:
-        kind = "-"
+        kind = os.environ.get("PF_TEST_TARGET_TYPE", "-")
     print(kind + "rwxr-xr-x 0/0 0 2026-01-01 00:00 squashfs-root/" + relative)
 EOF
 cat >"${bin}/root-renderer" <<'EOF'
@@ -194,6 +194,18 @@ for target in /var/lib/pocketforge/apps/org.pocketforge.steamlink \
     fi
     grep -F "destination is not a directory: ${target}" "${scratch}/negative.err" >/dev/null
 done
+if PF_TEST_WRONG_TYPE="${missing_target}" PF_TEST_TARGET_TYPE=d python3 "${bind_checker}" --root "${rootfs}" \
+    --unsquashfs "${bin}/unsquashfs" >"${scratch}/negative.out" 2>"${scratch}/negative.err"; then
+    echo 'directory accepted for explicit file bind destination' >&2; exit 1
+fi
+grep -F "file destination is a directory: ${missing_target}" "${scratch}/negative.err" >/dev/null
+if PF_TEST_WRONG_TYPE="${missing_target}" python3 "${bind_checker}" --root "${rootfs}" \
+    --unsquashfs "${bin}/unsquashfs" >"${scratch}/negative.out" 2>"${scratch}/negative.err"; then
+    # The shim sets this to a file, so the unchanged regular placeholder passes.
+    :
+else
+    echo 'regular explicit bind destination rejected' >&2; exit 1
+fi
 if PF_TEST_WRONG_TYPE=/var/lib/pocketforge python3 "${bind_checker}" --root "${rootfs}" \
     --unsquashfs "${bin}/unsquashfs" >"${scratch}/negative.out" 2>"${scratch}/negative.err"; then
     echo 'wrong parent type accepted' >&2; exit 1
