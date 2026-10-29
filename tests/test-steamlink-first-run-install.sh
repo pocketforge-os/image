@@ -231,6 +231,41 @@ assert image == "/root.raw"
 assert values == [("ReadWritePaths", "/replacement/sample"), ("ReadWritePaths", "/later/sample"), ("StateDirectory", "new/sample")], values
 (units / "pf-app@sample.service").write_text("[Service]\nRootImage=/instance.raw\n")
 assert api["parse_unit"](api["unit_paths"](units)["sample"], "sample")[0] == "/instance.raw"
+# Exhaust the shared bind-reset domain across empty/RO/RW/both initial lists,
+# either resetting directive, optional later RO/RW entries, and reset placement
+# in the base unit or a drop-in. Unrelated writable/directory lists must survive.
+from itertools import product
+cases = 0
+for initial, reset, later, placement in product(range(4), ("BindPaths", "BindReadOnlyPaths", None), (None, "BindPaths", "BindReadOnlyPaths"), ("base", "dropin")):
+    if reset is None and later is not None:
+        continue
+    fixture = units / f"matrix-{cases}"
+    fixture.mkdir()
+    base = "[Service]\nRootImage=/root.raw\nReadWritePaths=/keep-rw\nStateDirectory=keep-state\n"
+    initial_values = []
+    for bit, key in ((1, "BindPaths"), (2, "BindReadOnlyPaths")):
+        if initial & bit:
+            base += f"{key}=/initial-{bit}\n"
+            initial_values.append((key, f"/initial-{bit}"))
+    tail = f"{reset}=\n" if reset else ""
+    if later:
+        tail += f"{later}=/later\n"
+    if placement == "base":
+        base += tail
+    else:
+        directory = fixture / "pf-app@sample.service.d"
+        directory.mkdir()
+        (directory / "10-reset.conf").write_text("[Service]\n" + tail)
+    (fixture / "pf-app@.service").write_text(base)
+    # Ensure instance discovery for the base-only case too.
+    (fixture / "pf-app@sample.service.d").mkdir(exist_ok=True)
+    actual = api["parse_unit"](api["unit_paths"](fixture)["sample"], "sample")[1]
+    expected = [("ReadWritePaths", "/keep-rw"), ("StateDirectory", "keep-state")]
+    expected += ([(later, "/later")] if later else []) if reset else initial_values
+    assert sorted(actual) == sorted(expected), (initial, reset, later, placement, actual)
+    cases += 1
+assert cases == 56, cases
+print(f"Bind reset property sweep: PASS cases={cases} initial=empty,RO,RW,both reset=RO,RW,none placement=base,dropin later=none,RO,RW unrelated=preserved")
 PYTEST
 
 bad_rootfs="${scratch}/bad-rootfs"

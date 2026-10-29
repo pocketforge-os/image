@@ -90,7 +90,10 @@ def parse_unit(paths: list[pathlib.Path], instance: str) -> tuple[str | None, li
             elif words:
                 values[key].extend(words)
             else:
-                values[key].clear()
+                # systemd stores both bind directives in one mount list. An
+                # empty assignment to either clears regular and read-only binds.
+                for reset_key in BIND_KEYS if key in BIND_KEYS else (key,):
+                    values[reset_key].clear()
     return root_image, [(key, word) for key in LIST_KEYS for word in values[key]]
 
 
