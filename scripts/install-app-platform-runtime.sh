@@ -81,6 +81,11 @@ mkdir -p "$STORE"
 mv "$OUTPUT" "$TARGET"
 printf '%s\n' "$DIGEST" >"$TARGET/.manifest-sha256"
 chmod -R a-w "$TARGET"
+# The builder stages under mkdtemp, so the moved top-level directory starts
+# as 0700, and a restrictive build umask can also leave regular files 0600.
+# Keep the immutable store readable and traversable by the unprivileged app.
+find "$TARGET" -type d -exec chmod a+rx {} +
+find "$TARGET" -type f -exec chmod a+r {} +
 chmod 0444 "$TARGET/.manifest-sha256"
 
 printf 'app-platform-runtime=PASS store=%s digest=sha256:%s\n' \
