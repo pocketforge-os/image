@@ -94,7 +94,7 @@ def main() -> None:
         root.mkdir()
         for name in ("/bin/sh", "/bin/sleep"):
             executable(root, name)
-        for path in [*writable, Path(f"/opt/pocketforge/apps/{app_id}"), Path("/run/pocketforge/session"), Path("/tmp/.X11-unix"), Path("/dev"), Path("/proc"), Path("/sys"), Path("/etc")]:
+        for path in [*writable, Path(f"/opt/pocketforge/apps/{app_id}"), Path("/run/pocketforge/session"), Path("/tmp/.X11-unix"), Path("/var/tmp"), Path("/dev"), Path("/proc"), Path("/sys"), Path("/etc")]:
             (root / path.relative_to("/")).mkdir(parents=True, exist_ok=True)
         for path in ("run/pocketforge/session/environment", "run/pocketforge/session/wayland-0", "tmp/.X11-unix/X0"):
             (root / path).touch()
