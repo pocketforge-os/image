@@ -374,6 +374,37 @@ fi
 gamescope_self_test="$(python3 "${fake_gamescope}" --self-test)"
 grep -Fqx 'fake-gamescope self-test: PASS filesystem_sockets=2 abstract_sockets=0' \
     <<<"${gamescope_self_test}" || exit 1
+
+# The production tmpfiles entry owns the shared X11 parent as root while the
+# compositor runs as pf-gamescope. Model that writable-but-not-owned directory:
+# the fixture may bind X0 there, but must not try to chmod the parent itself.
+python3 - "${fake_gamescope}" <<'PY'
+import importlib.machinery
+from pathlib import Path
+import tempfile
+from unittest.mock import patch
+import sys
+
+loader = importlib.machinery.SourceFileLoader("fake_gamescope", sys.argv[1])
+fake_gamescope = loader.load_module()
+with tempfile.TemporaryDirectory(prefix="pf-fake-gamescope-parent.") as directory:
+    parent = Path(directory) / ".X11-unix"
+    parent.mkdir()
+    parent.chmod(0o1777)
+    fake_gamescope.X11 = parent / "X0"
+    with patch.object(Path, "chmod", side_effect=PermissionError(1, "Operation not permitted")):
+        listener = fake_gamescope.listen(fake_gamescope.X11)
+        listener.close()
+        fake_gamescope.X11.unlink()
+        try:
+            parent.chmod(0o1777)
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("non-owner chmod negative control unexpectedly succeeded")
+print("fake-gamescope shared X11 parent: PASS bind=allowed chmod=refused")
+PY
+
 verify_resident_fixture "${resident_unit}" "${harness}" "${recipe}" || {
     echo 'session-authority systemd-safety: FAIL: resident hold is absent from the live fixture' >&2
     exit 1
