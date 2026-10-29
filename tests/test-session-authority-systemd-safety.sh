@@ -120,7 +120,7 @@ verify_session_producer_fixture() {
         && grep -Fq 'command("systemd-tmpfiles", "--create")' "${driver}" \
         && grep -Fq '"${fixture_root%/}/run/pocketforge/x11/.X11-unix/"X*' \
             "${harness}" \
-        && grep -Fq 'for group_name in gamer audio input video pf-session; do' "${recipe}" \
+        && grep -Fq 'for group_name in gamer audio input video pf-session pf-gamescope; do' "${recipe}" \
         && grep -Fq 'COPY pocketforge-session-publisher.service' "${recipe}" \
         && grep -Fq 'COPY pf-session-publish /usr/lib/pocketforge/pf-session-publish' "${recipe}" \
         && grep -Fq 'probe["POCKETFORGE_SESSION"] == "/run/pocketforge/session"' "${driver}" \
