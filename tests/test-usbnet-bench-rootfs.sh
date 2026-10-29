@@ -263,11 +263,22 @@ set -eu
 [ -s "$1" ]
 echo 'app-platform-runtime fixture=SKIP scope=usbnet-final-rootfs-ordering'
 EOF
+# ELF splitting now precedes runtime sealing and the USB guard. The fixture
+# deliberately has no ELF files; its real gate/split and sealed-runtime order
+# are covered by test-elf-buildid.sh and test-app-platform-runtime-seal.py.
+cat > "${fixture_src}/scripts/finalize-elf-debuginfo.sh" <<'EOF'
+#!/bin/sh
+set -eu
+[ "$#" -eq 2 ]
+[ -d "$1" ] && [ -d "$2" ]
+echo 'elf-finalizer fixture=SKIP scope=usbnet-final-rootfs-ordering'
+EOF
 chmod 0755 "${fixture_src}/scripts/verify-open-gpu-tools.sh" \
     "${fixture_src}/scripts/verify-open-gpu-provider.sh" \
     "${fixture_src}/scripts/verify-mesa-shader-cache.sh" \
     "${fixture_src}/scripts/install-cursor-theme.sh" \
-    "${fixture_src}/scripts/install-app-platform-runtime.sh"
+    "${fixture_src}/scripts/install-app-platform-runtime.sh" \
+    "${fixture_src}/scripts/finalize-elf-debuginfo.sh"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829.bin"
 : > "${fixture}/blobs/sunxi/a133/wifi-firmware/fw_xr829_bt.bin"
 for library in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so gbm/dri_gbm.so; do
@@ -367,6 +378,9 @@ build_case() {
     grep -F -- 'app-platform-runtime fixture=SKIP scope=usbnet-final-rootfs-ordering' \
         "${fixture}/${label}.out" >/dev/null \
         || fail "build ${label}: app-platform runtime fixture was not invoked"
+    grep -F -- 'elf-finalizer fixture=SKIP scope=usbnet-final-rootfs-ordering' \
+        "${fixture}/${label}.out" >/dev/null \
+        || fail "build ${label}: ELF finalizer fixture was not invoked"
     echo "build-rootfs.sh ${label} (--variant ${variant}): '${want}'"
 }
 build_case release-clean release none \
