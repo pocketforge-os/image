@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -54,6 +55,23 @@ static int check_pixels(const char *stage, const unsigned char *pixels, size_t l
     return 0;
 }
 
+static unsigned char ximage_channel(unsigned long pixel, unsigned long mask)
+{
+    unsigned int shift = 0;
+    unsigned long maximum;
+    unsigned long value;
+
+    if (mask == 0)
+        return 0;
+    while ((mask & 1UL) == 0) {
+        mask >>= 1;
+        ++shift;
+    }
+    maximum = mask;
+    value = (pixel >> shift) & maximum;
+    return (unsigned char)((value * 255UL + maximum / 2UL) / maximum);
+}
+
 static void wait_for_map(Display *display, Window window)
 {
     XEvent event;
@@ -80,11 +98,14 @@ int main(void)
     Colormap colormap = None;
     Window window = None;
     XSetWindowAttributes attributes;
+    XImage *image = NULL;
     const char *renderer;
     const char *version;
     const char *vendor;
+    const struct timespec present_settle = { .tv_sec = 0, .tv_nsec = 250000000L };
     int major = 0, minor = 0;
     int status = 1;
+    int x, y;
 
     display = XOpenDisplay(NULL);
     if (display == NULL) {
@@ -178,17 +199,41 @@ int main(void)
     glXSwapBuffers(display, window);
     glXWaitGL();
     XSync(display, False);
-    glReadBuffer(GL_FRONT);
-    glReadPixels(0, 0, PROBE_WIDTH, PROBE_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    glFinish();
-    if (glGetError() != GL_NO_ERROR || check_pixels("front", pixels, sizeof(pixels)) != 0)
+    /*
+     * DRI3 does not require a post-swap GL_FRONT read to name the pixmap that
+     * Xwayland has presented.  Read the X drawable instead: that verifies the
+     * swap reached the X server rather than re-reading an implementation-owned
+     * GL buffer.  The bounded settle covers the asynchronous Xwayland present.
+     */
+    nanosleep(&present_settle, NULL);
+    XSync(display, False);
+    image = XGetImage(display, window, 0, 0, PROBE_WIDTH, PROBE_HEIGHT,
+                      AllPlanes, ZPixmap);
+    if (image == NULL) {
+        fprintf(stderr, "glx-readback-probe: XGetImage failed\n");
+        goto cleanup;
+    }
+    for (y = 0; y < PROBE_HEIGHT; ++y) {
+        for (x = 0; x < PROBE_WIDTH; ++x) {
+            unsigned long pixel = XGetPixel(image, x, y);
+            size_t offset = ((size_t)y * PROBE_WIDTH + (size_t)x) * 4;
+
+            pixels[offset] = ximage_channel(pixel, image->red_mask);
+            pixels[offset + 1] = ximage_channel(pixel, image->green_mask);
+            pixels[offset + 2] = ximage_channel(pixel, image->blue_mask);
+            pixels[offset + 3] = 0xff;
+        }
+    }
+    if (check_pixels("xdrawable", pixels, sizeof(pixels)) != 0)
         goto cleanup;
 
-    printf("glx_version=%s vendor=%s renderer=%s draw=ok back_crc32=%08x present=ok front_crc32=%08x\n",
+    printf("glx_version=%s vendor=%s renderer=%s draw=ok back_crc32=%08x present=ok xdrawable_crc32=%08x\n",
            version, vendor, renderer, GLX_READBACK_CRC32, GLX_READBACK_CRC32);
     status = 0;
 
 cleanup:
+    if (image != NULL)
+        XDestroyImage(image);
     if (display != NULL && context != NULL) {
         glXMakeCurrent(display, None, NULL);
         glXDestroyContext(display, context);
