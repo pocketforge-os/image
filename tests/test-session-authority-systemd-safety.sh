@@ -104,6 +104,8 @@ verify_session_producer_fixture() {
             'After=pf-input-broker.service pocketforge-session-publisher.service' \
             "${test_target}" \
         && grep -Fqx 'Type=notify' "${test_gamescope}" \
+        && grep -Fqx 'User=pf-gamescope' "${test_gamescope}" \
+        && grep -Fqx 'Group=pf-gamescope' "${test_gamescope}" \
         && grep -Fqx 'ExecStart=/usr/local/libexec/fake-gamescope' "${test_gamescope}" \
         && grep -Fq 'WAYLAND = Path("/run/pocketforge/gamescope/gamescope-0")' \
             "${fake_gamescope}" \
@@ -120,7 +122,7 @@ verify_session_producer_fixture() {
         && grep -Fq 'command("systemd-tmpfiles", "--create")' "${driver}" \
         && grep -Fq '"${fixture_root%/}/run/pocketforge/x11/.X11-unix/"X*' \
             "${harness}" \
-        && grep -Fq 'for group_name in gamer audio input video pf-session; do' "${recipe}" \
+        && grep -Fq 'for group_name in gamer audio input video pf-session pf-gamescope; do' "${recipe}" \
         && grep -Fq 'COPY pocketforge-session-publisher.service' "${recipe}" \
         && grep -Fq 'COPY pf-session-publish /usr/lib/pocketforge/pf-session-publish' "${recipe}" \
         && grep -Fq 'probe["POCKETFORGE_SESSION"] == "/run/pocketforge/session"' "${driver}" \
@@ -363,9 +365,46 @@ if verify_session_producer_fixture "${session_target}" "${tmp}/incomplete-gamesc
     echo 'session-authority systemd-safety: FAIL: compositor without clean-exit fallback passed' >&2
     exit 1
 fi
+sed 's/^User=pf-gamescope$/User=root/' \
+    "${fake_gamescope_unit}" >"${tmp}/root-gamescope.service"
+if verify_session_producer_fixture "${session_target}" "${tmp}/root-gamescope.service"; then
+    echo 'session-authority systemd-safety: FAIL: compositor with the wrong peer identity passed' >&2
+    exit 1
+fi
 gamescope_self_test="$(python3 "${fake_gamescope}" --self-test)"
 grep -Fqx 'fake-gamescope self-test: PASS filesystem_sockets=2 abstract_sockets=0' \
     <<<"${gamescope_self_test}" || exit 1
+
+# The production tmpfiles entry owns the shared X11 parent as root while the
+# compositor runs as pf-gamescope. Model that writable-but-not-owned directory:
+# the fixture may bind X0 there, but must not try to chmod the parent itself.
+python3 - "${fake_gamescope}" <<'PY'
+import importlib.machinery
+from pathlib import Path
+import tempfile
+from unittest.mock import patch
+import sys
+
+loader = importlib.machinery.SourceFileLoader("fake_gamescope", sys.argv[1])
+fake_gamescope = loader.load_module()
+with tempfile.TemporaryDirectory(prefix="pf-fake-gamescope-parent.") as directory:
+    parent = Path(directory) / ".X11-unix"
+    parent.mkdir()
+    parent.chmod(0o1777)
+    fake_gamescope.X11 = parent / "X0"
+    with patch.object(Path, "chmod", side_effect=PermissionError(1, "Operation not permitted")):
+        listener = fake_gamescope.listen(fake_gamescope.X11)
+        listener.close()
+        fake_gamescope.X11.unlink()
+        try:
+            parent.chmod(0o1777)
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("non-owner chmod negative control unexpectedly succeeded")
+print("fake-gamescope shared X11 parent: PASS bind=allowed chmod=refused")
+PY
+
 verify_resident_fixture "${resident_unit}" "${harness}" "${recipe}" || {
     echo 'session-authority systemd-safety: FAIL: resident hold is absent from the live fixture' >&2
     exit 1
@@ -1502,6 +1541,12 @@ grep -Fq -- '- tests/verify-session-authority-app-dropins.py' "${workflow}" || e
 app_fixture_output="$(python3 "${app_fixture_verifier}")"
 grep -Eq '^session-authority app-fixture closure: PASS hard_dependencies=[0-9]+ provided=[0-9]+$' \
     <<<"${app_fixture_output}" || exit 1
+if ! grep -Fq 'for group_name in gamer audio input video pf-session pf-gamescope; do' "${recipe}" \
+    || ! grep -Fq 'getent passwd pf-gamescope' "${recipe}" \
+    || ! grep -Fq 'useradd --system --gid pf-gamescope --no-create-home pf-gamescope' "${recipe}"; then
+    echo 'session-authority systemd-safety: FAIL: fixture does not provide runtime compositor identity pf-gamescope' >&2
+    exit 1
+fi
 sed '/^COPY pf-prefsd\.service \/etc\/systemd\/system\/pf-prefsd\.service$/d' \
     "${recipe}" >"${tmp}/missing-prefsd.Containerfile"
 if python3 "${app_fixture_verifier}" --containerfile "${tmp}/missing-prefsd.Containerfile" \

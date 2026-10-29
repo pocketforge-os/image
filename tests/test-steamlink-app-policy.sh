@@ -16,13 +16,13 @@ fragment=${root}/build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf
 tmp=$(mktemp -d "${RUNNER_TEMP:-/tmp}/steamlink-policy.XXXXXX")
 trap 'find "$tmp" -mindepth 1 -delete; rmdir "$tmp"' EXIT HUP INT TERM
 
-python3 - "$manifest" "$inventory" "$producer" <<'PY'
+python3 - "$manifest" "$inventory" "$producer" "$fragment" <<'PY'
 import json
 import pathlib
 import sys
 import tomllib
 
-manifest_path, inventory_path, producer_path = map(pathlib.Path, sys.argv[1:])
+manifest_path, inventory_path, producer_path, fragment_path = map(pathlib.Path, sys.argv[1:])
 with manifest_path.open("rb") as source:
     manifest = tomllib.load(source)
 inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
@@ -43,6 +43,13 @@ producer = producer_path.read_text(encoding="utf-8")
 literal = "'use = [\"audio\", \"input\", \"x11\", \"egress:tcp/443@*\"]'"
 if literal not in producer:
     raise SystemExit("Steam Link app-root producer capability policy differs")
+fragment = fragment_path.read_text(encoding="utf-8").splitlines()
+optional_system_bus = "InaccessiblePaths=-/run/dbus/system_bus_socket"
+required_system_bus = "InaccessiblePaths=/run/dbus/system_bus_socket"
+if optional_system_bus not in fragment:
+    raise SystemExit("Steam Link policy does not tolerate an absent system bus socket")
+if required_system_bus in fragment:
+    raise SystemExit("Steam Link policy still requires the system bus socket to exist")
 PY
 
 common="--platform-contract $platform --resource-inventory $inventory --app-dir /opt/pocketforge/apps/org.pocketforge.steamlink --platform-runtime /usr --xdg-config /var/lib/pocketforge/apps/org.pocketforge.steamlink/config --xdg-state /var/lib/pocketforge/apps/org.pocketforge.steamlink/state --xdg-cache /var/cache/pocketforge/apps/org.pocketforge.steamlink"

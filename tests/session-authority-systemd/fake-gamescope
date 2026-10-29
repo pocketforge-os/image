@@ -35,8 +35,6 @@ def notify_ready() -> None:
 
 def listen(path: Path) -> socket.socket:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.parent == X11.parent:
-        path.parent.chmod(0o1777)
     try:
         path.unlink()
     except FileNotFoundError:
@@ -51,6 +49,9 @@ def listen(path: Path) -> socket.socket:
 def self_test() -> None:
     with tempfile.TemporaryDirectory(prefix="pf-fake-gamescope.") as directory:
         root = Path(directory)
+        x11_parent = root / ".X11-unix"
+        x11_parent.mkdir()
+        x11_parent.chmod(0o1777)
         paths = [root / "gamescope-0", root / ".X11-unix" / "X0"]
         listeners = [listen(path) for path in paths]
         clients: list[socket.socket] = []
