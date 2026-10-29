@@ -125,6 +125,7 @@ jobs:
             tests/test-dma-heap-udev-policy.sh
             tests/test-dockerfile-pf-transforms.sh
             tests/test-elf-buildid.sh
+            tests/test-app-platform-runtime-seal.py
             tests/test-gamescope-package-path.sh
             tests/test-gamescope-pvr-cache.sh
             tests/test-gamescope-kms-select.sh

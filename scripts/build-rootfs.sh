@@ -2260,6 +2260,26 @@ fi
 "${SRC_DIR}/scripts/verify-gles32-candidate-profile.sh" \
     "${ROOTFS_EXTRACTED}" "${VARIANT}" "${PF_DEVICE_ID}"
 
+# Producer identity checks compare the original unstripped artifact bytes.
+# Run them before the owned debuginfo transform changes the shipped copies.
+if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
+    "${SRC_DIR}/scripts/verify-mesa-shader-cache.sh" \
+        "${GPU_UM_MESA_DIR}/usr/local/lib/libgallium_dri.so"
+    "${SRC_DIR}/scripts/verify-open-gpu-provider.sh" \
+        "${ROOTFS_EXTRACTED}" "${GPU_UM_MESA_DIR}"
+    "${SRC_DIR}/scripts/verify-open-gpu-tools.sh" \
+        "${ROOTFS_EXTRACTED}" "${GPU_UM_MESA_DIR}"
+fi
+
+# Finalize ELF bytes before the app runtime builder copies and hashes them.
+# All subsequent producers copy these finalized files or install non-ELF
+# descriptors, scripts and opaque app-root images. The final manifest below
+# must still run after those copies, to include their installed CAS paths.
+echo "[cr-symbols] ELF build-id gate + debuginfo split before runtime sealing"
+PF_OBJCOPY="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-objcopy" \
+PF_STRIP="${CROSS_STRIP}" \
+    "${SRC_DIR}/scripts/finalize-elf-debuginfo.sh" "${ROOTFS_EXTRACTED}" "${OUT_DIR}"
+
 if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
     [ -n "${APP_PLATFORM_RUNTIME_CONFIG}" ] || {
         echo "FATAL: APP_PLATFORM_RUNTIME_CONFIG is required for A133 open GPU images" >&2
@@ -2272,12 +2292,6 @@ if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
             "${SRC_DIR}/scripts/install-steamlink-first-run.sh" \
             "${ROOTFS_EXTRACTED}" "${SNAPSHOT_DATE}" root
     fi
-    "${SRC_DIR}/scripts/verify-mesa-shader-cache.sh" \
-        "${GPU_UM_MESA_DIR}/usr/local/lib/libgallium_dri.so"
-    "${SRC_DIR}/scripts/verify-open-gpu-provider.sh" \
-        "${ROOTFS_EXTRACTED}" "${GPU_UM_MESA_DIR}"
-    "${SRC_DIR}/scripts/verify-open-gpu-tools.sh" \
-        "${ROOTFS_EXTRACTED}" "${GPU_UM_MESA_DIR}"
 fi
 
 # The dev bench USB network (bd tsp-mc9m.41.984.34.2) switches USB0's role, so
@@ -2331,16 +2345,17 @@ if [ "${PF_DEVICE_ID}" = "a133-open-7x" ]; then
     "${SRC_DIR}/scripts/verify-rootfs-bluetooth.sh" "${ROOTFS_EXTRACTED}"
 fi
 
-# --- ELF build-ids, debuginfo split, image build-id manifest (bd tsp-ihne1.33) ---
+# --- Final image build-id manifest (bd tsp-ihne1.33) ---
 # Gate: every ELF in the assembled rootfs outside the closed vendor dirs must
 # carry a GNU build-id, or the build fails. DWARF-carrying owned binaries are
-# split into the debuginfod-compatible symbol store under OUT_DIR/pf-debuginfo
-# (private to cr-server; hosting is wired by tsp-ihne1.34) and the shipped
-# copies are stripped here, right before ext4 assembly.
-echo "[cr-symbols] ELF build-id gate + debuginfo split + image build-id manifest"
-PF_OBJCOPY="/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-objcopy" \
-PF_STRIP="${CROSS_STRIP}" \
-    "${SRC_DIR}/scripts/finalize-elf-debuginfo.sh" "${ROOTFS_EXTRACTED}" "${OUT_DIR}"
+# split before runtime sealing. This last pass is read-only over ELF bytes:
+# include copied runtime ELFs without invalidating their ABI or CAS identity.
+echo "[cr-symbols] final ELF build-id gate + complete image build-id manifest"
+"${SRC_DIR}/scripts/finalize-elf-debuginfo.sh" \
+    "${ROOTFS_EXTRACTED}" "${OUT_DIR}" --manifest-only
+if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
+    python3 "${SRC_DIR}/scripts/verify-app-platform-runtime.py" "${ROOTFS_EXTRACTED}"
+fi
 
 # Report rootfs size
 ROOTFS_DU="$(du -sm "${ROOTFS_EXTRACTED}" | cut -f1)"

@@ -2,7 +2,7 @@
 # finalize-elf-debuginfo.sh — the cr-symbols step the image builders run on the
 # assembled rootfs tree (bd tsp-ihne1.33): gate, split, manifest, publish.
 #
-#   usage: finalize-elf-debuginfo.sh ROOTFS OUT_DIR
+#   usage: finalize-elf-debuginfo.sh ROOTFS OUT_DIR [--manifest-only]
 #
 #   1. Gate   — fail the build unless every ELF in ROOTFS outside the closed
 #      vendor dirs carries a GNU build-id (pf-elf-buildid.py check). Closed
@@ -13,6 +13,8 @@
 #   3. Manifest — emit the image build-id manifest to OUT_DIR and install the
 #      on-device copy (+sha256) at /usr/share/pocketforge/elf-build-id-manifest.tsv
 #      so the on-device collector can decide which modules it may name.
+#      --manifest-only repeats the gate and manifest after producers copy
+#      finalized ELFs into sealed runtime paths; it never splits/strips again.
 #
 # The store/manifest in OUT_DIR ride the export stage of `pf build` (the v1
 # symbol store is private to cr-server; hosting is wired by tsp-ihne1.34).
@@ -23,7 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-    echo "usage: finalize-elf-debuginfo.sh ROOTFS OUT_DIR [--closed-paths DIR ...]" >&2
+    echo "usage: finalize-elf-debuginfo.sh ROOTFS OUT_DIR [--manifest-only] [--closed-paths DIR ...]" >&2
     exit 2
 }
 
@@ -31,6 +33,11 @@ usage() {
 ROOTFS="$1"
 OUT_DIR="$2"
 shift 2
+MANIFEST_ONLY=0
+if [ "${1:-}" = "--manifest-only" ]; then
+    MANIFEST_ONLY=1
+    shift
+fi
 [ "${1:-}" != "--closed-paths" ] || shift
 CLOSED_PATHS=("$@")
 if [ "${#CLOSED_PATHS[@]}" -eq 0 ]; then
@@ -55,8 +62,10 @@ echo "[elf-buildid] gate: every ELF outside closed vendor dirs must carry a GNU 
 python3 "$PY" check "$ROOTFS" --closed-paths "${CLOSED_PATHS[@]}"
 
 STORE="$OUT_DIR/pf-debuginfo"
-echo "[elf-buildid] split: DWARF-carrying ELFs -> $STORE (debuginfod layout)"
-python3 "$PY" split "$ROOTFS" "$STORE" --closed-paths "${CLOSED_PATHS[@]}"
+if [ "$MANIFEST_ONLY" = 0 ]; then
+    echo "[elf-buildid] split: DWARF-carrying ELFs -> $STORE (debuginfod layout)"
+    python3 "$PY" split "$ROOTFS" "$STORE" --closed-paths "${CLOSED_PATHS[@]}"
+fi
 
 echo "[elf-buildid] manifest: image build-id manifest"
 python3 "$PY" manifest "$ROOTFS" --closed-paths "${CLOSED_PATHS[@]}" \
