@@ -115,6 +115,10 @@ package_is_installed xwayland || fatal 'Xwayland is not installed for the glamor
 [ -x "$rootfs/usr/bin/Xwayland" ] || fatal 'Xwayland binary is missing'
 package_is_installed mesa-utils || fatal 'mesa-utils is not installed for GLX identity evidence'
 [ -x "$rootfs/usr/bin/glxinfo" ] || fatal 'glxinfo binary is missing'
+package_is_installed libxcb-glx0 \
+    || fatal 'libxcb-glx0 is not installed for the GLX vendor runtime'
+[ -e "$rootfs/usr/lib/aarch64-linux-gnu/libxcb-glx.so.0" ] \
+    || fatal 'libxcb-glx.so.0 is missing for the GLX vendor runtime'
 [ -e "$rootfs/usr/lib/aarch64-linux-gnu/libEGL.so.1" ] \
     || fatal 'neutral GLVND libEGL.so.1 dispatcher is missing'
 [ -e "$rootfs/usr/lib/aarch64-linux-gnu/libGL.so.1" ] \

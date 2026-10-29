@@ -11,6 +11,7 @@ glmark2-es2-drm
 glmark2-es2-wayland
 glmark2-es2-x11
 kmscube
+libxcb-glx0
 mesa-utils
 vulkan-tools
 xwayland
