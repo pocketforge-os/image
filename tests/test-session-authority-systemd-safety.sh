@@ -104,6 +104,8 @@ verify_session_producer_fixture() {
             'After=pf-input-broker.service pocketforge-session-publisher.service' \
             "${test_target}" \
         && grep -Fqx 'Type=notify' "${test_gamescope}" \
+        && grep -Fqx 'User=pf-gamescope' "${test_gamescope}" \
+        && grep -Fqx 'Group=pf-gamescope' "${test_gamescope}" \
         && grep -Fqx 'ExecStart=/usr/local/libexec/fake-gamescope' "${test_gamescope}" \
         && grep -Fq 'WAYLAND = Path("/run/pocketforge/gamescope/gamescope-0")' \
             "${fake_gamescope}" \
@@ -361,6 +363,12 @@ sed '/^OnSuccess=pocketforge-gamescope-fallback.service$/d' \
     "${fake_gamescope_unit}" >"${tmp}/incomplete-gamescope.service"
 if verify_session_producer_fixture "${session_target}" "${tmp}/incomplete-gamescope.service"; then
     echo 'session-authority systemd-safety: FAIL: compositor without clean-exit fallback passed' >&2
+    exit 1
+fi
+sed 's/^User=pf-gamescope$/User=root/' \
+    "${fake_gamescope_unit}" >"${tmp}/root-gamescope.service"
+if verify_session_producer_fixture "${session_target}" "${tmp}/root-gamescope.service"; then
+    echo 'session-authority systemd-safety: FAIL: compositor with the wrong peer identity passed' >&2
     exit 1
 fi
 gamescope_self_test="$(python3 "${fake_gamescope}" --self-test)"
