@@ -628,7 +628,7 @@ def render(
         "SupplementaryGroups=pf-session",
         "NoNewPrivileges=yes",
         "PrivateTmp=yes",
-        "InaccessiblePaths=/run/pocketforge/prefsd.sock",
+        "InaccessiblePaths=-/run/pocketforge/prefsd.sock",
         f"ReadWritePaths=/var/lib/pocketforge/apps/{app_id}",
         f"BindReadOnlyPaths={platform_root}:/run/pocketforge/platform-runtime",
         "BindReadOnlyPaths=/usr/bin/pf-app-launch",

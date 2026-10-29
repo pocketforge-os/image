@@ -27,7 +27,7 @@ run_label_key=org.pocketforge.session-authority-run
 
 runtime_sha=8c87d7b60ceb604489b6343355732504a06d743c
 runtime_repository=https://github.com/pocketforge-os/runtime.git
-app_unit_sha256=c9459665638bf7d04faf6bbfea99899ed7ed5ab3d535a4930e377ba6a85337e6
+app_unit_sha256=513853e3bd338f9cfee89e53fab3ffb9eff4eb33ad3050aa7f8a6ffda0177f28
 # tsp-ihne1.7: the session-wide broker wiring under test. The runtime unit
 # is taken verbatim from the paired runtime router head; the two drop-ins come
 # from this image tree. These pins make the real-systemd fixture test the same

@@ -687,6 +687,95 @@ def launch_held(mode: str) -> SessionEventScope:
     return scope
 
 
+def assert_rooted_prefsd_denial() -> None:
+    """Exercise the production deny directive with a real rooted mount namespace.
+
+    The host producer stays healthy throughout. Only the app root omits its
+    socket, matching the Build 56 failure before ExecStartPre.
+    """
+    base = Path("/run/prefsd-namespace-control")
+    root = base / "root"
+    results = base / "results"
+    for path in (root / "usr", root / "run/pocketforge/session", root / "evidence", results):
+        path.mkdir(parents=True, exist_ok=True)
+    results.chmod(0o777)
+    for name in ("bin", "sbin", "lib", "lib64"):
+        (root / name).symlink_to(f"usr/{name}")
+    probe = base / "probe.py"
+    probe.write_text(
+        "import pathlib, socket\n"
+        "s = socket.socket(socket.AF_UNIX)\n"
+        "try:\n"
+        "    s.connect('/run/pocketforge/prefsd.sock')\n"
+        "except OSError:\n"
+        "    pathlib.Path('/evidence/payload').write_text('blocked\\n')\n"
+        "else:\n"
+        "    raise SystemExit('prefsd accessible inside rooted app')\n"
+    )
+    required = base / "session-environment"
+    required.write_text("fixture session\n")
+    production = Path("/etc/systemd/system/pf-app@.service").read_text().splitlines()
+    denies = [line for line in production if line.startswith("InaccessiblePaths=")
+              and str(PREFSD_SOCKET) in line]
+    require(len(denies) == 1, f"ambiguous production prefsd deny: {denies}")
+    deny = denies[0]
+    unit = "pf-prefsd-rooted-control.service"
+    unit_file = Path("/run/systemd/system") / unit
+
+    def run_case(name: str, directive: str, *, present: bool = False,
+                 missing_required: bool = False, succeeds: bool) -> None:
+        command("systemctl", "stop", unit, check=False)
+        command("systemctl", "reset-failed", unit, check=False)
+        for marker in (results / "prestart", results / "payload"):
+            marker.unlink(missing_ok=True)
+        source = str(required) + ("-missing" if missing_required else "")
+        lines = [
+            "[Service]", "Type=oneshot", "RemainAfterExit=yes", "User=gamer", "Group=gamer",
+            f"RootDirectory={root}", "ProtectSystem=strict", "ProtectHome=yes",
+            "NoNewPrivileges=yes", "PrivateTmp=yes", "ReadWritePaths=/evidence",
+            "BindReadOnlyPaths=/usr", f"BindReadOnlyPaths={probe}:/probe.py",
+            f"BindReadOnlyPaths={source}:/run/pocketforge/session/environment",
+            f"BindPaths={results}:/evidence", directive,
+            "ExecStartPre=/usr/bin/touch /evidence/prestart",
+            "ExecStart=/usr/bin/python3 /probe.py",
+        ]
+        if present:
+            lines.append(f"BindReadOnlyPaths={PREFSD_SOCKET}")
+        unit_file.write_text("\n".join(lines) + "\n")
+        command("systemctl", "daemon-reload")
+        started = command("systemctl", "start", unit, check=False)
+        if succeeds:
+            require(started.returncode == 0 and (results / "prestart").exists()
+                    and (results / "payload").read_text() == "blocked\n",
+                    f"rooted prefsd {name} did not execute prestart and denied payload: "
+                    f"{started.stderr}")
+        else:
+            prestart = property_value(unit, "ExecStartPre")
+            require(started.returncode != 0 and "status=226" in prestart
+                    and not (results / "prestart").exists()
+                    and not (results / "payload").exists(),
+                    f"rooted prefsd {name} did not fail before prestart at NAMESPACE: {prestart}")
+
+    try:
+        outside = command(
+            "setpriv", "--reuid=gamer", "--regid=gamer", "--init-groups", "python3", "-c",
+            "import socket; s=socket.socket(socket.AF_UNIX); "
+            f"s.connect({str(PREFSD_SOCKET)!r}); print('ok')",
+        )
+        require(outside.stdout.strip() == "ok", "host prefsd positive control failed")
+        run_case("old-absent-red", f"InaccessiblePaths={PREFSD_SOCKET}", succeeds=False)
+        run_case("fixed-absent-green", deny, succeeds=True)
+        run_case("fixed-present-denied", deny, present=True, succeeds=True)
+        run_case("required-session-absent", deny, missing_required=True, succeeds=False)
+        evidence("prefsd_rooted old_absent=226/NAMESPACE fixed_absent=prestart+payload "
+                 "present_outside=ok present_inside=blocked required_session_absent=226/NAMESPACE")
+    finally:
+        command("systemctl", "stop", unit, check=False)
+        unit_file.unlink(missing_ok=True)
+        command("systemctl", "reset-failed", unit, check=False)
+        command("systemctl", "daemon-reload")
+
+
 def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     """What the real pf-app@ sandbox and the real broker drop-in give each side."""
     probe = json.loads(PROBE.read_text())
@@ -1717,6 +1806,7 @@ def main() -> None:
     )
     wait_for(lambda: unit_is_active(OWNER_UNIT), "initial selected owner")
     wait_for_owner_grab("boot")
+    assert_rooted_prefsd_denial()
     broker_boot = assert_broker_dormant_at_boot()
     bare_target = assert_bare_target_is_unneeded()
     resident_session = assert_resident_session_stays_up()

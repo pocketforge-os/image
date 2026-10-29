@@ -33,6 +33,9 @@ for relative in ("pf-shell-selected.service", "pf-foreground@.service"):
     assert WRITER_GROUP in unit, f"{relative} lacks {WRITER_GROUP}"
 
 app = text(SYSTEMD / "pf-app@.service")
+assert f"InaccessiblePaths=-{SOCKET}" in app.splitlines()
+assert "BindsTo=pf-prefsd.service" in app.splitlines()
+assert "After=local-fs.target pocketforge-gamescope-session.target pf-prefsd.service" in app.splitlines()
 assert WRITER_GROUP not in app, "the app template inherited preference-write authority"
 
 rootfs_builder = text(ROOT / "scripts/build-rootfs.sh")
