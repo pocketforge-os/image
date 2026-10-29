@@ -52,7 +52,7 @@ ReadOnlyPaths=/opt/pocketforge/apps/%i
 ReadWritePaths=/var/lib/pocketforge/apps/%i /var/cache/pocketforge/apps/%i /run/pf-app/%i
 InaccessiblePaths=-/run/pocketforge/session-authority.sock
 InaccessiblePaths=-/dev/uinput
-InaccessiblePaths=/run/pocketforge/prefsd.sock
+InaccessiblePaths=-/run/pocketforge/prefsd.sock
 # No session bus (bd: tsp-ihne1.5). Wayland apps get text only through
 # gamescope's text-input protocol. The address defeats libdbus/GDBus autolaunch
 # and the $XDG_RUNTIME_DIR/bus lookup. The private input-method bus is

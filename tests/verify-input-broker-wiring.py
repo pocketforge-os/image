@@ -99,7 +99,7 @@ assert f"PF_BROKER_SOCK={BROKER_SOCK}" in environment, environment
 assert values(app, "Service", "InaccessiblePaths") == [
     f"-{AUTHORITY_SOCK}",
     "-/dev/uinput",
-    PREFSD_SOCK,
+    f"-{PREFSD_SOCK}",
     "-/run/pf-ime",
 ]
 assert values(app, "Service", "SupplementaryGroups") == ["pf-session"]

@@ -322,7 +322,7 @@ class RendererTest(unittest.TestCase):
         self.assertIn("PrivateDevices=yes", unit)
         self.assertIn("DevicePolicy=closed", unit)
         self.assertIn(
-            "InaccessiblePaths=/run/pocketforge/prefsd.sock", unit
+            "InaccessiblePaths=-/run/pocketforge/prefsd.sock", unit
         )
         self.assertNotIn("pf-pref-writer", unit)
         self.assertIn(
