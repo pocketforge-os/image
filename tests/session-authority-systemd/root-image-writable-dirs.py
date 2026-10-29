@@ -22,9 +22,9 @@ def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, check=check, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
-def executable(root: Path, name: str) -> None:
+def executable(root: Path, name: str, target_name: str | None = None) -> None:
     source = Path(name)
-    target = root / source.relative_to("/")
+    target = root / Path(target_name or name).relative_to("/")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source.resolve(), target)
     target.chmod(0o755)
@@ -101,6 +101,56 @@ def main() -> None:
             (root / path.relative_to("/")).mkdir(parents=True, exist_ok=True)
         for path in ("run/pocketforge/session/environment", "run/pocketforge/session/wayland-0", "tmp/.X11-unix/X0"):
             (root / path).touch()
+        readonly_probe = root / "readonly-probe"
+        readonly_probe.mkdir(mode=0o777)
+        readonly_probe.chmod(0o777)
+        control = scope / "writable-control"
+        control.mkdir(mode=0o777)
+        control.chmod(0o777)
+        probe_source = scope / "write-probe.c"
+        probe_binary = scope / "write-probe"
+        probe_source.write_text(r'''#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    struct stat info;
+    char path[4096];
+    if (argc != 6 || getuid() != (uid_t)strtoul(argv[3], NULL, 10) ||
+            getgid() != (gid_t)strtoul(argv[4], NULL, 10) ||
+            stat(argv[1], &info) || !S_ISDIR(info.st_mode) ||
+            (info.st_mode & 0777) != 0777 ||
+            info.st_uid != (uid_t)strtoul(argv[5], NULL, 10)) return 2;
+    int length = snprintf(path, sizeof(path), "%s/write-attempt", argv[1]);
+    if (length < 0 || (size_t)length >= sizeof(path)) return 2;
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    int error = errno;
+    if (fd >= 0) {
+        if (close(fd)) return 2;
+        if (!strcmp(argv[2], "writable")) {
+            printf("write-probe result=writable uid=%lu gid=%lu mode=0777 owner=%lu\n",
+                   (unsigned long)getuid(), (unsigned long)getgid(), (unsigned long)info.st_uid);
+            return 0;
+        }
+        fprintf(stderr, "write-probe unexpected writable filesystem\n");
+        return 1;
+    }
+    if (!strcmp(argv[2], "erofs") && error == EROFS) {
+        printf("write-probe errno=EROFS uid=%lu gid=%lu mode=0777 owner=%lu\n",
+               (unsigned long)getuid(), (unsigned long)getgid(), (unsigned long)info.st_uid);
+        return 0;
+    }
+    fprintf(stderr, "write-probe unexpected errno=%d (%s)\n", error, strerror(error));
+    return 1;
+}
+''')
+        run("cc", "-Wall", "-Wextra", "-Werror", "-O2", str(probe_source), "-o", str(probe_binary))
+        executable(root, str(probe_binary), "/bin/write-probe")
+        control_result = run("setpriv", "--reuid", str(account.pw_uid), "--regid", str(account.pw_gid), "--clear-groups", str(probe_binary), str(control), "writable", str(account.pw_uid), str(account.pw_gid), "0")
+        print("evidence: rootimage writable_control=" + control_result.stdout.strip().replace(" ", "_"), flush=True)
         (root / "payload.sh").write_text('''#!/bin/sh
 set -eu
 state=/var/lib/pocketforge/apps/$PF_APP_ID
@@ -109,8 +159,8 @@ runtime=/run/pf-app/$PF_APP_ID
 printf 'payload\\n' >> "$state/payload"
 printf 'payload\\n' >> "$cache/payload"
 printf 'payload\\n' >> "$runtime/payload"
-if (printf forbidden > /outside-permitted-mounts) 2>/dev/null; then exit 91; fi
-printf 'readonly\\n' > "$runtime/readonly"
+/bin/write-probe /readonly-probe erofs $PF_TEST_UID $PF_TEST_GID 0
+printf 'EROFS\\n' > "$runtime/readonly"
 exec /bin/sleep infinity
 ''')
         # Four real immutable filesystems: baseline and each independent omission.
@@ -144,6 +194,7 @@ RootImageOptions=ro
 EnvironmentFile=
 EnvironmentFile={environment}
 Environment=PF_APP_ID=%i
+Environment=PF_TEST_UID={account.pw_uid} PF_TEST_GID={account.pw_gid}
 ExecStartPre=
 ExecStartPre=/bin/sh -ec 'printf prestart > /run/pf-app/%i/prestart'
 ExecStart=
@@ -179,11 +230,14 @@ BindPaths={session}/X0:/tmp/.X11-unix/X0
                 if run("systemctl", "is-failed", unit, check=False).returncode == 0:
                     break
                 time.sleep(0.05)
+            if not (writable[2] / "readonly").exists():
+                journal = run("journalctl", "--no-pager", "--output=cat", "--lines=12", "--unit", unit, check=False).stdout
+                raise AssertionError((label, "payload did not prove EROFS", journal))
             assert (writable[2] / "prestart").read_text() == "prestart", label
-            assert (writable[2] / "readonly").read_text() == "readonly\n", label
+            assert (writable[2] / "readonly").read_text() == "EROFS\n", label
             for directory in writable:
                 assert (directory / "payload").is_file(), (label, directory)
-            print(f"evidence: rootimage case={label} result=pass prestart=present payload=present outside=readonly", flush=True)
+            print(f"evidence: rootimage case={label} result=pass prestart=present payload=present outside_errno=EROFS", flush=True)
 
         for index, name in enumerate(("state", "cache"), 1):
             start(images[index], False, "missing-" + name)

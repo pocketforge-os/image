@@ -572,7 +572,7 @@ assert_safe_host /
 assert_real_ephemeral_slot
 
 if [ "${root_image_phase}" -eq 1 ]; then
-    for command_name in sudo python3 mksquashfs unsquashfs losetup; do
+    for command_name in sudo python3 mksquashfs unsquashfs losetup cc setpriv; do
         command -v "${command_name}" >/dev/null 2>&1 \
             || fail "MISSING_PREREQUISITE: ${command_name}"
     done
