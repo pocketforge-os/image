@@ -697,7 +697,9 @@ def assert_rooted_prefsd_denial() -> None:
     base = Path("/run/prefsd-namespace-control")
     root = base / "root"
     results = base / "results"
-    for path in (root / "usr", root / "run/pocketforge/session", root / "evidence", results):
+    projection = base / "run-projection"
+    for path in (root / "usr", root / "run/pocketforge/session", root / "evidence",
+                 results, projection / "session"):
         path.mkdir(parents=True, exist_ok=True)
     results.chmod(0o777)
     for name in ("bin", "sbin", "lib", "lib64"):
@@ -716,6 +718,7 @@ def assert_rooted_prefsd_denial() -> None:
     )
     required = base / "session-environment"
     required.write_text("fixture session\n")
+    (projection / "session/environment").touch()
     production = Path("/etc/systemd/system/pf-app@.service").read_text().splitlines()
     denies = [line for line in production if line.startswith("InaccessiblePaths=")
               and str(PREFSD_SOCKET) in line]
@@ -737,7 +740,10 @@ def assert_rooted_prefsd_denial() -> None:
         # the root; preserve '-' ordering while selecting RootImage semantics.
         rooted_path = "-+" + path[1:] if path.startswith("-") else "+" + path if path else ""
         listener = socket.socket(socket.AF_UNIX)
-        rooted_socket = root / str(PREFSD_SOCKET).lstrip("/")
+        # MountAPIVFS defaults to yes for RootDirectory and creates a fresh
+        # /run. Project a parent directory so its socket survives that mount;
+        # binding the socket itself would conflict with the same-path denial.
+        rooted_socket = projection / PREFSD_SOCKET.name
         if present:
             listener.bind(str(rooted_socket))
             rooted_socket.chmod(0o666)
@@ -755,6 +761,7 @@ def assert_rooted_prefsd_denial() -> None:
             f"RootDirectory={root}", "ProtectSystem=strict", "ProtectHome=yes",
             "NoNewPrivileges=yes", "PrivateTmp=yes", "ReadWritePaths=+/evidence",
             "BindReadOnlyPaths=/usr", f"BindReadOnlyPaths={probe}:/probe.py",
+            f"BindReadOnlyPaths={projection}:/run/pocketforge",
             f"BindReadOnlyPaths={source}:/run/pocketforge/session/environment",
             f"BindPaths={results}:/evidence", f"InaccessiblePaths={rooted_path}",
             "ExecStartPre=/usr/bin/touch /evidence/prestart",
@@ -769,16 +776,21 @@ def assert_rooted_prefsd_denial() -> None:
             if present:
                 rooted_socket.unlink(missing_ok=True)
         if succeeds:
-            require(started.returncode == 0 and (results / "prestart").exists()
-                    and (results / "payload").read_text() == expected + "\n",
-                    f"rooted prefsd {name} did not execute prestart and payload={expected}: "
-                    f"{started.stderr}")
+            prestarted = (results / "prestart").exists()
+            payload = (results / "payload").read_text() if (results / "payload").exists() else "missing"
+            require(started.returncode == 0 and prestarted and payload == expected + "\n",
+                    f"rooted prefsd {name} expected payload={expected}: "
+                    f"start_rc={started.returncode} prestarted={prestarted} actual_payload={payload!r} "
+                    f"prestart={property_value(unit, 'ExecStartPre')} "
+                    f"main_status={property_value(unit, 'ExecMainStatus')} {started.stderr}")
         else:
             prestart = property_value(unit, "ExecStartPre")
             require(started.returncode != 0 and "status=226" in prestart
                     and not (results / "prestart").exists()
                     and not (results / "payload").exists(),
                     f"rooted prefsd {name} did not fail before prestart at NAMESPACE: {prestart}")
+        evidence(f"prefsd_rooted_case case={name} result=PASS "
+                 f"expected={expected if succeeds else '226/NAMESPACE'}")
 
     try:
         outside = command(
