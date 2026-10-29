@@ -3,6 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 installer="${root}/scripts/install-steamlink-first-run.sh"
+bind_checker="${root}/scripts/check-app-root-bind-targets.py"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/steamlink-first-run-install.XXXXXX")
 cleanup() {
     find "${scratch}" -mindepth 1 -delete
@@ -32,11 +33,29 @@ if find "${overlay}" -name '*.tar.gz' -o -name '*.sig' | grep -q .; then
     exit 1
 fi
 mkdir -p "${output}"
-printf '%s\n' source-owned-fetch-root >"${output}/root.raw"
+# The root-image auditor consumes unsquashfs's file list, so this fixture keeps
+# the test hermetic by storing the same relative-path inventory as plain text.
+# Production still builds and audits the real SquashFS in build-rootfs.sh.
+find "${overlay}" -mindepth 1 -printf '%P\n' | LC_ALL=C sort >"${output}/root.raw"
 digest=$(sha256sum "${output}/root.raw" | awk '{print $1}')
 [ "${PF_TEST_BAD_METADATA:-0}" = 0 ] || digest=$(printf '%064d' 0)
 printf '{"schema_version":1,"distribution":"debian-13","suite":"trixie","architecture":"arm64","sha256":"%s"}\n' \
     "${digest}" >"${output}/root.metadata.json"
+EOF
+cat >"${bin}/unsquashfs" <<'EOF'
+#!/usr/bin/env python3
+import os
+import pathlib
+import sys
+
+image = pathlib.Path(sys.argv[-1])
+drop = os.environ.get("PF_TEST_DROP_BIND_TARGET", "")
+print("squashfs-root")
+for raw in image.read_text(encoding="utf-8").splitlines():
+    relative = raw.strip().lstrip("/")
+    if not relative or "/" + relative == drop:
+        continue
+    print("squashfs-root/" + relative)
 EOF
 cat >"${bin}/root-renderer" <<'EOF'
 #!/usr/bin/env python3
@@ -64,9 +83,13 @@ assert all(inventory["resources"].values())
 # this test focused on the producer boundary that failed the owned image build.
 globals_ = renderer["render"].__globals__
 globals_["require_artifacts"] = lambda **kwargs: None
+policy_lines = [
+    line for line in pathlib.Path(os.environ["PF_REAL_POLICY_FRAGMENT"])
+    .read_text(encoding="utf-8").splitlines()
+    if line and line != "[Service]"
+]
 globals_["compile_policy"] = lambda **kwargs: (
-    {"schema_version": 1, "manifest_sha256": "fixture"},
-    ["SupplementaryGroups=audio input pf-session video"],
+    {"schema_version": 1, "manifest_sha256": "fixture"}, policy_lines
 )
 rendered = renderer["render"](
     renderer["load_toml"](pathlib.Path(a.manifest)),
@@ -93,7 +116,8 @@ cat >"${bin}/policy-renderer" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
-chmod 0755 "${bin}/root-builder" "${bin}/root-renderer" "${bin}/policy-renderer"
+chmod 0755 "${bin}/root-builder" "${bin}/unsquashfs" \
+    "${bin}/root-renderer" "${bin}/policy-renderer"
 
 make_rootfs() {
     local target=$1 digest
@@ -118,6 +142,7 @@ PF_STEAMLINK_ROOT_BUILDER="${bin}/root-builder" \
 PF_STEAMLINK_ROOT_RENDERER="${bin}/root-renderer" \
 PF_STEAMLINK_POLICY_RENDERER="${bin}/policy-renderer" \
 PF_REAL_ROOT_RENDERER="${root}/scripts/render-app-runtime-root.py" \
+PF_REAL_POLICY_FRAGMENT="${root}/build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
     "${installer}" "${rootfs}" 20261010T000000Z root
 
 manifest="${rootfs}/opt/pocketforge/apps/org.pocketforge.steamlink/app.toml"
@@ -135,6 +160,17 @@ dropin="${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/
 grep -Fx 'BindReadOnlyPaths=/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1' "${dropin}" >/dev/null
 grep -F 'steamlink-ffmpeg59/v1/lib/aarch64-linux-gnu' "${dropin}" >/dev/null
 test ! -e "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf"
+python3 "${bind_checker}" --root "${rootfs}" --unsquashfs "${bin}/unsquashfs"
+
+missing_target="/opt/pocketforge/apps/org.pocketforge.steamlink/app.toml"
+if PF_TEST_DROP_BIND_TARGET="${missing_target}" \
+    python3 "${bind_checker}" --root "${rootfs}" --unsquashfs "${bin}/unsquashfs" \
+        >"${scratch}/missing-bind.out" 2>"${scratch}/missing-bind.err"; then
+    echo 'missing RootImage bind destination was accepted' >&2
+    exit 1
+fi
+grep -F "destination missing from RootImage: ${missing_target}" \
+    "${scratch}/missing-bind.err" >/dev/null
 
 bad_rootfs="${scratch}/bad-rootfs"
 make_rootfs "${bad_rootfs}"
@@ -143,6 +179,7 @@ if PF_TEST_BAD_METADATA=1 \
     PF_STEAMLINK_ROOT_RENDERER="${bin}/root-renderer" \
     PF_STEAMLINK_POLICY_RENDERER="${bin}/policy-renderer" \
     PF_REAL_ROOT_RENDERER="${root}/scripts/render-app-runtime-root.py" \
+    PF_REAL_POLICY_FRAGMENT="${root}/build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
         "${installer}" "${bad_rootfs}" 20261010T000000Z root \
         >"${scratch}/bad.out" 2>"${scratch}/bad.err"; then
     echo 'metadata mismatch was accepted' >&2

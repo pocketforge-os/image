@@ -12,13 +12,14 @@ builder_mode=$3
 src=$(cd "$(dirname "$0")/.." && pwd)
 app_id=org.pocketforge.steamlink
 app_source="${src}/apps/steamlink"
+policy_fragment="${src}/build/pf-app@${app_id}.service.d/10-policy.conf"
 root_builder=${PF_STEAMLINK_ROOT_BUILDER:-${src}/scripts/build-debian-app-root.sh}
 root_renderer=${PF_STEAMLINK_ROOT_RENDERER:-${src}/scripts/render-app-runtime-root.py}
 policy_renderer=${PF_STEAMLINK_POLICY_RENDERER:-${RUNTIME_DIR:-/work/runtime}/build-tools/pf-app-policy-render}
 platform_store="${rootfs}/usr/lib/pocketforge/platform-runtimes/pocketforge-bookworm-aarch64"
 ffmpeg_runtime="${rootfs}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1"
 
-for path in "${rootfs}" "${app_source}" "${root_builder}" "${root_renderer}" \
+for path in "${rootfs}" "${app_source}" "${policy_fragment}" "${root_builder}" "${root_renderer}" \
     "${policy_renderer}" "${platform_store}" "${ffmpeg_runtime}"; do
     [ -e "${path}" ] || { echo "steamlink-first-run: missing path: ${path}" >&2; exit 66; }
 done
@@ -33,7 +34,37 @@ trap cleanup EXIT HUP INT TERM
 
 app_root_overlay="${work}/overlay"
 app_overlay="${app_root_overlay}/opt/pocketforge/apps/${app_id}"
-mkdir -p "${app_overlay}"
+
+# systemd requires bind destinations to exist inside a RootImage before it can
+# construct the app's mount namespace.  The final app.toml contains the digest
+# of this image, so embedding that final manifest here would be self-referential;
+# an empty regular file is the producer-owned, immutable mountpoint instead.
+install -d -m 0755 \
+    "${app_overlay}" \
+    "${app_root_overlay}/run/pocketforge/platform-runtime" \
+    "${app_root_overlay}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1"
+install -D -m 0644 /dev/null "${app_root_overlay}/usr/bin/pf-app-launch"
+install -D -m 0644 /dev/null \
+    "${app_root_overlay}/usr/share/pocketforge/platform-capabilities.toml"
+install -D -m 0644 /dev/null \
+    "${app_root_overlay}/usr/share/pocketforge/app-policy/${app_id}.resources.json"
+install -D -m 0644 /dev/null "${app_overlay}/app.toml"
+
+# Keep policy-owned mountpoints derived from the policy itself.  Each current
+# target is a device node, socket, or regular file at runtime, for which an
+# empty regular file is the correct pre-bind placeholder in the sealed image.
+while IFS= read -r mountpoint; do
+    install -D -m 0644 /dev/null "${app_root_overlay}${mountpoint}"
+done < <(awk -F= '
+    $1 == "BindReadOnlyPaths" || $1 == "BindPaths" {
+        count = split($2, values, /[[:space:]]+/)
+        for (i = 1; i <= count; i++) {
+            fields = split(values[i], paths, ":")
+            destination = (fields > 1) ? 2 : 1
+            print paths[destination]
+        }
+    }
+' "${policy_fragment}")
 install -m 0755 "${app_source}/pf-launch" "${app_overlay}/pf-launch"
 install -m 0755 "${app_source}/steamlink-fetch.py" "${app_overlay}/steamlink-fetch.py"
 install -m 0644 "${app_source}/valve-steamlink-release-key.asc" \

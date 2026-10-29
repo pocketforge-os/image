@@ -2293,6 +2293,12 @@ python3 "${SRC_DIR}/scripts/verify-rootfs-usbnet-bench.py" \
 # structural image check; lease population itself is verified on tsp-f956's boot.
 "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${ROOTFS_EXTRACTED}"
 
+# A read-only RootImage cannot acquire new bind destinations at service start.
+# Audit every rooted app unit after all app producers have run so an incomplete
+# policy/image pair fails the owned-image build rather than the device boot.
+python3 "${SRC_DIR}/scripts/check-app-root-bind-targets.py" \
+    --root "${ROOTFS_EXTRACTED}"
+
 # mmdebstrap permanently persists every --aptopt into the target's
 # etc/apt/apt.conf.d/99mmdebstrap, so the PF_APT_PROXY build transport would
 # otherwise ship in the release image (build-6: first-boot cloud-config died
