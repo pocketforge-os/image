@@ -341,9 +341,12 @@ class PlatformRuntimeBuilderTest(unittest.TestCase):
         )
         readelf.chmod(0o755)
         rootfs = self.work / "rootfs"
-        rootfs.mkdir()
+        rootfs.mkdir(mode=0o700)
         result = run(
-            [str(PLATFORM_INSTALLER), str(config), str(self.host), str(rootfs)],
+            [
+                "sh", "-c", 'umask 077; exec "$@"', "runtime-installer",
+                str(PLATFORM_INSTALLER), str(config), str(self.host), str(rootfs),
+            ],
             env={"PATH": os.environ["PATH"], "PF_APP_RUNTIME_READELF": str(readelf)},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -355,6 +358,20 @@ class PlatformRuntimeBuilderTest(unittest.TestCase):
         )
         self.assertEqual(len(stores), 1)
         store = stores[0]
+        publication_path = [
+            rootfs,
+            rootfs / "usr",
+            rootfs / "usr/lib",
+            rootfs / "usr/lib/pocketforge",
+            rootfs / "usr/lib/pocketforge/platform-runtimes",
+            store.parent,
+        ]
+        for path in publication_path:
+            mode = stat.S_IMODE(path.stat().st_mode)
+            self.assertTrue(
+                mode & stat.S_IXOTH,
+                f"unprivileged app cannot traverse {path.relative_to(rootfs)}: {mode:o}",
+            )
         self.assertTrue((store / ".manifest-sha256").is_file())
         entries = sorted(
             store.rglob("*"), key=lambda path: path.relative_to(store).as_posix()

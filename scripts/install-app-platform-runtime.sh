@@ -74,6 +74,17 @@ for path in \
 done
 
 mkdir -p "$STORE"
+# mkdir -p inherits the build caller's umask. Normalize the complete published
+# path, including the filesystem root that becomes the app's mounted root.
+for path in \
+    "$ROOTFS" \
+    "$ROOTFS/usr" \
+    "$ROOTFS/usr/lib" \
+    "$ROOTFS/usr/lib/pocketforge" \
+    "$ROOTFS/usr/lib/pocketforge/platform-runtimes" \
+    "$STORE"; do
+    chmod a+rx "$path"
+done
 [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] || {
     echo "app-platform-runtime: refusing content-address collision: $TARGET" >&2
     exit 73
