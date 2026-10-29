@@ -39,8 +39,13 @@ app_overlay="${app_root_overlay}/opt/pocketforge/apps/${app_id}"
 # construct the app's mount namespace.  The final app.toml contains the digest
 # of this image, so embedding that final manifest here would be self-referential;
 # an empty regular file is the producer-owned, immutable mountpoint instead.
+# StateDirectory/CacheDirectory/RuntimeDirectory are implicit host binds too.
+# Seed only their empty destinations; systemd owns host permissions and lifetime.
 install -d -m 0755 \
     "${app_overlay}" \
+    "${app_root_overlay}/var/lib/pocketforge/apps/${app_id}" \
+    "${app_root_overlay}/var/cache/pocketforge/apps/${app_id}" \
+    "${app_root_overlay}/run/pf-app/${app_id}" \
     "${app_root_overlay}/run/pocketforge/platform-runtime" \
     "${app_root_overlay}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1"
 install -D -m 0644 /dev/null "${app_root_overlay}/usr/bin/pf-app-launch"
