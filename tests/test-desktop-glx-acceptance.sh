@@ -8,6 +8,22 @@ packages="$root/rootfs-packages-a133-open-7x-gpu.txt"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/desktop-glx-acceptance.XXXXXX")
 trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT
 
+check_probe_contract() {
+    candidate=$1
+
+    grep -F '#include <GL/glx.h>' "$candidate" >/dev/null || return 1
+    grep -F 'glXSwapBuffers' "$candidate" >/dev/null || return 1
+    grep -F 'glReadPixels' "$candidate" >/dev/null || return 1
+    grep -F 'image = XGetImage(' "$candidate" >/dev/null || return 1
+    grep -F 'check_pixels("xdrawable"' "$candidate" >/dev/null || return 1
+    grep -F 'xdrawable_crc32=' "$candidate" >/dev/null || return 1
+    grep -F 'GLX_READBACK_CRC32 0xad849d79u' "$candidate" >/dev/null || return 1
+    if grep -F 'glReadBuffer(GL_FRONT)' "$candidate" >/dev/null; then
+        echo 'desktop GLX probe must verify presentation through the X drawable' >&2
+        return 1
+    fi
+}
+
 # A standalone invocation reuses the complete synthetic-rootfs gate. The gate
 # calls back with PF_DESKTOP_GLX_PROVIDER_NESTED=1 so CI's existing provider
 # test covers this policy without recursive execution.
@@ -23,11 +39,22 @@ fi
 
 grep -Fx 'mesa-utils' "$packages" >/dev/null
 grep -Fx 'libxcb-glx0' "$packages" >/dev/null
-grep -F '#include <GL/glx.h>' "$probe" >/dev/null
-grep -F 'glXSwapBuffers' "$probe" >/dev/null
-grep -F 'glReadPixels' "$probe" >/dev/null
-grep -F 'GLX_READBACK_CRC32 0xad849d79u' "$probe" >/dev/null
+check_probe_contract "$probe"
 grep -F -- '-lGL -lX11' "$dockerfile" >/dev/null
+
+# Negative controls prove that neither the old post-swap GL_FRONT assumption
+# nor a probe missing the presented-X-drawable readback satisfies the contract.
+sed 's/image = XGetImage(/image = XGetSubImage(/' "$probe" >"$scratch/no-xdrawable.c"
+if check_probe_contract "$scratch/no-xdrawable.c" 2>/dev/null; then
+    echo 'desktop GLX probe without XGetImage unexpectedly passed' >&2
+    exit 1
+fi
+cp "$probe" "$scratch/front-buffer.c"
+printf '\nglReadBuffer(GL_FRONT);\n' >>"$scratch/front-buffer.c"
+if check_probe_contract "$scratch/front-buffer.c" 2>/dev/null; then
+    echo 'desktop GLX probe using post-swap GL_FRONT unexpectedly passed' >&2
+    exit 1
+fi
 
 cat >"$scratch/policy-test.c" <<'EOF'
 #include <stdio.h>
