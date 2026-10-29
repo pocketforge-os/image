@@ -7,6 +7,7 @@ import json
 import hashlib
 import os
 from pathlib import Path
+import stat
 import subprocess
 import tempfile
 import textwrap
@@ -340,9 +341,12 @@ class PlatformRuntimeBuilderTest(unittest.TestCase):
         )
         readelf.chmod(0o755)
         rootfs = self.work / "rootfs"
-        rootfs.mkdir()
+        rootfs.mkdir(mode=0o700)
         result = run(
-            [str(PLATFORM_INSTALLER), str(config), str(self.host), str(rootfs)],
+            [
+                "sh", "-c", 'umask 077; exec "$@"', "runtime-installer",
+                str(PLATFORM_INSTALLER), str(config), str(self.host), str(rootfs),
+            ],
             env={"PATH": os.environ["PATH"], "PF_APP_RUNTIME_READELF": str(readelf)},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -354,6 +358,20 @@ class PlatformRuntimeBuilderTest(unittest.TestCase):
         )
         self.assertEqual(len(stores), 1)
         store = stores[0]
+        publication_path = [
+            rootfs,
+            rootfs / "usr",
+            rootfs / "usr/lib",
+            rootfs / "usr/lib/pocketforge",
+            rootfs / "usr/lib/pocketforge/platform-runtimes",
+            store.parent,
+        ]
+        for path in publication_path:
+            mode = stat.S_IMODE(path.stat().st_mode)
+            self.assertTrue(
+                mode & stat.S_IXOTH,
+                f"unprivileged app cannot traverse {path.relative_to(rootfs)}: {mode:o}",
+            )
         self.assertTrue((store / ".manifest-sha256").is_file())
         entries = sorted(
             store.rglob("*"), key=lambda path: path.relative_to(store).as_posix()
@@ -373,6 +391,25 @@ class PlatformRuntimeBuilderTest(unittest.TestCase):
             expected_digest,
         )
         self.assertEqual(store.name, f"sha256-{expected_digest}")
+        installed_paths = [store, *store.rglob("*")]
+        for path in installed_paths:
+            mode = stat.S_IMODE(path.stat().st_mode)
+            if path.is_dir():
+                self.assertTrue(
+                    mode & stat.S_IXOTH,
+                    f"unprivileged app cannot traverse {path.relative_to(store)}: {mode:o}",
+                )
+            elif path.is_file():
+                self.assertTrue(
+                    mode & stat.S_IROTH,
+                    f"unprivileged app cannot read {path.relative_to(store)}: {mode:o}",
+                )
+
+        store.chmod(0o500)
+        self.assertFalse(
+            stat.S_IMODE(store.stat().st_mode) & stat.S_IXOTH,
+            "negative control must reproduce the Build 50 inaccessible store",
+        )
         for relative in (
             "usr/lib/aarch64-linux-gnu/libxcb-dri3.so.0",
             "usr/lib/aarch64-linux-gnu/libxcb-present.so.0",

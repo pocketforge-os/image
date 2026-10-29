@@ -74,6 +74,17 @@ for path in \
 done
 
 mkdir -p "$STORE"
+# mkdir -p inherits the build caller's umask. Normalize the complete published
+# path, including the filesystem root that becomes the app's mounted root.
+for path in \
+    "$ROOTFS" \
+    "$ROOTFS/usr" \
+    "$ROOTFS/usr/lib" \
+    "$ROOTFS/usr/lib/pocketforge" \
+    "$ROOTFS/usr/lib/pocketforge/platform-runtimes" \
+    "$STORE"; do
+    chmod a+rx "$path"
+done
 [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] || {
     echo "app-platform-runtime: refusing content-address collision: $TARGET" >&2
     exit 73
@@ -81,6 +92,11 @@ mkdir -p "$STORE"
 mv "$OUTPUT" "$TARGET"
 printf '%s\n' "$DIGEST" >"$TARGET/.manifest-sha256"
 chmod -R a-w "$TARGET"
+# The builder stages under mkdtemp, so the moved top-level directory starts
+# as 0700, and a restrictive build umask can also leave regular files 0600.
+# Keep the immutable store readable and traversable by the unprivileged app.
+find "$TARGET" -type d -exec chmod a+rx {} +
+find "$TARGET" -type f -exec chmod a+r {} +
 chmod 0444 "$TARGET/.manifest-sha256"
 
 printf 'app-platform-runtime=PASS store=%s digest=sha256:%s\n' \
