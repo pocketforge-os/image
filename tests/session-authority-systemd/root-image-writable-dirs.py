@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import grp
+import hashlib
 import os
 from pathlib import Path
 import pwd
@@ -76,6 +77,8 @@ def main() -> None:
         raise SystemExit("root-image writable-dirs: REFUSE real systemd PID1 required")
     guard = Path(__file__).resolve().parents[1] / "test-session-authority-systemd.sh"
     run("bash", str(guard), "--check-host-guard", "/")
+    version = run("systemctl", "--version").stdout.splitlines()[0].replace(" ", "_")
+    print(f"evidence: rootimage systemd={version} template_sha256={hashlib.sha256(args.template.read_bytes()).hexdigest()}", flush=True)
     account = pwd.getpwnam("nobody")
     group = grp.getgrgid(account.pw_gid).gr_name
     app_id = "org.pocketforge.rootimage-" + uuid.uuid4().hex
@@ -158,6 +161,7 @@ BindPaths={session}/X0:/tmp/.X11-unix/X0
             stop()
             unit_path.write_text(body + f"RootImage={image}\n")
             run("systemctl", "daemon-reload")
+            assert run("systemctl", "show", unit, "-p", "MountAPIVFS", "--value").stdout.strip() == "yes", "production RootImage MountAPIVFS default changed"
             result = run("systemctl", "start", unit, check=False)
             if not expected:
                 status = run("systemctl", "show", unit, "-p", "ExecStartPre").stdout
@@ -181,8 +185,20 @@ BindPaths={session}/X0:/tmp/.X11-unix/X0
                 assert (directory / "payload").is_file(), (label, directory)
             print(f"evidence: rootimage case={label} result=pass prestart=present payload=present outside=readonly", flush=True)
 
-        for index, path in enumerate(writable, 1):
-            start(images[index], False, "missing-" + ("state", "cache", "runtime")[index - 1])
+        for index, name in enumerate(("state", "cache"), 1):
+            start(images[index], False, "missing-" + name)
+        # Unlike persistent mounts, production MountAPIVFS=yes supplies a
+        # writable /run. Verify the source SquashFS really omits this directory,
+        # then require systemd to create the runtime destination successfully.
+        inventory = run("unsquashfs", "-no-progress", "-lln", str(images[3])).stdout
+        runtime_entry = "squashfs-root" + str(writable[2])
+        assert not any(line.endswith(runtime_entry) for line in inventory.splitlines()), "runtime omission fixture still contains destination"
+        print(f"evidence: rootimage runtime_source_destination=absent image_sha256={hashlib.sha256(images[3].read_bytes()).hexdigest()} mount_api_vfs=yes", flush=True)
+        start(images[3], True, "missing-runtime-api-vfs")
+        stop()
+        assert not writable[2].exists(), "runtime omission case retained RuntimeDirectory after stop"
+        for directory in writable[:2]:
+            shutil.rmtree(directory)
         start(images[0], True, "all-destinations")
         stop()
         assert not writable[2].exists(), "production RuntimeDirectory was retained after stop"
