@@ -8,8 +8,8 @@ OnSuccess=pocketforge-gamescope-fallback.service
 
 [Service]
 Type=notify
-User=root
-Group=pf-session
+User=pf-gamescope
+Group=pf-gamescope
 RuntimeDirectory=pocketforge/gamescope
 RuntimeDirectoryMode=0751
 ExecStart=/usr/local/libexec/fake-gamescope
