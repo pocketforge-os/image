@@ -143,6 +143,8 @@ def validate(root: Path, runtime_root: Path | None = None) -> list[str]:
         "ExecStart=/usr/bin/pf-session-authorityd "
         "--state-dir /var/lib/pocketforge/session-authority "
         "--socket /run/pocketforge/session-authority.sock "
+        "--compositor-user pf-gamescope "
+        "--compositor-unit pocketforge-gamescope.service "
         f"--hang-sampler-socket {SAMPLER_SOCKET}"
     )
     require_exact_line(

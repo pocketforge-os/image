@@ -1502,6 +1502,12 @@ grep -Fq -- '- tests/verify-session-authority-app-dropins.py' "${workflow}" || e
 app_fixture_output="$(python3 "${app_fixture_verifier}")"
 grep -Eq '^session-authority app-fixture closure: PASS hard_dependencies=[0-9]+ provided=[0-9]+$' \
     <<<"${app_fixture_output}" || exit 1
+if ! grep -Fq 'for group_name in gamer audio input video pf-session pf-gamescope; do' "${recipe}" \
+    || ! grep -Fq 'getent passwd pf-gamescope' "${recipe}" \
+    || ! grep -Fq 'useradd --system --gid pf-gamescope --no-create-home pf-gamescope' "${recipe}"; then
+    echo 'session-authority systemd-safety: FAIL: fixture does not provide runtime compositor identity pf-gamescope' >&2
+    exit 1
+fi
 sed '/^COPY pf-prefsd\.service \/etc\/systemd\/system\/pf-prefsd\.service$/d' \
     "${recipe}" >"${tmp}/missing-prefsd.Containerfile"
 if python3 "${app_fixture_verifier}" --containerfile "${tmp}/missing-prefsd.Containerfile" \
