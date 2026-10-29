@@ -7,6 +7,9 @@ on:
     paths:
       - .github/workflows/session-authority-systemd.yml
       - tests/test-session-authority-systemd.sh
+      - scripts/install-steamlink-first-run.sh
+      - scripts/check-app-root-bind-targets.py
+      - tests/test-steamlink-first-run-install.sh
       - tests/test-session-authority-systemd-safety.sh
       - tests/probe-session-authority-docker-systemd.sh
       - tests/verify-session-authority-systemd-preconditions.py
@@ -106,5 +109,35 @@ jobs:
             grep -E '^(evidence:|session-authority real-systemd: (PASS|FAIL))' \
               "$RUNNER_TEMP/session-authority-systemd-live.log" 2>/dev/null ||
               echo 'live harness produced no receipt'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  root-image:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, pf-builder-vm]
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Run real read-only SquashFS writable-directory lifecycle
+        run: |
+          set -o pipefail
+          tests/test-session-authority-systemd.sh --root-image-writable-dirs 2>&1 |
+            tee "$RUNNER_TEMP/root-image-writable-dirs.log"
+
+      - name: Publish RootImage evidence
+        if: always()
+        run: |
+          {
+            echo '## Read-only SquashFS real-systemd evidence'
+            echo '```text'
+            grep -E '^(evidence: rootimage|root-image writable-dirs:)' \
+              "$RUNNER_TEMP/root-image-writable-dirs.log" 2>/dev/null ||
+              echo 'RootImage harness produced no receipt'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

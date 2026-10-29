@@ -36,7 +36,11 @@ mkdir -p "${output}"
 # The root-image auditor consumes unsquashfs's file list, so this fixture keeps
 # the test hermetic by storing the same relative-path inventory as plain text.
 # Production still builds and audits the real SquashFS in build-rootfs.sh.
-find "${overlay}" -mindepth 1 -printf '%P\n' | LC_ALL=C sort >"${output}/root.raw"
+find "${overlay}" -mindepth 1 -printf '%y %P\n' | LC_ALL=C sort >"${output}/root.raw"
+if [ "${PF_TEST_REAL_SQUASHFS:-0}" = 1 ]; then
+    rm "${output}/root.raw"
+    mksquashfs "${overlay}" "${output}/root.raw" -noappend -no-progress -processors 1 > /dev/null
+fi
 digest=$(sha256sum "${output}/root.raw" | awk '{print $1}')
 [ "${PF_TEST_BAD_METADATA:-0}" = 0 ] || digest=$(printf '%064d' 0)
 printf '{"schema_version":1,"distribution":"debian-13","suite":"trixie","architecture":"arm64","sha256":"%s"}\n' \
@@ -50,12 +54,15 @@ import sys
 
 image = pathlib.Path(sys.argv[-1])
 drop = os.environ.get("PF_TEST_DROP_BIND_TARGET", "")
-print("squashfs-root")
+print("drwxr-xr-x 0/0 0 2026-01-01 00:00 squashfs-root")
 for raw in image.read_text(encoding="utf-8").splitlines():
-    relative = raw.strip().lstrip("/")
+    kind, relative = raw.split(" ", 1)
+    kind = "-" if kind == "f" else kind
     if not relative or "/" + relative == drop:
         continue
-    print("squashfs-root/" + relative)
+    if os.environ.get("PF_TEST_WRONG_TYPE") == "/" + relative:
+        kind = os.environ.get("PF_TEST_TARGET_TYPE", "-")
+    print(kind + "rwxr-xr-x 0/0 0 2026-01-01 00:00 squashfs-root/" + relative)
 EOF
 cat >"${bin}/root-renderer" <<'EOF'
 #!/usr/bin/env python3
@@ -126,6 +133,8 @@ make_rootfs() {
         "${target}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1" \
         "${target}/usr/share/pocketforge" \
         "${target}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d"
+    install -m 0644 "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service" \
+        "${target}/etc/systemd/system/pf-app@.service"
     printf '%s\n' legacy-host-root-policy \
         >"${target}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf"
     digest=$(printf '%064d' 1)
@@ -172,6 +181,93 @@ fi
 grep -F "destination missing from RootImage: ${missing_target}" \
     "${scratch}/missing-bind.err" >/dev/null
 
+for target in /var/lib/pocketforge/apps/org.pocketforge.steamlink \
+    /var/cache/pocketforge/apps/org.pocketforge.steamlink /run/pf-app/org.pocketforge.steamlink; do
+    if PF_TEST_DROP_BIND_TARGET="${target}" python3 "${bind_checker}" --root "${rootfs}" \
+        --unsquashfs "${bin}/unsquashfs" >"${scratch}/negative.out" 2>"${scratch}/negative.err"; then
+        echo "missing writable destination accepted: ${target}" >&2; exit 1
+    fi
+    grep -F "destination missing from RootImage: ${target}" "${scratch}/negative.err" >/dev/null
+    if PF_TEST_WRONG_TYPE="${target}" python3 "${bind_checker}" --root "${rootfs}" \
+        --unsquashfs "${bin}/unsquashfs" >"${scratch}/negative.out" 2>"${scratch}/negative.err"; then
+        echo "wrong writable destination type accepted: ${target}" >&2; exit 1
+    fi
+    grep -F "destination is not a directory: ${target}" "${scratch}/negative.err" >/dev/null
+done
+if PF_TEST_WRONG_TYPE="${missing_target}" PF_TEST_TARGET_TYPE=d python3 "${bind_checker}" --root "${rootfs}" \
+    --unsquashfs "${bin}/unsquashfs" >"${scratch}/negative.out" 2>"${scratch}/negative.err"; then
+    echo 'directory accepted for explicit file bind destination' >&2; exit 1
+fi
+grep -F "file destination is a directory: ${missing_target}" "${scratch}/negative.err" >/dev/null
+if PF_TEST_WRONG_TYPE="${missing_target}" python3 "${bind_checker}" --root "${rootfs}" \
+    --unsquashfs "${bin}/unsquashfs" >"${scratch}/negative.out" 2>"${scratch}/negative.err"; then
+    # The shim sets this to a file, so the unchanged regular placeholder passes.
+    :
+else
+    echo 'regular explicit bind destination rejected' >&2; exit 1
+fi
+if PF_TEST_WRONG_TYPE=/var/lib/pocketforge python3 "${bind_checker}" --root "${rootfs}" \
+    --unsquashfs "${bin}/unsquashfs" >"${scratch}/negative.out" 2>"${scratch}/negative.err"; then
+    echo 'wrong parent type accepted' >&2; exit 1
+fi
+grep -F 'parent is not a directory: /var/lib/pocketforge' "${scratch}/negative.err" >/dev/null
+
+# Base template plus lexically merged template/instance drop-ins, list resets,
+# instance same-name precedence, and a section that must not change Service.
+python3 - "${bind_checker}" "${scratch}" <<'PYTEST'
+import pathlib, runpy, sys
+api = runpy.run_path(sys.argv[1])
+units = pathlib.Path(sys.argv[2]) / "merge-units"
+units.mkdir()
+(units / "pf-app@.service").write_text("[Service]\nRootImage=/root.raw\nReadWritePaths=/base/%i\nStateDirectory=old/%i\n")
+for name in ("pf-app@.service.d", "pf-app@sample.service.d"):
+    (units / name).mkdir()
+(units / "pf-app@.service.d/10-common.conf").write_text("[Service]\nReadWritePaths=/shadowed\n")
+(units / "pf-app@sample.service.d/10-common.conf").write_text("[Service]\nReadWritePaths=\nReadWritePaths=/replacement/%i\nStateDirectory=\nStateDirectory=new/%i\n[Unit]\nReadWritePaths=/wrong-section\n")
+(units / "pf-app@.service.d/20-later.conf").write_text("[Service]\nReadWritePaths=/later/%i\n")
+paths = api["unit_paths"](units)["sample"]
+image, values = api["parse_unit"](paths, "sample")
+assert image == "/root.raw"
+assert values == [("ReadWritePaths", "/replacement/sample"), ("ReadWritePaths", "/later/sample"), ("StateDirectory", "new/sample")], values
+(units / "pf-app@sample.service").write_text("[Service]\nRootImage=/instance.raw\n")
+assert api["parse_unit"](api["unit_paths"](units)["sample"], "sample")[0] == "/instance.raw"
+# Exhaust the shared bind-reset domain across empty/RO/RW/both initial lists,
+# either resetting directive, optional later RO/RW entries, and reset placement
+# in the base unit or a drop-in. Unrelated writable/directory lists must survive.
+from itertools import product
+cases = 0
+for initial, reset, later, placement in product(range(4), ("BindPaths", "BindReadOnlyPaths", None), (None, "BindPaths", "BindReadOnlyPaths"), ("base", "dropin")):
+    if reset is None and later is not None:
+        continue
+    fixture = units / f"matrix-{cases}"
+    fixture.mkdir()
+    base = "[Service]\nRootImage=/root.raw\nReadWritePaths=/keep-rw\nStateDirectory=keep-state\n"
+    initial_values = []
+    for bit, key in ((1, "BindPaths"), (2, "BindReadOnlyPaths")):
+        if initial & bit:
+            base += f"{key}=/initial-{bit}\n"
+            initial_values.append((key, f"/initial-{bit}"))
+    tail = f"{reset}=\n" if reset else ""
+    if later:
+        tail += f"{later}=/later\n"
+    if placement == "base":
+        base += tail
+    else:
+        directory = fixture / "pf-app@sample.service.d"
+        directory.mkdir()
+        (directory / "10-reset.conf").write_text("[Service]\n" + tail)
+    (fixture / "pf-app@.service").write_text(base)
+    # Ensure instance discovery for the base-only case too.
+    (fixture / "pf-app@sample.service.d").mkdir(exist_ok=True)
+    actual = api["parse_unit"](api["unit_paths"](fixture)["sample"], "sample")[1]
+    expected = [("ReadWritePaths", "/keep-rw"), ("StateDirectory", "keep-state")]
+    expected += ([(later, "/later")] if later else []) if reset else initial_values
+    assert sorted(actual) == sorted(expected), (initial, reset, later, placement, actual)
+    cases += 1
+assert cases == 56, cases
+print(f"Bind reset property sweep: PASS cases={cases} initial=empty,RO,RW,both reset=RO,RW,none placement=base,dropin later=none,RO,RW unrelated=preserved")
+PYTEST
+
 bad_rootfs="${scratch}/bad-rootfs"
 make_rootfs "${bad_rootfs}"
 if PF_TEST_BAD_METADATA=1 \
@@ -187,5 +283,31 @@ if PF_TEST_BAD_METADATA=1 \
 fi
 grep -F 'root metadata sha256 differs' "${scratch}/bad.err" >/dev/null
 test ! -e "${bad_rootfs}/opt/pocketforge/apps/org.pocketforge.steamlink"
+
+if [ "${PF_TEST_REQUIRE_REAL_SQUASHFS:-0}" = 1 ]; then
+    command -v mksquashfs >/dev/null
+    command -v unsquashfs >/dev/null
+    real_rootfs="${scratch}/real-rootfs"
+    make_rootfs "${real_rootfs}"
+    PF_TEST_REAL_SQUASHFS=1 \
+    PF_STEAMLINK_ROOT_BUILDER="${bin}/root-builder" \
+    PF_STEAMLINK_ROOT_RENDERER="${bin}/root-renderer" \
+    PF_STEAMLINK_POLICY_RENDERER="${bin}/policy-renderer" \
+    PF_REAL_ROOT_RENDERER="${root}/scripts/render-app-runtime-root.py" \
+    PF_REAL_POLICY_FRAGMENT="${root}/build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
+        "${installer}" "${real_rootfs}" 20261010T000000Z root
+    python3 "${bind_checker}" --root "${real_rootfs}"
+    image=$(find "${real_rootfs}/var/lib/pocketforge/app-roots" -name '*.raw')
+    python3 - "${image}" <<'PYREAL'
+import pathlib, subprocess, sys, tempfile
+with tempfile.TemporaryDirectory() as scratch:
+    root = pathlib.Path(scratch) / "root"
+    subprocess.run(["unsquashfs", "-no-progress", "-d", str(root), sys.argv[1]], check=True, stdout=subprocess.DEVNULL)
+    for relative in ("var/lib/pocketforge/apps", "var/cache/pocketforge/apps", "run/pf-app"):
+        target = root / relative / "org.pocketforge.steamlink"
+        assert target.is_dir() and not list(target.iterdir()), target
+print("Steam Link real SquashFS producer destinations: PASS (three empty directories)")
+PYREAL
+fi
 
 echo 'Steam Link first-run root install: PASS (positive and negative controls)'
