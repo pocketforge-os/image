@@ -165,7 +165,10 @@ BindPaths={session}/X0:/tmp/.X11-unix/X0
                 assert not (writable[2] / "prestart").exists(), label
                 print(f"evidence: rootimage case={label} result=226 prestart=absent", flush=True)
                 return
-            assert result.returncode == 0, (label, result.stderr)
+            if result.returncode:
+                properties = run("systemctl", "show", unit, "-p", "Result", "-p", "ExecStartPre", check=False).stdout
+                journal = run("journalctl", "--no-pager", "--output=cat", "--lines=12", "--unit", unit, check=False).stdout
+                raise AssertionError((label, result.stderr, properties, journal))
             for _ in range(100):
                 if (writable[2] / "readonly").exists():
                     break
