@@ -98,7 +98,7 @@ check_provider_package_solve() {
             return 1
         fi
     done
-    for package in libegl1 libgles2 xwayland; do
+    for package in libegl1 libgles2 libxcb-glx0 xwayland; do
         printf '%s\n' "$resolved_packages" | tr ',' '\n' | grep -Fx "$package" >/dev/null || {
             echo "FAIL: $label omits neutral client package: $package" >&2
             return 1
@@ -448,6 +448,8 @@ printf 'neutral GLVND dispatcher\n' \
     >"$rootfs/usr/lib/aarch64-linux-gnu/libGL.so.1"
 printf 'neutral GLVND dispatcher\n' \
     >"$rootfs/usr/lib/aarch64-linux-gnu/libGLX.so.0"
+printf 'neutral XCB GLX runtime\n' \
+    >"$rootfs/usr/lib/aarch64-linux-gnu/libxcb-glx.so.0"
 printf '#!/bin/sh\nexit 0\n' >"$rootfs/usr/bin/Xwayland"
 chmod 0755 "$rootfs/usr/bin/Xwayland"
 printf '#!/bin/sh\nexit 0\n' >"$rootfs/usr/bin/glxinfo"
@@ -487,6 +489,11 @@ Package: libglvnd0
 Status: install ok installed
 Architecture: arm64
 Version: 1.6.0-1
+
+Package: libxcb-glx0
+Status: install ok installed
+Architecture: arm64
+Version: 1.15-1
 
 Package: xwayland
 Status: install ok installed
@@ -740,6 +747,18 @@ sed -i '/^Package: mesa-utils$/,$d' "$candidate/var/lib/dpkg/status"
 expect_rejection red-missing-mesa-utils "$candidate" \
     'mesa-utils is not installed for GLX identity evidence'
 
+candidate="$scratch/red-missing-libxcb-glx-package"
+cp -a "$rootfs" "$candidate"
+sed -i '/^Package: libxcb-glx0$/,/^$/d' "$candidate/var/lib/dpkg/status"
+expect_rejection red-missing-libxcb-glx-package "$candidate" \
+    'libxcb-glx0 is not installed for the GLX vendor runtime'
+
+candidate="$scratch/red-missing-libxcb-glx-soname"
+cp -a "$rootfs" "$candidate"
+rm "$candidate/usr/lib/aarch64-linux-gnu/libxcb-glx.so.0"
+expect_rejection red-missing-libxcb-glx-soname "$candidate" \
+    'libxcb-glx.so.0 is missing for the GLX vendor runtime'
+
 candidate="$scratch/red-changed-gallium"
 cp -a "$rootfs" "$candidate"
 printf 'tampered\n' >"$candidate/usr/local/lib/libgallium_dri.so"
@@ -840,4 +859,4 @@ grep -F 'Mesa build option mismatch: xmlconfig expected=enabled actual=disabled'
 
 PF_DESKTOP_GLX_PROVIDER_NESTED=1 "$root/tests/test-desktop-glx-acceptance.sh"
 
-echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+xwayland-powervr-alias+glxinfo+glx-probe+drirc-powervr+kmsro+zink-renderonly+static-symtab+stripped-build-options-fallback red=loader-environment,missing-zink-policy,old-two-block-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,wrong-xwayland-glx-vendor-alias,producer-glx-alias,missing-glx-probe,nonexec-glx-probe,missing-glxinfo,missing-mesa-utils,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,no-kmsro-symbols,stripped-without-kmsro,glx-disabled,xmlconfig-disabled'
+echo 'open-gpu-provider-test=PASS green=source-package+glvnd-egl+glx-routing+xwayland-powervr-alias+libxcb-glx-runtime+glxinfo+glx-probe+drirc-powervr+kmsro+zink-renderonly+static-symtab+stripped-build-options-fallback red=loader-environment,missing-zink-policy,old-two-block-zink-policy,false-provides,debian-zink,debian-egl,debian-glx,debian-gbm,all-forbidden-packages,duplicate-egl-json,duplicate-vulkan-icd,duplicate-vulkan-alias,relative-json,wrong-target-json,symlink-boundary,missing-egl-vendor,missing-glx-vendor,wrong-xwayland-glx-vendor-alias,producer-glx-alias,missing-glx-probe,nonexec-glx-probe,missing-glxinfo,missing-mesa-utils,missing-libxcb-glx-package,missing-libxcb-glx-soname,changed-hash,wrong-arch,missing-egl-main,missing-glx-main,no-kmsro-symbols,stripped-without-kmsro,glx-disabled,xmlconfig-disabled'

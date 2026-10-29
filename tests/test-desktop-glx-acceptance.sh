@@ -16,10 +16,13 @@ if [ "${PF_DESKTOP_GLX_PROVIDER_NESTED:-0}" = 0 ]; then
     grep -F 'red=' "$scratch/provider.out" | grep -F 'missing-glx-vendor' | \
         grep -F 'missing-glx-probe' | grep -F 'nonexec-glx-probe' | \
         grep -F 'missing-glxinfo' | \
-        grep -F 'missing-mesa-utils' | grep -F 'glx-disabled' >/dev/null
+        grep -F 'missing-mesa-utils' | \
+        grep -F 'missing-libxcb-glx-package' | \
+        grep -F 'missing-libxcb-glx-soname' | grep -F 'glx-disabled' >/dev/null
 fi
 
 grep -Fx 'mesa-utils' "$packages" >/dev/null
+grep -Fx 'libxcb-glx0' "$packages" >/dev/null
 grep -F '#include <GL/glx.h>' "$probe" >/dev/null
 grep -F 'glXSwapBuffers' "$probe" >/dev/null
 grep -F 'glReadPixels' "$probe" >/dev/null
