@@ -173,7 +173,7 @@ def main() -> int:
     parser.add_argument(
         "--fixture",
         type=Path,
-        default=root / "build/tests/fixtures/gpu-um-toolchain-a3354100.Dockerfile",
+        default=root / "build/tests/fixtures/gpu-um-toolchain-0c3b02bd.Dockerfile",
     )
     parser.add_argument("--source-sha", default=PINNED_GPU_UM_SHA)
     args = parser.parse_args()
