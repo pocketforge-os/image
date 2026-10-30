@@ -23,6 +23,7 @@ on:
       - 'tests/test-poolsuite-app-policy.sh'
       - 'tests/test-steamlink-app-policy.sh'
       - 'tests/test-steamlink-first-run-install.sh'
+      - 'tests/test-steamlink-rooted-launch.py'
       - 'apps/steamlink/app.toml'
       - 'tests/test-poolsuite-rootfs-install.sh'
       - 'tests/test-poolsuite-variant-stage.sh'
@@ -55,7 +56,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/runtime
-          ref: 8c87d7b60ceb604489b6343355732504a06d743c
+          ref: 976ead2978626ebeb494d78daa36c67f2a8f5810
           path: runtime-pair
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -64,7 +65,7 @@ jobs:
           path: launcher-pair
       - name: Prove exact runtime, launcher, and image candidates together
         run: |
-          test "$(git -C runtime-pair rev-parse HEAD)" = 8c87d7b60ceb604489b6343355732504a06d743c
+          test "$(git -C runtime-pair rev-parse HEAD)" = 976ead2978626ebeb494d78daa36c67f2a8f5810
           test "$(git -C launcher-pair rev-parse HEAD)" = 900db88c7c27f3286ac0baad4199db8f6748cb81
           scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
             pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
@@ -73,8 +74,9 @@ jobs:
           PF_HANG_RUNTIME_ROOT=runtime-pair tests/test-hang-sampler-image.sh
           (cd runtime-pair && cargo build --locked \
             --manifest-path Cargo.toml \
-            -p pf-app-launch --bin pf-app-policy-render \
+            -p pf-app-launch --bins \
             --target-dir target)
+          export PF_APP_LAUNCH="$GITHUB_WORKSPACE/runtime-pair/target/debug/pf-app-launch"
           export PF_APP_POLICY_RENDER="$GITHUB_WORKSPACE/runtime-pair/target/debug/pf-app-policy-render"
           printf 'runtime_candidate=%s launcher_candidate=%s image_candidate=%s policy_renderer_sha256=%s\n' \
             "$(git -C runtime-pair rev-parse HEAD)" \

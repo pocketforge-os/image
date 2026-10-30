@@ -3,6 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 installer="${root}/scripts/install-steamlink-first-run.sh"
+export PF_TEST_SOURCE_DESCRIPTOR="${root}/apps/steamlink/app.toml"
 bind_checker="${root}/scripts/check-app-root-bind-targets.py"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/steamlink-first-run-install.XXXXXX")
 cleanup() {
@@ -11,6 +12,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+export PF_TEST_CAPTURE_OVERLAY="${scratch}/captured-overlay"
 bin="${scratch}/bin"
 mkdir -p "${bin}"
 cat >"${bin}/root-builder" <<'EOF'
@@ -25,7 +27,12 @@ while [ "$#" -gt 0 ]; do
         *) shift ;;
     esac
 done
-test -x "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/pf-launch"
+python3 - "${PF_TEST_SOURCE_DESCRIPTOR}" "${overlay}" <<'PYTHON'
+import pathlib, sys, tomllib
+manifest = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())
+executable = pathlib.Path(sys.argv[2]) / "opt/pocketforge/apps" / manifest["app"]["id"] / manifest["launch"]["exec"]
+assert executable.is_file() and executable.stat().st_mode & 0o111, executable
+PYTHON
 test -x "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/steamlink-fetch.py"
 test -f "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/valve-steamlink-release-key.asc"
 if find "${overlay}" -name '*.tar.gz' -o -name '*.sig' | grep -q .; then
@@ -33,6 +40,7 @@ if find "${overlay}" -name '*.tar.gz' -o -name '*.sig' | grep -q .; then
     exit 1
 fi
 mkdir -p "${output}"
+if [ ! -e "${PF_TEST_CAPTURE_OVERLAY}" ]; then cp -a "${overlay}" "${PF_TEST_CAPTURE_OVERLAY}"; fi
 # The root-image auditor consumes unsquashfs's file list, so this fixture keeps
 # the test hermetic by storing the same relative-path inventory as plain text.
 # Production still builds and audits the real SquashFS in build-rootfs.sh.
@@ -165,6 +173,13 @@ assert root["digest"] != "sha256:" + "0" * 64
 assert root["platform-runtime-version"] != "sha256:" + "0" * 64
 assert sorted(path.parent.iterdir()) == [path]
 PY
+if [ -n "${PF_APP_LAUNCH:-}" ]; then
+    python3 "${root}/tests/test-steamlink-rooted-launch.py" \
+        --manifest "${manifest}" --layout "${PF_TEST_CAPTURE_OVERLAY}" \
+        --inventory "${rootfs}/usr/share/pocketforge/app-policy/org.pocketforge.steamlink.resources.json" \
+        --contract "${root}/tests/fixtures/app-policy/platform-capabilities-a133-open.toml" \
+        --helper "${PF_APP_LAUNCH}" --renderer "${PF_APP_POLICY_RENDER:?}"
+fi
 dropin="${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/20-runtime-root.conf"
 grep -Fx 'BindReadOnlyPaths=/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1' "${dropin}" >/dev/null
 grep -F 'steamlink-ffmpeg59/v1/lib/aarch64-linux-gnu' "${dropin}" >/dev/null
