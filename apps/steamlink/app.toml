@@ -25,7 +25,7 @@ platform-runtime-version = "sha256:000000000000000000000000000000000000000000000
 library-paths = []
 
 [launch]
-exec = "bin/pf-launch"
+exec = "pf-launch"
 needs_network = true
 takes_display = true
 audio = true

@@ -23,6 +23,8 @@ on:
       - 'tests/test-poolsuite-app-policy.sh'
       - 'tests/test-steamlink-app-policy.sh'
       - 'tests/test-steamlink-first-run-install.sh'
+      - 'tests/test-steamlink-rooted-launch.py'
+      - 'tests/run-app-policy-pair.sh'
       - 'apps/steamlink/app.toml'
       - 'tests/test-poolsuite-rootfs-install.sh'
       - 'tests/test-poolsuite-variant-stage.sh'
@@ -44,46 +46,109 @@ jobs:
   pair:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, pf-ci]
+    runs-on: [self-hosted, pf-builder-vm]
     timeout-minutes: 15
-    container:
-      image: 10.0.32.86:5555/pocketforge/ci-rust@sha256:801f15f7e8fd20b449e3b0d0a7a56d632e28dae825b251a19a30e6f8b32bd8e9
+    env:
+      PF_PAIR_OCI_IMAGE: 10.0.32.86:5555/pocketforge/ci-rust@sha256:801f15f7e8fd20b449e3b0d0a7a56d632e28dae825b251a19a30e6f8b32bd8e9
+      PF_IMAGE_PR_HEAD: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          persist-credentials: false
           repository: pocketforge-os/runtime
-          ref: da971c761e40ef153a0133039273cbd0901a8b03
+          ref: 7d92ef9fa5a6c1dca21d7f0e1e568c0cf2de6bc8
           path: runtime-pair
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          persist-credentials: false
           repository: pocketforge-os/launcher
-          ref: 80f9dd87a68dbcda4dbbc78ae546afc469ba3aa8
+          ref: 2df03a48a91f7b4dfe2626848af80f4eca6398da
           path: launcher-pair
-      - name: Prove exact runtime, launcher, and image candidates together
+      - name: Prove exact source pair in the pinned OCI toolchain
         run: |
-          test "$(git -C runtime-pair rev-parse HEAD)" = da971c761e40ef153a0133039273cbd0901a8b03
-          test "$(git -C launcher-pair rev-parse HEAD)" = 80f9dd87a68dbcda4dbbc78ae546afc469ba3aa8
-          scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
-            pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
-            pf-framehost-wayland pf-hang-trigger pf-theme pf-input-map pf-prefs pf-prefs-port \
-            pf-session-client pf-session-authority pf-wire
-          PF_HANG_RUNTIME_ROOT=runtime-pair tests/test-hang-sampler-image.sh
-          (cd runtime-pair && cargo build --locked \
-            --manifest-path Cargo.toml \
-            -p pf-app-launch --bin pf-app-policy-render \
-            --target-dir target)
-          export PF_APP_POLICY_RENDER="$GITHUB_WORKSPACE/runtime-pair/target/debug/pf-app-policy-render"
-          printf 'runtime_candidate=%s launcher_candidate=%s image_candidate=%s policy_renderer_sha256=%s\n' \
+          set -euo pipefail
+          export PF_PAIR_OUTPUT="$RUNNER_TEMP/app-policy-pair"
+          printf 'PF_PAIR_OUTPUT=%s\n' "$PF_PAIR_OUTPUT" >> "$GITHUB_ENV"
+          test "$(git -C runtime-pair rev-parse HEAD)" = 7d92ef9fa5a6c1dca21d7f0e1e568c0cf2de6bc8
+          test "$(git -C launcher-pair rev-parse HEAD)" = 2df03a48a91f7b4dfe2626848af80f4eca6398da
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$PF_IMAGE_PR_HEAD" HEAD
+          test ! -e "$PF_PAIR_OUTPUT"
+          mkdir "$PF_PAIR_OUTPUT"
+          printf 'runtime_candidate=%s launcher_candidate=%s image_candidate=%s image_pr_head=%s\n' \
             "$(git -C runtime-pair rev-parse HEAD)" \
-            "$(git -C launcher-pair rev-parse HEAD)" \
-            "$(git rev-parse HEAD)" \
-            "$(sha256sum "$PF_APP_POLICY_RENDER" | cut -d' ' -f1)"
-          tests/test-app-runtime-root.sh
-          tests/test-steamlink-app-policy.sh "$PF_APP_POLICY_RENDER"
-          tests/test-steamlink-first-run-install.sh
-          tests/test-default-app-platform.sh
-          PF_RUNTIME_UNITS_DIR="$GITHUB_WORKSPACE/runtime-pair/systemd" \
-            tests/test-runtime-path-producers.sh
+            "$(git -C launcher-pair rev-parse HEAD)" "$(git rev-parse HEAD)" "$PF_IMAGE_PR_HEAD" \
+            | tee "$PF_PAIR_OUTPUT/source-receipt.txt"
+          # The builder's provisioned OCI service; no host Rust or service changes.
+          name="app-policy-pair-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          # The builder already provisions Skopeo for the LAN HTTP registry;
+          # avoid changing its daemon registry configuration.
+          printf '{"auths":{}}\n' > "$PF_PAIR_OUTPUT/registry-anonymous.json"
+          skopeo inspect --authfile "$PF_PAIR_OUTPUT/registry-anonymous.json" --raw --tls-verify=false "docker://$PF_PAIR_OCI_IMAGE" \
+            > "$PF_PAIR_OUTPUT/oci-manifest.json"
+          printf '%s  %s\n' "${PF_PAIR_OCI_IMAGE##*@sha256:}" "$PF_PAIR_OUTPUT/oci-manifest.json" \
+            | sha256sum -c -
+          manifest_id=$(python3 -c 'import json,sys; entries=[m for m in json.load(open(sys.argv[1]))["manifests"] if m.get("platform")=={"architecture":"amd64","os":"linux"}]; assert len(entries)==1; print(entries[0]["digest"])' \
+            "$PF_PAIR_OUTPUT/oci-manifest.json")
+          [[ "$manifest_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          platform_image="${PF_PAIR_OCI_IMAGE%@*}@$manifest_id"
+          skopeo inspect --authfile "$PF_PAIR_OUTPUT/registry-anonymous.json" --raw --tls-verify=false \
+            "docker://$platform_image" > "$PF_PAIR_OUTPUT/platform-manifest.json"
+          printf '%s  %s\n' "${manifest_id#sha256:}" "$PF_PAIR_OUTPUT/platform-manifest.json" | sha256sum -c -
+          image_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["config"]["digest"])' \
+            "$PF_PAIR_OUTPUT/platform-manifest.json")
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          skopeo copy --src-authfile "$PF_PAIR_OUTPUT/registry-anonymous.json" \
+            --src-tls-verify=false \
+            "docker://$platform_image" "docker-archive:$PF_PAIR_OUTPUT/toolchain.tar:app-policy-pair:verified"
+          docker load --input "$PF_PAIR_OUTPUT/toolchain.tar"
+          loaded_id=$(docker image inspect --format '{{.Id}}' app-policy-pair:verified)
+          [[ "$loaded_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          # Classic and containerd stores expose different image-ID kinds. Export
+          # the immutable daemon ID and verify its actual config bytes instead.
+          docker image save --output "$PF_PAIR_OUTPUT/loaded-image.tar" "$loaded_id"
+          python3 -c 'import hashlib,json,sys,tarfile
+          with tarfile.open(sys.argv[1]) as archive:
+              entries=json.load(archive.extractfile("manifest.json"))
+              assert len(entries)==1
+              config=archive.extractfile(entries[0]["Config"]).read()
+              assert "sha256:"+hashlib.sha256(config).hexdigest()==sys.argv[2]
+          print("loaded_config=PASS digest="+sys.argv[2])' "$PF_PAIR_OUTPUT/loaded-image.tar" "$image_id"
+          rm "$PF_PAIR_OUTPUT/loaded-image.tar"
+          rm "$PF_PAIR_OUTPUT/toolchain.tar"
+          printf 'paired_toolchain=%s config_digest=%s daemon_id=%s\n' "$PF_PAIR_OCI_IMAGE" "$image_id" "$loaded_id"
+          docker run --rm --pull never --name "$name" --init \
+            --user "$(id -u):$(id -g)" --network none \
+            --cpus 2 --memory 2g --pids-limit 512 \
+            --cap-drop ALL --security-opt no-new-privileges --read-only \
+            --tmpfs /tmp:rw,nosuid,nodev,exec,size=256m,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/app-policy-pair,dst=/work" \
+            --workdir /workspace -- "$loaded_id" \
+            bash tests/run-app-policy-pair.sh
+
+      - name: Require real rooted launch namespace on the capable builder
+        run: |
+          set -euo pipefail
+          cat "$PF_PAIR_OUTPUT/source-receipt.txt" "$PF_PAIR_OUTPUT/SHA256SUMS"
+          (cd "$PF_PAIR_OUTPUT/target/debug" && sha256sum -c "$PF_PAIR_OUTPUT/SHA256SUMS")
+          export PF_APP_LAUNCH="$PF_PAIR_OUTPUT/target/debug/pf-app-launch"
+          export PF_APP_POLICY_RENDER="$PF_PAIR_OUTPUT/target/debug/pf-app-policy-render"
+          # All real namespace and policy negatives must execute. Landlock ABI10
+          # full enforcement remains the capable-kernel whole-image device gate.
+          PF_APP_REQUIRE_NAMESPACE=1 tests/test-steamlink-first-run-install.sh
+
+      - name: Remove private pair output
+        if: always()
+        run: |
+          if test -n "${PF_PAIR_OUTPUT:-}" && test -d "$PF_PAIR_OUTPUT"; then
+            find "$PF_PAIR_OUTPUT" -mindepth 1 -delete
+            rmdir "$PF_PAIR_OUTPUT"
+          fi
