@@ -1556,6 +1556,8 @@ if [ -f "${POWERD_BIN}" ]; then
     powerd_em="$(od -An -tx1 -j18 -N2 "${POWERD_BIN}" | tr -d ' ')"
     [ "${powerd_em}" = "b700" ] || { echo "FATAL: ${POWERD_BIN} is not an aarch64 ELF (e_machine=${powerd_em}, want b700)" >&2; exit 1; }
     install -D -m 0755 "${POWERD_BIN}" "${ROOTFS}/usr/bin/pf-powerd"
+    install -D -m 0644 "/work/src/power-key-policy/60-pocketforge-power-key.conf" \
+        "${ROOTFS}/etc/systemd/logind.conf.d/60-pocketforge-power-key.conf"
     install -D -m 0644 "${RUNTIME_DIR}/systemd/pf-powerd.service" \
         "${ROOTFS}/etc/systemd/system/pf-powerd.service"
     install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
