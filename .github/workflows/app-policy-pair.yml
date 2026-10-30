@@ -56,17 +56,17 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/runtime
-          ref: 976ead2978626ebeb494d78daa36c67f2a8f5810
+          ref: 7d92ef9fa5a6c1dca21d7f0e1e568c0cf2de6bc8
           path: runtime-pair
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pocketforge-os/launcher
-          ref: 900db88c7c27f3286ac0baad4199db8f6748cb81
+          ref: 2df03a48a91f7b4dfe2626848af80f4eca6398da
           path: launcher-pair
       - name: Prove exact runtime, launcher, and image candidates together
         run: |
-          test "$(git -C runtime-pair rev-parse HEAD)" = 976ead2978626ebeb494d78daa36c67f2a8f5810
-          test "$(git -C launcher-pair rev-parse HEAD)" = 900db88c7c27f3286ac0baad4199db8f6748cb81
+          test "$(git -C runtime-pair rev-parse HEAD)" = 7d92ef9fa5a6c1dca21d7f0e1e568c0cf2de6bc8
+          test "$(git -C launcher-pair rev-parse HEAD)" = 2df03a48a91f7b4dfe2626848af80f4eca6398da
           scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
             pf-app-launch pf-app-manifest pf-scene pf-ports pf-render pf-framehost \
             pf-framehost-wayland pf-hang-trigger pf-theme pf-input-map pf-prefs pf-prefs-port \
