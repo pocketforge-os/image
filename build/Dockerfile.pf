@@ -1337,7 +1337,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "8c87d7b60ceb604489b6343355732504a06d743c" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "da971c761e40ef153a0133039273cbd0901a8b03" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # files exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml plus the byte-identical device-neutral
@@ -2117,7 +2117,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "900db88c7c27f3286ac0baad4199db8f6748cb81" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "80f9dd87a68dbcda4dbbc78ae546afc469ba3aa8" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fifteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
