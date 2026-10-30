@@ -50,7 +50,6 @@ jobs:
     timeout-minutes: 15
     env:
       PF_PAIR_OCI_IMAGE: 10.0.32.86:5555/pocketforge/ci-rust@sha256:801f15f7e8fd20b449e3b0d0a7a56d632e28dae825b251a19a30e6f8b32bd8e9
-      PF_PAIR_OUTPUT: ${{ runner.temp }}/app-policy-pair
       PF_IMAGE_PR_HEAD: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -72,6 +71,8 @@ jobs:
       - name: Prove exact source pair in the pinned OCI toolchain
         run: |
           set -euo pipefail
+          export PF_PAIR_OUTPUT="$RUNNER_TEMP/app-policy-pair"
+          printf 'PF_PAIR_OUTPUT=%s\n' "$PF_PAIR_OUTPUT" >> "$GITHUB_ENV"
           test "$(git -C runtime-pair rev-parse HEAD)" = 7d92ef9fa5a6c1dca21d7f0e1e568c0cf2de6bc8
           test "$(git -C launcher-pair rev-parse HEAD)" = 2df03a48a91f7b4dfe2626848af80f4eca6398da
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -112,7 +113,7 @@ jobs:
       - name: Remove private pair output
         if: always()
         run: |
-          if test -d "$PF_PAIR_OUTPUT"; then
+          if test -n "${PF_PAIR_OUTPUT:-}" && test -d "$PF_PAIR_OUTPUT"; then
             find "$PF_PAIR_OUTPUT" -mindepth 1 -delete
             rmdir "$PF_PAIR_OUTPUT"
           fi
