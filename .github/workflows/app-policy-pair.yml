@@ -109,9 +109,21 @@ jobs:
             --src-tls-verify=false \
             "docker://$platform_image" "docker-archive:$PF_PAIR_OUTPUT/toolchain.tar:app-policy-pair:verified"
           docker load --input "$PF_PAIR_OUTPUT/toolchain.tar"
-          test "$(docker image inspect --format '{{.Id}}' "$image_id")" = "$image_id"
+          loaded_id=$(docker image inspect --format '{{.Id}}' app-policy-pair:verified)
+          [[ "$loaded_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          # Classic and containerd stores expose different image-ID kinds. Export
+          # the immutable daemon ID and verify its actual config bytes instead.
+          docker image save --output "$PF_PAIR_OUTPUT/loaded-image.tar" "$loaded_id"
+          python3 -c 'import hashlib,json,sys,tarfile
+          with tarfile.open(sys.argv[1]) as archive:
+              entries=json.load(archive.extractfile("manifest.json"))
+              assert len(entries)==1
+              config=archive.extractfile(entries[0]["Config"]).read()
+              assert "sha256:"+hashlib.sha256(config).hexdigest()==sys.argv[2]
+          print("loaded_config=PASS digest="+sys.argv[2])' "$PF_PAIR_OUTPUT/loaded-image.tar" "$image_id"
+          rm "$PF_PAIR_OUTPUT/loaded-image.tar"
           rm "$PF_PAIR_OUTPUT/toolchain.tar"
-          printf 'paired_toolchain=%s image_id=%s\n' "$PF_PAIR_OCI_IMAGE" "$image_id"
+          printf 'paired_toolchain=%s config_digest=%s daemon_id=%s\n' "$PF_PAIR_OCI_IMAGE" "$image_id" "$loaded_id"
           docker run --rm --pull never --name "$name" --init \
             --user "$(id -u):$(id -g)" --network none \
             --cpus 2 --memory 2g --pids-limit 512 \
@@ -119,7 +131,7 @@ jobs:
             --tmpfs /tmp:rw,nosuid,nodev,exec,size=256m,mode=1777 \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly" \
             --mount "type=bind,src=$PF_PAIR_OUTPUT,dst=/work" \
-            --workdir /workspace "$image_id" \
+            --workdir /workspace "$loaded_id" \
             bash tests/run-app-policy-pair.sh
 
       - name: Require real rooted launch namespace on the capable builder
