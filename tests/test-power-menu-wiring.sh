@@ -24,4 +24,9 @@ grep -Fx 'Wants=pf-powerd.service' "${shell_unit}" >/dev/null
 grep -E '^After=.*[[:space:]]pf-powerd\.service([[:space:]]|$)' "${shell_unit}" >/dev/null
 grep -Fx 'Environment=PF_POWER_SOCK=/run/pocketforge-power/power.sock' "${shell_unit}" >/dev/null
 
+policy="${root}/rootfs-overlay/etc/systemd/logind.conf.d/60-pocketforge-power-key.conf"
+grep -Fx 'HandlePowerKey=ignore' "${policy}" >/dev/null
+grep -Fx 'HandlePowerKeyLongPress=poweroff' "${policy}" >/dev/null
+grep -F '"${ROOTFS}/etc/systemd/logind.conf.d/60-pocketforge-power-key.conf"' "${builder}" >/dev/null
+
 echo 'PASS power menu authority is built, installed, enabled, and ordered before pf-shell'
