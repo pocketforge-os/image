@@ -174,11 +174,72 @@ assert root["platform-runtime-version"] != "sha256:" + "0" * 64
 assert sorted(path.parent.iterdir()) == [path]
 PY
 if [ -n "${PF_APP_LAUNCH:-}" ]; then
-    python3 "${root}/tests/test-steamlink-rooted-launch.py" \
-        --manifest "${manifest}" --layout "${PF_TEST_CAPTURE_OVERLAY}" \
-        --inventory "${rootfs}/usr/share/pocketforge/app-policy/org.pocketforge.steamlink.resources.json" \
-        --contract "${root}/tests/fixtures/app-policy/platform-capabilities-a133-open.toml" \
+    namespace_args=(
+        "${root}/tests/test-steamlink-rooted-launch.py"
+        --manifest "${manifest}" --layout "${PF_TEST_CAPTURE_OVERLAY}"
+        --inventory "${rootfs}/usr/share/pocketforge/app-policy/org.pocketforge.steamlink.resources.json"
+        --contract "${root}/tests/fixtures/app-policy/platform-capabilities-a133-open.toml"
         --helper "${PF_APP_LAUNCH}" --renderer "${PF_APP_POLICY_RENDER:?}"
+    )
+    required=()
+    if [ "${PF_APP_REQUIRE_NAMESPACE:-0}" = 1 ]; then required=(--require-namespace); fi
+    python_command=$(command -v python3)
+    "${python_command}" "${namespace_args[@]}" "${required[@]}"
+
+    # Missing tooling is explicit partial coverage, never enforcement evidence.
+    # Requiring the namespace turns that same capability absence into a failure.
+    mkdir "${scratch}/no-namespace-tools"
+    PATH="${scratch}/no-namespace-tools" "${python_command}" "${namespace_args[@]}" \
+        >"${scratch}/missing-bwrap.out"
+    grep -Fx 'rooted-launch=PARTIAL namespace=UNAVAILABLE reason=bwrap_missing enforcement=unverified' \
+        "${scratch}/missing-bwrap.out" >/dev/null
+    if PATH="${scratch}/no-namespace-tools" "${python_command}" "${namespace_args[@]}" \
+        --require-namespace >"${scratch}/required-bwrap.out"; then
+        echo 'required namespace accepted missing bwrap' >&2; exit 1
+    else
+        [ "$?" -eq 77 ] || exit 1
+    fi
+    grep -F 'reason=bwrap_missing' "${scratch}/required-bwrap.out" >/dev/null
+
+    # Permission-limited namespace hosts follow the same explicit boundary.
+    for permission in \
+        'Creating new namespace failed: Operation not permitted' \
+        'No permissions to create new namespace' \
+        'setting up uid map: Permission denied'; do
+        printf '#!/bin/sh\nprintf "%%s\\n" "%s" >&2\nexit 1\n' "${permission}" \
+            >"${scratch}/no-namespace-tools/bwrap"
+        chmod +x "${scratch}/no-namespace-tools/bwrap"
+        PATH="${scratch}/no-namespace-tools" "${python_command}" "${namespace_args[@]}" \
+            >"${scratch}/permission-bwrap.out"
+        grep -F 'namespace=UNAVAILABLE reason=namespace_permission_required' \
+            "${scratch}/permission-bwrap.out" >/dev/null
+        if PATH="${scratch}/no-namespace-tools" "${python_command}" "${namespace_args[@]}" \
+            --require-namespace >"${scratch}/required-permission.out"; then
+            echo 'required namespace accepted missing permission' >&2; exit 1
+        else
+            [ "$?" -eq 77 ] || exit 1
+        fi
+    done
+
+    # A present but broken tool is an error even when capability absence is allowed.
+    cat >"${scratch}/no-namespace-tools/bwrap" <<'BWRAP'
+#!/bin/sh
+printf '%s\n' 'synthetic unexpected namespace failure' >&2
+exit 1
+BWRAP
+    chmod +x "${scratch}/no-namespace-tools/bwrap"
+    if PATH="${scratch}/no-namespace-tools" "${python_command}" "${namespace_args[@]}" \
+        >"${scratch}/broken-bwrap.out" 2>"${scratch}/broken-bwrap.err"; then
+        echo 'broken namespace tool was accepted' >&2; exit 1
+    fi
+    grep -F 'namespace probe failed unexpectedly' "${scratch}/broken-bwrap.err" >/dev/null
+    if PATH="${scratch}/no-namespace-tools" "${python_command}" "${namespace_args[@]}" \
+        --require-namespace >"${scratch}/required-broken.out" 2>"${scratch}/required-broken.err"; then
+        echo 'required namespace accepted a broken tool' >&2; exit 1
+    fi
+    grep -F 'namespace probe failed unexpectedly' "${scratch}/required-broken.err" >/dev/null
+    echo 'Namespace capability controls: PASS optional=partial required=refused missing=checked permission=3 broken=refused-both'
+
 fi
 dropin="${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/20-runtime-root.conf"
 grep -Fx 'BindReadOnlyPaths=/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1' "${dropin}" >/dev/null

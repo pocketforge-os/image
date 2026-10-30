@@ -18,6 +18,7 @@ import tomllib
 p = argparse.ArgumentParser()
 for name in ("manifest", "layout", "inventory", "contract", "helper", "renderer"):
     p.add_argument("--" + name, required=True, type=Path)
+p.add_argument("--require-namespace", action="store_true")
 a = p.parse_args()
 manifest = tomllib.loads(a.manifest.read_text())
 app_id = manifest["app"]["id"]
@@ -40,9 +41,22 @@ render = [str(a.renderer), "--manifest", str(a.manifest), "--platform-contract",
           "--xdg-config", xdg["XDG_CONFIG_HOME"], "--xdg-state", xdg["XDG_STATE_HOME"],
           "--xdg-cache", xdg["XDG_CACHE_HOME"], "--format", "json"]
 policy = json.loads(subprocess.check_output(render, text=True))
-probe = subprocess.run(["bwrap", "--unshare-all", "--ro-bind", "/", "/", "/bin/true"], capture_output=True)
+def unavailable(reason):
+    print(f"rooted-launch=PARTIAL namespace=UNAVAILABLE reason={reason} enforcement=unverified")
+    raise SystemExit(77 if a.require_namespace else 0)
+
+bwrap = shutil.which("bwrap")
+if bwrap is None:
+    unavailable("bwrap_missing")
+probe = subprocess.run([bwrap, "--unshare-all", "--ro-bind", "/", "/", "/bin/true"], capture_output=True, text=True)
 if probe.returncode:
-    raise SystemExit("rooted-launch=UNAVAILABLE reason=namespace_permission_required")
+    if any(message in probe.stderr for message in (
+        "Creating new namespace failed: Operation not permitted",
+        "No permissions to create new namespace",
+        "setting up uid map: Permission denied",
+    )):
+        unavailable("namespace_permission_required")
+    raise AssertionError(f"namespace probe failed unexpectedly: {probe}")
 with tempfile.TemporaryDirectory(prefix="steamlink-rooted-launch-") as tmp:
     work = Path(tmp)
     root = work / "root"
@@ -86,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix="steamlink-rooted-launch-") as tmp:
     for path in ("/usr/lib", "/lib", "/lib64"):
         inside(path).mkdir(parents=True, exist_ok=True)
     write("/bin/sh", "")
-    base = ["bwrap", "--unshare-all", "--ro-bind", str(root), "/"]
+    base = [bwrap, "--unshare-all", "--ro-bind", str(root), "/"]
     for path in xdg.values():
         base += ["--bind", str(inside(path)), path]
     for path in ("/usr/lib", "/lib", "/lib64", "/bin/sh"):
