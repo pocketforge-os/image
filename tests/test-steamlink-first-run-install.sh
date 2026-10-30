@@ -173,6 +173,10 @@ assert root["digest"] != "sha256:" + "0" * 64
 assert root["platform-runtime-version"] != "sha256:" + "0" * 64
 assert sorted(path.parent.iterdir()) == [path]
 PY
+if [ "${PF_APP_REQUIRE_NAMESPACE:-0}" = 1 ]; then
+    : "${PF_APP_LAUNCH:?required namespace needs the production helper}"
+    : "${PF_APP_POLICY_RENDER:?required namespace needs the production renderer}"
+fi
 if [ -n "${PF_APP_LAUNCH:-}" ]; then
     namespace_args=(
         "${root}/tests/test-steamlink-rooted-launch.py"
