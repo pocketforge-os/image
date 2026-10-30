@@ -88,15 +88,38 @@ jobs:
           trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
           trap 'exit 130' INT
           trap 'exit 143' TERM
-          docker pull "$PF_PAIR_OCI_IMAGE"
-          docker run --rm --name "$name" --init \
+          # The builder already provisions Skopeo for the LAN HTTP registry;
+          # avoid changing its daemon registry configuration.
+          printf '{"auths":{}}\n' > "$PF_PAIR_OUTPUT/registry-anonymous.json"
+          skopeo inspect --authfile "$PF_PAIR_OUTPUT/registry-anonymous.json" --raw --tls-verify=false "docker://$PF_PAIR_OCI_IMAGE" \
+            > "$PF_PAIR_OUTPUT/oci-manifest.json"
+          printf '%s  %s\n' "${PF_PAIR_OCI_IMAGE##*@sha256:}" "$PF_PAIR_OUTPUT/oci-manifest.json" \
+            | sha256sum -c -
+          manifest_id=$(python3 -c 'import json,sys; entries=[m for m in json.load(open(sys.argv[1]))["manifests"] if m.get("platform")=={"architecture":"amd64","os":"linux"}]; assert len(entries)==1; print(entries[0]["digest"])' \
+            "$PF_PAIR_OUTPUT/oci-manifest.json")
+          [[ "$manifest_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          platform_image="${PF_PAIR_OCI_IMAGE%@*}@$manifest_id"
+          skopeo inspect --authfile "$PF_PAIR_OUTPUT/registry-anonymous.json" --raw --tls-verify=false \
+            "docker://$platform_image" > "$PF_PAIR_OUTPUT/platform-manifest.json"
+          printf '%s  %s\n' "${manifest_id#sha256:}" "$PF_PAIR_OUTPUT/platform-manifest.json" | sha256sum -c -
+          image_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["config"]["digest"])' \
+            "$PF_PAIR_OUTPUT/platform-manifest.json")
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          skopeo copy --src-authfile "$PF_PAIR_OUTPUT/registry-anonymous.json" \
+            --src-tls-verify=false \
+            "docker://$platform_image" "docker-archive:$PF_PAIR_OUTPUT/toolchain.tar:app-policy-pair:verified"
+          docker load --input "$PF_PAIR_OUTPUT/toolchain.tar"
+          test "$(docker image inspect --format '{{.Id}}' "$image_id")" = "$image_id"
+          rm "$PF_PAIR_OUTPUT/toolchain.tar"
+          printf 'paired_toolchain=%s image_id=%s\n' "$PF_PAIR_OCI_IMAGE" "$image_id"
+          docker run --rm --pull never --name "$name" --init \
             --user "$(id -u):$(id -g)" --network none \
             --cpus 2 --memory 2g --pids-limit 512 \
             --cap-drop ALL --security-opt no-new-privileges --read-only \
             --tmpfs /tmp:rw,nosuid,nodev,exec,size=256m,mode=1777 \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly" \
             --mount "type=bind,src=$PF_PAIR_OUTPUT,dst=/work" \
-            --workdir /workspace "$PF_PAIR_OCI_IMAGE" \
+            --workdir /workspace "$image_id" \
             bash tests/run-app-policy-pair.sh
 
       - name: Require real rooted launch namespace on the capable builder
