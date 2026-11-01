@@ -2173,6 +2173,7 @@ ARG PF_GAMESCOPE_PATCH_SERIES_SHA256
 ARG PF_GAMESCOPE_DEPENDENCY_MANIFEST_SHA256
 ARG PF_GAMESCOPE_SOURCE_TREE_SHA256
 ARG PF_GAMESCOPE_LICENSE_SHA256
+ARG PF_GAMESCOPE_IDENTITY_SHA256
 ARG PF_GAMESCOPE_DIAGNOSTICS=0
 COPY --from=gamescope-src . /work/gamescope
 COPY --from=image-src scripts/gamescope_package.py /work/image/scripts/gamescope_package.py
@@ -2204,6 +2205,7 @@ DESTDIR=/out ninja -C /work/gamescope/build-aarch64 install
 readelf -h /out/usr/bin/gamescope | python3 "${validator}" verify-elf -
 install -D -m 0644 /work/gamescope-build-id \
   /out/usr/share/pocketforge/gamescope-build-id
+printf '%s  %s\n' "${PF_GAMESCOPE_IDENTITY_SHA256}" /out/usr/share/pocketforge/gamescope-build-id | sha256sum --check --strict -
 python3 "${validator}" install-licenses ${common_args} \
   --output /out/usr/share/licenses/gamescope
 case "${PF_GAMESCOPE_DIAGNOSTICS}" in
