@@ -24,6 +24,9 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}")
 POCKETFORGE_SOURCE_PREFIX = "https://github.com/pocketforge-os/"
 SOURCE_SCHEMA = "pocketforge.gamescope-source/v1"
 IDENTITY_SCHEMA = "pocketforge.gamescope-build/v1"
+CANONICAL_SOURCE = Path("/work/gamescope")
+CANONICAL_BUILD_DIR = Path("/work/gamescope/build-aarch64")
+CANONICAL_CROSS_FILE = Path("/work/aarch64.ini")
 MANIFEST_FIELDS = (
     "schema", "edge_id", "parent_id", "project_id", "path", "kind",
     "upstream_url", "upstream_revision", "declared_url", "locator_revision",
@@ -422,6 +425,24 @@ def render_identity(validated: ValidatedSource, *,
     return "\n".join(lines) + "\n"
 
 
+def canonical_meson_configuration() -> MesonSetupConfiguration:
+    """Return the exact configuration used by the image's Gamescope stage."""
+    return MesonSetupConfiguration(
+        source=CANONICAL_SOURCE,
+        build_dir=CANONICAL_BUILD_DIR,
+        cross_file=CANONICAL_CROSS_FILE,
+    )
+
+
+def render_canonical_identity(source: Path, expected: ExpectedSource) -> str:
+    """Validate staged source and render installed identity bytes without writes."""
+    return render_identity(
+        validate_source(source, expected),
+        meson_configuration=canonical_meson_configuration(),
+        target_arch="aarch64",
+    )
+
+
 def configure_build(source: Path, expected: ExpectedSource, *, build_dir: Path,
                     cross_file: Path, identity_out: Path,
                     runner: Callable[..., object] = subprocess.run) -> None:
@@ -519,6 +540,10 @@ def main(argv: list[str] | None = None) -> int:
     validate.add_argument("--source", type=Path, required=True)
     _add_expected_source_args(validate)
 
+    render = subparsers.add_parser("render-identity")
+    render.add_argument("--source", type=Path, required=True)
+    _add_expected_source_args(render)
+
     configure = subparsers.add_parser("configure-build")
     configure.add_argument("--source", type=Path, required=True)
     configure.add_argument("--build-dir", type=Path, required=True)
@@ -538,6 +563,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "validate-source":
             validate_source(args.source, _expected_from_args(args))
+        elif args.command == "render-identity":
+            sys.stdout.write(render_canonical_identity(
+                args.source, _expected_from_args(args)))
         elif args.command == "configure-build":
             configure_build(
                 args.source, _expected_from_args(args),

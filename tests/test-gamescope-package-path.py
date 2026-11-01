@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -180,6 +182,43 @@ class GamescopePackagePathTest(unittest.TestCase):
         gp.install_licenses(self.source, validated, licenses)
         self.assertEqual(len(list(licenses.iterdir())), 34)
 
+    def test_canonical_identity_renderer_is_side_effect_free(self) -> None:
+        before = {
+            path.relative_to(self.source): path.read_bytes()
+            for path in self.source.rglob("*") if path.is_file()
+        }
+        identity = gp.render_canonical_identity(self.source, self.expected)
+        configuration = gp.canonical_meson_configuration()
+        self.assertEqual(
+            identity,
+            gp.render_identity(
+                gp.validate_source(self.source, self.expected),
+                meson_configuration=configuration,
+                target_arch="aarch64",
+            ),
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = gp.main([
+                "render-identity", "--source", str(self.source),
+                "--upstream-base", BASE,
+                "--integrated-head", HEAD,
+                "--present-head", PRESENT,
+                "--staging-head", STAGING,
+                "--rotation-head", ROTATION,
+                "--patch-series-sha256", PATCHES,
+                "--dependency-manifest-sha256", self.manifest_sha,
+                "--source-tree-sha256", self.expected.source_tree_sha256,
+                "--license-sha256", self.license_sha,
+            ])
+        self.assertEqual(result, 0)
+        self.assertEqual(output.getvalue(), identity)
+        after = {
+            path.relative_to(self.source): path.read_bytes()
+            for path in self.source.rglob("*") if path.is_file()
+        }
+        self.assertEqual(after, before)
+
     def test_meson_identity_tracks_exact_setup_argv_and_cross_file(self) -> None:
         base = gp.MesonSetupConfiguration(
             source=Path("/work/gamescope"),
@@ -351,9 +390,11 @@ class GamescopePackagePathTest(unittest.TestCase):
         for required in (
             "FROM gamescope-${PF_GAMESCOPE_MODE} AS gamescope",
             "ARG PF_GAMESCOPE_SOURCE_TREE_SHA256",
+            "ARG PF_GAMESCOPE_IDENTITY_SHA256",
             "COPY --from=gamescope-src . /work/gamescope",
             "--source-tree-sha256 ${PF_GAMESCOPE_SOURCE_TREE_SHA256}",
             "configure-build ${common_args}",
+            "printf '%s  %s\\n' \"${PF_GAMESCOPE_IDENTITY_SHA256}\" /out/usr/share/pocketforge/gamescope-build-id | sha256sum --check --strict -",
             "--wrap-mode=nodownload",
             "COPY --from=gamescope /out /work/gamescope-package",
         ):
