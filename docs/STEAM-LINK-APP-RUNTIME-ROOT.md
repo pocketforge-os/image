@@ -355,6 +355,25 @@ unprivileged host identity; the application still runs as `gamer`, with
 supplementary groups reset and no-new-privileges. PID 1 performs the image
 mount; the app receives no mount or namespace capability.
 
+## Production fetch-helper Python closure
+
+The production first-run root is built from the repository-pinned Debian 13
+snapshot, not from the older RB2g prototype below.  Its producer requests the
+full Debian `python3` package because `steamlink-fetch.py` imports
+`http.client`, `urllib`, `email`, and their transitive standard-library
+dependencies.  `python3-minimal` supplies an interpreter but deliberately does
+not supply that closure; using it caused the Build62 r2 launch failure.
+
+The root builder sorts the requested package set into `root.metadata.json`
+and records the snapshot plus the finished root SHA-256.  The Steam Link
+installer rejects metadata that does not name the exact expected package set,
+so the full stdlib request and every byte produced from its snapshot-resolved
+dependency closure are bound to the root receipt.  The hermetic producer test
+executes the packaged helper under the generated root's isolated Python home,
+then removes the transitive `email.parser` module and requires the same launch
+to fail closed.  No host package, runtime download, or device-side patch fills
+the closure.
+
 ## Reproducible Steam Link prototype
 
 The prototype uses preserved originals and writes all derived/vendor bytes to

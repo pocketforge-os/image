@@ -13,6 +13,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 export PF_TEST_CAPTURE_OVERLAY="${scratch}/captured-overlay"
+export PF_TEST_CAPTURE_RUNTIME_ROOT="${scratch}/captured-runtime-root"
 bin="${scratch}/bin"
 mkdir -p "${bin}"
 cat >"${bin}/root-builder" <<'EOF'
@@ -20,10 +21,12 @@ cat >"${bin}/root-builder" <<'EOF'
 set -eu
 output=
 overlay=
+packages=
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --output) output=$2; shift 2 ;;
         --overlay) overlay=$2; shift 2 ;;
+        --package) packages="${packages}${packages:+ }$2"; shift 2 ;;
         *) shift ;;
     esac
 done
@@ -41,18 +44,56 @@ if find "${overlay}" -name '*.tar.gz' -o -name '*.sig' | grep -q .; then
 fi
 mkdir -p "${output}"
 if [ ! -e "${PF_TEST_CAPTURE_OVERLAY}" ]; then cp -a "${overlay}" "${PF_TEST_CAPTURE_OVERLAY}"; fi
+# Model the package split at the producer seam with the host's complete stdlib:
+# python3 supplies it, while python3-minimal deliberately omits http.  The
+# resulting root executes the packaged helper without network or host imports.
+runtime_layout=${overlay}
+if [ ! -e "${PF_TEST_CAPTURE_RUNTIME_ROOT}" ]; then
+    python3 - "${overlay}" "${PF_TEST_CAPTURE_RUNTIME_ROOT}" "${packages}" <<'PYTHON'
+import pathlib
+import shutil
+import sys
+import sysconfig
+
+overlay, runtime, package_text = map(pathlib.Path, sys.argv[1:])
+packages = set(str(package_text).split())
+shutil.copytree(overlay, runtime)
+stdlib = pathlib.Path(sysconfig.get_path("stdlib"))
+target = runtime / "usr" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+shutil.copytree(stdlib, target)
+for name in ("site-packages", "dist-packages"):
+    shutil.rmtree(target / name, ignore_errors=True)
+for cache in target.rglob("__pycache__"):
+    shutil.rmtree(cache)
+python = runtime / "usr" / "bin" / "python3"
+python.parent.mkdir(parents=True, exist_ok=True)
+shutil.copy2(sys.executable, python, follow_symlinks=True)
+if "python3" not in packages:
+    shutil.rmtree(target / "http")
+PYTHON
+    runtime_layout=${PF_TEST_CAPTURE_RUNTIME_ROOT}
+fi
 # The root-image auditor consumes unsquashfs's file list, so this fixture keeps
 # the test hermetic by storing the same relative-path inventory as plain text.
 # Production still builds and audits the real SquashFS in build-rootfs.sh.
-find "${overlay}" -mindepth 1 -printf '%y %P\n' | LC_ALL=C sort >"${output}/root.raw"
+find "${runtime_layout}" -mindepth 1 -printf '%y %P\n' | LC_ALL=C sort >"${output}/root.raw"
 if [ "${PF_TEST_REAL_SQUASHFS:-0}" = 1 ]; then
     rm "${output}/root.raw"
-    mksquashfs "${overlay}" "${output}/root.raw" -noappend -no-progress -processors 1 > /dev/null
+    mksquashfs "${runtime_layout}" "${output}/root.raw" -noappend -no-progress -processors 1 > /dev/null
 fi
 digest=$(sha256sum "${output}/root.raw" | awk '{print $1}')
 [ "${PF_TEST_BAD_METADATA:-0}" = 0 ] || digest=$(printf '%064d' 0)
-printf '{"schema_version":1,"distribution":"debian-13","suite":"trixie","architecture":"arm64","sha256":"%s"}\n' \
-    "${digest}" >"${output}/root.metadata.json"
+python3 - "${output}/root.metadata.json" "${digest}" "${packages}" <<'PYTHON'
+import json, os, pathlib, sys
+packages = {"ca-certificates", "libc6", "libgcc-s1", "libstdc++6"}
+packages.update(sys.argv[3].split())
+if os.environ.get("PF_TEST_BAD_PACKAGES") == "1":
+    packages.discard("python3")
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    "schema_version": 1, "distribution": "debian-13", "suite": "trixie",
+    "architecture": "arm64", "packages": sorted(packages), "sha256": sys.argv[2],
+}, sort_keys=True, separators=(",", ":")) + "\n")
+PYTHON
 EOF
 cat >"${bin}/unsquashfs" <<'EOF'
 #!/usr/bin/env python3
@@ -161,6 +202,29 @@ PF_STEAMLINK_POLICY_RENDERER="${bin}/policy-renderer" \
 PF_REAL_ROOT_RENDERER="${root}/scripts/render-app-runtime-root.py" \
 PF_REAL_POLICY_FRAGMENT="${root}/build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
     "${installer}" "${rootfs}" 20261010T000000Z root
+
+runtime_python="${PF_TEST_CAPTURE_RUNTIME_ROOT}/usr/bin/python3"
+runtime_helper="${PF_TEST_CAPTURE_RUNTIME_ROOT}/opt/pocketforge/apps/org.pocketforge.steamlink/steamlink-fetch.py"
+runtime_home="${PF_TEST_CAPTURE_RUNTIME_ROOT}/usr"
+if ! env -i PATH=/usr/bin:/bin PYTHONHOME="${runtime_home}" PYTHONDONTWRITEBYTECODE=1 \
+    "${runtime_python}" -S "${runtime_helper}" --help \
+    >"${scratch}/python-closure.out" 2>"${scratch}/python-closure.err"; then
+    cat "${scratch}/python-closure.err" >&2
+    echo 'packaged Steam Link fetch helper cannot import its Python stdlib closure' >&2
+    exit 1
+fi
+transitive_module=$(find "${runtime_home}" -path '*/email/parser.py' -print -quit)
+test -n "${transitive_module}"
+mv "${transitive_module}" "${transitive_module}.missing"
+if env -i PATH=/usr/bin:/bin PYTHONHOME="${runtime_home}" PYTHONDONTWRITEBYTECODE=1 \
+    "${runtime_python}" -S "${runtime_helper}" --help \
+    >"${scratch}/python-negative.out" 2>"${scratch}/python-negative.err"; then
+    echo 'packaged Steam Link fetch helper accepted a missing transitive stdlib module' >&2
+    exit 1
+fi
+grep -F "No module named 'email.parser'" "${scratch}/python-negative.err" >/dev/null
+mv "${transitive_module}.missing" "${transitive_module}"
+echo 'Steam Link packaged Python stdlib closure: PASS (helper imports; missing email.parser refused)'
 
 manifest="${rootfs}/opt/pocketforge/apps/org.pocketforge.steamlink/app.toml"
 python3 - "${manifest}" <<'PY'
@@ -363,6 +427,22 @@ if PF_TEST_BAD_METADATA=1 \
 fi
 grep -F 'root metadata sha256 differs' "${scratch}/bad.err" >/dev/null
 test ! -e "${bad_rootfs}/opt/pocketforge/apps/org.pocketforge.steamlink"
+
+bad_packages_rootfs="${scratch}/bad-packages-rootfs"
+make_rootfs "${bad_packages_rootfs}"
+if PF_TEST_BAD_PACKAGES=1 \
+    PF_STEAMLINK_ROOT_BUILDER="${bin}/root-builder" \
+    PF_STEAMLINK_ROOT_RENDERER="${bin}/root-renderer" \
+    PF_STEAMLINK_POLICY_RENDERER="${bin}/policy-renderer" \
+    PF_REAL_ROOT_RENDERER="${root}/scripts/render-app-runtime-root.py" \
+    PF_REAL_POLICY_FRAGMENT="${root}/build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
+        "${installer}" "${bad_packages_rootfs}" 20261010T000000Z root \
+        >"${scratch}/bad-packages.out" 2>"${scratch}/bad-packages.err"; then
+    echo 'root receipt without the Python package closure was accepted' >&2
+    exit 1
+fi
+grep -F 'root metadata package closure differs' "${scratch}/bad-packages.err" >/dev/null
+test ! -e "${bad_packages_rootfs}/opt/pocketforge/apps/org.pocketforge.steamlink"
 
 if [ "${PF_TEST_REQUIRE_REAL_SQUASHFS:-0}" = 1 ]; then
     command -v mksquashfs >/dev/null
