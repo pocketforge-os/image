@@ -76,12 +76,15 @@ install -m 0644 "${app_source}/valve-steamlink-release-key.asc" \
     "${app_overlay}/valve-steamlink-release-key.asc"
 
 root_output="${work}/root-output"
+# The fetch helper imports http.client, urllib, email, and their transitive
+# stdlib closure. Debian's python3-minimal intentionally omits that closure;
+# the snapshot-pinned python3 package supplies and provenance-binds it.
 "${root_builder}" \
     --distribution debian-13 \
     --architecture arm64 \
     --snapshot "${snapshot}" \
     --mode "${builder_mode}" \
-    --package python3-minimal \
+    --package python3 \
     --package gnupg \
     --overlay "${app_root_overlay}" \
     --output "${root_output}"
@@ -96,6 +99,9 @@ expected = {"schema_version": 1, "distribution": "debian-13", "suite": "trixie",
 for key, wanted in expected.items():
     if value.get(key) != wanted:
         raise SystemExit(f"steamlink-first-run: root metadata {key} differs")
+expected_packages = ["ca-certificates", "gnupg", "libc6", "libgcc-s1", "libstdc++6", "python3"]
+if value.get("packages") != expected_packages:
+    raise SystemExit("steamlink-first-run: root metadata package closure differs")
 PY
 
 platforms=$(find "${platform_store}" -mindepth 1 -maxdepth 1 -type d -name 'sha256-*' -printf '%f\n')
