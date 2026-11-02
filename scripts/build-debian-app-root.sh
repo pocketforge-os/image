@@ -8,10 +8,11 @@ output=
 overlay=
 mode=unshare
 preflight_only=false
+systemd_resolved_stub=false
 packages=(ca-certificates libc6 libgcc-s1 libstdc++6)
 
 usage() {
-    echo "usage: $0 --preflight-only | --distribution debian-12|debian-13 --architecture arm64 --snapshot YYYYMMDDTHHMMSSZ [--mode root|unshare|fakechroot] [--package NAME]... [--overlay DIR] --output DIR" >&2
+    echo "usage: $0 --preflight-only | --distribution debian-12|debian-13 --architecture arm64 --snapshot YYYYMMDDTHHMMSSZ [--mode root|unshare|fakechroot] [--package NAME]... [--overlay DIR] [--systemd-resolved-stub] --output DIR" >&2
     exit 64
 }
 
@@ -35,6 +36,7 @@ while (($#)); do
         --preflight-only) preflight_only=true; shift ;;
         --package) packages+=("${2-}"); shift 2 ;;
         --overlay) overlay=${2-}; shift 2 ;;
+        --systemd-resolved-stub) systemd_resolved_stub=true; shift ;;
         --output) output=${2-}; shift 2 ;;
         *) usage ;;
     esac
@@ -131,6 +133,15 @@ if [[ -n "${overlay}" ]]; then
         }
     done < <(find "${overlay}" -type f -print0)
     cp -a "${overlay}/." "${stage}/rootfs/"
+fi
+
+if [[ "${systemd_resolved_stub}" == true ]]; then
+    # RootImage services with PrivateNetwork=no share the base image's network
+    # namespace, including systemd-resolved's loopback stub. Never preserve
+    # mmdebstrap's build-host resolver in the immutable runtime root.
+    rm -f "${stage}/rootfs/etc/resolv.conf"
+    printf 'nameserver 127.0.0.53\n' >"${stage}/rootfs/etc/resolv.conf"
+    chmod 0644 "${stage}/rootfs/etc/resolv.conf"
 fi
 
 find "${stage}/rootfs" -print0 | LC_ALL=C sort -z | xargs -0 touch -h --date='@0'
