@@ -22,11 +22,13 @@ set -eu
 output=
 overlay=
 packages=
+systemd_resolved_stub=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --output) output=$2; shift 2 ;;
         --overlay) overlay=$2; shift 2 ;;
         --package) packages="${packages}${packages:+ }$2"; shift 2 ;;
+        --systemd-resolved-stub) systemd_resolved_stub=true; shift ;;
         *) shift ;;
     esac
 done
@@ -47,17 +49,32 @@ if [ ! -e "${PF_TEST_CAPTURE_OVERLAY}" ]; then cp -a "${overlay}" "${PF_TEST_CAP
 # Model the package split at the producer seam with the host's complete stdlib:
 # python3 supplies it, while python3-minimal deliberately omits http.  The
 # resulting root executes the packaged helper without network or host imports.
-runtime_layout=${overlay}
-if [ ! -e "${PF_TEST_CAPTURE_RUNTIME_ROOT}" ]; then
-    python3 - "${overlay}" "${PF_TEST_CAPTURE_RUNTIME_ROOT}" "${packages}" <<'PYTHON'
+runtime_layout="${output}-runtime"
+python3 - "${overlay}" "${runtime_layout}" "${packages}" \
+    "${systemd_resolved_stub}" <<'PYTHON'
 import pathlib
 import shutil
 import sys
 import sysconfig
 
-overlay, runtime, package_text = map(pathlib.Path, sys.argv[1:])
+overlay = pathlib.Path(sys.argv[1])
+runtime = pathlib.Path(sys.argv[2])
+package_text = sys.argv[3]
+systemd_resolved_stub = sys.argv[4] == "true"
 packages = set(str(package_text).split())
 shutil.copytree(overlay, runtime)
+# Model the package/bootstrap resolver leak at the real producer seam. The
+# shipped root must replace this build-network address with its runtime DNS
+# contract while preserving glibc's DNS NSS closure.
+etc = runtime / "etc"
+etc.mkdir(exist_ok=True)
+(etc / "resolv.conf").write_text("nameserver 192.168.151.1\n", encoding="utf-8")
+(etc / "nsswitch.conf").write_text("hosts: files dns\n", encoding="utf-8")
+nss_dns = runtime / "usr" / "lib" / "aarch64-linux-gnu" / "libnss_dns.so.2"
+nss_dns.parent.mkdir(parents=True, exist_ok=True)
+nss_dns.write_bytes(b"fixture libnss_dns closure\n")
+if systemd_resolved_stub:
+    (etc / "resolv.conf").write_text("nameserver 127.0.0.53\n", encoding="utf-8")
 stdlib = pathlib.Path(sysconfig.get_path("stdlib"))
 target = runtime / "usr" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
 shutil.copytree(stdlib, target)
@@ -71,7 +88,8 @@ shutil.copy2(sys.executable, python, follow_symlinks=True)
 if "python3" not in packages:
     shutil.rmtree(target / "http")
 PYTHON
-    runtime_layout=${PF_TEST_CAPTURE_RUNTIME_ROOT}
+if [ ! -e "${PF_TEST_CAPTURE_RUNTIME_ROOT}" ]; then
+    cp -a "${runtime_layout}" "${PF_TEST_CAPTURE_RUNTIME_ROOT}"
 fi
 # The root-image auditor consumes unsquashfs's file list, so this fixture keeps
 # the test hermetic by storing the same relative-path inventory as plain text.
@@ -206,6 +224,23 @@ PF_REAL_POLICY_FRAGMENT="${root}/build/pf-app@org.pocketforge.steamlink.service.
 runtime_python="${PF_TEST_CAPTURE_RUNTIME_ROOT}/usr/bin/python3"
 runtime_helper="${PF_TEST_CAPTURE_RUNTIME_ROOT}/opt/pocketforge/apps/org.pocketforge.steamlink/steamlink-fetch.py"
 runtime_home="${PF_TEST_CAPTURE_RUNTIME_ROOT}/usr"
+python3 - "${PF_TEST_CAPTURE_RUNTIME_ROOT}" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+resolver = (root / "etc/resolv.conf").read_text(encoding="utf-8")
+assert resolver == "nameserver 127.0.0.53\n", f"build resolver survived: {resolver!r}"
+assert "hosts: files dns" in (root / "etc/nsswitch.conf").read_text(encoding="utf-8").splitlines()
+assert (root / "usr/lib/aarch64-linux-gnu/libnss_dns.so.2").is_file()
+leaked = [
+    str(path.relative_to(root))
+    for path in root.rglob("*")
+    if path.is_file() and b"192.168.151.1" in path.read_bytes()
+]
+assert not leaked, f"fixture/build nameserver survived in app root: {leaked}"
+print("Steam Link runtime DNS closure: PASS (systemd-resolved stub; NSS files+dns; no build resolver)")
+PY
 if ! env -i PATH=/usr/bin:/bin PYTHONHOME="${runtime_home}" PYTHONDONTWRITEBYTECODE=1 \
     "${runtime_python}" -S "${runtime_helper}" --help \
     >"${scratch}/python-closure.out" 2>"${scratch}/python-closure.err"; then
@@ -463,10 +498,17 @@ import pathlib, subprocess, sys, tempfile
 with tempfile.TemporaryDirectory() as scratch:
     root = pathlib.Path(scratch) / "root"
     subprocess.run(["unsquashfs", "-no-progress", "-d", str(root), sys.argv[1]], check=True, stdout=subprocess.DEVNULL)
+    assert (root / "etc/resolv.conf").read_text(encoding="utf-8") == "nameserver 127.0.0.53\n"
+    assert "hosts: files dns" in (root / "etc/nsswitch.conf").read_text(encoding="utf-8").splitlines()
+    assert (root / "usr/lib/aarch64-linux-gnu/libnss_dns.so.2").is_file()
+    assert not any(
+        path.is_file() and b"192.168.151.1" in path.read_bytes()
+        for path in root.rglob("*")
+    )
     for relative in ("var/lib/pocketforge/apps", "var/cache/pocketforge/apps", "run/pf-app"):
         target = root / relative / "org.pocketforge.steamlink"
         assert target.is_dir() and not list(target.iterdir()), target
-print("Steam Link real SquashFS producer destinations: PASS (three empty directories)")
+print("Steam Link real SquashFS producer: PASS (runtime DNS/NSS closure; no build resolver; three empty destinations)")
 PYREAL
 fi
 

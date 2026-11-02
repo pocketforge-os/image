@@ -87,6 +87,7 @@ root_output="${work}/root-output"
     --package python3 \
     --package gnupg \
     --overlay "${app_root_overlay}" \
+    --systemd-resolved-stub \
     --output "${root_output}"
 
 root_digest=$(sha256sum "${root_output}/root.raw" | awk '{print $1}')

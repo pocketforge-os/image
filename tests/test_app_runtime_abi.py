@@ -44,6 +44,9 @@ class DebianRootBuilderTest(unittest.TestCase):
         (fixture / "etc" / "os-release").write_text(
             "ID=debian\nVERSION_CODENAME=trixie\n", encoding="utf-8"
         )
+        (fixture / "etc" / "resolv.conf").write_text(
+            "nameserver 192.168.151.1\n", encoding="utf-8"
+        )
         (self.bin / "mmdebstrap").write_text(
             textwrap.dedent(
                 """\
@@ -74,6 +77,10 @@ class DebianRootBuilderTest(unittest.TestCase):
                 test -f "$source/etc/os-release"
                 if [ -n "${PF_TEST_OVERLAY_EXPECT:-}" ]; then
                     test -f "$source/$PF_TEST_OVERLAY_EXPECT"
+                fi
+                if [ -n "${PF_TEST_RESOLV_EXPECT:-}" ]; then
+                    test "$(cat "$source/etc/resolv.conf")" = "$PF_TEST_RESOLV_EXPECT"
+                    ! grep -R -F '192.168.151.1' "$source"
                 fi
                 cp "$source/etc/os-release" "$output"
                 """
@@ -137,6 +144,19 @@ class DebianRootBuilderTest(unittest.TestCase):
         self.assertIn("unsupported distribution", invalid.stderr)
         self.assertEqual(self.log.read_bytes(), before)
         self.assertFalse((self.work / "invalid").exists())
+
+    def test_systemd_resolved_stub_replaces_build_resolver(self) -> None:
+        env = dict(self.env)
+        env["PF_TEST_RESOLV_EXPECT"] = "nameserver 127.0.0.53"
+        result = run(
+            [
+                str(ROOT_BUILDER), "--distribution", "debian-13", "--architecture", "arm64",
+                "--snapshot", "20261010T000000Z", "--systemd-resolved-stub",
+                "--output", str(self.work / "resolved-stub"),
+            ],
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_overlay_is_included_and_symlinks_are_refused(self) -> None:
         overlay = self.work / "overlay"
