@@ -112,6 +112,17 @@ grep -F 'VK_PHYSICAL_DEVICE_TYPE_CPU' "$probe" >/dev/null
 grep -F 'vkQueueSubmit' "$probe" >/dev/null
 grep -F 'vkWaitForFences' "$probe" >/dev/null
 grep -F 'submit=ok' "$probe" >/dev/null
+# The physical probe's outer collector must not preempt the probe's own fence
+# timeout before Vulkan initialization and failure reporting can complete.  A
+# collector budget of at least 3x the internal fence wait keeps the boot gate
+# bounded while preserving its strict queue-submit + fence acceptance.
+fence_timeout_s="$(sed -n 's/.*vkWaitForFences.*VK_TRUE, \([0-9][0-9]*\)ULL \* 1000 \* 1000 \* 1000).*/\1/p' "$probe" | head -n 1)"
+physical_probe_timeout_s="$(sed -n 's/.*probe_result="$(timeout \([0-9][0-9]*\)s "$probe")".*/\1/p' "$gate")"
+if [ -z "$fence_timeout_s" ] || [ -z "$physical_probe_timeout_s" ] ||
+    [ "$physical_probe_timeout_s" -lt "$((fence_timeout_s * 3))" ]; then
+    echo "physical GPU collector timeout ${physical_probe_timeout_s:-missing}s must be at least 3x the Vulkan fence timeout ${fence_timeout_s:-missing}s" >&2
+    exit 1
+fi
 grep -F 'COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe' "$dockerfile" >/dev/null
 grep -F 'COPY --from=gpu-um-build /pocketforge-open-gpu-stack.deb /out/pocketforge-open-gpu-stack.deb' "$dockerfile" >/dev/null
 grep -F 'GPU_STACK_PROVIDER_DEB="${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb"' "$customize" >/dev/null
