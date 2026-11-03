@@ -43,7 +43,7 @@ compressed_sha=8d01225721a7a276a241e273f748a1d97a9e59b1abad1d40b50af767bc13d49c
 raw_sha=5a8eb206755d3e3d1fc41f190396d04e3fb6c6ededf8afccf7a280944bb456d7
 userdata_sha=ea8d2977c5408168e0e5457d66423c73ba9c7be55ce850a991a43cbe3d8fd2cb
 loader_list_sha=ee60863ae48260e8703b870a0def98e9ffbaa07a784dd6af822060d5503098c5
-sysroot_subset_sha=4f20616be1dcdba99e5140b3781197f101b26a1542321242c4caad2e436f08a9
+sysroot_subset_sha=f71dd8f70b461c84437b2f03c1d920c1f7c502bdd020339890e972e4c9159546
 
 for tool in awk basename chmod cp dirname du find grep mkdir mktemp mksquashfs \
             sha256sum sort stat tar touch xargs; do
@@ -189,7 +189,7 @@ mapfile -t sysroot_input_paths < <(
         for relative in "${data_directories[@]}"; do
             [[ -e "${sysroot}/${relative}" ]] && find -L "${sysroot}/${relative}" -type f
         done
-        for relative in "${data_files[@]}" etc/.resolv.conf.systemd-resolved.bak; do
+        for relative in "${data_files[@]}"; do
             [[ -f "${sysroot}/${relative}" ]] && printf '%s\n' "${sysroot}/${relative}"
         done
     } | sort -u
@@ -224,8 +224,8 @@ done
 copy_file "${sysroot}/lib/ld-linux-aarch64.so.1" "${app_root}"
 
 # Runtime data is copied from the same pinned image root; no apt/network/host
-# distro files enter the artifact.  resolv.conf is a regular mount target for
-# the host-development QEMU run and contains the preserved pre-resolved value.
+# distro files enter the artifact. resolv.conf is a regular mount target for
+# the host-development QEMU run and uses the base image's resolved stub.
 for relative in "${data_directories[@]}"; do
     [[ -e "${sysroot}/${relative}" ]] || continue
     mkdir -p "${app_root}/$(dirname "${relative}")"
@@ -234,8 +234,7 @@ done
 for relative in "${data_files[@]}"; do
     [[ -f "${sysroot}/${relative}" ]] && copy_file "${sysroot}/${relative}" "${app_root}"
 done
-cp -L --preserve=mode,timestamps "${sysroot}/etc/.resolv.conf.systemd-resolved.bak" \
-    "${app_root}/etc/resolv.conf"
+printf 'nameserver 127.0.0.53\n' > "${app_root}/etc/resolv.conf"
 
 # Reproducible derivative: fixed mtimes and a single-threaded deterministic
 # squashfs.  Ownership in the image is normalized with -all-root.

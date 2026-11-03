@@ -401,7 +401,7 @@ The builder verifies these complete identities before reading an input:
 | RB2g raw image | `5a8eb206755d3e3d1fc41f190396d04e3fb6c6ededf8afccf7a280944bb456d7` |
 | RB2g userdata image | `ea8d2977c5408168e0e5457d66423c73ba9c7be55ce850a991a43cbe3d8fd2cb` |
 | Preserved 112-path loader list | `ee60863ae48260e8703b870a0def98e9ffbaa07a784dd6af822060d5503098c5` |
-| 216-file sysroot subset manifest | `4f20616be1dcdba99e5140b3781197f101b26a1542321242c4caad2e436f08a9` |
+| 215-file sysroot subset manifest | `f71dd8f70b461c84437b2f03c1d920c1f7c502bdd020339890e972e4c9159546` |
 
 The preserved source receipt records a good Valve signature but also states
 that the key is not independently trust-certified. This is provenance
@@ -425,8 +425,8 @@ manifests:
 
 | Prototype artifact | Identity / size |
 | --- | --- |
-| App root squashfs | `c4df188387a07b3905f746283d117295ad2716b3730a68658599cbaf12a8f2b1`; 75,923,456 bytes stored |
-| App root unpacked tree | 185,190,901 bytes |
+| App root squashfs | `063e3c989f3684e623feed07ceb6c2f7ddf2e2549b7e0d44a74531bd283753cf`; 75,923,456 bytes stored |
+| App root unpacked tree | 185,190,898 bytes |
 | Platform-runtime manifest | `75ae78207603d5a4ee7b1fef4d7bcf399037cc603387cf50c2add9e36e263e1d` |
 | Platform-runtime unpacked tree | 115,605,944 bytes, shared rather than charged to the app root |
 | Preserved vendor archive | 32,086,587 bytes |

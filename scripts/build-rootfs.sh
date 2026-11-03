@@ -1851,6 +1851,7 @@ install -d "${ROOTFS}/etc/systemd/resolved.conf.d"
 install -m 0644 "/work/src/rootfs-overlay/etc/systemd/resolved.conf.d/pocketforge.conf" \
     "${ROOTFS}/etc/systemd/resolved.conf.d/pocketforge.conf"
 ln -sfn ../run/systemd/resolve/stub-resolv.conf "${ROOTFS}/etc/resolv.conf"
+rm -f "${ROOTFS}/etc/.resolv.conf.systemd-resolved.bak"
 ln -sf /lib/systemd/system/systemd-resolved.service \
     "${ROOTFS}/etc/systemd/system/sysinit.target.wants/systemd-resolved.service"
 

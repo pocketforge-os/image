@@ -7,6 +7,7 @@ RESOLV_CONF="${ROOTFS}/etc/resolv.conf"
 RESOLVED_WANT="${ROOTFS}/etc/systemd/system/sysinit.target.wants/systemd-resolved.service"
 RESOLVED_CONF="${ROOTFS}/etc/systemd/resolved.conf.d/pocketforge.conf"
 NETWORK_CONF="${ROOTFS}/etc/systemd/network/20-wlan0.network"
+RESOLVER_BACKUP="${ROOTFS}/etc/.resolv.conf.systemd-resolved.bak"
 
 [ -L "${RESOLV_CONF}" ] || { echo "FATAL: rootfs DNS: /etc/resolv.conf is not a symlink" >&2; exit 1; }
 [ "$(readlink "${RESOLV_CONF}")" = "../run/systemd/resolve/stub-resolv.conf" ] \
@@ -15,6 +16,10 @@ NETWORK_CONF="${ROOTFS}/etc/systemd/network/20-wlan0.network"
     || { echo "FATAL: rootfs DNS: systemd-resolved package is missing" >&2; exit 1; }
 [ -L "${RESOLVED_WANT}" ] || { echo "FATAL: rootfs DNS: systemd-resolved is not enabled" >&2; exit 1; }
 [ -f "${RESOLVED_CONF}" ] || { echo "FATAL: rootfs DNS: resolved fallback configuration is missing" >&2; exit 1; }
+if [ -e "${RESOLVER_BACKUP}" ] || [ -L "${RESOLVER_BACKUP}" ]; then
+    echo "FATAL: rootfs DNS: /etc/.resolv.conf.systemd-resolved.bak is present" >&2
+    exit 1
+fi
 grep -Eq '^FallbackDNS=[^[:space:]]' "${RESOLVED_CONF}" \
     || { echo "FATAL: rootfs DNS: resolved fallback DNS is empty" >&2; exit 1; }
 if ! { [ -f "${NETWORK_CONF}" ] && grep -Eq '^DHCP=(yes|ipv4)$' "${NETWORK_CONF}"; }; then

@@ -43,6 +43,11 @@ producer = producer_path.read_text(encoding="utf-8")
 literal = "'use = [\"audio\", \"input\", \"x11\", \"egress:tcp/443@*\"]'"
 if literal not in producer:
     raise SystemExit("Steam Link app-root producer capability policy differs")
+if ".resolv.conf.systemd-resolved.bak" in producer:
+    raise SystemExit("Steam Link app-root producer still depends on the build resolver backup")
+resolver = "printf 'nameserver 127.0.0.53\\n' > \"${app_root}/etc/resolv.conf\""
+if resolver not in producer:
+    raise SystemExit("Steam Link app-root producer lacks the explicit resolved-stub contract")
 fragment = fragment_path.read_text(encoding="utf-8").splitlines()
 optional_system_bus = "InaccessiblePaths=-/run/dbus/system_bus_socket"
 required_system_bus = "InaccessiblePaths=/run/dbus/system_bus_socket"
