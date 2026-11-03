@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -22,7 +23,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 FETCHER = ROOT / "apps" / "steamlink" / "steamlink-fetch.py"
-TRUSTED_KEY = ROOT / "apps" / "steamlink" / "valve-steamlink-release-key.asc"
+COMMITTED_KEYRING = ROOT / "apps" / "steamlink" / "valve-steamlink-release-key.gpg"
+TRUSTED_KEYRING = COMMITTED_KEYRING
 VENDOR = Path(
     os.environ.get(
         "PF_STEAMLINK_VENDOR_DIR",
@@ -33,10 +35,13 @@ VERSION = "1.3.32.316"
 ARCHIVE_NAME = f"steamlink-rpi-bookworm-arm64-{VERSION}.tar.gz"
 SIGNATURE_NAME = f"{ARCHIVE_NAME}.sig"
 ARCHIVE_SHA256 = "6e1e431265da01b85a7a2fb2ef652f822eb16c5b78aca03f0d0d500dc29b93d3"
-FINGERPRINT = "BA23DAE64102FBE0BB140CE5387C648A24C0E740"
+VALVE_FINGERPRINT = "BA23DAE64102FBE0BB140CE5387C648A24C0E740"
+VALVE_KEYRING_SHA256 = "eadb9fb69738a0a74967984368243dcf10bbb82fc1267d683e1c3772b1384e1c"
+FINGERPRINT = VALVE_FINGERPRINT
+KEYRING_SHA256 = VALVE_KEYRING_SHA256
 
 
-def make_synthetic_signed_fixture(root: Path) -> tuple[Path, str, str]:
+def make_synthetic_signed_fixture(root: Path) -> tuple[Path, str, str, str]:
     """Create CI-only inputs; developer runs exercise the preserved Valve files."""
     if shutil.which("gpg") is None:
         raise AssertionError("gpg is required for Steam Link signature tests")
@@ -72,10 +77,10 @@ def make_synthetic_signed_fixture(root: Path) -> tuple[Path, str, str]:
     fingerprint = next(
         line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")
     )
-    key = root / "fixture-release-key.asc"
-    key.write_bytes(
+    keyring = root / "fixture-release-key.gpg"
+    keyring.write_bytes(
         subprocess.run(
-            [*common, "--armor", "--export", fingerprint],
+            [*common, "--export", fingerprint],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -87,7 +92,12 @@ def make_synthetic_signed_fixture(root: Path) -> tuple[Path, str, str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    return key, fingerprint, hashlib.sha256(archive.read_bytes()).hexdigest()
+    return (
+        keyring,
+        fingerprint,
+        hashlib.sha256(archive.read_bytes()).hexdigest(),
+        hashlib.sha256(keyring.read_bytes()).hexdigest(),
+    )
 
 
 class FixtureHandler(http.server.BaseHTTPRequestHandler):
@@ -95,6 +105,7 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
     version = VERSION
     archive_pointer = False
     bad_signature = False
+    corrupt_archive = False
     truncate_archive = False
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
@@ -108,7 +119,9 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
             self._send((pointer + "\n").encode("ascii"))
             return
         if self.path == f"/{ARCHIVE_NAME}":
-            body = (self.root / ARCHIVE_NAME).read_bytes()
+            body = bytearray((self.root / ARCHIVE_NAME).read_bytes())
+            if self.corrupt_archive:
+                body[len(body) // 2] ^= 1
             if self.truncate_archive:
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
@@ -141,6 +154,7 @@ def fixture_server(
     version: str = VERSION,
     archive_pointer: bool = False,
     bad_signature: bool = False,
+    corrupt_archive: bool = False,
     truncate: bool = False,
 ):
     handler = type(
@@ -151,6 +165,7 @@ def fixture_server(
             "version": version,
             "archive_pointer": archive_pointer,
             "bad_signature": bad_signature,
+            "corrupt_archive": corrupt_archive,
             "truncate_archive": truncate,
         },
     )
@@ -207,13 +222,15 @@ def write_platform_runtime(root: Path) -> Path:
 class SteamLinkFetchTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        global ARCHIVE_SHA256, FINGERPRINT, TRUSTED_KEY, VENDOR
+        global ARCHIVE_SHA256, FINGERPRINT, KEYRING_SHA256, TRUSTED_KEYRING, VENDOR
         for name in (ARCHIVE_NAME, SIGNATURE_NAME):
             path = VENDOR / name
             if not path.is_file():
                 cls.fixture_temp = tempfile.TemporaryDirectory(prefix="steamlink-signed-fixture.")
                 VENDOR = Path(cls.fixture_temp.name)
-                TRUSTED_KEY, FINGERPRINT, ARCHIVE_SHA256 = make_synthetic_signed_fixture(VENDOR)
+                TRUSTED_KEYRING, FINGERPRINT, ARCHIVE_SHA256, KEYRING_SHA256 = (
+                    make_synthetic_signed_fixture(VENDOR)
+                )
                 return
         digest = hashlib.sha256((VENDOR / ARCHIVE_NAME).read_bytes()).hexdigest()
         if digest != ARCHIVE_SHA256:
@@ -233,9 +250,19 @@ class SteamLinkFetchTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def run_fetch(self, base_url: str, *, state: Path | None = None) -> subprocess.CompletedProcess[str]:
+    def run_fetch(
+        self,
+        base_url: str,
+        *,
+        state: Path | None = None,
+        trusted_keyring: Path | None = None,
+        keyring_sha256: str | None = None,
+        fingerprint: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
+                sys.executable,
                 str(FETCHER),
                 "--state-root",
                 str(state or self.state),
@@ -243,10 +270,12 @@ class SteamLinkFetchTests(unittest.TestCase):
                 str(self.runtime),
                 "--base-url",
                 base_url,
-                "--trusted-key",
-                str(TRUSTED_KEY),
+                "--trusted-keyring",
+                str(trusted_keyring or TRUSTED_KEYRING),
+                "--trusted-keyring-sha256",
+                keyring_sha256 or KEYRING_SHA256,
                 "--trusted-fingerprint",
-                FINGERPRINT,
+                fingerprint or FINGERPRINT,
                 "--minimum-version",
                 VERSION,
                 "--bootstrap-sha256",
@@ -258,11 +287,60 @@ class SteamLinkFetchTests(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            env=env,
         )
 
     def assert_refused(self, result: subprocess.CompletedProcess[str], reason: str) -> None:
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(f"reason={reason}", result.stderr)
+
+    def assert_no_install(self) -> None:
+        self.assertFalse((self.state / "current").exists())
+        builds = self.state / "builds"
+        self.assertEqual(list(builds.iterdir()) if builds.is_dir() else [], [])
+
+    def test_committed_keyring_is_exact_valve_key(self) -> None:
+        self.assertEqual(
+            hashlib.sha256(COMMITTED_KEYRING.read_bytes()).hexdigest(),
+            VALVE_KEYRING_SHA256,
+        )
+        gnupg_home = self.work / "key-inspection-gnupg"
+        gnupg_home.mkdir(mode=0o700)
+        missing_home = self.work / "missing-home"
+        self.assertFalse(missing_home.exists())
+        env = os.environ.copy()
+        env["HOME"] = str(missing_home)
+        result = subprocess.run(
+            [
+                "gpg",
+                "--batch",
+                "--no-options",
+                "--homedir",
+                str(gnupg_home),
+                "--with-colons",
+                "--show-keys",
+                "--fingerprint",
+                str(COMMITTED_KEYRING),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=env,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"gpg failed to inspect the committed keyring:\n{result.stderr}",
+        )
+        listing = result.stdout
+        fingerprints = [
+            line.split(":")[9]
+            for line in listing.splitlines()
+            if line.startswith("fpr:") and len(line.split(":")) > 9
+        ]
+        self.assertGreaterEqual(len(fingerprints), 1)
+        self.assertEqual(fingerprints[0], VALVE_FINGERPRINT)
 
     def test_live_absolute_archive_pointer_extracts_version(self) -> None:
         spec = importlib.util.spec_from_file_location("steamlink_fetch", FETCHER)
@@ -384,7 +462,51 @@ class SteamLinkFetchTests(unittest.TestCase):
         with fixture_server(bad_signature=True) as url:
             result = self.run_fetch(url)
         self.assert_refused(result, "signature_invalid")
-        self.assertFalse((self.state / "current").exists())
+        self.assert_no_install()
+
+    def test_corrupt_archive_refuses_before_extraction(self) -> None:
+        with fixture_server(corrupt_archive=True) as url:
+            result = self.run_fetch(url)
+        self.assert_refused(result, "signature_invalid")
+        self.assert_no_install()
+
+    def test_wrong_key_refuses_before_extraction(self) -> None:
+        wrong = self.work / "wrong-key"
+        wrong.mkdir()
+        wrong_keyring, _, _, wrong_keyring_sha256 = make_synthetic_signed_fixture(wrong)
+        with fixture_server() as url:
+            result = self.run_fetch(
+                url,
+                trusted_keyring=wrong_keyring,
+                keyring_sha256=wrong_keyring_sha256,
+            )
+        self.assert_refused(result, "signature_invalid")
+        self.assert_no_install()
+
+    def test_wrong_fingerprint_refuses_before_extraction(self) -> None:
+        with fixture_server() as url:
+            result = self.run_fetch(url, fingerprint="A" * 40)
+        self.assert_refused(result, "signature_invalid")
+        self.assert_no_install()
+
+    def test_mutated_sealed_keyring_refuses_before_verifier(self) -> None:
+        mutated = self.work / "mutated-keyring.gpg"
+        body = bytearray(TRUSTED_KEYRING.read_bytes())
+        body[-1] ^= 1
+        mutated.write_bytes(body)
+        with fixture_server() as url:
+            result = self.run_fetch(url, trusted_keyring=mutated)
+        self.assert_refused(result, "trust_key_invalid")
+        self.assert_no_install()
+
+    def test_missing_verifier_refuses_before_extraction(self) -> None:
+        empty_path = self.work / "empty-path"
+        empty_path.mkdir()
+        with fixture_server() as url:
+            result = self.run_fetch(url, env={**os.environ, "PATH": str(empty_path)})
+        self.assert_refused(result, "signature_invalid")
+        self.assertIn("gpgv_unavailable", result.stderr)
+        self.assert_no_install()
 
     def test_truncated_download_refuses_without_partial_install(self) -> None:
         with fixture_server(truncate=True) as url:

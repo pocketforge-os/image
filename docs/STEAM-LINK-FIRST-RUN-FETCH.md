@@ -35,10 +35,16 @@ cannot select a download authority.
 
 Every archive must have a valid detached signature from the committed Valve
 Steam Link Release Key whose primary fingerprint is pinned in source as
-`BA23DAE64102FBE0BB140CE5387C648A24C0E740`. Verification uses a new local GnuPG
-home containing only that key. Network/keyserver retrieval is forbidden. Key
-rotation requires a reviewed source change to the committed key and fingerprint;
-a download cannot extend the trust set.
+`BA23DAE64102FBE0BB140CE5387C648A24C0E740`. Verification uses the committed
+binary `valve-steamlink-release-key.gpg` keyring, whose sealed bytes are pinned to
+SHA-256 `eadb9fb69738a0a74967984368243dcf10bbb82fc1267d683e1c3772b1384e1c`.
+After checking that digest, the sealed `gpgv` verifies the downloaded detached
+signature against the archive offline. Its valid-signature status must identify
+the pinned fingerprint as both the signing and primary key. Verification creates
+no local GnuPG home, imports no key, starts no agent, and performs no network or
+keyserver retrieval. Key rotation requires a reviewed source change to the
+committed keyring, digest, and fingerprint; a download cannot extend the trust
+set.
 
 The fetcher rejects a candidate below the minimum or below the installed
 last-good version. The minimum release additionally has to match its committed

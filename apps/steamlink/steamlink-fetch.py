@@ -24,6 +24,9 @@ import urllib.request
 
 DEFAULT_BASE_URL = "https://media.steampowered.com/steamlink/rpi/bookworm/arm64"
 DEFAULT_FINGERPRINT = "BA23DAE64102FBE0BB140CE5387C648A24C0E740"
+DEFAULT_KEYRING_SHA256 = (
+    "eadb9fb69738a0a74967984368243dcf10bbb82fc1267d683e1c3772b1384e1c"
+)
 DEFAULT_MINIMUM_VERSION = "1.3.32.316"
 DEFAULT_BOOTSTRAP_SHA256 = (
     "6e1e431265da01b85a7a2fb2ef652f822eb16c5b78aca03f0d0d500dc29b93d3"
@@ -182,45 +185,30 @@ def discover(base_url: str, stage: Path, timeout: float) -> str:
 
 
 def verify_signature(
-    archive: Path, signature: Path, trusted_key: Path, trusted_fingerprint: str, stage: Path
+    archive: Path,
+    signature: Path,
+    trusted_keyring: Path,
+    trusted_keyring_sha256: str,
+    trusted_fingerprint: str,
 ) -> None:
-    if not trusted_key.is_file() or trusted_key.is_symlink():
-        refuse("trust_key_invalid", f"trusted key is not a regular file: {trusted_key}")
-    gnupg = stage / "gnupg"
-    gnupg.mkdir(mode=0o700)
+    if not trusted_keyring.is_file() or trusted_keyring.is_symlink():
+        refuse(
+            "trust_key_invalid",
+            f"trusted keyring is not a regular file: {trusted_keyring}",
+        )
     try:
-        imported = subprocess.run(
-            ["gpg", "--homedir", str(gnupg), "--batch", "--no-options", "--import", str(trusted_key)],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        if imported.returncode != 0:
-            refuse("trust_key_invalid", imported.stderr.strip() or "gpg import failed")
-        listed = subprocess.run(
-            ["gpg", "--homedir", str(gnupg), "--batch", "--with-colons", "--fingerprint", "--list-keys"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        fingerprints = [
-            line.split(":")[9]
-            for line in listed.stdout.splitlines()
-            if line.startswith("fpr:") and len(line.split(":")) > 9
-        ]
-        if listed.returncode != 0 or not fingerprints or fingerprints[0] != trusted_fingerprint:
-            refuse("trust_key_invalid", "committed key primary fingerprint differs")
+        keyring_digest = hashlib.sha256(trusted_keyring.read_bytes()).hexdigest()
+    except OSError as error:
+        refuse("trust_key_invalid", f"cannot read trusted keyring: {error}")
+    if keyring_digest != trusted_keyring_sha256:
+        refuse("trust_key_invalid", "sealed keyring digest differs")
+    try:
         verified = subprocess.run(
             [
-                "gpg",
-                "--homedir",
-                str(gnupg),
-                "--batch",
-                "--no-options",
+                "gpgv",
                 "--status-fd=1",
-                "--verify",
+                "--keyring",
+                str(trusted_keyring),
                 str(signature),
                 str(archive),
             ],
@@ -230,7 +218,7 @@ def verify_signature(
             check=False,
         )
     except OSError as error:
-        refuse("signature_invalid", f"gpg unavailable: {error}")
+        refuse("signature_invalid", f"gpgv unavailable: {error}")
     valid = any(
         line.startswith("[GNUPG:] VALIDSIG ")
         and line.split()[2] == trusted_fingerprint
@@ -509,14 +497,13 @@ def validate_build(build: Path, args: argparse.Namespace) -> Path:
     manifest_bytes = canonical_json(stored_manifest)
     if hashlib.sha256(manifest_bytes).hexdigest() != manifest_digest:
         refuse("state_invalid", "payload manifest digest differs")
-    with tempfile.TemporaryDirectory(prefix=".verify.", dir=build.parent.parent) as stage_name:
-        verify_signature(
-            archive,
-            signature,
-            args.trusted_key,
-            args.trusted_fingerprint,
-            Path(stage_name),
-        )
+    verify_signature(
+        archive,
+        signature,
+        args.trusted_keyring,
+        args.trusted_keyring_sha256,
+        args.trusted_fingerprint,
+    )
     expected_manifest = archive_manifest(archive, version)
     if stored_manifest != expected_manifest:
         refuse("state_invalid", "payload manifest is not bound to retained signed archive")
@@ -623,7 +610,13 @@ def install_candidate(args: argparse.Namespace, state: Path, stage: Path, versio
         limit=MAX_SIGNATURE_BYTES,
         kind="signature",
     )
-    verify_signature(archive, signature, args.trusted_key, args.trusted_fingerprint, stage)
+    verify_signature(
+        archive,
+        signature,
+        args.trusted_keyring,
+        args.trusted_keyring_sha256,
+        args.trusted_fingerprint,
+    )
     digest = sha256_file(archive)
     if version == args.minimum_version and digest != args.bootstrap_sha256:
         refuse("digest_mismatch", "minimum release archive digest differs")
@@ -708,10 +701,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--platform-runtime", type=Path, required=True)
     result.add_argument("--base-url", default=DEFAULT_BASE_URL)
     result.add_argument(
-        "--trusted-key",
+        "--trusted-keyring",
         type=Path,
-        default=Path(__file__).with_name("valve-steamlink-release-key.asc"),
+        default=Path(__file__).with_name("valve-steamlink-release-key.gpg"),
     )
+    result.add_argument("--trusted-keyring-sha256", default=DEFAULT_KEYRING_SHA256)
     result.add_argument("--trusted-fingerprint", default=DEFAULT_FINGERPRINT)
     result.add_argument("--minimum-version", default=DEFAULT_MINIMUM_VERSION)
     result.add_argument("--bootstrap-sha256", default=DEFAULT_BOOTSTRAP_SHA256)
@@ -724,6 +718,9 @@ def main() -> int:
     args = parser().parse_args()
     if not re.fullmatch(r"[0-9A-F]{40}", args.trusted_fingerprint):
         print("STEAMFETCH result=refused reason=trust_key_invalid detail=fingerprint", file=sys.stderr)
+        return 64
+    if not SHA256_RE.fullmatch(args.trusted_keyring_sha256):
+        print("STEAMFETCH result=refused reason=trust_key_invalid detail=keyring_digest", file=sys.stderr)
         return 64
     if not SHA256_RE.fullmatch(args.bootstrap_sha256):
         print("STEAMFETCH result=refused reason=digest_invalid detail=bootstrap", file=sys.stderr)
