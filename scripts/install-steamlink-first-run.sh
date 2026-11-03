@@ -72,8 +72,8 @@ done < <(awk -F= '
 ' "${policy_fragment}")
 install -m 0755 "${app_source}/pf-launch" "${app_overlay}/pf-launch"
 install -m 0755 "${app_source}/steamlink-fetch.py" "${app_overlay}/steamlink-fetch.py"
-install -m 0644 "${app_source}/valve-steamlink-release-key.asc" \
-    "${app_overlay}/valve-steamlink-release-key.asc"
+install -m 0644 "${app_source}/valve-steamlink-release-key.gpg" \
+    "${app_overlay}/valve-steamlink-release-key.gpg"
 
 root_output="${work}/root-output"
 # The fetch helper imports http.client, urllib, email, and their transitive
@@ -85,7 +85,7 @@ root_output="${work}/root-output"
     --snapshot "${snapshot}" \
     --mode "${builder_mode}" \
     --package python3 \
-    --package gnupg \
+    --package gpgv \
     --overlay "${app_root_overlay}" \
     --systemd-resolved-stub \
     --output "${root_output}"
@@ -100,7 +100,7 @@ expected = {"schema_version": 1, "distribution": "debian-13", "suite": "trixie",
 for key, wanted in expected.items():
     if value.get(key) != wanted:
         raise SystemExit(f"steamlink-first-run: root metadata {key} differs")
-expected_packages = ["ca-certificates", "gnupg", "libc6", "libgcc-s1", "libstdc++6", "python3"]
+expected_packages = ["ca-certificates", "gpgv", "libc6", "libgcc-s1", "libstdc++6", "python3"]
 if value.get("packages") != expected_packages:
     raise SystemExit("steamlink-first-run: root metadata package closure differs")
 PY

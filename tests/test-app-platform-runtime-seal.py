@@ -56,7 +56,7 @@ data = b"opaque app-root fixture\\n"
 (out / "root.raw").write_bytes(data)
 (out / "root.metadata.json").write_text(json.dumps({"schema_version":1,
  "distribution":"debian-13", "suite":"trixie", "architecture":"arm64",
- "packages":["ca-certificates","gnupg","libc6","libgcc-s1","libstdc++6","python3"],
+ "packages":["ca-certificates","gpgv","libc6","libgcc-s1","libstdc++6","python3"],
  "sha256":hashlib.sha256(data).hexdigest()}))
 ''')
         self.root_builder.chmod(0o755)
