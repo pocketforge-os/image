@@ -10,7 +10,7 @@ export PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1
 # Branch selection (tsp-mc9m.41.984.54.18): the render node's bound DRM driver
 # picks the branch. A virtio_gpu render node takes the strict virtual branch
 # below; every other layout (including a physical board and every failure the
-# ordering tests cover) falls through to the unchanged physical branch.
+# ordering tests cover) falls through to the strict physical branch.
 node_driver=
 node_device=/sys/class/drm/renderD128/device
 if [ -e /dev/dri/renderD128 ] && [ -e "$node_device/driver" ]; then
@@ -87,7 +87,10 @@ km="$(modinfo -F version powervr 2>/dev/null || true)"
 [ -n "$km" ] || km="$(modinfo -F description powervr 2>/dev/null || true)"
 [ -n "$km" ] || km=unknown
 
-probe_result="$(timeout 15s "$probe")" || {
+# The probe's own fence wait is 10 seconds.  Leave bounded headroom for Vulkan
+# loader/device initialization and for the probe to report a named failure;
+# otherwise the collector can kill a still-valid cold-boot probe first.
+probe_result="$(timeout 30s "$probe")" || {
     if [ -z "${PVR_I_WANT_A_BROKEN_VULKAN_DRIVER:-}" ]; then
         echo "PF-OPEN-GPU HINT: set PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1" >&2
     fi

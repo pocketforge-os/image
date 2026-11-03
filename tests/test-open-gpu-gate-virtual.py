@@ -18,10 +18,10 @@ Cases:
   v6  no virtio ICD manifest in /usr/share/vulkan/icd.d -> rejected
   v7  GLES renderer is llvmpipe, not zink -> rejected
   v8  GLES probe fails -> rejected
-  p1  physical fixture: the gate at BASE_REF and the working-tree gate run
-      byte-identical (rc, stdout, stderr) and PASS with km=/firmware_sha256=
-  p2  physical firmware-sha mismatch: byte-identical failure
-  p3  physical probe failure: byte-identical failure
+  p1  physical fixture: the gate at BASE_REF and the working-tree gate remain
+      acceptance-equivalent (rc, stdout, stderr) and PASS with km=/firmware_sha256=
+  p2  physical firmware-sha mismatch: acceptance-equivalent failure
+  p3  physical probe failure: acceptance-equivalent failure
 
 Exit status: 0 PASS, 1 FAIL, 75 BLOCKED (no bwrap / no git history).
 """
@@ -34,8 +34,8 @@ import sys
 from pathlib import Path
 
 BLOCKED = 75
-# origin/main when the virtual branch was written; the physical-branch
-# byte-identity controls diff against this exact gate text.
+# origin/main when the virtual branch was written; the immediate physical
+# acceptance controls compare against this exact gate text.
 BASE_REF = "7aeddf9cfb6da435da0685aebe8e53a3f7bb4c10"
 GATE_REL = "rootfs-overlay/usr/lib/pocketforge/open-gpu-gate.sh"
 FW_REL = "lib/firmware/powervr/rogue_22.102.54.38_v1.fw"
@@ -300,7 +300,7 @@ def main() -> int:
         check(rc == 1 and "GLES 3.2 Zink readback probe failed" in err,
               f"v8: rc={rc} stderr={err.strip()!r}")
 
-        # p1-p3: the physical branch is byte-identical to BASE_REF.
+        # p1-p3: strict immediate physical acceptance is unchanged from BASE_REF.
         phys_ok = dict(node_driver="powervr", powervr_module=True, icd=False,
                        firmware=True, provenance_sha=FW_SHA)
         for name, mode, mutate in (
@@ -320,7 +320,7 @@ def main() -> int:
             else:
                 check(old[0] == 1 and "PF-OPEN-GPU FAIL:" in old[2],
                       f"{name}: expected identical physical failure, got rc={old[0]}")
-            notes.append(f"{name}: base and working-tree gate byte-identical (rc={old[0]})")
+            notes.append(f"{name}: base and working-tree acceptance equivalent (rc={old[0]})")
     except Failed as e:
         failed = True
         print(f"  FAIL {e}")
