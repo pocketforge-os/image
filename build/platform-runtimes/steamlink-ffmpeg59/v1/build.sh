@@ -206,6 +206,10 @@ libavcodec ${FFMPEG_LIBAVCODEC_VERSION} 59
 libavutil ${FFMPEG_LIBAVUTIL_VERSION} 57
 libswresample ${FFMPEG_LIBSWRESAMPLE_VERSION} 4
 EOF
+# Seal the exact shipped ELF bytes before either manifest records them. The
+# assembled-rootfs debuginfo pass must see no remaining DWARF and therefore
+# leave these private runtime libraries byte-identical to this producer output.
+"${definition_dir}/finalize-runtime.sh" "${dest}"
 cp -a "${src_objects}/." "${source_dest}/"
 cp -a "${definition_dir}/patches/." "${source_dest}/patches/"
 cp -a "${reports}/." "${source_dest}/reports/"
