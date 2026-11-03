@@ -18,6 +18,7 @@ import tarfile
 import tempfile
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -28,6 +29,9 @@ DEFAULT_BOOTSTRAP_SHA256 = (
     "6e1e431265da01b85a7a2fb2ef652f822eb16c5b78aca03f0d0d500dc29b93d3"
 )
 VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){3}$")
+ARCHIVE_NAME_RE = re.compile(
+    r"^steamlink-rpi-bookworm-arm64-(?P<version>[0-9]+(?:\.[0-9]+){3})\.tar\.gz$"
+)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_POINTER_BYTES = 128
 MAX_SIGNATURE_BYTES = 64 * 1024
@@ -56,6 +60,53 @@ def version_tuple(value: str) -> tuple[int, int, int, int]:
     if not VERSION_RE.fullmatch(value):
         refuse("version_invalid", f"non-canonical version: {value!r}")
     return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
+
+
+def parse_pointer_version(base_url: str, value: str) -> str:
+    if VERSION_RE.fullmatch(value):
+        return value
+
+    base = base_url.rstrip("/")
+    try:
+        configured = urllib.parse.urlsplit(base)
+        pointer = urllib.parse.urlsplit(value)
+        configured.port
+        pointer.port
+    except ValueError as error:
+        refuse("version_invalid", f"malformed archive URL: {error}")
+
+    if (
+        not configured.scheme
+        or not configured.netloc
+        or configured.username is not None
+        or configured.password is not None
+        or configured.query
+        or configured.fragment
+        or "%" in base
+        or "\\" in base
+    ):
+        refuse("version_invalid", "configured base URL is not canonical")
+    if pointer.username is not None or pointer.password is not None:
+        refuse("version_invalid", "archive URL userinfo is forbidden")
+    if pointer.query or pointer.fragment:
+        refuse("version_invalid", "archive URL query or fragment is forbidden")
+    if "%" in value or "\\" in value:
+        refuse("version_invalid", "archive URL contains encoded or ambiguous path data")
+    if pointer.scheme != configured.scheme or pointer.netloc != configured.netloc:
+        refuse("version_invalid", "archive URL origin differs from configured base")
+
+    path_prefix = f"{configured.path.rstrip('/')}/"
+    if not pointer.path.startswith(path_prefix):
+        refuse("version_invalid", "archive URL path differs from configured base")
+    filename = pointer.path[len(path_prefix) :]
+    match = ARCHIVE_NAME_RE.fullmatch(filename)
+    if match is None:
+        refuse("version_invalid", "archive URL filename is not canonical")
+    version = match.group("version")
+    version_tuple(version)
+    if value != f"{base}/{filename}":
+        refuse("version_invalid", "archive URL is not the exact configured URL")
+    return version
 
 
 def sha256_file(path: Path) -> str:
@@ -127,8 +178,7 @@ def discover(base_url: str, stage: Path, timeout: float) -> str:
         value = pointer.read_text(encoding="ascii").strip()
     except (OSError, UnicodeError) as error:
         refuse("version_invalid", str(error))
-    version_tuple(value)
-    return value
+    return parse_pointer_version(base_url, value)
 
 
 def verify_signature(
