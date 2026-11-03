@@ -93,12 +93,19 @@ def make_synthetic_signed_fixture(root: Path) -> tuple[Path, str, str]:
 class FixtureHandler(http.server.BaseHTTPRequestHandler):
     root: Path
     version = VERSION
+    archive_pointer = False
     bad_signature = False
     truncate_archive = False
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if self.path == "/public_build.txt":
-            self._send((self.version + "\n").encode("ascii"))
+            pointer = self.version
+            if self.archive_pointer:
+                pointer = (
+                    f"http://127.0.0.1:{self.server.server_port}/"
+                    f"steamlink-rpi-bookworm-arm64-{self.version}.tar.gz"
+                )
+            self._send((pointer + "\n").encode("ascii"))
             return
         if self.path == f"/{ARCHIVE_NAME}":
             body = (self.root / ARCHIVE_NAME).read_bytes()
@@ -129,13 +136,20 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
 
 
 @contextlib.contextmanager
-def fixture_server(*, version: str = VERSION, bad_signature: bool = False, truncate: bool = False):
+def fixture_server(
+    *,
+    version: str = VERSION,
+    archive_pointer: bool = False,
+    bad_signature: bool = False,
+    truncate: bool = False,
+):
     handler = type(
         "ConfiguredFixtureHandler",
         (FixtureHandler,),
         {
             "root": VENDOR,
             "version": version,
+            "archive_pointer": archive_pointer,
             "bad_signature": bad_signature,
             "truncate_archive": truncate,
         },
@@ -249,6 +263,71 @@ class SteamLinkFetchTests(unittest.TestCase):
     def assert_refused(self, result: subprocess.CompletedProcess[str], reason: str) -> None:
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(f"reason={reason}", result.stderr)
+
+    def test_live_absolute_archive_pointer_extracts_version(self) -> None:
+        spec = importlib.util.spec_from_file_location("steamlink_fetch", FETCHER)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        stage = self.work / "stage"
+        stage.mkdir()
+        pointer = (
+            "https://media.steampowered.com/steamlink/rpi/bookworm/arm64/"
+            "steamlink-rpi-bookworm-arm64-1.4.5.327.tar.gz\n"
+        )
+
+        def write_pointer(
+            _url: str,
+            destination: Path,
+            *,
+            timeout: float,
+            limit: int,
+            kind: str,
+        ) -> None:
+            del timeout, limit, kind
+            destination.write_text(pointer, encoding="ascii")
+
+        with mock.patch.object(module, "read_url", side_effect=write_pointer):
+            self.assertEqual(module.discover(module.DEFAULT_BASE_URL, stage, 2), "1.4.5.327")
+
+    def test_absolute_archive_pointer_installs_from_configured_base(self) -> None:
+        with fixture_server(archive_pointer=True) as url:
+            result = self.run_fetch(url)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("result=installed", result.stdout)
+        installed = self.state / os.readlink(self.state / "current")
+        receipt = (installed / "receipt.json").read_text(encoding="utf-8")
+        self.assertIn(f'"archive_url":"{url}/{ARCHIVE_NAME}"', receipt)
+
+    def test_absolute_archive_pointer_rejects_ambiguous_or_untrusted_urls(self) -> None:
+        spec = importlib.util.spec_from_file_location("steamlink_fetch", FETCHER)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        base = module.DEFAULT_BASE_URL
+        filename = "steamlink-rpi-bookworm-arm64-1.4.5.327.tar.gz"
+        rejected = {
+            "cross-origin": f"https://example.invalid/steamlink/rpi/bookworm/arm64/{filename}",
+            "wrong-scheme": f"http://media.steampowered.com/steamlink/rpi/bookworm/arm64/{filename}",
+            "authority-case": f"https://MEDIA.STEAMPOWERED.COM/steamlink/rpi/bookworm/arm64/{filename}",
+            "userinfo": f"https://attacker@media.steampowered.com/steamlink/rpi/bookworm/arm64/{filename}",
+            "query": f"{base}/{filename}?channel=public",
+            "fragment": f"{base}/{filename}#public",
+            "wrong-base": f"https://media.steampowered.com/steamlink/rpi/bookworm/{filename}",
+            "path-escape": f"{base}/nested/../{filename}",
+            "encoded-path-escape": f"{base}/%2e%2e/{filename}",
+            "encoded-version": f"{base}/steamlink-rpi-bookworm-arm64-1.4.5.%33%32%37.tar.gz",
+            "wrong-prefix": f"{base}/steamlink-rpi-bookworm-armhf-1.4.5.327.tar.gz",
+            "wrong-suffix": f"{base}/{filename}.sig",
+            "wrong-version": f"{base}/steamlink-rpi-bookworm-arm64-1.4.5.tar.gz",
+            "version-suffix": f"{base}/steamlink-rpi-bookworm-arm64-1.4.5.327.0.tar.gz",
+        }
+        for name, pointer in rejected.items():
+            with self.subTest(name=name), self.assertRaises(module.Refusal) as caught:
+                module.parse_pointer_version(base, pointer)
+            self.assertEqual(caught.exception.reason, "version_invalid")
 
     def test_good_signature_installs(self) -> None:
         with fixture_server() as url:

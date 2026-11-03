@@ -24,6 +24,15 @@ minimum release provide a bootstrap and recovery pin. A newer candidate may be
 selected by Valve's `public_build.txt`, but the mutable pointer is discovery
 metadata, never an integrity authority.
 
+The pointer may contain either the legacy bare four-component version or Valve's
+canonical absolute archive URL. An absolute pointer must use the configured
+scheme, authority, and base path verbatim and the exact
+`steamlink-rpi-bookworm-arm64-<version>.tar.gz` filename. Userinfo,
+query/fragment data, path escapes, percent encoding, and alternate filenames are
+rejected. In both forms the pointer yields only a version; archive and signature
+download URLs are reconstructed from the configured base URL, so pointer content
+cannot select a download authority.
+
 Every archive must have a valid detached signature from the committed Valve
 Steam Link Release Key whose primary fingerprint is pinned in source as
 `BA23DAE64102FBE0BB140CE5387C648A24C0E740`. Verification uses a new local GnuPG
