@@ -20,6 +20,22 @@ printf '[Resolve]\nFallbackDNS=1.1.1.1\n' > \
 
 "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${SCRATCH}"
 
+# Model the package-created backup from the real rootfs producer. The final
+# rootfs gate must reject build-network resolver state even when the active
+# resolver is the correct systemd-resolved stub.
+printf 'nameserver 192.168.151.1\n' > \
+    "${SCRATCH}/etc/.resolv.conf.systemd-resolved.bak"
+if "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${SCRATCH}" \
+    >"${SCRATCH}/expected-backup-failure.log" 2>&1; then
+    grep -Fqx 'nameserver 192.168.151.1' \
+        "${SCRATCH}/etc/.resolv.conf.systemd-resolved.bak"
+    echo "FAIL: final rootfs DNS gate accepted and retained the build resolver backup" >&2
+    exit 1
+fi
+grep -F '/etc/.resolv.conf.systemd-resolved.bak is present' \
+    "${SCRATCH}/expected-backup-failure.log"
+rm "${SCRATCH}/etc/.resolv.conf.systemd-resolved.bak"
+
 # The build guard must reject the original regression: no /etc/resolv.conf.
 rm "${SCRATCH}/etc/resolv.conf"
 if "${SRC_DIR}/scripts/verify-rootfs-dns.sh" "${SCRATCH}" \
