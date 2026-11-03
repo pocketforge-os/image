@@ -304,21 +304,36 @@ class SteamLinkFetchTests(unittest.TestCase):
             hashlib.sha256(COMMITTED_KEYRING.read_bytes()).hexdigest(),
             VALVE_KEYRING_SHA256,
         )
-        listing = subprocess.run(
+        gnupg_home = self.work / "key-inspection-gnupg"
+        gnupg_home.mkdir(mode=0o700)
+        missing_home = self.work / "missing-home"
+        self.assertFalse(missing_home.exists())
+        env = os.environ.copy()
+        env["HOME"] = str(missing_home)
+        result = subprocess.run(
             [
                 "gpg",
                 "--batch",
                 "--no-options",
+                "--homedir",
+                str(gnupg_home),
                 "--with-colons",
                 "--show-keys",
                 "--fingerprint",
                 str(COMMITTED_KEYRING),
             ],
-            check=True,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-        ).stdout
+            check=False,
+            env=env,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"gpg failed to inspect the committed keyring:\n{result.stderr}",
+        )
+        listing = result.stdout
         fingerprints = [
             line.split(":")[9]
             for line in listing.splitlines()
