@@ -23,6 +23,9 @@ import urllib.request
 
 
 DEFAULT_BASE_URL = "https://media.steampowered.com/steamlink/rpi/bookworm/arm64"
+DEFAULT_RUNTIME_BUILDS_ROOT = Path(
+    "/opt/pocketforge/apps/org.pocketforge.steamlink/verified-builds"
+)
 DEFAULT_FINGERPRINT = "BA23DAE64102FBE0BB140CE5387C648A24C0E740"
 DEFAULT_KEYRING_SHA256 = (
     "eadb9fb69738a0a74967984368243dcf10bbb82fc1267d683e1c3772b1384e1c"
@@ -53,6 +56,14 @@ class Refusal(Exception):
         super().__init__(detail)
         self.reason = reason
         self.detail = detail
+
+
+class VerifiedBuild:
+    __slots__ = ("storage", "runtime")
+
+    def __init__(self, storage: Path, runtime: Path):
+        self.storage = storage
+        self.runtime = runtime
 
 
 def refuse(reason: str, detail: str) -> None:
@@ -494,13 +505,19 @@ def atomic_symlink(state: Path, name: str, target: str) -> None:
             pass
 
 
-def validate_build(build: Path, args: argparse.Namespace) -> Path:
+def validate_build(build: Path, args: argparse.Namespace) -> VerifiedBuild:
     if not build.is_dir() or build.is_symlink():
         refuse("state_invalid", f"build is not a real directory: {build}")
-    receipt_path = build / "receipt.json"
-    manifest_path = build / "payload-manifest.json"
-    archive = build / "verified-source" / "archive.tar.gz"
-    signature = build / "verified-source" / "archive.tar.gz.sig"
+    runtime = args.runtime_builds_root / build.name
+    try:
+        if not runtime.is_dir() or runtime.is_symlink() or not os.path.samefile(build, runtime):
+            refuse("state_invalid", f"runtime alias differs from stored build: {build.name}")
+    except OSError as error:
+        refuse("state_invalid", f"runtime alias is unavailable: {error}")
+    receipt_path = runtime / "receipt.json"
+    manifest_path = runtime / "payload-manifest.json"
+    archive = runtime / "verified-source" / "archive.tar.gz"
+    signature = runtime / "verified-source" / "archive.tar.gz.sig"
     for path in (receipt_path, manifest_path, archive, signature):
         if not path.is_file() or path.is_symlink():
             refuse("state_invalid", f"build metadata is not a regular file: {path.name}")
@@ -540,15 +557,15 @@ def validate_build(build: Path, args: argparse.Namespace) -> Path:
     expected_manifest = archive_manifest(archive, version)
     if stored_manifest != expected_manifest:
         refuse("state_invalid", "payload manifest is not bound to retained signed archive")
-    if installed_manifest(build) != expected_manifest:
+    if installed_manifest(runtime) != expected_manifest:
         refuse("state_invalid", "installed payload differs from signed archive")
-    shell = build / "steamlink" / "bin" / "shell"
+    shell = runtime / "steamlink" / "bin" / "shell"
     if not shell.is_file() or shell.is_symlink() or not os.access(shell, os.X_OK):
         refuse("state_invalid", "installed shell is not executable")
-    return build
+    return VerifiedBuild(storage=build, runtime=runtime)
 
 
-def selected_build(state: Path, link_name: str, args: argparse.Namespace) -> Path | None:
+def selected_build(state: Path, link_name: str, args: argparse.Namespace) -> VerifiedBuild | None:
     link = state / link_name
     if not link.exists() and not link.is_symlink():
         return None
@@ -561,18 +578,18 @@ def selected_build(state: Path, link_name: str, args: argparse.Namespace) -> Pat
     return validate_build(state / target, args)
 
 
-def receipt_version(build: Path | None) -> str | None:
+def receipt_version(build: VerifiedBuild | None) -> str | None:
     if build is None:
         return None
     try:
-        value = json.loads((build / "receipt.json").read_text(encoding="utf-8"))
+        value = json.loads((build.runtime / "receipt.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     version = value.get("version")
     return version if isinstance(version, str) and VERSION_RE.fullmatch(version) else None
 
 
-def fallback_build(state: Path, args: argparse.Namespace) -> Path | None:
+def fallback_build(state: Path, args: argparse.Namespace) -> VerifiedBuild | None:
     for link_name in ("current", "last-good"):
         try:
             selected = selected_build(state, link_name, args)
@@ -589,7 +606,7 @@ def fallback_build(state: Path, args: argparse.Namespace) -> Path | None:
     return None
 
 
-def optional_rollback_build(state: Path, args: argparse.Namespace) -> Path | None:
+def optional_rollback_build(state: Path, args: argparse.Namespace) -> VerifiedBuild | None:
     try:
         return selected_build(state, "last-good", args)
     except Refusal as error:
@@ -630,7 +647,9 @@ def prune_builds(state: Path, keep: set[Path]) -> None:
         refuse("state_invalid", f"cannot prune historical build: {error}")
 
 
-def install_candidate(args: argparse.Namespace, state: Path, stage: Path, version: str) -> Path:
+def install_candidate(
+    args: argparse.Namespace, state: Path, stage: Path, version: str
+) -> VerifiedBuild:
     archive_name = f"steamlink-rpi-bookworm-arm64-{version}.tar.gz"
     archive = stage / archive_name
     signature = stage / f"{archive_name}.sig"
@@ -677,39 +696,42 @@ def install_candidate(args: argparse.Namespace, state: Path, stage: Path, versio
     receipt_path.write_text(json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
     receipt_path.chmod(0o600)
     relative = f"builds/{version}-{digest}"
-    installed = state / relative
-    if installed.exists() or installed.is_symlink():
-        validate_build(installed, args)
+    stored = state / relative
+    if stored.exists() or stored.is_symlink():
+        installed = validate_build(stored, args)
     else:
-        os.replace(payload, installed)
+        os.replace(payload, stored)
+        installed = validate_build(stored, args)
     previous = selected_build(state, "current", args)
     if previous is None:
         previous = optional_rollback_build(state, args)
-    keep = {installed}
+    keep = {installed.storage}
     if previous is not None:
-        keep.add(previous)
+        keep.add(previous.storage)
     if stage.parent == state / "builds":
         keep.add(stage)
     prune_builds(state, keep)
-    if previous is not None and previous != installed:
-        atomic_symlink(state, "last-good", previous.relative_to(state).as_posix())
+    if previous is not None and previous.storage != installed.storage:
+        atomic_symlink(state, "last-good", previous.storage.relative_to(state).as_posix())
     atomic_symlink(state, "current", relative)
     return installed
 
 
-def report_success(result: str, build: Path, *, reason: str | None = None, fallback: bool = False) -> None:
+def report_success(
+    result: str, build: VerifiedBuild, *, reason: str | None = None, fallback: bool = False
+) -> None:
     fields = ["STEAMFETCH", f"result={result}"]
     if reason:
         fields.append(f"reason={reason}")
     if fallback:
         fields.append("fallback=last_good")
-    fields.append(f"path={build}")
+    fields.append(f"path={build.runtime}")
     print(" ".join(fields), flush=True)
 
 
-def launch_if_requested(build: Path, launch: bool) -> None:
+def launch_if_requested(build: VerifiedBuild, launch: bool) -> None:
     if launch:
-        top = build / "steamlink"
+        top = build.runtime / "steamlink"
         shell = top / "bin" / "shell"
         qt = top / "Qt-5.14.1"
         environment = os.environ.copy()
@@ -734,6 +756,9 @@ def launch_if_requested(build: Path, launch: bool) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     result.add_argument("--state-root", type=Path, required=True)
+    result.add_argument(
+        "--runtime-builds-root", type=Path, default=DEFAULT_RUNTIME_BUILDS_ROOT
+    )
     result.add_argument("--platform-runtime", type=Path, required=True)
     result.add_argument("--base-url", default=DEFAULT_BASE_URL)
     result.add_argument(

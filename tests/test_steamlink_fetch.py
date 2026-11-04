@@ -41,7 +41,9 @@ FINGERPRINT = VALVE_FINGERPRINT
 KEYRING_SHA256 = VALVE_KEYRING_SHA256
 
 
-def make_synthetic_signed_fixture(root: Path) -> tuple[Path, str, str, str]:
+def make_synthetic_signed_fixture(
+    root: Path, *, shell_body: bytes = b"#!/bin/sh\nexit 0\n"
+) -> tuple[Path, str, str, str]:
     """Create CI-only inputs; developer runs exercise the preserved Valve files."""
     if shutil.which("gpg") is None:
         raise AssertionError("gpg is required for Steam Link signature tests")
@@ -49,7 +51,7 @@ def make_synthetic_signed_fixture(root: Path) -> tuple[Path, str, str, str]:
     with tarfile.open(archive, "w:gz") as bundle:
         files = {
             "steamlink/version.txt": (f"{VERSION}\n".encode("ascii"), 0o644),
-            "steamlink/bin/shell": (b"#!/bin/sh\nexit 0\n", 0o755),
+            "steamlink/bin/shell": (shell_body, 0o755),
         }
         for name, (body, mode) in files.items():
             member = tarfile.TarInfo(name)
@@ -151,6 +153,7 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
 @contextlib.contextmanager
 def fixture_server(
     *,
+    fixture_root: Path | None = None,
     version: str = VERSION,
     archive_pointer: bool = False,
     bad_signature: bool = False,
@@ -161,7 +164,7 @@ def fixture_server(
         "ConfiguredFixtureHandler",
         (FixtureHandler,),
         {
-            "root": VENDOR,
+            "root": fixture_root or VENDOR,
             "version": version,
             "archive_pointer": archive_pointer,
             "bad_signature": bad_signature,
@@ -245,6 +248,8 @@ class SteamLinkFetchTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="steamlink-fetch-test.")
         self.work = Path(self.temp.name)
         self.state = self.work / "state"
+        self.runtime_builds = self.work / "verified-builds"
+        self.runtime_builds.symlink_to(self.state / "builds", target_is_directory=True)
         self.runtime = write_platform_runtime(self.work / "platform-runtimes")
 
     def tearDown(self) -> None:
@@ -258,31 +263,39 @@ class SteamLinkFetchTests(unittest.TestCase):
         trusted_keyring: Path | None = None,
         keyring_sha256: str | None = None,
         fingerprint: str | None = None,
+        bootstrap_sha256: str | None = None,
+        runtime_builds_root: Path | None = None,
+        launch: bool = False,
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        command = [
+            sys.executable,
+            str(FETCHER),
+            "--state-root",
+            str(state or self.state),
+            "--runtime-builds-root",
+            str(runtime_builds_root or self.runtime_builds),
+            "--platform-runtime",
+            str(self.runtime),
+            "--base-url",
+            base_url,
+            "--trusted-keyring",
+            str(trusted_keyring or TRUSTED_KEYRING),
+            "--trusted-keyring-sha256",
+            keyring_sha256 or KEYRING_SHA256,
+            "--trusted-fingerprint",
+            fingerprint or FINGERPRINT,
+            "--minimum-version",
+            VERSION,
+            "--bootstrap-sha256",
+            bootstrap_sha256 or ARCHIVE_SHA256,
+            "--timeout",
+            "2",
+        ]
+        if launch:
+            command.append("--launch")
         return subprocess.run(
-            [
-                sys.executable,
-                str(FETCHER),
-                "--state-root",
-                str(state or self.state),
-                "--platform-runtime",
-                str(self.runtime),
-                "--base-url",
-                base_url,
-                "--trusted-keyring",
-                str(trusted_keyring or TRUSTED_KEYRING),
-                "--trusted-keyring-sha256",
-                keyring_sha256 or KEYRING_SHA256,
-                "--trusted-fingerprint",
-                fingerprint or FINGERPRINT,
-                "--minimum-version",
-                VERSION,
-                "--bootstrap-sha256",
-                ARCHIVE_SHA256,
-                "--timeout",
-                "2",
-            ],
+            command,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -418,6 +431,78 @@ class SteamLinkFetchTests(unittest.TestCase):
         self.assertTrue((installed / "steamlink" / "bin" / "shell").is_file())
         self.assertTrue((installed / "receipt.json").is_file())
 
+    def test_real_fetcher_routes_all_success_paths_through_runtime_alias(self) -> None:
+        fixture = self.work / "alias-fixture"
+        fixture.mkdir()
+        shell_body = b"""#!/bin/sh
+printf 'alias-shell=%s\nalias-qtdir=%s\nalias-path=%s\nalias-ld=%s\n' \
+  "$0" "$QTDIR" "${PATH%%:*}" "${LD_LIBRARY_PATH%%:*}"
+exit 0
+"""
+        keyring, fingerprint, archive_digest, keyring_digest = (
+            make_synthetic_signed_fixture(fixture, shell_body=shell_body)
+        )
+
+        def run(url: str, *, launch: bool = False) -> subprocess.CompletedProcess[str]:
+            return self.run_fetch(
+                url,
+                trusted_keyring=keyring,
+                keyring_sha256=keyring_digest,
+                fingerprint=fingerprint,
+                bootstrap_sha256=archive_digest,
+                launch=launch,
+            )
+
+        def assert_alias_launch(
+            result: subprocess.CompletedProcess[str], outcome: str, target: str | None = None
+        ) -> None:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f"result={outcome}", result.stdout)
+            selected = target or os.readlink(self.state / "current")
+            build = self.runtime_builds / selected.split("/", 1)[1]
+            top = build / "steamlink"
+            expected = {
+                f"path={build}",
+                f"alias-shell={top / 'bin' / 'shell'}",
+                f"alias-qtdir={top / 'Qt-5.14.1'}",
+                f"alias-path={top / 'bin'}",
+                f"alias-ld={top / 'lib'}",
+            }
+            for value in expected:
+                self.assertIn(value, result.stdout)
+            self.assertNotIn(str(self.state / "builds"), result.stdout)
+
+        with fixture_server(fixture_root=fixture) as url:
+            installed = run(url, launch=True)
+            self.assertEqual(
+                hashlib.sha256((fixture / ARCHIVE_NAME).read_bytes()).hexdigest(),
+                archive_digest,
+            )
+            assert_alias_launch(installed, "installed")
+
+            cached = run(url, launch=True)
+            assert_alias_launch(cached, "cached")
+
+            self.runtime_builds.unlink()
+            empty_alias = self.work / "empty-alias"
+            empty_alias.mkdir()
+            self.runtime_builds.symlink_to(empty_alias, target_is_directory=True)
+            missing_alias = run(url)
+            self.assert_refused(missing_alias, "state_invalid")
+            self.runtime_builds.unlink()
+            self.runtime_builds.symlink_to(self.state / "builds", target_is_directory=True)
+
+        valid_target = os.readlink(self.state / "current")
+        (self.state / "last-good").symlink_to(valid_target)
+        (self.state / "current").unlink()
+        (self.state / "current").symlink_to("builds/corrupt-current")
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            unavailable = f"http://127.0.0.1:{probe.getsockname()[1]}"
+        fallback = run(unavailable, launch=True)
+        self.assertIn("fallback=last_good", fallback.stdout)
+        assert_alias_launch(fallback, "fallback", valid_target)
+
     def test_verified_payload_mode_policy_prevents_eacces_without_data_exec(self) -> None:
         spec = importlib.util.spec_from_file_location("steamlink_fetch", FETCHER)
         self.assertIsNotNone(spec)
@@ -519,6 +604,8 @@ class SteamLinkFetchTests(unittest.TestCase):
             [
                 "--state-root",
                 str(self.state),
+                "--runtime-builds-root",
+                str(self.runtime_builds),
                 "--platform-runtime",
                 str(self.runtime),
                 "--trusted-keyring",
@@ -547,8 +634,12 @@ class SteamLinkFetchTests(unittest.TestCase):
                 args, self.state, Path(stage_name), VERSION
             )
         self.assertEqual(events, ["abi", "executable-policy", "atomic-publication"])
-        self.assertTrue((installed / "steamlink" / "bin" / "shell").stat().st_mode & 0o111)
-        self.assertFalse((installed / "steamlink" / "version.txt").stat().st_mode & 0o111)
+        self.assertTrue(
+            (installed.runtime / "steamlink" / "bin" / "shell").stat().st_mode & 0o111
+        )
+        self.assertFalse(
+            (installed.runtime / "steamlink" / "version.txt").stat().st_mode & 0o111
+        )
 
     def test_launch_uses_archive_runtime_paths_and_working_directory(self) -> None:
         spec = importlib.util.spec_from_file_location("steamlink_fetch", FETCHER)
@@ -568,7 +659,10 @@ class SteamLinkFetchTests(unittest.TestCase):
         with mock.patch.object(module.os, "chdir") as chdir, mock.patch.object(
             module.os, "execv"
         ) as execv, mock.patch.object(module.os, "execve") as execve:
-            module.launch_if_requested(build, True)
+            module.launch_if_requested(
+                module.VerifiedBuild(storage=self.work / "state-build", runtime=build),
+                True,
+            )
         execv.assert_not_called()
         chdir.assert_called_once_with(top)
         executable, argv, environment = execve.call_args.args
@@ -695,7 +789,9 @@ class SteamLinkFetchTests(unittest.TestCase):
         self.assertEqual(fallback.returncode, 0, fallback.stderr)
         self.assertIn("result=fallback", fallback.stdout)
         self.assertIn("fallback=last_good", fallback.stdout)
-        self.assertIn(str(self.state / valid_target), fallback.stdout)
+        self.assertIn(
+            str(self.runtime_builds / valid_target.split("/", 1)[1]), fallback.stdout
+        )
 
     def test_successful_install_prunes_unreferenced_builds(self) -> None:
         with fixture_server() as url:

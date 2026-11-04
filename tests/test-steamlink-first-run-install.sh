@@ -39,6 +39,7 @@ executable = pathlib.Path(sys.argv[2]) / "opt/pocketforge/apps" / manifest["app"
 assert executable.is_file() and executable.stat().st_mode & 0o111, executable
 PYTHON
 test -x "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/steamlink-fetch.py"
+grep -F -- '--runtime-builds-root "${app}/verified-builds"' "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/pf-launch" >/dev/null
 test -f "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/valve-steamlink-release-key.gpg"
 if find "${overlay}" -name '*.tar.gz' -o -name '*.sig' | grep -q .; then
     echo 'Valve payload reached app-root overlay' >&2
