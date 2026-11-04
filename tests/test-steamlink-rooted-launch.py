@@ -139,9 +139,13 @@ exec "{state_shell_path}"
         return subprocess.run(base + ro + list(extra) + (command or ["/usr/bin/pf-app-launch", app_id]), text=True, capture_output=True)
     landlock_probe = Path(__file__).with_name("steamlink-landlock-exec-probe.py")
     probe_base = [bwrap, "--unshare-all", "--ro-bind", "/", "/",
+                  # The alias fixture intentionally covers /opt. Stage the probe
+                  # outside that mount so CI checkouts rooted at /opt stay visible.
+                  "--tmpfs", "/run",
+                  "--ro-bind", str(landlock_probe), "/run/steamlink-landlock-exec-probe.py",
                   "--bind", str(inside(state_builds)), "/mnt",
                   "--bind", str(inside(state_builds)), "/opt",
-                  "--setenv", "DISPLAY", ":0", "python3", str(landlock_probe)]
+                  "--setenv", "DISPLAY", ":0", "python3", "/run/steamlink-landlock-exec-probe.py"]
     denied = subprocess.run(
         probe_base + ["--grant", "/usr", "--grant", "/bin",
                       "--expect", "eacces", "/mnt/shell"],
