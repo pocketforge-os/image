@@ -1,0 +1,3 @@
+# The service's bind mount must exist before its mount namespace is assembled.
+d /var/lib/pocketforge/apps/org.pocketforge.steamlink/state/steamlink-fetch 0700 gamer gamer -
+d /var/lib/pocketforge/apps/org.pocketforge.steamlink/state/steamlink-fetch/builds 0700 gamer gamer -

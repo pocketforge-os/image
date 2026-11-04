@@ -41,6 +41,12 @@ render = [str(a.renderer), "--manifest", str(a.manifest), "--platform-contract",
           "--xdg-config", xdg["XDG_CONFIG_HOME"], "--xdg-state", xdg["XDG_STATE_HOME"],
           "--xdg-cache", xdg["XDG_CACHE_HOME"], "--format", "json"]
 policy = json.loads(subprocess.check_output(render, text=True))
+filesystem = {
+    (entry["path"], entry["access"])
+    for entry in policy["landlock"]["filesystem"]
+}
+assert (str(app_dir), "read_execute") in filesystem
+assert (xdg["XDG_STATE_HOME"], "read_write_no_exec") in filesystem
 def unavailable(reason):
     print(f"rooted-launch=PARTIAL namespace=UNAVAILABLE reason={reason} enforcement=unverified")
     raise SystemExit(77 if a.require_namespace else 0)
@@ -69,7 +75,23 @@ with tempfile.TemporaryDirectory(prefix="steamlink-rooted-launch-") as tmp:
         target.write_text(body)
         return target
     shutil.copyfile(a.manifest, inside(app_dir / "app.toml"))
-    executable = write(exec_path, '#!/bin/sh\nset -eu\n[ "$DISPLAY" = :0 ]\n[ -S /tmp/.X11-unix/X0 ]\n[ ! -e /run/pocketforge/x11/.X11-unix/X0 ]\nprintf "rooted-launch-exec=PASS DISPLAY=%s\\n" "$DISPLAY"\n')
+    state_builds = Path(xdg["XDG_STATE_HOME"]) / "steamlink-fetch/builds"
+    state_shell_path = state_builds / "shell"
+    state_shell = write(state_shell_path, '#!/bin/sh\nprintf "rooted-state-exec=PASS DISPLAY=%s\\n" "$DISPLAY"\n')
+    state_shell.chmod(0o755)
+    state_data_path = state_builds / "version.txt"
+    state_data = write(state_data_path, "fixture-data-not-code\n")
+    state_data.chmod(0o644)
+    exec_alias = app_dir / "verified-builds"
+    inside(exec_alias).mkdir(parents=True, exist_ok=True)
+    executable = write(exec_path, f'''#!/bin/sh
+set -eu
+[ "$DISPLAY" = :0 ]
+[ -S /tmp/.X11-unix/X0 ]
+[ ! -e /run/pocketforge/x11/.X11-unix/X0 ]
+[ ! -x "{state_data_path}" ]
+exec "{state_shell_path}"
+''')
     executable.chmod(0o755)
     sockets = []
     mappings = []
@@ -103,6 +125,7 @@ with tempfile.TemporaryDirectory(prefix="steamlink-rooted-launch-") as tmp:
     base = [bwrap, "--unshare-all", "--ro-bind", str(root), "/"]
     for path in xdg.values():
         base += ["--bind", str(inside(path)), path]
+    base += ["--bind", str(inside(state_builds)), str(exec_alias)]
     for path in ("/usr/lib", "/lib", "/lib64", "/bin/sh"):
         if Path(path).exists():
             base += ["--ro-bind", path, path]
@@ -114,15 +137,35 @@ with tempfile.TemporaryDirectory(prefix="steamlink-rooted-launch-") as tmp:
     base += ["--setenv", "DISPLAY", ":99"]
     def run(extra=(), command=None, ro=readonly):
         return subprocess.run(base + ro + list(extra) + (command or ["/usr/bin/pf-app-launch", app_id]), text=True, capture_output=True)
+    landlock_probe = Path(__file__).with_name("steamlink-landlock-exec-probe.py")
+    probe_base = [bwrap, "--unshare-all", "--ro-bind", "/", "/",
+                  # The alias fixture intentionally covers /opt. Stage the probe
+                  # outside that mount so CI checkouts rooted at /opt stay visible.
+                  "--tmpfs", "/run",
+                  "--ro-bind", str(landlock_probe), "/run/steamlink-landlock-exec-probe.py",
+                  "--bind", str(inside(state_builds)), "/mnt",
+                  "--bind", str(inside(state_builds)), "/opt",
+                  "--setenv", "DISPLAY", ":0", "python3", "/run/steamlink-landlock-exec-probe.py"]
+    denied = subprocess.run(
+        probe_base + ["--grant", "/usr", "--grant", "/bin",
+                      "--expect", "eacces", "/mnt/shell"],
+        text=True, capture_output=True)
+    assert denied.returncode == 0 and "landlock-exec=EACCES errno=13" in denied.stdout, denied
+    allowed = subprocess.run(
+        probe_base + ["--grant", "/usr", "--grant", "/bin", "--grant", "/opt",
+                      "--expect", "success", "/mnt/shell"],
+        text=True, capture_output=True)
+    assert allowed.returncode == 0 and "landlock-exec=PASS" in allowed.stdout, allowed
+    print("rooted-landlock-exec=PASS denied=EACCES alias-grant=success data-exec=no")
     positive = run(mappings)
     if positive.returncode == 0:
-        assert "rooted-launch-exec=PASS DISPLAY=:0" in positive.stdout, positive
-        print("rooted-launch=PASS enforcement=production actual_exec=yes")
+        assert "rooted-state-exec=PASS DISPLAY=:0" in positive.stdout, positive
+        print("rooted-launch=PASS enforcement=production verified-state-exec=yes data-exec=no")
     else:
         assert positive.returncode == 77 and "reason=landlock_abi_too_old" in positive.stderr, positive
         # This proves harmless layout execution independently; it is NOT enforcement acceptance.
         layout = run(mappings + ["--setenv", "DISPLAY", ":0"], [str(exec_path)])
-        assert layout.returncode == 0 and "rooted-launch-exec=PASS" in layout.stdout, layout
+        assert layout.returncode == 0 and "rooted-state-exec=PASS" in layout.stdout, layout
         print("rooted-launch=PARTIAL reason=landlock_abi_too_old production_exec=deferred layout_exec=PASS")
     def refused(label, extra=mappings):
         result = run(extra)

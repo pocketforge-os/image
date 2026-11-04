@@ -39,6 +39,7 @@ executable = pathlib.Path(sys.argv[2]) / "opt/pocketforge/apps" / manifest["app"
 assert executable.is_file() and executable.stat().st_mode & 0o111, executable
 PYTHON
 test -x "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/steamlink-fetch.py"
+grep -F -- '--runtime-builds-root "${app}/verified-builds"' "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/pf-launch" >/dev/null
 test -f "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/valve-steamlink-release-key.gpg"
 if find "${overlay}" -name '*.tar.gz' -o -name '*.sig' | grep -q .; then
     echo 'Valve payload reached app-root overlay' >&2
@@ -346,7 +347,12 @@ BWRAP
 fi
 dropin="${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/20-runtime-root.conf"
 grep -Fx 'BindReadOnlyPaths=/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1' "${dropin}" >/dev/null
+grep -Fx 'BindPaths=/var/lib/pocketforge/apps/org.pocketforge.steamlink/state/steamlink-fetch/builds:/opt/pocketforge/apps/org.pocketforge.steamlink/verified-builds:rbind' "${dropin}" >/dev/null
 grep -F 'steamlink-ffmpeg59/v1/lib/aarch64-linux-gnu' "${dropin}" >/dev/null
+tmpfiles="${rootfs}/usr/lib/tmpfiles.d/pf-steamlink-exec.conf"
+grep -Fx 'd /var/lib/pocketforge/apps/org.pocketforge.steamlink/state/steamlink-fetch 0700 gamer gamer -' "${tmpfiles}" >/dev/null
+grep -Fx 'd /var/lib/pocketforge/apps/org.pocketforge.steamlink/state/steamlink-fetch/builds 0700 gamer gamer -' "${tmpfiles}" >/dev/null
+test -d "${PF_TEST_CAPTURE_OVERLAY}/opt/pocketforge/apps/org.pocketforge.steamlink/verified-builds"
 test ! -e "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf"
 python3 "${bind_checker}" --root "${rootfs}" --unsquashfs "${bin}/unsquashfs"
 
@@ -505,10 +511,15 @@ with tempfile.TemporaryDirectory() as scratch:
         path.is_file() and b"192.168.151.1" in path.read_bytes()
         for path in root.rglob("*")
     )
-    for relative in ("var/lib/pocketforge/apps", "var/cache/pocketforge/apps", "run/pf-app"):
-        target = root / relative / "org.pocketforge.steamlink"
+    for relative in (
+        "var/lib/pocketforge/apps/org.pocketforge.steamlink",
+        "var/cache/pocketforge/apps/org.pocketforge.steamlink",
+        "run/pf-app/org.pocketforge.steamlink",
+        "opt/pocketforge/apps/org.pocketforge.steamlink/verified-builds",
+    ):
+        target = root / relative
         assert target.is_dir() and not list(target.iterdir()), target
-print("Steam Link real SquashFS producer: PASS (runtime DNS/NSS closure; no build resolver; three empty destinations)")
+print("Steam Link real SquashFS producer: PASS (runtime DNS/NSS closure; no build resolver; four empty destinations)")
 PYREAL
 fi
 

@@ -6,6 +6,7 @@ state=${XDG_STATE_HOME:-/var/lib/pocketforge/apps/org.pocketforge.steamlink/stat
 
 exec /usr/bin/python3 "${app}/steamlink-fetch.py" \
     --state-root "${state}/steamlink-fetch" \
+    --runtime-builds-root "${app}/verified-builds" \
     --platform-runtime /usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1 \
     --trusted-keyring "${app}/valve-steamlink-release-key.gpg" \
     --launch

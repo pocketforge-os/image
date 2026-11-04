@@ -21,6 +21,7 @@ STATE_ROOT = Path(f"/var/lib/pocketforge/apps/{APP_ID}/state")
 PLATFORM_RUNTIME = Path(
     "/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1"
 )
+RUNTIME_BUILDS_ROOT = Path(f"/opt/pocketforge/apps/{APP_ID}/verified-builds")
 
 
 def sha256(path: Path) -> str:
@@ -103,6 +104,9 @@ def isolated_command(
         "--bind",
         str(state),
         str(STATE_ROOT),
+        "--bind",
+        str(state / "steamlink-fetch/builds"),
+        str(RUNTIME_BUILDS_ROOT),
         "--ro-bind",
         str(platform),
         str(PLATFORM_RUNTIME),
@@ -125,6 +129,8 @@ def isolated_command(
         f"/opt/pocketforge/apps/{APP_ID}/steamlink-fetch.py",
         "--state-root",
         str(STATE_ROOT / "steamlink-fetch"),
+        "--runtime-builds-root",
+        str(RUNTIME_BUILDS_ROOT),
         "--platform-runtime",
         str(PLATFORM_RUNTIME),
         "--base-url",
@@ -192,6 +198,7 @@ def main() -> int:
         qemu_target.touch()
 
         state = work / "state"
+        (state / "steamlink-fetch/builds").mkdir(parents=True)
         vendor = state / "vendor"
         vendor.mkdir(parents=True)
         (vendor / "public_build.txt").write_text(f"{VERSION}\n", encoding="ascii")

@@ -12,6 +12,7 @@ builder_mode=$3
 src=$(cd "$(dirname "$0")/.." && pwd)
 app_id=org.pocketforge.steamlink
 app_source="${src}/apps/steamlink"
+tmpfiles_source="${app_source}/steamlink-exec.tmpfiles"
 policy_fragment="${src}/build/pf-app@${app_id}.service.d/10-policy.conf"
 root_builder=${PF_STEAMLINK_ROOT_BUILDER:-${src}/scripts/build-debian-app-root.sh}
 root_renderer=${PF_STEAMLINK_ROOT_RENDERER:-${src}/scripts/render-app-runtime-root.py}
@@ -19,7 +20,7 @@ policy_renderer=${PF_STEAMLINK_POLICY_RENDERER:-${RUNTIME_DIR:-/work/runtime}/bu
 platform_store="${rootfs}/usr/lib/pocketforge/platform-runtimes/pocketforge-bookworm-aarch64"
 ffmpeg_runtime="${rootfs}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1"
 
-for path in "${rootfs}" "${app_source}" "${policy_fragment}" "${root_builder}" "${root_renderer}" \
+for path in "${rootfs}" "${app_source}" "${tmpfiles_source}" "${policy_fragment}" "${root_builder}" "${root_renderer}" \
     "${policy_renderer}" "${platform_store}" "${ffmpeg_runtime}"; do
     [ -e "${path}" ] || { echo "steamlink-first-run: missing path: ${path}" >&2; exit 66; }
 done
@@ -47,6 +48,7 @@ install -d -m 0755 \
     "${app_root_overlay}/var/cache/pocketforge/apps/${app_id}" \
     "${app_root_overlay}/run/pf-app/${app_id}" \
     "${app_root_overlay}/run/pocketforge/platform-runtime" \
+    "${app_overlay}/verified-builds" \
     "${app_root_overlay}/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1"
 install -D -m 0644 /dev/null "${app_root_overlay}/usr/bin/pf-app-launch"
 install -D -m 0644 /dev/null \
@@ -74,6 +76,8 @@ install -m 0755 "${app_source}/pf-launch" "${app_overlay}/pf-launch"
 install -m 0755 "${app_source}/steamlink-fetch.py" "${app_overlay}/steamlink-fetch.py"
 install -m 0644 "${app_source}/valve-steamlink-release-key.gpg" \
     "${app_overlay}/valve-steamlink-release-key.gpg"
+install -D -m 0644 "${tmpfiles_source}" \
+    "${rootfs}/usr/lib/tmpfiles.d/pf-steamlink-exec.conf"
 
 root_output="${work}/root-output"
 # The fetch helper imports http.client, urllib, email, and their transitive
@@ -167,6 +171,9 @@ python3 "${root_renderer}" \
 cat >>"${dropin}" <<'EOF'
 # Steam Link's sealed FFmpeg59 ABI is separate from the graphics platform slice.
 BindReadOnlyPaths=/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1
+# Alias only the fetcher's build subtree under the app's read/execute rule.
+# Staged file modes remain the verified fetcher's explicit execution boundary.
+BindPaths=/var/lib/pocketforge/apps/org.pocketforge.steamlink/state/steamlink-fetch/builds:/opt/pocketforge/apps/org.pocketforge.steamlink/verified-builds:rbind
 Environment="LD_LIBRARY_PATH=/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1/lib/aarch64-linux-gnu:/run/pocketforge/platform-runtime/usr/local/lib:/run/pocketforge/platform-runtime/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu"
 EOF
 
