@@ -327,7 +327,10 @@ def safe_extract(archive: Path, destination: Path, expected_version: str) -> Non
                     refuse("archive_invalid", f"cannot read archive member: {member.name}")
                 with target.open("xb") as output:
                     shutil.copyfileobj(source, output, length=1024 * 1024)
-                target.chmod(0o755 if member.mode & 0o111 else 0o644)
+                # Nothing in the unfinalized staging tree is executable.  The
+                # signed manifest's executable closure is applied only after
+                # the sealed platform ABI has also been verified.
+                target.chmod(0o644)
             for target, link_name in links:
                 link_target = target.parent / link_name
                 if not link_target.is_file() or link_target.is_symlink():
@@ -348,8 +351,8 @@ def safe_extract(archive: Path, destination: Path, expected_version: str) -> Non
         refuse("archive_invalid", f"version.txt: {error}")
     if actual_version != expected_version:
         refuse("version_mismatch", f"archive version is {actual_version!r}")
-    if shell.is_symlink() or not shell.is_file() or not os.access(shell, os.X_OK):
-        refuse("archive_invalid", "steamlink/bin/shell is not a regular executable")
+    if shell.is_symlink() or not shell.is_file():
+        refuse("archive_invalid", "steamlink/bin/shell is not a regular file")
 
 
 def archive_manifest(archive: Path, expected_version: str) -> dict[str, dict[str, object]]:
@@ -447,6 +450,36 @@ def installed_manifest(build: Path) -> dict[str, dict[str, object]]:
     except OSError as error:
         refuse("state_invalid", str(error))
     return result
+
+
+def apply_executable_policy(
+    payload: Path, manifest: dict[str, dict[str, object]]
+) -> None:
+    """Apply only the executable file set declared by the verified archive."""
+    shell_entry = manifest.get("steamlink/bin/shell")
+    if (
+        not isinstance(shell_entry, dict)
+        or shell_entry.get("type") != "file"
+        or shell_entry.get("executable") is not True
+    ):
+        refuse("archive_invalid", "steamlink/bin/shell is not declared executable")
+    try:
+        for name, entry in sorted(manifest.items()):
+            if entry.get("type") != "file":
+                continue
+            executable = entry.get("executable")
+            if not isinstance(executable, bool):
+                refuse("archive_invalid", f"file mode declaration is invalid: {name}")
+            target = payload.joinpath(*PurePosixPath(name).parts)
+            if target.is_symlink() or not target.is_file():
+                refuse("archive_invalid", f"executable policy target differs: {name}")
+            target.chmod(0o755 if executable else 0o644)
+    except Refusal:
+        raise
+    except OSError as error:
+        refuse("archive_invalid", f"cannot apply executable policy: {error}")
+    if installed_manifest(payload) != manifest:
+        refuse("archive_invalid", "extracted payload differs from verified manifest")
 
 
 def atomic_symlink(state: Path, name: str, target: str) -> None:
@@ -624,6 +657,7 @@ def install_candidate(args: argparse.Namespace, state: Path, stage: Path, versio
     payload = stage / "payload"
     safe_extract(archive, payload, version)
     validate_platform_runtime(args.platform_runtime)
+    apply_executable_policy(payload, manifest)
     manifest_bytes = canonical_json(manifest)
     (payload / "payload-manifest.json").write_bytes(manifest_bytes)
     source = payload / "verified-source"
@@ -654,6 +688,8 @@ def install_candidate(args: argparse.Namespace, state: Path, stage: Path, versio
     keep = {installed}
     if previous is not None:
         keep.add(previous)
+    if stage.parent == state / "builds":
+        keep.add(stage)
     prune_builds(state, keep)
     if previous is not None and previous != installed:
         atomic_symlink(state, "last-good", previous.relative_to(state).as_posix())
@@ -728,7 +764,9 @@ def main() -> int:
     try:
         minimum = version_tuple(args.minimum_version)
         ensure_state_root(args.state_root)
-        with tempfile.TemporaryDirectory(prefix=".staging.", dir=args.state_root) as stage_name:
+        with tempfile.TemporaryDirectory(
+            prefix=".staging.", dir=args.state_root / "builds"
+        ) as stage_name:
             stage = Path(stage_name)
             try:
                 candidate = discover(args.base_url, stage, args.timeout)

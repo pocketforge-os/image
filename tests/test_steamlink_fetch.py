@@ -418,6 +418,138 @@ class SteamLinkFetchTests(unittest.TestCase):
         self.assertTrue((installed / "steamlink" / "bin" / "shell").is_file())
         self.assertTrue((installed / "receipt.json").is_file())
 
+    def test_verified_payload_mode_policy_prevents_eacces_without_data_exec(self) -> None:
+        spec = importlib.util.spec_from_file_location("steamlink_fetch", FETCHER)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        archive = VENDOR / ARCHIVE_NAME
+        signature = VENDOR / SIGNATURE_NAME
+        module.verify_signature(
+            archive,
+            signature,
+            TRUSTED_KEYRING,
+            KEYRING_SHA256,
+            FINGERPRINT,
+        )
+        manifest = module.archive_manifest(archive, VERSION)
+        payload = self.work / "verified-payload"
+        module.safe_extract(archive, payload, VERSION)
+        shell = payload / "steamlink" / "bin" / "shell"
+        data = payload / "steamlink" / "version.txt"
+
+        self.assertFalse(shell.stat().st_mode & 0o111)
+        with self.assertRaises(PermissionError) as denied:
+            subprocess.run([shell], check=False)
+        self.assertEqual(denied.exception.errno, 13)
+
+        module.apply_executable_policy(payload, manifest)
+        self.assertTrue(shell.stat().st_mode & 0o111)
+        self.assertFalse(data.stat().st_mode & 0o111)
+        self.assertEqual(module.installed_manifest(payload), manifest)
+
+    def test_archive_traversal_still_refuses_before_extraction(self) -> None:
+        spec = importlib.util.spec_from_file_location("steamlink_fetch", FETCHER)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        for name, member_name, link_name in (
+            ("path", "steamlink/../escape", None),
+            ("symlink", "steamlink/bin/escape", "../escape"),
+        ):
+            with self.subTest(name=name):
+                archive = self.work / f"malformed-{name}.tar.gz"
+                with tarfile.open(archive, "w:gz") as bundle:
+                    version = tarfile.TarInfo("steamlink/version.txt")
+                    version.size = len(VERSION) + 1
+                    bundle.addfile(version, io.BytesIO(f"{VERSION}\n".encode("ascii")))
+                    shell = tarfile.TarInfo("steamlink/bin/shell")
+                    shell_body = b"#!/bin/sh\nexit 0\n"
+                    shell.size = len(shell_body)
+                    bundle.addfile(shell, io.BytesIO(shell_body))
+                    hostile = tarfile.TarInfo(member_name)
+                    if link_name is not None:
+                        hostile.type = tarfile.SYMTYPE
+                        hostile.linkname = link_name
+                    else:
+                        hostile.size = 1
+                    bundle.addfile(
+                        hostile,
+                        None if link_name is not None else io.BytesIO(b"x"),
+                    )
+
+                with self.assertRaises(module.Refusal) as manifest_refusal:
+                    module.archive_manifest(archive, VERSION)
+                self.assertEqual(manifest_refusal.exception.reason, "archive_invalid")
+                with self.assertRaises(module.Refusal) as extract_refusal:
+                    module.safe_extract(archive, self.work / f"extract-{name}", VERSION)
+                self.assertEqual(extract_refusal.exception.reason, "archive_invalid")
+                self.assertFalse((self.work / "escape").exists())
+
+    def test_executable_policy_runs_after_abi_before_atomic_publication(self) -> None:
+        spec = importlib.util.spec_from_file_location("steamlink_fetch", FETCHER)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.ensure_state_root(self.state)
+        events: list[str] = []
+        real_validate = module.validate_platform_runtime
+        real_policy = module.apply_executable_policy
+        real_replace = module.os.replace
+
+        def validate(runtime: Path) -> None:
+            real_validate(runtime)
+            events.append("abi")
+
+        def apply_policy(payload: Path, manifest: dict[str, dict[str, object]]) -> None:
+            self.assertEqual(events[-1:], ["abi"])
+            real_policy(payload, manifest)
+            events.append("executable-policy")
+
+        def replace(source: Path, destination: Path) -> None:
+            if Path(source).name == "payload":
+                events.append("atomic-publication")
+            real_replace(source, destination)
+
+        args = module.parser().parse_args(
+            [
+                "--state-root",
+                str(self.state),
+                "--platform-runtime",
+                str(self.runtime),
+                "--trusted-keyring",
+                str(TRUSTED_KEYRING),
+                "--trusted-keyring-sha256",
+                KEYRING_SHA256,
+                "--trusted-fingerprint",
+                FINGERPRINT,
+                "--minimum-version",
+                VERSION,
+                "--bootstrap-sha256",
+                ARCHIVE_SHA256,
+            ]
+        )
+        with fixture_server() as url, tempfile.TemporaryDirectory(
+            prefix=".staging.", dir=self.state / "builds"
+        ) as stage_name, mock.patch.object(
+            module, "validate_platform_runtime", side_effect=validate
+        ), mock.patch.object(
+            module, "apply_executable_policy", side_effect=apply_policy
+        ), mock.patch.object(
+            module.os, "replace", side_effect=replace
+        ):
+            args.base_url = url
+            installed = module.install_candidate(
+                args, self.state, Path(stage_name), VERSION
+            )
+        self.assertEqual(events, ["abi", "executable-policy", "atomic-publication"])
+        self.assertTrue((installed / "steamlink" / "bin" / "shell").stat().st_mode & 0o111)
+        self.assertFalse((installed / "steamlink" / "version.txt").stat().st_mode & 0o111)
+
     def test_launch_uses_archive_runtime_paths_and_working_directory(self) -> None:
         spec = importlib.util.spec_from_file_location("steamlink_fetch", FETCHER)
         self.assertIsNotNone(spec)
