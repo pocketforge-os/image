@@ -16,13 +16,20 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "build/app-platform-runtime-a133-open-v1.json"
 PROTOTYPE = ROOT / "scripts/build-steamlink-app-root-prototype.sh"
 # Sonames the shell is known to need that are excluded from the app root.
-# Direct NEEDED of Steam Link 1.3.32.316 bin/shell (readelf -d) that
-# is_platform_library() excludes from the app root, minus the ffmpeg59 runtime
-# (libavcodec/libavutil) which has its own bound runtime.  libepoxy's own
-# NEEDED (libdl, libc, ld-linux) are all base_sonames.
+# Recorded from Steam Link 1.4.5.327 (the build STEAMFETCH installed on device
+# in r4; archive sha256 980f19f22069902e9c3cc5002d90adeee76ab514d35fde4377534a70783dc531,
+# Valve signature verified with the repo keyring).  `readelf -d` over EVERY ELF
+# in the archive (bin/shell, Qt-5.14.1 lib+plugins, lib/, helpers) gives these
+# NEEDED sonames in is_platform_library() families.  libavcodec.so.59,
+# libavutil.so.57 come from the steamlink-ffmpeg59 runtime bind, not seeds.
+# libepoxy's own NEEDED (libdl, libc, ld-linux) are base_sonames.  The NEEDED
+# set is identical to 1.3.32.316 apart from ld-linux (libsteamwebrtc only).
 KNOWN_SHELL_NEEDS = (
+    "libEGL.so.1",
+    "libGLESv2.so.2",
     "libdrm.so.2",
     "libepoxy.so.0",
+    "libgbm.so.1",
     "libwayland-client.so.0",
     "libwayland-egl.so.1",
 )
