@@ -104,6 +104,7 @@ jobs:
             tests/test-a-cts-worker-recovery.sh
             tests/test-a-cts-worker-terminal.sh
             tests/test-alsa-config.sh
+            tests/test-apt-cache-transport.py
             tests/test-artifact-intake-put.sh
             tests/test-app-root-build-toolchain.sh
             tests/test-boot-animator.sh
