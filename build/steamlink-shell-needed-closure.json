@@ -1,0 +1,259 @@
+{
+  "archive_sha256": "980f19f22069902e9c3cc5002d90adeee76ab514d35fde4377534a70783dc531",
+  "elf_count": 47,
+  "provenance": {
+    "libEGL.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5EglFSDeviceIntegration.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/egldeviceintegrations/libqeglfs-emu-integration.so",
+      "steamlink/Qt-5.14.1/plugins/egldeviceintegrations/libqeglfs-kms-egldevice-integration.so",
+      "steamlink/Qt-5.14.1/plugins/egldeviceintegrations/libqeglfs-kms-integration.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqminimalegl.so",
+      "steamlink/Qt-5.14.1/plugins/xcbglintegrations/libqxcb-egl-integration.so"
+    ],
+    "libGLESv2.so.2": [
+      "steamlink/Qt-5.14.1/lib/libQt5EglFSDeviceIntegration.so.5.14.1",
+      "steamlink/Qt-5.14.1/lib/libQt5Gui.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqminimalegl.so",
+      "steamlink/Qt-5.14.1/plugins/xcbglintegrations/libqxcb-egl-integration.so"
+    ],
+    "libICE.so.6": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libSM.so.6": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libX11-xcb.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/egldeviceintegrations/libqeglfs-x11-integration.so"
+    ],
+    "libX11.so.6": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/egldeviceintegrations/libqeglfs-x11-integration.so",
+      "steamlink/Qt-5.14.1/plugins/xcbglintegrations/libqxcb-egl-integration.so"
+    ],
+    "libavcodec.so.59": [
+      "steamlink/bin/shell"
+    ],
+    "libavutil.so.57": [
+      "steamlink/bin/shell"
+    ],
+    "libdbus-1.so.3": [
+      "steamlink/Qt-5.14.1/lib/libQt5DBus.so.5.14.1"
+    ],
+    "libdouble-conversion.so.3": [
+      "steamlink/Qt-5.14.1/lib/libQt5Core.so.5.14.1"
+    ],
+    "libdrm.so.2": [
+      "steamlink/Qt-5.14.1/lib/libQt5EglFsKmsSupport.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/egldeviceintegrations/libqeglfs-kms-egldevice-integration.so",
+      "steamlink/Qt-5.14.1/plugins/egldeviceintegrations/libqeglfs-kms-integration.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqlinuxfb.so",
+      "steamlink/bin/shell"
+    ],
+    "libepoxy.so.0": [
+      "steamlink/bin/shell"
+    ],
+    "libfontconfig.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5EglFSDeviceIntegration.so.5.14.1",
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqlinuxfb.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqminimal.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqminimalegl.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqoffscreen.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqvnc.so"
+    ],
+    "libfreetype.so.6": [
+      "steamlink/Qt-5.14.1/lib/libQt5EglFSDeviceIntegration.so.5.14.1",
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqlinuxfb.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqminimal.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqminimalegl.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqoffscreen.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqvnc.so"
+    ],
+    "libgbm.so.1": [
+      "steamlink/Qt-5.14.1/plugins/egldeviceintegrations/libqeglfs-kms-integration.so"
+    ],
+    "libglib-2.0.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5Core.so.5.14.1",
+      "steamlink/Qt-5.14.1/lib/libQt5EglFSDeviceIntegration.so.5.14.1",
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqlinuxfb.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqminimal.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqminimalegl.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqoffscreen.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqvnc.so"
+    ],
+    "libgssapi_krb5.so.2": [
+      "steamlink/Qt-5.14.1/lib/libQt5Network.so.5.14.1"
+    ],
+    "libharfbuzz.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5Gui.so.5.14.1"
+    ],
+    "libicui18n.so.72": [
+      "steamlink/Qt-5.14.1/lib/libQt5Core.so.5.14.1"
+    ],
+    "libicuuc.so.72": [
+      "steamlink/Qt-5.14.1/lib/libQt5Core.so.5.14.1"
+    ],
+    "libinput.so.10": [
+      "steamlink/Qt-5.14.1/lib/libQt5EglFSDeviceIntegration.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/generic/libqlibinputplugin.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqlinuxfb.so"
+    ],
+    "libjpeg.so.62": [
+      "steamlink/Qt-5.14.1/plugins/imageformats/libqjpeg.so"
+    ],
+    "libmd4c.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5Gui.so.5.14.1"
+    ],
+    "libmtdev.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5EglFSDeviceIntegration.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/generic/libqevdevtouchplugin.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqlinuxfb.so"
+    ],
+    "libpng16.so.16": [
+      "steamlink/Qt-5.14.1/lib/libQt5Gui.so.5.14.1"
+    ],
+    "libudev.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5EglFSDeviceIntegration.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/egldeviceintegrations/libqeglfs-kms-integration.so",
+      "steamlink/Qt-5.14.1/plugins/generic/libqevdevkeyboardplugin.so",
+      "steamlink/Qt-5.14.1/plugins/generic/libqevdevmouseplugin.so",
+      "steamlink/Qt-5.14.1/plugins/generic/libqevdevtabletplugin.so",
+      "steamlink/Qt-5.14.1/plugins/generic/libqevdevtouchplugin.so",
+      "steamlink/Qt-5.14.1/plugins/generic/libqlibinputplugin.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqlinuxfb.so"
+    ],
+    "libusb-1.0.so.0": [
+      "steamlink/bin/ltwheelconf"
+    ],
+    "libwayland-client.so.0": [
+      "steamlink/bin/shell"
+    ],
+    "libwayland-egl.so.1": [
+      "steamlink/bin/shell"
+    ],
+    "libxcb-icccm.so.4": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-image.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-keysyms.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-randr.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-render-util.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-render.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-shape.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-shm.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-sync.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-xfixes.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-xinerama.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-xinput.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb-xkb.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxcb.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/egldeviceintegrations/libqeglfs-x11-integration.so"
+    ],
+    "libxkbcommon-x11.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1"
+    ],
+    "libxkbcommon.so.0": [
+      "steamlink/Qt-5.14.1/lib/libQt5EglFSDeviceIntegration.so.5.14.1",
+      "steamlink/Qt-5.14.1/lib/libQt5XcbQpa.so.5.14.1",
+      "steamlink/Qt-5.14.1/plugins/generic/libqlibinputplugin.so",
+      "steamlink/Qt-5.14.1/plugins/platforminputcontexts/libcomposeplatforminputcontextplugin.so",
+      "steamlink/Qt-5.14.1/plugins/platforminputcontexts/libibusplatforminputcontextplugin.so",
+      "steamlink/Qt-5.14.1/plugins/platforms/libqlinuxfb.so"
+    ],
+    "libz.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5Core.so.5.14.1",
+      "steamlink/Qt-5.14.1/lib/libQt5Gui.so.5.14.1",
+      "steamlink/Qt-5.14.1/lib/libQt5Network.so.5.14.1",
+      "steamlink/Qt-5.14.1/lib/libQt5Svg.so.5.14.1",
+      "steamlink/bin/shell"
+    ],
+    "libzstd.so.1": [
+      "steamlink/Qt-5.14.1/lib/libQt5Core.so.5.14.1"
+    ]
+  },
+  "runtime_binds": [
+    "libavcodec.so.59",
+    "libavutil.so.57",
+    "libswresample.so.4"
+  ],
+  "schema_version": 1,
+  "signature_verified": true,
+  "unresolved": [
+    "libEGL.so.1",
+    "libGLESv2.so.2",
+    "libICE.so.6",
+    "libSM.so.6",
+    "libX11-xcb.so.1",
+    "libX11.so.6",
+    "libavcodec.so.59",
+    "libavutil.so.57",
+    "libdbus-1.so.3",
+    "libdouble-conversion.so.3",
+    "libdrm.so.2",
+    "libepoxy.so.0",
+    "libfontconfig.so.1",
+    "libfreetype.so.6",
+    "libgbm.so.1",
+    "libglib-2.0.so.0",
+    "libgssapi_krb5.so.2",
+    "libharfbuzz.so.0",
+    "libicui18n.so.72",
+    "libicuuc.so.72",
+    "libinput.so.10",
+    "libjpeg.so.62",
+    "libmd4c.so.0",
+    "libmtdev.so.1",
+    "libpng16.so.16",
+    "libudev.so.1",
+    "libusb-1.0.so.0",
+    "libwayland-client.so.0",
+    "libwayland-egl.so.1",
+    "libxcb-icccm.so.4",
+    "libxcb-image.so.0",
+    "libxcb-keysyms.so.1",
+    "libxcb-randr.so.0",
+    "libxcb-render-util.so.0",
+    "libxcb-render.so.0",
+    "libxcb-shape.so.0",
+    "libxcb-shm.so.0",
+    "libxcb-sync.so.1",
+    "libxcb-xfixes.so.0",
+    "libxcb-xinerama.so.0",
+    "libxcb-xinput.so.0",
+    "libxcb-xkb.so.1",
+    "libxcb.so.1",
+    "libxkbcommon-x11.so.0",
+    "libxkbcommon.so.0",
+    "libz.so.1",
+    "libzstd.so.1"
+  ],
+  "version": "1.4.5.327"
+}
