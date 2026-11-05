@@ -16,7 +16,16 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "build/app-platform-runtime-a133-open-v1.json"
 PROTOTYPE = ROOT / "scripts/build-steamlink-app-root-prototype.sh"
 # Sonames the shell is known to need that are excluded from the app root.
-KNOWN_SHELL_NEEDS = ("libepoxy.so.0",)
+# Direct NEEDED of Steam Link 1.3.32.316 bin/shell (readelf -d) that
+# is_platform_library() excludes from the app root, minus the ffmpeg59 runtime
+# (libavcodec/libavutil) which has its own bound runtime.  libepoxy's own
+# NEEDED (libdl, libc, ld-linux) are all base_sonames.
+KNOWN_SHELL_NEEDS = (
+    "libdrm.so.2",
+    "libepoxy.so.0",
+    "libwayland-client.so.0",
+    "libwayland-egl.so.1",
+)
 
 
 class SteamLinkShellPlatformNeededTest(unittest.TestCase):
