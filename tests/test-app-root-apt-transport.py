@@ -18,7 +18,12 @@ Contract under test (hermetic: stubbed mmdebstrap and mksquashfs, no network, no
      fails the build closed (rc 65) instead of shipping the cache's scheme;
   4. red controls: the old unconditional-https builder is caught while proxied, and a builder
      without the persisted-source rewrite is caught by both the fail-closed check and, with
-     that check also removed, by the root-image identity comparison.
+     that check also removed, by the root-image identity comparison;
+  5. the A523 rootfs builder (scripts/build-rootfs-a523.sh) had the same unconditional https
+     mirror and runs in the same proxied RUN: the real script, with a stubbed mmdebstrap that
+     records its mirror and aborts, picks http while `http_proxy` is set and https without it,
+     and the unconditional-https version is caught (its persisted-source rewrite and policy
+     gate are the shared scripts, wired by tests/test-rootfs-apt-policy.sh).
 """
 
 import hashlib
@@ -32,6 +37,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build-debian-app-root.sh"
+A523_BUILDER = ROOT / "scripts" / "build-rootfs-a523.sh"
 REWRITER = ROOT / "scripts" / "rewrite-rootfs-apt-sources-https.sh"
 PROXY = "http://10.0.32.86:3142"
 SNAPSHOT = "20261010T000000Z"
@@ -170,6 +176,67 @@ def violations(harness: Harness, builder: Path) -> list[str]:
     return problems
 
 
+STUB_A523_MMDEBSTRAP = r"""#!/bin/sh
+printf '%s\n' "$@" >"$PF_TEST_ARGS"
+printf 'http_proxy=<%s>\n' "${http_proxy:-}" >"$PF_TEST_ENV"
+exit 97
+"""
+
+
+def a523_mirror(harness: Harness, builder: Path, proxied: bool) -> dict:
+    """Run an A523 builder up to its mmdebstrap call; report the mirror it handed over."""
+    harness.count += 1
+    n = harness.count
+    src = harness.dir / f"a523-src-{n}"
+    fix = harness.dir / f"a523-fix-{n}"
+    (src / "boards" / "tsp-s").mkdir(parents=True)
+    fix.mkdir()
+    for name in ("board.env", "fs-uuids.env"):
+        shutil.copy2(ROOT / "boards" / "tsp-s" / name, src / "boards" / "tsp-s" / name)
+    for name in ("snapshot-date.txt", "rootfs-packages-a523.txt", "rootfs-packages-a523-dev.txt"):
+        shutil.copy2(ROOT / name, src / name)
+    for name in ("apt_2.6.2_arm64.deb", "libapt-pkg6.0_2.6.2_arm64.deb"):
+        (fix / name).write_bytes(b"")
+    bin_dir = harness.dir / f"a523-bin-{n}"
+    bin_dir.mkdir()
+    (bin_dir / "mmdebstrap").write_text(STUB_A523_MMDEBSTRAP, encoding="utf-8")
+    (bin_dir / "mmdebstrap").chmod(0o755)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(harness.dir),
+           "SRC_DIR": str(src), "OUT_DIR": str(harness.dir / f"a523-out-{n}"),
+           "PF_APT_FIX_DIR": str(fix), "SOURCE_DATE_EPOCH": "1700000000",
+           "PF_TEST_ARGS": str(harness.dir / f"a523-args-{n}"),
+           "PF_TEST_ENV": str(harness.dir / f"a523-env-{n}")}
+    if proxied:
+        env["http_proxy"] = PROXY
+    result = subprocess.run(["bash", str(builder), "--variant", "release"],
+                            env=env, capture_output=True, text=True)
+    record = {"rc": result.returncode, "stderr": result.stderr, "mirror": None, "env": ""}
+    args = Path(env["PF_TEST_ARGS"])
+    if args.exists():
+        record["mirror"] = next((a for a in args.read_text(encoding="utf-8").splitlines()
+                                 if a.startswith(("http://", "https://"))), None)
+        record["env"] = Path(env["PF_TEST_ENV"]).read_text(encoding="utf-8").strip()
+    return record
+
+
+def a523_violations(harness: Harness, builder: Path) -> list[str]:
+    problems: list[str] = []
+    date = (ROOT / "snapshot-date.txt").read_text(encoding="utf-8").strip()
+    base = f"snapshot.debian.org/archive/debian/{date}/"
+    for mode, proxied, want in (("cache", True, f"http://{base}"), ("direct", False, f"https://{base}")):
+        record = a523_mirror(harness, builder, proxied)
+        if record["rc"] != 97 or record["mirror"] is None:
+            problems.append(f"a523/{mode}: the builder did not reach mmdebstrap: rc={record['rc']} {record['stderr'].strip()[-160:]!r}")
+            continue
+        if record["mirror"] != want:
+            what = "while proxied" if proxied else "without the cache"
+            problems.append(f"a523: mirror {what} is {record['mirror']!r}, want {want!r}")
+        want_env = f"http_proxy=<{PROXY}>" if proxied else "http_proxy=<>"
+        if record["env"] != want_env:
+            problems.append(f"a523/{mode}: mmdebstrap saw {record['env']!r}, want {want_env!r}")
+    return problems
+
+
 def mutate_once(text: str, old: str, new: str) -> str:
     if text.count(old) != 1:
         fail(f"mutation anchor not found exactly once: {old!r}")
@@ -215,6 +282,20 @@ try:
     if not any("differs with and without the cache" in problem for problem in caught):
         fail(f"negative control: the root-image identity check missed a transport-dependent root: {caught}")
     print("ok 4 - red controls: unconditional https, a missing rewrite, and a transport-dependent root are all caught")
+
+    # 5: the A523 rootfs builder follows the same transport rule.
+    problems = a523_violations(harness, A523_BUILDER)
+    if problems:
+        fail("the A523 rootfs builder breaks the transport contract: " + "; ".join(problems))
+    print("ok 5 - the A523 rootfs mirror is http through the cache and https direct")
+    a523_text = A523_BUILDER.read_text(encoding="utf-8")
+    old_a523 = harness.dir / "old-a523" / "build-rootfs-a523.sh"
+    old_a523.parent.mkdir()
+    old_a523.write_text(mutate_once(a523_text, "SNAPSHOT_SCHEME=http\n", "SNAPSHOT_SCHEME=https\n"), encoding="utf-8")
+    caught = a523_violations(harness, old_a523)
+    if not any("while proxied" in problem for problem in caught):
+        fail(f"negative control: the unconditional-https A523 builder was not caught while proxied: {caught}")
+    print("ok 6 - red control: the unconditional-https A523 builder is caught")
 finally:
     harness.close()
 
