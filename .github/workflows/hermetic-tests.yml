@@ -184,6 +184,7 @@ jobs:
             tests/test-session-compositor-contract.sh
             tests/test-shell-fonts.sh
             tests/test-steamlink-ffmpeg59-config-normalizer.sh
+            tests/test-steamlink-ffmpeg59-fetch-retry.py
             tests/test-steamlink-ffmpeg59-rootfs-closure.py
             tests/test-steamlink-ffmpeg59-runtime.sh
             tests/test-steamlink-first-run-install.sh

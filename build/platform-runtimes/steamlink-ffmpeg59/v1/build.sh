@@ -40,7 +40,13 @@ src_objects="${work}/source-objects"
 mkdir -p "${src_objects}"
 fetch_one() {
     local name=$1 size=$2 hash=$3
+    # snapshot.debian.org answers 503/504 for the first fetch of a cold object
+    # and 200 about a minute later (tsp-hqm1p.153). --retry covers exactly the
+    # transient class (timeouts and HTTP 408/429/500/502/503/504), so a missing
+    # object (404) or a wrong one still fails at once; each attempt rewrites the
+    # output file and the size and sha256 checks below still gate the result.
     curl --fail --location --proto '=https' --tlsv1.2 \
+        --connect-timeout 30 --max-time 300 --retry 5 --retry-delay 20 \
         --output "${src_objects}/${name}" "${FFMPEG_SNAPSHOT_BASE}/${name}"
     require_equal "${name} size" "$(stat -c%s "${src_objects}/${name}")" "${size}"
     require_equal "${name} sha256" "$(sha256sum "${src_objects}/${name}" | cut -d' ' -f1)" "${hash}"
