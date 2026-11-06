@@ -100,6 +100,12 @@ ARG PF_SOC=not-shipped
 #   rustup/crates   https only, never proxied
 #   ffmpeg59 source https snapshot objects, fetched direct (the proxy never carries https);
 #                   the cache cannot serve debian-security pool objects yet
+# The two live-archive toolchains (gpu-um-toolchain, poolsuite-toolchain) start from a bare
+# Ubuntu/Debian base, not this one, and make the same choice for their own apt sources: plain
+# http through the cache while http_proxy is set (the cache upgrades these hosts to https
+# upstream, and refuses CONNECT to the Ubuntu ones, so an https source cannot work through
+# it), https direct otherwise. Both persist https sources, so the layer is byte-identical
+# either way (tests/test-apt-cache-transport.py 6b runs both real RUN bodies in both modes).
 FROM ${PF_CONTAINER} AS pf-build-base
 SHELL ["/bin/sh", "-c", "for pf_env_name in $(env | sed 's/=.*//'); do case \"$pf_env_name\" in HOME|PATH|PWD|SHLVL|PF_*|SOURCE_DATE_EPOCH|APT_SNAPSHOT_DATE|CARGO_*|RUSTUP_*|RUST_VERSION|RUSTUP_VERSION|RUSTUP_INIT_SHA256|MESA_UBUNTU_SNAPSHOT|CCACHE_*|LLVM_CONFIG|DEBIAN_FRONTEND|http_proxy) ;; *) unset \"$pf_env_name\" ;; esac; done; exec /bin/sh -c \"$0\""]
 
@@ -655,20 +661,27 @@ set -eux
 # CVE-2026-109518 (bd tsp-hqm1p.143): the pinned noble base ships apt 2.8.3, which
 # overflows on a hostile redirect when Acquire::Retries > 0, over plain-http archive
 # sources. Bootstrap the fixed apt (noble-updates/-security) and the CA store over the
-# stock sources with retries off, assert it, then move every archive source to https
-# before anything else is fetched; the live archives have no snapshot to pin.
+# stock sources with retries off, assert it, then choose the transport before anything
+# else is fetched; the live archives have no snapshot to pin. The choice is the one
+# pf-build-base makes (see its apt-cache note): plain http to the NAS apt-cacher-ng while
+# BuildKit's predefined `http_proxy` build-arg is set -- the cache remaps these hosts to
+# https upstream and refuses CONNECT to them, so an https source cannot work through it --
+# and https direct otherwise. The sources are persisted as https either way (below), so
+# the layer is byte-identical with and without the cache.
+if [ -n "${http_proxy:-}" ]; then pf_apt_scheme=http; else pf_apt_scheme=https; fi
 apt-get -o Acquire::Retries=0 update
 DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=0 install -y --no-install-recommends \
   apt ca-certificates
 pf-assert-apt-fixed
-sed -i -e 's#http://archive.ubuntu.com/#https://archive.ubuntu.com/#g' \
-  -e 's#http://security.ubuntu.com/#https://security.ubuntu.com/#g' \
+sed -i -e "s#http://archive.ubuntu.com/#${pf_apt_scheme}://archive.ubuntu.com/#g" \
+  -e "s#http://security.ubuntu.com/#${pf_apt_scheme}://security.ubuntu.com/#g" \
   /etc/apt/sources.list.d/ubuntu.sources
-if grep -nE '^[^#]*http://' /etc/apt/sources.list.d/ubuntu.sources; then exit 1; fi
-# gpu-um-tsp's installer writes apt.llvm.org as plain http; serve it over https here
-# (upstream follow-up in gpu-um-tsp tracked on tsp-hqm1p.143).
-sed -i 's#http://apt.llvm.org/#https://apt.llvm.org/#' /usr/local/src/install-mesa-buildenv.sh
-grep -q 'https://apt.llvm.org/' /usr/local/src/install-mesa-buildenv.sh
+if [ "${pf_apt_scheme}" = https ] && grep -nE '^[^#]*http://' /etc/apt/sources.list.d/ubuntu.sources; then exit 1; fi
+# gpu-um-tsp's installer writes apt.llvm.org as plain http; follow the transport here
+# (upstream follow-up in gpu-um-tsp tracked on tsp-hqm1p.143). Its signing key is fetched
+# by the installer over https with wget, which ignores http_proxy, so that leg stays direct.
+sed -i "s#http://apt.llvm.org/#${pf_apt_scheme}://apt.llvm.org/#" /usr/local/src/install-mesa-buildenv.sh
+grep -q "${pf_apt_scheme}://apt.llvm.org/" /usr/local/src/install-mesa-buildenv.sh
 # Strip only the EXIT trap that deletes the downloaded LLVM key so the key
 # survives into this layer. A blanket `rm -f` deletion hollows conditional
 # bodies and makes the script invalid; match gpu-um-tsp's
@@ -679,14 +692,14 @@ sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
 sed -i 's/^deb \[/deb [arch=amd64 /' /etc/apt/sources.list.d/llvm-20.list
 printf '%s\n' \
   'Types: deb' \
-  'URIs: https://ports.ubuntu.com/ubuntu-ports' \
+  "URIs: ${pf_apt_scheme}://ports.ubuntu.com/ubuntu-ports" \
   'Suites: noble noble-updates noble-backports noble-security' \
   'Components: main universe restricted multiverse' \
   'Architectures: arm64' \
   'Snapshot: no' \
   'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
   >/etc/apt/sources.list.d/ubuntu-arm64.sources
-if grep -rnE '^[^#]*http://' /etc/apt/sources.list /etc/apt/sources.list.d; then exit 1; fi
+if [ "${pf_apt_scheme}" = https ] && grep -rnE '^[^#]*http://' /etc/apt/sources.list /etc/apt/sources.list.d; then exit 1; fi
 dpkg --add-architecture arm64
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -699,6 +712,14 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   libdrm-dev:arm64 \
   libexpat1-dev:arm64 \
   libvulkan-dev:arm64
+# Persist https whatever the install transport was: the cache hop is install-time only.
+sed -i -e 's#http://archive.ubuntu.com/#https://archive.ubuntu.com/#g' \
+  -e 's#http://security.ubuntu.com/#https://security.ubuntu.com/#g' \
+  -e 's#http://ports.ubuntu.com/#https://ports.ubuntu.com/#g' \
+  -e 's#http://apt.llvm.org/#https://apt.llvm.org/#g' \
+  /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu-arm64.sources \
+  /etc/apt/sources.list.d/llvm-20.list
+if grep -rnE '^[^#]*http://' /etc/apt/sources.list /etc/apt/sources.list.d; then exit 1; fi
 dpkg-query -W > /toolchain-packages.txt
 GPUUMTOOLCHAIN
 COPY --from=gpu-um-src docker/pkg-config/ /usr/local/bin/
@@ -1886,12 +1907,16 @@ RUN <<'POOLSUITETOOLCHAIN'
 set -eux
 # CVE-2026-109518 (bd tsp-hqm1p.143): the pinned bookworm-slim base ships apt 2.6.1 over
 # plain-http deb.debian.org. Bootstrap the fixed apt (bookworm-security) and the CA store
-# with retries off, assert it, then move the archive sources to https.
+# with retries off, assert it, then choose the transport as pf-build-base does: plain http
+# to the NAS apt-cacher-ng while BuildKit's predefined `http_proxy` build-arg is set (the
+# builder resolves no public names, and the cache upgrades the fetch to https upstream),
+# https direct otherwise. The sources are persisted as https either way (below).
+if [ -n "${http_proxy:-}" ]; then pf_apt_scheme=http; else pf_apt_scheme=https; fi
 apt-get -o Acquire::Retries=0 update
 apt-get -o Acquire::Retries=0 install -y --no-install-recommends apt ca-certificates
 pf-assert-apt-fixed
-sed -i 's#http://deb.debian.org/#https://deb.debian.org/#g' /etc/apt/sources.list.d/debian.sources
-if grep -nE '^[^#]*http://' /etc/apt/sources.list.d/debian.sources; then exit 1; fi
+sed -i "s#http://deb.debian.org/#${pf_apt_scheme}://deb.debian.org/#g" /etc/apt/sources.list.d/debian.sources
+if [ "${pf_apt_scheme}" = https ] && grep -nE '^[^#]*http://' /etc/apt/sources.list.d/debian.sources; then exit 1; fi
 apt-get update
 apt-get install -y --no-install-recommends \
   binutils-aarch64-linux-gnu \
@@ -1916,6 +1941,9 @@ rustup target add aarch64-unknown-linux-gnu
 rustc -V | grep -F "rustc ${RUST_VERSION}"
 cargo -V
 aarch64-linux-gnu-gcc --version
+# Persist https whatever the install transport was: the cache hop is install-time only.
+sed -i 's#http://deb.debian.org/#https://deb.debian.org/#g' /etc/apt/sources.list.d/debian.sources
+if grep -nE '^[^#]*http://' /etc/apt/sources.list.d/debian.sources; then exit 1; fi
 dpkg-query -W > /toolchain-packages.txt
 rm -f /tmp/rustup-init
 rm -rf /var/lib/apt/lists/*

@@ -15,10 +15,13 @@ PINNED_GPU_UM_SHA = "0c3b02bd4cfd98b2fcfbc6b6c1d0a948d60bda15"
 
 # CVE-2026-109518 (bd tsp-hqm1p.143): reviewed downstream deviations from the pinned
 # upstream recipe, kept until gpu-um-tsp carries them. apt.llvm.org and ports.ubuntu.com
-# are fetched over https; the live stage must carry exactly these, nothing looser.
-LLVM_HTTPS_REWRITE = "s#http://apt.llvm.org/#https://apt.llvm.org/#"
+# follow the stage's apt transport: ${pf_apt_scheme} is http to the NAS apt-cacher-ng while
+# http_proxy is set and https otherwise (the same selection as pf-build-base). The live
+# stage must carry exactly these, nothing looser; tests/test-apt-cache-transport.py
+# executes the selection in both modes.
+LLVM_HTTPS_REWRITE = "s#http://apt.llvm.org/#${pf_apt_scheme}://apt.llvm.org/#"
 REVIEWED_HTTPS_STANZA = {
-    "URIs: http://ports.ubuntu.com/ubuntu-ports": "URIs: https://ports.ubuntu.com/ubuntu-ports",
+    "URIs: http://ports.ubuntu.com/ubuntu-ports": "URIs: ${pf_apt_scheme}://ports.ubuntu.com/ubuntu-ports",
 }
 
 INSTALLED_REPRO_CONTRACT = {
@@ -120,10 +123,13 @@ def sed_strip(text: str) -> str:
 
 
 def arm64_stanza(text: str) -> list[str]:
-    blocks = [line for line in logical_lines(text) if ARM64_DESTINATION in line]
+    blocks = [line for line in logical_lines(text) if f">{ARM64_DESTINATION}" in line]
     if len(blocks) != 1:
         raise ValueError(f"expected one arm64 sources stanza, found {len(blocks)}")
-    values = re.findall(r"'([^']+)'", blocks[0])
+    values = [
+        single or double
+        for single, double in re.findall(r"'([^']+)'|\"([^\"]+)\"", blocks[0])
+    ]
     try:
         first = values.index("Types: deb")
         last = next(i for i in range(first, len(values)) if values[i].startswith("Signed-By:"))
@@ -203,7 +209,7 @@ def main() -> int:
             (
                 "apt.llvm.org https rewrite",
                 1,
-                actual.count(f"sed -i '{LLVM_HTTPS_REWRITE}' /usr/local/src/install-mesa-buildenv.sh"),
+                actual.count(f'sed -i "{LLVM_HTTPS_REWRITE}" /usr/local/src/install-mesa-buildenv.sh'),
             ),
             (
                 "upstream toolchain apt packages missing",
