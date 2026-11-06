@@ -216,7 +216,15 @@ def main() -> None:
     require(containerfile, "ARG APT_SNAPSHOT_DATE=20260601T000000Z", "IME harness Containerfile")
     require(containerfile, "ARG PF_IME_UID", "IME harness Containerfile")
     require(containerfile, "ARG PF_IME_GID", "IME harness Containerfile")
-    require(containerfile, "snapshot.debian.org/archive/debian/${APT_SNAPSHOT_DATE}/", "IME harness Containerfile")
+    # The apt policy (https snapshot, Retries 0, fail-closed bounded steps) lives in the
+    # script; tests/test-ime-apt-install.sh runs it hermetically.
+    installer = read("tests/ime-bus-security/install-tools.sh")
+    require(containerfile, '"${APT_SNAPSHOT_DATE}"', "IME harness Containerfile")
+    require(installer, 'base="https://snapshot.debian.org/archive"', "IME harness installer")
+    require(installer, "${base}/debian/${snapshot}/", "IME harness installer")
+    assert "http://" not in installer and "http://" not in containerfile, (
+        "IME harness must not name a plain-http endpoint"
+    )
     for package in (
         "dbus-bin",
         "dbus-daemon",
@@ -225,7 +233,7 @@ def main() -> None:
         "python3-gi",
         "xdg-dbus-proxy",
     ):
-        require(containerfile, package, "IME harness Containerfile")
+        require(installer, package, "IME harness installer")
 
     harness = read("tests/test-ime-bus-security.sh")
     for needle in (

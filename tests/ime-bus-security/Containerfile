@@ -1,8 +1,19 @@
+# The Debian slim base below has no CA store, and apt reaches snapshot.debian.org over https
+# with public-CA verification (a pf-public-ci runner cannot use the NAS apt cache, and the
+# policy forbids a plain-http internet leg). Take the Mozilla bundle from a digest-pinned image
+# pulled over the daemon's own verified https; it is not a package source.
+FROM docker.io/library/alpine:3.22@sha256:bfe7ceb9f09ec0566c48fb93356e45a47a00be5a1dd14fa5b909e7709c66b034 AS pf-ca-bundle
+
 FROM debian:bookworm-20260623-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
 
 ARG APT_SNAPSHOT_DATE=20260601T000000Z
 ARG PF_IME_UID
 ARG PF_IME_GID
+
+COPY --from=pf-ca-bundle /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+# The apt policy (https only, Retries 0 against CVE-2026-109518, fail-closed update, bounded
+# steps) lives in the script so tests/test-ime-apt-install.sh can run it hermetically.
+COPY install-tools.sh /usr/local/libexec/pf-ime-install-tools.sh
 
 RUN case "${PF_IME_UID}:${PF_IME_GID}" in \
         *[!0-9:]*|*::*|:*|*:) echo 'PF_IME_UID and PF_IME_GID must be numeric' >&2; exit 1 ;; \
@@ -11,27 +22,7 @@ RUN case "${PF_IME_UID}:${PF_IME_GID}" in \
     && printf 'pf-ime:x:%s:%s:PocketForge input method:/nonexistent:/usr/sbin/nologin\n' \
         "${PF_IME_UID}" "${PF_IME_GID}" >> /etc/passwd \
     && awk -F: '$1 == "nobody" && $3 == "65534" { found=1 } END { exit !found }' /etc/passwd \
-    && find /etc/apt/sources.list.d -mindepth 1 -delete \
-    && printf '%s\n' \
-        "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${APT_SNAPSHOT_DATE}/ bookworm main" \
-        "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${APT_SNAPSHOT_DATE}/ bookworm-updates main" \
-        "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${APT_SNAPSHOT_DATE}/ bookworm-backports main" \
-        "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${APT_SNAPSHOT_DATE}/ bookworm-security main" \
-        > /etc/apt/sources.list \
-    && printf '%s\n' \
-        'Acquire::Check-Valid-Until "false";' \
-        'Acquire::Retries "5";' \
-        > /etc/apt/apt.conf.d/99-pocketforge-snapshot \
-    && apt-get update -qq \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-        dbus-bin \
-        dbus-daemon \
-        python3 \
-        python3-dbus \
-        python3-gi \
-        xdg-dbus-proxy \
-    && apt-get clean \
-    && find /var/lib/apt/lists -mindepth 1 -delete \
+    && sh /usr/local/libexec/pf-ime-install-tools.sh "${APT_SNAPSHOT_DATE}" \
     && command -v dbus-daemon \
     && command -v dbus-send \
     && command -v xdg-dbus-proxy \

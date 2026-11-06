@@ -134,6 +134,7 @@ jobs:
             tests/test-gamescope-session-supervisor.sh
             tests/test-hermetic-test-dispatch.sh
             tests/test-hwprobe-variant-stage.sh
+            tests/test-ime-apt-install.sh
             tests/test-initrd-selfflash-watchdog.sh
             tests/test-initrd-selfflash-v2.sh
             tests/test-initrd-selfflash-v3.sh
