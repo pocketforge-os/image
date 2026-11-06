@@ -42,6 +42,8 @@ PLATFORM_BASE_ABI_SONAMES = {
     "libgcc_s.so.1",
     "libm.so.6",
     "libpthread.so.0",
+    # glibc's own DSO: imports GLIBC_PRIVATE from the libc it was built with.
+    "libresolv.so.2",
     "librt.so.1",
     "libstdc++.so.6",
 }
