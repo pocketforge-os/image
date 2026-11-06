@@ -92,7 +92,12 @@ ARG PF_SOC=not-shipped
 # the layer cache key and `docker history`, so cache keys and output bytes are identical
 # with and without the cache. The one thing it needs is a way past the allowlist below,
 # which unsets every variable it does not name: `http_proxy` is admitted (and only that
-# one; https_proxy/no_proxy/ALL_PROXY stay stripped, so every https fetch stays direct).
+# one; https_proxy/no_proxy/ALL_PROXY stay stripped, so curl/wget https fetches stay direct).
+# apt is the exception: it sends an https source through http_proxy as a CONNECT tunnel
+# (measured), which the cache lets through for the Debian hosts but cannot cache, so an
+# apt https source silently bypasses the cache (owned-image-build 42215946514, the Debian 13
+# app root). Every apt client therefore picks http while http_proxy is set, https otherwise
+# (tests/test-app-root-apt-transport.py for scripts/build-debian-app-root.sh).
 # Anything that fetches plain http from a non-apt RUN must bypass it (inventory, checked
 # by tests/test-apt-cache-transport.py):
 #   cts-bundle-v1   curl --noproxy '*' (artifact store over plain http)
@@ -2593,7 +2598,8 @@ case "${PF_SOC}" in
     install -m 0644 /work/gpu-km-tsp/mali_kbase.ko "/work/modules/lib/modules/${krel_a523}/extra/mali_kbase.ko"
     # Call the OWNED a523 rootfs builder unchanged (mirrors sdl/a133-rootfs: run the recipe
     # living with the source, don't re-inline it). SOURCE_DATE_EPOCH is honoured transparently;
-    # PF_APT_PROXY plumbing is a133-only today (tsp-1dl.14 unify carries it to a523).
+    # the apt cache reaches a523 as the RUN's http_proxy (the builder picks its mirror scheme
+    # from it, bd tsp-hqm1p.143); PF_APT_PROXY plumbing is a133-only today (tsp-1dl.14).
     SRC_DIR=/work/src OUT_DIR=/out CURSOR_THEME_DIR=/work/cursor-theme \
       PF_GPU_SHA="${PF_GPU_SHA:-}" PF_LAUNCHER_SHA="${PF_LAUNCHER_SHA:-}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \

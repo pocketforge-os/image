@@ -53,10 +53,21 @@ fi
 export SOURCE_DATE_EPOCH
 
 SNAPSHOT_DATE="$(cat "${SRC_DIR}/snapshot-date.txt")"
-# https: no proxy transport is plumbed into this builder (PF_APT_PROXY is
-# a133-only until tsp-1dl.14), so the fetch is always direct and has no
-# plain-http leg for a redirect to ride (CVE-2026-109518, bd tsp-hqm1p.143).
-SNAPSHOT_URL="https://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE}/"
+# The scheme follows the fetch transport, as in build-rootfs.sh. The rootfs RUN
+# carries BuildKit's predefined http_proxy (the NAS apt cache) and apt sends an
+# https source through it as an uncached CONNECT tunnel, so while http_proxy is
+# set the mirror is plain http (the cache remaps it upstream over verified
+# https) and without it https direct. The persisted snapshot source is rewritten
+# to https below in both modes, and the policy gate rejects any plain-http
+# source, so the rootfs bytes do not depend on the transport (CVE-2026-109518,
+# bd tsp-hqm1p.143; the app-root builder had the same unconditional-https
+# tunnel, AC5 run 42215946514).
+if [ -n "${http_proxy:-}" ]; then
+    SNAPSHOT_SCHEME=http
+else
+    SNAPSHOT_SCHEME=https
+fi
+SNAPSHOT_URL="${SNAPSHOT_SCHEME}://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE}/"
 
 WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}"' EXIT
 mkdir -p "${OUT_DIR}"
@@ -133,8 +144,9 @@ done
 "${SRC_DIR}/build/prepare-rootfs-build-logs.sh" "${EXT}"
 
 # mmdebstrap permanently persists every --aptopt into the target's
-# etc/apt/apt.conf.d/99mmdebstrap. No proxy transport is plumbed into this
-# builder today (PF_APT_PROXY is a133-only until tsp-1dl.14), so the strip is
+# etc/apt/apt.conf.d/99mmdebstrap. This builder passes no proxy --aptopt (the
+# cache arrives as the http_proxy environment, which mmdebstrap does not
+# persist; PF_APT_PROXY is a133-only until tsp-1dl.14), so the strip is
 # a no-op guard; the release policy is platform-independent and the gate
 # fails closed on any effective proxy key (parsed with apt-config) or private
 # build endpoint under etc/apt (bd tsp-mc9m.41.1002.5, build-6 regression),

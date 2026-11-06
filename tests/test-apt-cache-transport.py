@@ -15,7 +15,8 @@ on an allowlist, so without `http_proxy` on that allowlist the arg never reaches
 Contract under test (hermetic: no docker, no network; the BuildKit half of the cache-key
 claim is proved against a real builder in tests/test-build-stage-environment.sh):
   1. the sanitising SHELL is one text, and it admits `http_proxy` and NO other proxy
-     variable (https/all/ftp/no_proxy stay stripped, so the https fetches stay direct);
+     variable (https/all/ftp/no_proxy stay stripped, so curl/wget https fetches stay direct;
+     apt alone tunnels an https source through http_proxy, see tests/test-app-root-apt-transport.py);
      with the proxy on, the environment a RUN sees differs by exactly that variable;
   2. every stage that runs apt (directly or through a helper script) runs under that
      SHELL, and the set of apt stages is the reviewed set below;

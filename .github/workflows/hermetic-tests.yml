@@ -107,6 +107,7 @@ jobs:
             tests/test-apt-cache-transport.py
             tests/test-assert-apt-fixed.sh
             tests/test-artifact-intake-put.sh
+            tests/test-app-root-apt-transport.py
             tests/test-app-root-build-toolchain.sh
             tests/test-boot-animator.sh
             tests/test-browser-platform-defaults.sh

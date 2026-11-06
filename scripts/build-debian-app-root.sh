@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 distribution=
 architecture=
 snapshot=
@@ -101,7 +102,22 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 package_csv=$(printf '%s\n' "${packages[@]}" | LC_ALL=C sort -u | paste -sd, -)
-mirror="https://snapshot.debian.org/archive/debian/${snapshot}/"
+# Fetch transport (CVE-2026-109518, bd tsp-hqm1p.143). apt sends an https source through
+# $http_proxy as a CONNECT tunnel (measured: apt 2.8.4 -> "CONNECT snapshot.debian.org:443"),
+# which the NAS apt-cacher-ng lets through for the Debian hosts but cannot cache. An https
+# mirror here therefore bypassed the cache and every build paid snapshot.debian.org's
+# cold-object 504s directly (owned-image-build 42215946514: 18 min, then 9 packages failed).
+# With the cache (http_proxy set) the source is plain http to the cache, which fetches the same
+# immutable snapshot path upstream over verified https (nas/apt-cacher-ng/acng.conf); without
+# it the source is https direct. apt verifies every byte against the signed snapshot index in
+# both modes, and the persisted sources are rewritten to https below, so the root bytes do not
+# depend on the transport.
+if [[ -n "${http_proxy:-}" ]]; then
+    mirror_scheme=http
+else
+    mirror_scheme=https
+fi
+mirror="${mirror_scheme}://snapshot.debian.org/archive/debian/${snapshot}/"
 mmdebstrap \
     --mode="${mode}" \
     --variant=minbase \
@@ -115,6 +131,15 @@ mkdir "${stage}/rootfs"
 tar -xf "${stage}/rootfs.tar" -C "${stage}/rootfs" \
     --no-same-owner --exclude='./dev/*'
 mkdir -p "${stage}/rootfs/dev"
+# mmdebstrap wrote the mirror it was given into the root's apt sources: make them https in
+# both transports (idempotent on a tree that is already https), then refuse any plain-http
+# source so a cached build cannot ship the cache's scheme.
+"${script_dir}/rewrite-rootfs-apt-sources-https.sh" "${stage}/rootfs"
+if grep -rqE '^[^#]*(deb|URIs:).*http://' "${stage}/rootfs/etc/apt/sources.list" \
+        "${stage}/rootfs/etc/apt/sources.list.d" 2>/dev/null; then
+    echo "app-root build: a plain-http apt source survived in the root" >&2
+    exit 65
+fi
 os_release="${stage}/rootfs/etc/os-release"
 [[ -f "${os_release}" ]] || {
     echo "app-root build: mmdebstrap output has no /etc/os-release" >&2

@@ -9,6 +9,8 @@ on:
       - 'scripts/install-poolsuite.sh'
       - 'scripts/check-runtime-path-producers.py'
       - 'scripts/check-app-root-bind-targets.py'
+      - 'scripts/build-debian-app-root.sh'
+      - 'scripts/rewrite-rootfs-apt-sources-https.sh'
       - 'scripts/install-steamlink-first-run.sh'
       - 'build/app-policy-a133-open-v1.json'
       - 'build/app-policy-a133-open-g1-v1.json'
