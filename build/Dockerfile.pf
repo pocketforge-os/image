@@ -112,9 +112,21 @@ SHELL ["/bin/sh", "-c", "for pf_env_name in $(env | sed 's/=.*//'); do case \"$p
 # when installed) move, and the persisted base sources are untouched. Transport follows
 # the apt cache: plain http through it when http_proxy is set (it never carries https),
 # https direct otherwise; apt verifies every byte against the signed index either way and
-# the amd64 debs are also checked against the pins below. The arm64 apt pair is kept for
-# the rootfs builders' mmdebstrap (build-rootfs*.sh --include), checked against committed
-# SHA256 pins, so the device rootfs ships the fixed apt too.
+# the amd64 debs are also checked against the pins below. The temporary-list `apt-get
+# update` runs with --error-on=any (apt 2.6.1 has it): a plain update only warns and exits 0
+# when an index cannot be fetched, and the install then fails far from the cause with
+# "Version '2.6.2' for 'apt' was not found".
+#
+# Build-VM CI (pf-builder-vm, the golden's pf-insecure builder) cannot resolve public names
+# from a RUN: its builder has no [dns] block, so RUN gets BuildKit's public fallback
+# resolvers, and the guest egress fence allows DNS only to the gateway (automation
+# docs/OWNED-IMAGE-CI.md "Builder DNS", scripts/lib/pf_build_guest_fence.py). A build of
+# this stage there MUST pass the cache as `--build-arg http_proxy=...`: the cache is
+# reached by IP and resolves snapshot.debian.org itself.
+#
+# The arm64 apt pair is kept for the rootfs builders' mmdebstrap (build-rootfs*.sh
+# --include), checked against committed SHA256 pins, so the device rootfs ships the fixed
+# apt too.
 COPY --chmod=0555 --from=image-src scripts/assert-apt-fixed.sh /usr/local/bin/pf-assert-apt-fixed
 RUN <<'APTCVE2026109518'
 set -eux
@@ -129,7 +141,7 @@ mkdir -p "${pf_apt_tmp}/parts" "${pf_apt_tmp}/lists" "${pf_apt_tmp}/cache/archiv
 install -d -o _apt -g root -m 0700 "${pf_apt_tmp}/lists/partial" "${pf_apt_tmp}/cache/archives/partial"
 set -- -o Dir::Etc::SourceList="${pf_apt_tmp}/sources.list" -o Dir::Etc::SourceParts="${pf_apt_tmp}/parts" \
   -o Dir::State::Lists="${pf_apt_tmp}/lists" -o Dir::Cache="${pf_apt_tmp}/cache"
-apt-get -o Acquire::Retries=0 "$@" update
+apt-get -o Acquire::Retries=0 "$@" update --error-on=any
 printf '%s\n' \
   '796fc7fe18866f5b1fb27a115d7339e549d71b7ddbc15b8d6fc4226c243e96d1  apt_2.6.2_amd64.deb' \
   '023a7017b75295fc7037c7a4352847f9516a36a82cc5e1650d6832d238860913  libapt-pkg6.0_2.6.2_amd64.deb' \

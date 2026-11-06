@@ -345,8 +345,10 @@ def section_asset_audit(work):
         "payload workflow does not use the runner's approved insecure-registry builder",
     )
     require(
-        '--build-arg PF_APT_PROXY=http://10.0.32.86:3142' in payload_workflow,
-        "payload workflow does not pass the fleet apt-cacher-ng endpoint",
+        '  PF_APT_CACHE: http://10.0.32.86:3142\n' in payload_workflow
+        and '--build-arg PF_APT_PROXY="$PF_APT_CACHE"' in payload_workflow
+        and '--build-arg http_proxy="$PF_APT_CACHE"' in payload_workflow,
+        "payload workflow does not pass the fleet apt-cacher-ng endpoint to both builds",
     )
     require(
         'GITHUB_EVENT_NAME" = pull_request' in payload_workflow
