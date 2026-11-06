@@ -13,9 +13,21 @@
     "libgcc_s.so.1",
     "libm.so.6",
     "libpthread.so.0",
+    "libresolv.so.2",
     "librt.so.1",
     "libstdc++.so.6"
   ],
+  "base_symbol_version_floor": {
+    "ld-linux-aarch64.so.1": {"GLIBC": "2.36"},
+    "libc.so.6": {"GLIBC": "2.36"},
+    "libdl.so.2": {"GLIBC": "2.36"},
+    "libgcc_s.so.1": {"GCC": "12.0.0"},
+    "libm.so.6": {"GLIBC": "2.36"},
+    "libpthread.so.0": {"GLIBC": "2.36"},
+    "libresolv.so.2": {"GLIBC": "2.36"},
+    "librt.so.1": {"GLIBC": "2.36"},
+    "libstdc++.so.6": {"CXXABI": "1.3.13", "GLIBCXX": "3.4.30"}
+  },
   "seeds": [
     "usr/local/lib/gbm/dri_gbm.so",
     "usr/local/lib/dri/libdril_dri.so",
@@ -70,11 +82,11 @@
     "usr/lib/aarch64-linux-gnu/libxcb.so.1",
     "usr/lib/aarch64-linux-gnu/libxkbcommon-x11.so.0",
     "usr/lib/aarch64-linux-gnu/libz.so.1",
-    "usr/lib/aarch64-linux-gnu/libzstd.so.1",
-    "usr/lib/aarch64-linux-gnu/libresolv.so.2"
+    "usr/lib/aarch64-linux-gnu/libzstd.so.1"
   ],
   "data": [
     "usr/local/lib/dri/zink_dri.so",
+    "usr/local/share/drirc.d/00-mesa-defaults.conf",
     "usr/local/share/drirc.d/10-pocketforge-zink.conf",
     "usr/share/glvnd/egl_vendor.d/50_mesa.json",
     "usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"

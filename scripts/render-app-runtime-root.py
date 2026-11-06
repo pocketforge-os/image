@@ -42,6 +42,8 @@ PLATFORM_BASE_ABI_SONAMES = {
     "libgcc_s.so.1",
     "libm.so.6",
     "libpthread.so.0",
+    # glibc's own DSO: imports GLIBC_PRIVATE from the libc it was built with.
+    "libresolv.so.2",
     "librt.so.1",
     "libstdc++.so.6",
 }
@@ -73,6 +75,9 @@ PLATFORM_DISCOVERY_PATHS = {
 
 PLATFORM_REQUIRED_DATA = {
     "usr/local/lib/dri/zink_dri.so",
+    # Mesa's compiled DATADIR is /usr/local/share; DRIRC_CONFIGDIR replaces
+    # that whole search, so the platform copy must hold the complete host set.
+    "usr/local/share/drirc.d/00-mesa-defaults.conf",
     "usr/local/share/drirc.d/10-pocketforge-zink.conf",
     *PLATFORM_DISCOVERY_PATHS,
 }
@@ -645,6 +650,10 @@ def render(
                 'Environment="__EGL_VENDOR_LIBRARY_FILENAMES=/run/pocketforge/platform-runtime/usr/share/glvnd/egl_vendor.d/50_mesa.json"',
                 'Environment="LIBGL_DRIVERS_PATH=/run/pocketforge/platform-runtime/usr/local/lib/dri"',
                 'Environment="GBM_BACKENDS_PATH=/run/pocketforge/platform-runtime/usr/local/lib/gbm"',
+                # Mesa parses DATADIR/drirc.d (/usr/local/share/drirc.d), which
+                # in this namespace is the app root. The Zink loader policy
+                # (powervr -> zink) lives in the platform runtime instead.
+                'Environment="DRIRC_CONFIGDIR=/run/pocketforge/platform-runtime/usr/local/share/drirc.d"',
             ]
         )
     lines.append(f"# policy schema={policy.get('schema_version')} manifest_sha256={policy.get('manifest_sha256')}")
