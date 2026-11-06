@@ -87,8 +87,8 @@ fixture="$repo/tests/fixtures/alsa/sun4i-codec-controls.kernel-sunxi-7.x.tsv"
 
 grep -Fqx 'DAC Playback Volume=38' "$defaults" \
     || fail "7.x defaults do not start the shared DAC at the 60 percent speaker preference"
-grep -Fqx 'Headphone Playback Volume=0' "$defaults" \
-    || fail "7.x defaults do not pin the driver-reference headphone gain"
+grep -Fqx 'Headphone Playback Volume=7' "$defaults" \
+    || fail "7.x defaults do not pin the headphone volume to 7 (0 dB, inverted control)"
 if grep -Eq '^(Line Out|DAC Playback Switch|DAC Reversed)' "$defaults"; then
     fail "7.x defaults still name obsolete H616-route controls"
 fi
