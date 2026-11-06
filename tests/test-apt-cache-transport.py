@@ -29,7 +29,21 @@ claim is proved against a real builder in tests/test-build-stage-environment.sh)
      the proxy: it stays https-only and never takes the plain-http cache path. The live
      cache cannot serve debian-security snapshot pool objects (504/500), so routing this
      fetch through it would turn a working build into a failing one; it stays a known
-     outage-vulnerable direct fetch until the cache can carry it.
+     outage-vulnerable direct fetch until the cache can carry it;
+  6. CVE-2026-109518 (bd tsp-hqm1p.143): every stage whose base ships a vulnerable apt
+     (pf-build-base, gpu-um-toolchain, poolsuite-toolchain) runs every apt before its
+     pf-assert-apt-fixed with Acquire::Retries=0, and the two live-archive toolchains move
+     their sources to https before any later fetch. pf-build-base's self-upgrade source
+     takes the transport the cache dictates, run through the real SHELL: plain http with
+     the proxy (the cache never carries https), https without it;
+  7. the temporary-list `apt-get update` fails closed: run for real (stubbed apt-get and
+     helpers) under the real SHELL, a failed index fetch stops the RUN at the update with
+     no install, whereas the same body without --error-on=any (apt 2.6.1 exits 0 on a
+     failed fetch, measured in the pinned build image) runs on into the install;
+  8. every CI workflow that builds build/Dockerfile.pf hands it the cache as the predefined
+     http_proxy build-arg: a RUN on a build-VM runner's pf-insecure builder cannot resolve
+     public names (its DNS is fenced to the guest gateway), so the https-direct self-upgrade
+     source cannot work there (payload run 42154043539).
 """
 
 import json
@@ -49,6 +63,7 @@ PROXY = "http://10.0.32.86:3142"
 # The stages that run apt, reviewed against Dockerfile.pf. A new apt stage fails here until
 # a reviewer has confirmed it runs under the proxy-admitting SHELL and belongs on the list.
 EXPECTED_APT_STAGES = {
+    "pf-build-base",  # CVE-2026-109518 apt self-upgrade, frozen debian-security snapshot
     "gpu-um-toolchain",  # Ubuntu 24.04 live archive + apt.llvm.org (no snapshot exists)
     "gpu-um-build",  # frozen Debian snapshot (arm64 cross sysroot)
     "sdl",  # prepare-sdl-kmsdrm-sysroot -> apt-get, frozen snapshot
@@ -212,8 +227,9 @@ plain_http = 0
 for stage_name, line in logical:
     for match in re.finditer(r"http://[^\s'\"]+", line):
         url = match.group(0)
-        if url.startswith("http://ports.ubuntu.com/") and "URIs:" in line:
-            continue  # an apt source line: apt, the proxied tool
+        host = re.match(r"http://([^/\s'\"#]+)/", url)
+        if re.match(r"^sed\s", line) and host and f"https://{host.group(1)}/" in line:
+            continue  # a reviewed http -> https apt source rewrite (CVE-2026-109518)
         if url.startswith("http://127.0.0.1:") and stage_name == "debuginfo":
             plain_http += 1
             if "env -u http_proxy" not in line:
@@ -271,6 +287,186 @@ if direct_call != proxied_call:
 if "--proto =https" not in direct_call or "https://snapshot.debian.org/" not in direct_call:
     fail(f"the ffmpeg59 source fetch must stay https-only: {direct_call}")
 print("ok 5 - the ffmpeg59 source fetch is identical with and without the proxy (https, direct)")
+
+# ---------------------------------------------------------------- 6. CVE-2026-109518
+RETRY_SENSITIVE = ("pf-build-base", "gpu-um-toolchain", "poolsuite-toolchain")
+for name in RETRY_SENSITIVE:
+    lines = [line for stage, line in logical if stage == name]
+    asserts = [i for i, line in enumerate(lines) if line == "pf-assert-apt-fixed"]
+    if not asserts:
+        fail(f"{name}: no pf-assert-apt-fixed gate after its apt self-upgrade")
+    before = lines[: asserts[0]]
+    apt_runs = [line for line in before if re.search(r"(?:^|[\s;&|(])apt-get\s", line)]
+    if not apt_runs:
+        fail(f"{name}: no apt self-upgrade before pf-assert-apt-fixed")
+    for line in apt_runs:
+        if "-o Acquire::Retries=0" not in line:
+            fail(f"{name}: apt runs before the fix is asserted with retries on: {line[:120]}")
+    if name == "pf-build-base":
+        continue
+    after = lines[asserts[0] + 1 :]
+    first_apt = next((i for i, line in enumerate(after) if re.search(r"\bapt-get\b", line)), None)
+    rewrite = next((i for i, line in enumerate(after) if re.match(r"^sed\s", line) and "https://" in line), None)
+    if rewrite is None or first_apt is None or rewrite > first_apt:
+        fail(f"{name}: the archive sources must move to https before the next apt fetch")
+block = "\n".join(code_lines(STAGES["gpu-um-toolchain"]["block"]))
+if "s#http://apt.llvm.org/#https://apt.llvm.org/#" not in block:
+    fail("gpu-um-toolchain: apt.llvm.org must be rewritten to https in install-mesa-buildenv.sh")
+if "URIs: https://ports.ubuntu.com/ubuntu-ports" not in block:
+    fail("gpu-um-toolchain: the arm64 ports source must be https")
+
+base_block = STAGES["pf-build-base"]["block"]
+heredoc = re.search(r"^RUN <<'APTCVE2026109518'\n(.*?)^APTCVE2026109518$", base_block, re.M | re.S)
+if not heredoc:
+    fail("pf-build-base: the CVE-2026-109518 self-upgrade RUN is missing")
+body = heredoc.group(1)
+if re.search(r">\s*/etc/apt/sources\.list|/etc/apt/sources\.list\.d/", body):
+    fail("pf-build-base: the self-upgrade must not edit the persisted base sources")
+selector = re.search(r"^if \[ -n \"\$\{http_proxy:-\}\" \];.*?\n(printf .*?sources\.list\"\n)", body, re.M | re.S)
+if not selector:
+    fail("pf-build-base: the self-upgrade source must select its scheme from http_proxy")
+with tempfile.TemporaryDirectory(prefix="apt-cve-scheme.") as tmp:
+    script = f"pf_apt_tmp={tmp}\n{selector.group(0)}cat {tmp}/sources.list\n"
+
+    def source_line(extra_env: dict[str, str]) -> str:
+        env = {"PATH": "/usr/bin:/bin", "HOME": "/root", **extra_env}
+        result = subprocess.run(["/bin/sh", "-c", WRAPPER, script], env=env, check=True,
+                                capture_output=True, text=True)
+        return result.stdout.strip()
+
+    snapshot = "snapshot.debian.org/archive/debian-security/20261105T000000Z/ bookworm-security main"
+    if source_line({}) != f"deb [arch=amd64,arm64 check-valid-until=no] https://{snapshot}":
+        fail(f"pf-build-base: direct self-upgrade source is not https: {source_line({})}")
+    if source_line({"http_proxy": PROXY}) != f"deb [arch=amd64,arm64 check-valid-until=no] http://{snapshot}":
+        fail("pf-build-base: cache-mode self-upgrade source is not plain http through the cache")
+print("ok 6 - vulnerable-apt stages self-upgrade with retries off; transport follows the cache")
+
+# ---------------------------------------------------------------- 7. update fails closed
+update_calls = re.findall(r'^apt-get -o Acquire::Retries=0 "\$@" update([^\n]*)$', body, re.M)
+if len(update_calls) != 1 or "--error-on=any" not in update_calls[0].split():
+    fail("pf-build-base: the temporary-list `apt-get update` must run with --error-on=any "
+         f"(a failed index fetch exits 0 otherwise): {update_calls!r}")
+
+FAKE_APT_GET = r"""#!/bin/sh
+# Stand-in for apt 2.6.1, modelled on what that apt does offline (measured in the pinned
+# build image): `update` with a failed fetch warns and exits 0, and exits 100 with
+# --error-on=any.
+cmd=''; error_on=0; dl=0; cache=''; list=''
+for a in "$@"; do
+    case "$a" in
+        update|install|download) cmd=$a ;;
+        --error-on=any) error_on=1 ;;
+        --download-only) dl=1 ;;
+        Dir::Cache=*) cache=${a#Dir::Cache=} ;;
+        Dir::Etc::SourceList=*) list=${a#Dir::Etc::SourceList=} ;;
+    esac
+done
+printf 'apt-get %s error_on=%s download_only=%s http_proxy=<%s>\n' "$cmd" "$error_on" "$dl" "${http_proxy:-}" >>"$PF_FAKE_LOG"
+case "$cmd" in
+    update)
+        printf 'sources %s\n' "$(cat "$list")" >>"$PF_FAKE_LOG"
+        printf '%s\n' "$(dirname "$list")" >>"$PF_FAKE_LOG.tmpdirs"
+        if [ -n "${PF_FAKE_FETCH_FAIL:-}" ]; then
+            echo "W: Failed to fetch InRelease  Temporary failure resolving 'snapshot.debian.org'" >&2
+            [ "$error_on" = 1 ] || exit 0
+            echo "E: Some index files failed to download. They have been ignored, or old ones used instead." >&2
+            exit 100
+        fi
+        ;;
+    install)
+        if [ "$dl" = 1 ]; then
+            : >"$cache/archives/apt_2.6.2_amd64.deb"
+            : >"$cache/archives/libapt-pkg6.0_2.6.2_amd64.deb"
+        fi
+        ;;
+    download)
+        : >apt_2.6.2_arm64.deb
+        : >libapt-pkg6.0_2.6.2_arm64.deb
+        ;;
+esac
+"""
+FAKE_INSTALL = r"""#!/bin/sh
+# `install -d [-o u] [-g g] [-m mode] DIR...` without needing root or the _apt user.
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -d) ;;
+        -o|-g|-m) shift ;;
+        *) mkdir -p "$1" ;;
+    esac
+    shift
+done
+"""
+FAKE_NOTE = '#!/bin/sh\nprintf "%s\\n" "{name}" >>"$PF_FAKE_LOG"\n'
+
+
+def run_self_upgrade(script_body: str, extra_env: dict[str, str]) -> tuple[int, list[str]]:
+    """Run the RUN body for real under the SHELL wrapper, with apt and root-only helpers stubbed."""
+    with tempfile.TemporaryDirectory(prefix="apt-cve-run.") as tmp:
+        tmp_path = Path(tmp)
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        stubs = {"apt-get": FAKE_APT_GET, "install": FAKE_INSTALL, "dpkg-query": "#!/bin/sh\nexit 1\n"}
+        for name in ("chown", "sha256sum", "pf-assert-apt-fixed"):
+            stubs[name] = FAKE_NOTE.format(name=name)
+        for name, text in stubs.items():
+            (bin_dir / name).write_text(text, encoding="utf-8")
+            (bin_dir / name).chmod(0o755)
+        log = tmp_path / "calls.log"
+        log.write_text("", encoding="utf-8")
+        env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": "/root", "PF_FAKE_LOG": str(log), **extra_env}
+        script = script_body.replace("/opt/pocketforge/apt-cve-2026-109518", str(tmp_path / "apt-fix"))
+        result = subprocess.run(["/bin/sh", "-c", WRAPPER, script], env=env, capture_output=True, text=True)
+        leftovers = Path(f"{log}.tmpdirs")
+        if leftovers.exists():  # the body's own mktemp -d, left behind when the RUN fails
+            for leftover in leftovers.read_text(encoding="utf-8").split():
+                subprocess.run(["rm", "-rf", "--", leftover], check=True)
+        return result.returncode, log.read_text(encoding="utf-8").splitlines()
+
+
+def apt_commands(lines: list[str]) -> list[str]:
+    return [line.split()[1] + (" --download-only" if "download_only=1" in line else "")
+            for line in lines if line.startswith("apt-get ")]
+
+
+fetch_fail = {"http_proxy": PROXY, "PF_FAKE_FETCH_FAIL": "1"}
+rc, calls = run_self_upgrade(body, fetch_fail)
+if rc == 0 or apt_commands(calls) != ["update"]:
+    fail(f"pf-build-base: a failed index fetch must stop the RUN at the update (rc={rc}): {calls}")
+if "error_on=1" not in calls[0]:
+    fail(f"pf-build-base: the update ran without --error-on=any: {calls[0]}")
+rc, calls = run_self_upgrade(body.replace(" update --error-on=any", " update"), fetch_fail)
+if "install" not in apt_commands(calls):
+    fail("negative control: without --error-on=any the failed fetch must run on into the install; "
+         "the fail-closed check above no longer discriminates")
+rc, calls = run_self_upgrade(body, {"http_proxy": PROXY})
+if rc != 0 or apt_commands(calls) != ["update", "install --download-only", "install", "download"]:
+    fail(f"pf-build-base: the cache-mode self-upgrade did not run to the end (rc={rc}): {calls}")
+if "sources deb [arch=amd64,arm64 check-valid-until=no] http://snapshot.debian.org/" not in "\n".join(calls) \
+        or any(f"http_proxy=<{PROXY}>" not in line for line in calls if line.startswith("apt-get ")):
+    fail(f"pf-build-base: cache mode must read the snapshot over http with http_proxy set: {calls}")
+rc, calls = run_self_upgrade(body, {})
+if rc != 0 or "sources deb [arch=amd64,arm64 check-valid-until=no] https://snapshot.debian.org/" not in "\n".join(calls) \
+        or any("http_proxy=<>" not in line for line in calls if line.startswith("apt-get ")):
+    fail(f"pf-build-base: with no cache the self-upgrade must read the snapshot over https direct: {calls}")
+print("ok 7 - a failed index fetch stops the self-upgrade at the update (red control proves it)")
+
+# ---------------------------------------------------------------- 8. CI hands the cache over
+builds = 0
+for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+    text = workflow.read_text(encoding="utf-8")
+    for line in re.sub(r"\\\n\s*", " ", text).splitlines():
+        if "buildx build" not in line or "build/Dockerfile.pf" not in line:
+            continue
+        builds += 1
+        if '--build-arg http_proxy="$PF_APT_CACHE"' not in line:
+            fail(f'{workflow.name}: a Dockerfile.pf build must pass --build-arg http_proxy="$PF_APT_CACHE" '
+                 "(a build-VM RUN cannot resolve snapshot.debian.org itself)")
+        if not re.search(r"(?m)^  PF_APT_CACHE: http://\d+\.\d+\.\d+\.\d+:\d+$", text):
+            fail(f"{workflow.name}: PF_APT_CACHE must be a plain-http IP:port cache endpoint "
+                 "(the CI->NAS hop; the cache never carries https)")
+if builds < 1:
+    fail("no workflow builds build/Dockerfile.pf any more; refresh the CI routing inventory")
+print(f"ok 8 - all {builds} CI Dockerfile.pf build(s) hand the apt cache over as http_proxy")
 
 print("PASS: every apt-running stage can use the transport cache, transport only")
 sys.exit(0)

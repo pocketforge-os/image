@@ -105,6 +105,7 @@ jobs:
             tests/test-a-cts-worker-terminal.sh
             tests/test-alsa-config.sh
             tests/test-apt-cache-transport.py
+            tests/test-assert-apt-fixed.sh
             tests/test-artifact-intake-put.sh
             tests/test-app-root-build-toolchain.sh
             tests/test-boot-animator.sh
@@ -133,6 +134,7 @@ jobs:
             tests/test-gamescope-session-supervisor.sh
             tests/test-hermetic-test-dispatch.sh
             tests/test-hwprobe-variant-stage.sh
+            tests/test-ime-apt-install.sh
             tests/test-initrd-selfflash-watchdog.sh
             tests/test-initrd-selfflash-v2.sh
             tests/test-initrd-selfflash-v3.sh

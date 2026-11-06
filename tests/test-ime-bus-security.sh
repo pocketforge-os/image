@@ -59,7 +59,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 view_root=$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-ime-view.XXXXXX")
 
-docker build \
+# The image build reaches snapshot.debian.org with no cache in front of it (a pf-public-ci
+# runner is fenced from the NAS). install-tools.sh bounds every apt step; this bounds the
+# whole build, so a stall (a hung pull included) fails here with a reason instead of
+# holding the job until its 30-minute timeout cancels it with no output.
+build_timeout=${PF_IME_BUILD_TIMEOUT:-1200}
+build_status=0
+timeout --kill-after=30 "${build_timeout}" docker build \
     --build-arg "APT_SNAPSHOT_DATE=${snapshot}" \
     --build-arg "PF_IME_UID=${runner_uid}" \
     --build-arg "PF_IME_GID=${runner_gid}" \
@@ -68,7 +74,11 @@ docker build \
     --tag "${image_ref}" \
     --file "${container_dir}/Containerfile" \
     "${container_dir}" \
-    || fail "IME harness image build failed"
+    || build_status=$?
+if [ "${build_status}" -eq 124 ] || [ "${build_status}" -eq 137 ]; then
+    fail "IME harness image build exceeded ${build_timeout}s (stalled snapshot.debian.org fetch or image pull)"
+fi
+[ "${build_status}" -eq 0 ] || fail "IME harness image build failed"
 image_built=1
 
 docker run --rm \

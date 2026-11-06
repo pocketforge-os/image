@@ -26,16 +26,25 @@
 #     it so the build fails closed naming the offending file.
 #   * Both rootfs builders run strip-then-verify on the extracted tree before
 #     mke2fs, so no ext4 can be assembled with the proxy persisted.
+#   * CVE-2026-109518 (bd tsp-hqm1p.143): the gate also rejects any plain-http
+#     apt source and any installed apt below its line's fix (a dpkg database
+#     carrying the snapshot's apt 2.6.1, a stale libapt-pkg, or none at all).
+#     scripts/rewrite-rootfs-apt-sources-https.sh turns the cache-mode
+#     http://snapshot.debian.org/ source into the https one a direct build
+#     persists, is idempotent, and launders no other plain-http source; both
+#     builders run it before strip-then-verify.
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 strip="${repo_dir}/scripts/strip-rootfs-apt-proxy.sh"
 verify="${repo_dir}/scripts/verify-rootfs-apt-policy.sh"
+rewrite="${repo_dir}/scripts/rewrite-rootfs-apt-sources-https.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -f "${strip}" ] || fail "missing ${strip} (base commit has no proxy-strip step)"
 [ -f "${verify}" ] || fail "missing ${verify} (base commit has no apt policy gate)"
+[ -x "${rewrite}" ] || fail "missing ${rewrite} (base commit has no https source rewrite)"
 command -v apt-config >/dev/null 2>&1 \
     || fail "this test requires apt-config (apt) on the host"
 
@@ -62,8 +71,19 @@ APT::Sandbox::User "root";
 Acquire::Retries "5";
 Acquire::http::Proxy "http://10.0.32.86:3142";
 EOF
-    echo 'deb http://snapshot.debian.org/archive/debian/20260601T000000Z/ bookworm main' \
-        > "${dir}/etc/apt/sources.list"
+    echo "${SNAPSHOT_SOURCE}" > "${dir}/etc/apt/sources.list"
+    make_dpkg_db "${dir}" 2.6.2 2.6.2
+}
+
+SNAPSHOT_SOURCE='deb https://snapshot.debian.org/archive/debian/20260601T000000Z/ bookworm main'
+
+# make_dpkg_db ROOTFS APT_VERSION LIBAPT_VERSION -- an arm64 rootfs dpkg
+# database, as mmdebstrap leaves it, carrying just apt and its library.
+make_dpkg_db() {
+    local dir="$1"
+    mkdir -p "${dir}/var/lib/dpkg/info" "${dir}/var/lib/dpkg/updates"
+    printf 'Package: %s\nStatus: install ok installed\nArchitecture: arm64\nVersion: %s\n\n' \
+        apt "$2" libapt-pkg6.0 "$3" > "${dir}/var/lib/dpkg/status"
 }
 
 # Same mechanism the gate uses: point apt-config's Dir at a tree so it reads
@@ -147,9 +167,10 @@ for keep in 'Acquire::Check-Valid-Until "false";' 'APT::Sandbox::User "root";' '
     grep -Fxq "${keep}" "${conf}" \
         || fail "strip removed sibling build-hardening aptopt: ${keep}"
 done
-grep -Fxq 'deb http://snapshot.debian.org/archive/debian/20260601T000000Z/ bookworm main' \
-    "${rootfs}/etc/apt/sources.list" \
+grep -Fxq "${SNAPSHOT_SOURCE}" "${rootfs}/etc/apt/sources.list" \
     || fail "strip altered the pinned snapshot.debian.org source"
+grep -Fq 'apt_cve_2026_109518=PASS version=2.6.2 min=2.6.2 reason=fixed' "${scratch}/p1.out" \
+    || fail "gate does not report the CVE-2026-109518 apt PASS (got: $(cat "${scratch}/p1.out"))"
 before="$(sha256sum "${conf}" | cut -d' ' -f1)"
 "${strip}" "${rootfs}" "${PERSISTED_LINE}"
 after="$(sha256sum "${conf}" | cut -d' ' -f1)"
@@ -336,6 +357,101 @@ if "${verify}" "${rootfs8}" >"${scratch}/n7b.out" 2>"${scratch}/n7b.err"; then
 fi
 
 # ---------------------------------------------------------------------------
+# Negative control 8: plain-http apt sources (CVE-2026-109518). The cache-mode
+# snapshot source left unrewritten, a deb822 drop-in and a mirror+http URI
+# must each fail the gate naming the file; a commented-out http line and an
+# https source must not.
+# ---------------------------------------------------------------------------
+rootfs9="${scratch}/rootfs-http-source"
+make_proxy_rootfs "${rootfs9}"
+"${strip}" "${rootfs9}" "${PERSISTED_LINE}"
+printf '%s\n' '# deb http://deb.debian.org/debian bookworm main' "${SNAPSHOT_SOURCE}" \
+    > "${rootfs9}/etc/apt/sources.list"
+"${verify}" "${rootfs9}" >"${scratch}/p8.out" 2>"${scratch}/p8.err" \
+    || fail "gate rejected a commented-out http line beside the https source: $(cat "${scratch}/p8.err")"
+echo 'deb http://snapshot.debian.org/archive/debian/20260601T000000Z/ bookworm main' \
+    > "${rootfs9}/etc/apt/sources.list"
+if "${verify}" "${rootfs9}" >"${scratch}/n8.out" 2>"${scratch}/n8.err"; then
+    fail "gate accepted a plain-http snapshot source"
+fi
+for needle in 'plain-http apt source' 'etc/apt/sources.list:1:'; do
+    grep -Fq "${needle}" "${scratch}/n8.err" \
+        || fail "gate stderr does not name ${needle} (got: $(cat "${scratch}/n8.err"))"
+done
+echo "${SNAPSHOT_SOURCE}" > "${rootfs9}/etc/apt/sources.list"
+printf '%s\n' 'Types: deb' 'URIs: http://deb.debian.org/debian' 'Suites: bookworm' 'Components: main' \
+    > "${rootfs9}/etc/apt/sources.list.d/debian.sources"
+if "${verify}" "${rootfs9}" >"${scratch}/n8b.out" 2>"${scratch}/n8b.err"; then
+    fail "gate accepted a plain-http deb822 source"
+fi
+grep -Fq 'sources.list.d/debian.sources:2:' "${scratch}/n8b.err" \
+    || fail "gate stderr does not name the deb822 source (got: $(cat "${scratch}/n8b.err"))"
+echo 'deb mirror+http://deb.debian.org/debian bookworm main' \
+    > "${rootfs9}/etc/apt/sources.list.d/debian.sources"
+if "${verify}" "${rootfs9}" >"${scratch}/n8c.out" 2>"${scratch}/n8c.err"; then
+    fail "gate accepted a mirror+http source"
+fi
+
+# ---------------------------------------------------------------------------
+# Negative control 9: the installed apt (CVE-2026-109518). The snapshot's
+# vulnerable 2.6.1, a fixed apt over a stale libapt-pkg6.0, and a rootfs with
+# no dpkg database at all must each fail the gate with the assert's reason.
+# ---------------------------------------------------------------------------
+rootfs10="${scratch}/rootfs-apt-version"
+make_proxy_rootfs "${rootfs10}"
+"${strip}" "${rootfs10}" "${PERSISTED_LINE}"
+make_dpkg_db "${rootfs10}" 2.6.1 2.6.1
+if "${verify}" "${rootfs10}" >"${scratch}/n9.out" 2>"${scratch}/n9.err"; then
+    fail "gate accepted the snapshot's vulnerable apt 2.6.1"
+fi
+grep -Fq 'apt_cve_2026_109518=FAIL version=2.6.1 min=2.6.2 reason=below-minimum' "${scratch}/n9.err" \
+    || fail "gate stderr does not carry the apt 2.6.1 FAIL (got: $(cat "${scratch}/n9.err"))"
+make_dpkg_db "${rootfs10}" 2.6.2 2.6.1
+if "${verify}" "${rootfs10}" >"${scratch}/n9b.out" 2>"${scratch}/n9b.err"; then
+    fail "gate accepted apt 2.6.2 over libapt-pkg6.0 2.6.1"
+fi
+grep -Fq 'reason=libapt-mismatch:libapt-pkg6.0:arm64=2.6.1' "${scratch}/n9b.err" \
+    || fail "gate stderr does not name the stale libapt-pkg6.0 (got: $(cat "${scratch}/n9b.err"))"
+find "${rootfs10}/var/lib/dpkg" -mindepth 1 -delete
+if "${verify}" "${rootfs10}" >"${scratch}/n9c.out" 2>"${scratch}/n9c.err"; then
+    fail "gate accepted a rootfs with no dpkg database"
+fi
+grep -Fq 'reason=no-dpkg-status:' "${scratch}/n9c.err" \
+    || fail "gate stderr does not report the missing dpkg database (got: $(cat "${scratch}/n9c.err"))"
+
+# ---------------------------------------------------------------------------
+# Positive control 3: the https rewrite. A cache-mode build persists the
+# http snapshot mirror; the rewrite makes it the exact https source a direct
+# build persists, the gate passes, and a second rewrite is a byte-identical
+# no-op. It launders no other plain-http source: the gate still rejects one.
+# ---------------------------------------------------------------------------
+rootfs11="${scratch}/rootfs-cache-mode"
+make_proxy_rootfs "${rootfs11}"
+"${strip}" "${rootfs11}" "${PERSISTED_LINE}"
+echo 'deb http://snapshot.debian.org/archive/debian/20260601T000000Z/ bookworm main' \
+    > "${rootfs11}/etc/apt/sources.list"
+"${rewrite}" "${rootfs11}" >"${scratch}/p3.out"
+grep -Fq 'rewrote 1 file(s) to https' "${scratch}/p3.out" \
+    || fail "rewrite did not report its one rewritten file (got: $(cat "${scratch}/p3.out"))"
+[ "$(cat "${rootfs11}/etc/apt/sources.list")" = "${SNAPSHOT_SOURCE}" ] \
+    || fail "rewrite did not persist the direct-build https source: $(cat "${rootfs11}/etc/apt/sources.list")"
+"${verify}" "${rootfs11}" >"${scratch}/p3v.out" 2>"${scratch}/p3v.err" \
+    || fail "gate rejected the rewritten cache-mode rootfs: $(cat "${scratch}/p3v.err")"
+rewrite_before="$(find "${rootfs11}/etc/apt" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+"${rewrite}" "${rootfs11}" >"${scratch}/p3b.out"
+rewrite_after="$(find "${rootfs11}/etc/apt" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+[ "${rewrite_before}" = "${rewrite_after}" ] || fail "second rewrite mutated etc/apt"
+grep -Fq 'rewrote 0 file(s) to https' "${scratch}/p3b.out" \
+    || fail "second rewrite was not a no-op (got: $(cat "${scratch}/p3b.out"))"
+echo 'deb http://deb.debian.org/debian bookworm main' > "${rootfs11}/etc/apt/sources.list.d/other.list"
+"${rewrite}" "${rootfs11}" >/dev/null
+grep -Fxq 'deb http://deb.debian.org/debian bookworm main' "${rootfs11}/etc/apt/sources.list.d/other.list" \
+    || fail "rewrite laundered a non-snapshot plain-http source"
+if "${verify}" "${rootfs11}" >"${scratch}/n10.out" 2>"${scratch}/n10.err"; then
+    fail "gate accepted a non-snapshot plain-http source the rewrite does not own"
+fi
+
+# ---------------------------------------------------------------------------
 # Positive control 2: a clean rootfs (direct build, PF_APT_PROXY unset) passes
 # the gate untouched, and strip is a byte-identical no-op on it — with no
 # persisted line argument and with one (absent line = idempotent skip).
@@ -369,7 +485,10 @@ first_line_no() {
     printf '%s' "${ln}"
 }
 assert_wired() {
-    local builder="$1" target="$2" strip_ln verify_ln mke2fs_ln
+    local builder="$1" target="$2" rewrite_ln strip_ln verify_ln mke2fs_ln
+    rewrite_ln="$(first_line_no "rewrite-rootfs-apt-sources-https.sh\" \"\${${target}}\"" "${builder}")"
+    [ -n "${rewrite_ln}" ] \
+        || fail "${builder} does not rewrite the persisted apt sources to https on \${${target}}"
     strip_ln="$(first_line_no "strip-rootfs-apt-proxy.sh\" \"\${${target}}\"" "${builder}")"
     [ -n "${strip_ln}" ] \
         || fail "${builder} does not strip the apt proxy on \${${target}} before assembly"
@@ -378,6 +497,8 @@ assert_wired() {
         || fail "${builder} does not run the release apt policy gate on \${${target}}"
     [ "${strip_ln}" -lt "${verify_ln}" ] \
         || fail "${builder}: strip must run before the verify gate"
+    [ "${rewrite_ln}" -lt "${verify_ln}" ] \
+        || fail "${builder}: the https rewrite must run before the verify gate"
     mke2fs_ln="$(first_line_no '^mke2fs' "${builder}")"
     [ -n "${mke2fs_ln}" ] || fail "${builder}: no mke2fs invocation found"
     [ "${verify_ln}" -lt "${mke2fs_ln}" ] \
@@ -394,4 +515,4 @@ grep -Fxq '"${SRC_DIR}/scripts/strip-rootfs-apt-proxy.sh" "${EXT}"' \
     "${repo_dir}/scripts/build-rootfs-a523.sh" \
     || fail "build-rootfs-a523.sh strip call changed shape; update this test deliberately"
 
-echo "rootfs-apt-policy=PASS positive=strip-then-verify-clean-proxied-and-direct-rootfs,apt-config-rootfs-isolation,second-strip-noop negative=persisted-99mmdebstrap-proxy,apt.conf-proxy,bare-private-endpoint,unquoted-proxy-values,block-brace-terminator,split-key-value,invalid-config-parse-failure,quoted-key-components,host-config-leak"
+echo "rootfs-apt-policy=PASS positive=strip-then-verify-clean-proxied-and-direct-rootfs,apt-config-rootfs-isolation,second-strip-noop,https-rewrite-cache-mode-idempotent,commented-http-line negative=persisted-99mmdebstrap-proxy,apt.conf-proxy,bare-private-endpoint,unquoted-proxy-values,block-brace-terminator,split-key-value,invalid-config-parse-failure,quoted-key-components,host-config-leak,http-snapshot-source,http-deb822-source,mirror+http-source,apt-2.6.1,libapt-mismatch,no-dpkg-db,rewrite-launders-nothing-else"
