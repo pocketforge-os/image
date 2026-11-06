@@ -36,6 +36,11 @@ claim is proved against a real builder in tests/test-build-stage-environment.sh)
      their sources to https before any later fetch. pf-build-base's self-upgrade source
      takes the transport the cache dictates, run through the real SHELL: plain http with
      the proxy (the cache never carries https), https without it;
+  6b. the two live-archive toolchains (gpu-um-toolchain, poolsuite-toolchain) pick the same
+     transport for their own sources. Their real RUN bodies run under the real SHELL with
+     apt stubbed: with the cache no apt fetch may read an https source (the old unconditional
+     rewrite made the cache answer "403 CONNECT denied"), without it every fetch after the
+     fix is https, and both modes persist byte-identical https sources;
   7. the temporary-list `apt-get update` fails closed: run for real (stubbed apt-get and
      helpers) under the real SHELL, a failed index fetch stops the RUN at the update with
      no install, whereas the same body without --error-on=any (apt 2.6.1 exits 0 on a
@@ -228,8 +233,10 @@ for stage_name, line in logical:
     for match in re.finditer(r"http://[^\s'\"]+", line):
         url = match.group(0)
         host = re.match(r"http://([^/\s'\"#]+)/", url)
-        if re.match(r"^sed\s", line) and host and f"https://{host.group(1)}/" in line:
-            continue  # a reviewed http -> https apt source rewrite (CVE-2026-109518)
+        if re.match(r"^sed\s", line) and host and (
+            f"https://{host.group(1)}/" in line or "${pf_apt_scheme}://" + host.group(1) + "/" in line
+        ):
+            continue  # a reviewed apt source scheme rewrite (CVE-2026-109518; see 6b)
         if url.startswith("http://127.0.0.1:") and stage_name == "debuginfo":
             plain_http += 1
             if "env -u http_proxy" not in line:
@@ -290,6 +297,7 @@ print("ok 5 - the ffmpeg59 source fetch is identical with and without the proxy 
 
 # ---------------------------------------------------------------- 6. CVE-2026-109518
 RETRY_SENSITIVE = ("pf-build-base", "gpu-um-toolchain", "poolsuite-toolchain")
+APT_SCHEME_SELECTOR = 'if [ -n "${http_proxy:-}" ]; then pf_apt_scheme=http; else pf_apt_scheme=https; fi'
 for name in RETRY_SENSITIVE:
     lines = [line for stage, line in logical if stage == name]
     asserts = [i for i, line in enumerate(lines) if line == "pf-assert-apt-fixed"]
@@ -304,16 +312,22 @@ for name in RETRY_SENSITIVE:
             fail(f"{name}: apt runs before the fix is asserted with retries on: {line[:120]}")
     if name == "pf-build-base":
         continue
+    selectors = [i for i, line in enumerate(lines) if line == APT_SCHEME_SELECTOR]
+    first_apt_any = next((i for i, line in enumerate(lines) if re.search(r"\bapt-get\b", line)), None)
+    if len(selectors) != 1 or first_apt_any is None or selectors[0] > first_apt_any:
+        fail(f"{name}: the apt scheme must be selected from http_proxy, with pf-build-base's exact "
+             f"selection, before the first apt fetch: {APT_SCHEME_SELECTOR}")
     after = lines[asserts[0] + 1 :]
     first_apt = next((i for i, line in enumerate(after) if re.search(r"\bapt-get\b", line)), None)
-    rewrite = next((i for i, line in enumerate(after) if re.match(r"^sed\s", line) and "https://" in line), None)
+    rewrite = next((i for i, line in enumerate(after)
+                    if re.match(r"^sed\s", line) and "${pf_apt_scheme}://" in line), None)
     if rewrite is None or first_apt is None or rewrite > first_apt:
-        fail(f"{name}: the archive sources must move to https before the next apt fetch")
+        fail(f"{name}: the archive sources must take the selected scheme before the next apt fetch")
 block = "\n".join(code_lines(STAGES["gpu-um-toolchain"]["block"]))
-if "s#http://apt.llvm.org/#https://apt.llvm.org/#" not in block:
-    fail("gpu-um-toolchain: apt.llvm.org must be rewritten to https in install-mesa-buildenv.sh")
-if "URIs: https://ports.ubuntu.com/ubuntu-ports" not in block:
-    fail("gpu-um-toolchain: the arm64 ports source must be https")
+if 'sed -i "s#http://apt.llvm.org/#${pf_apt_scheme}://apt.llvm.org/#"' not in block:
+    fail("gpu-um-toolchain: apt.llvm.org must take the selected scheme in install-mesa-buildenv.sh")
+if 'URIs: ${pf_apt_scheme}://ports.ubuntu.com/ubuntu-ports' not in block:
+    fail("gpu-um-toolchain: the arm64 ports source must take the selected scheme")
 
 base_block = STAGES["pf-build-base"]["block"]
 heredoc = re.search(r"^RUN <<'APTCVE2026109518'\n(.*?)^APTCVE2026109518$", base_block, re.M | re.S)
@@ -340,6 +354,171 @@ with tempfile.TemporaryDirectory(prefix="apt-cve-scheme.") as tmp:
     if source_line({"http_proxy": PROXY}) != f"deb [arch=amd64,arm64 check-valid-until=no] http://{snapshot}":
         fail("pf-build-base: cache-mode self-upgrade source is not plain http through the cache")
 print("ok 6 - vulnerable-apt stages self-upgrade with retries off; transport follows the cache")
+
+# ---------------------------------------------------------------- 6b. no unconditional https
+# The two live-archive toolchains start from a bare base image and persist their archive
+# sources, so they pick the transport themselves. Run the REAL RUN bodies (stubbed apt and
+# helpers, every path moved under a temp root) with and without the cache and watch the
+# sources each apt-get actually reads: with `http_proxy` set the cache cannot carry https (it
+# remaps these hosts upstream and answers "403 CONNECT denied" to an https source; owned image
+# run 42205566394), so any https source an apt-get sees while proxied is the old bug. Without
+# the cache every post-fix fetch must be https. Both modes must persist the same https sources.
+LIVE_ARCHIVE_STAGES = {
+    "gpu-um-toolchain": ("GPUUMTOOLCHAIN", {
+        "etc/apt/sources.list.d/ubuntu.sources":
+            "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates noble-backports\n"
+            "Components: main restricted universe multiverse\n\n"
+            "Types: deb\nURIs: http://security.ubuntu.com/ubuntu\nSuites: noble-security\n"
+            "Components: main restricted universe multiverse\n",
+        "etc/apt/sources.list": "# See /etc/apt/sources.list.d/ubuntu.sources\n",
+        # What gpu-um-tsp's installer does: it writes the LLVM source as plain http.
+        "usr/local/src/install-mesa-buildenv.sh":
+            "#!/bin/sh\napt-get update\nmkdir -p %ROOT%/etc/apt/sources.list.d\n"
+            "cat >%ROOT%/etc/apt/sources.list.d/llvm-20.list <<'LLVM'\n"
+            "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.gpg] http://apt.llvm.org/noble/ "
+            "llvm-toolchain-noble-20 main\nLLVM\napt-get update\napt-get install -y llvm-20\n",
+    }),
+    "poolsuite-toolchain": ("POOLSUITETOOLCHAIN", {
+        "etc/apt/sources.list.d/debian.sources":
+            "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: bookworm bookworm-updates\n"
+            "Components: main\n\nTypes: deb\nURIs: http://deb.debian.org/debian-security\n"
+            "Suites: bookworm-security\nComponents: main\n",
+    }),
+}
+# A stage that runs apt off a bare base image (not pf-build-base's frozen snapshot) persists
+# live archive sources and so needs this behavioural test: make adding one a conscious act.
+for name in sorted(EXPECTED_APT_STAGES):
+    chain: set[str] = set()
+    current = name
+    while current in STAGES and current not in chain:
+        chain.add(current)
+        current = STAGES[current]["parent"]
+    if "pf-build-base" not in chain and name not in LIVE_ARCHIVE_STAGES:
+        fail(f"{name}: a new live-archive apt stage; add it to LIVE_ARCHIVE_STAGES so the proxied "
+             "and direct source schemes are exercised")
+
+STUB_APT_GET = r"""#!/bin/sh
+# Records every apt-get with the scheme of each source it would read at that moment.
+cmd=''
+for a in "$@"; do case "$a" in update|install|download|dist-upgrade) cmd=$a ;; esac; done
+printf 'apt-get %s http_proxy=<%s>\n' "$cmd" "${http_proxy:-}" >>"$PF_STAGE_LOG"
+for f in "$PF_STAGE_ROOT"/etc/apt/sources.list "$PF_STAGE_ROOT"/etc/apt/sources.list.d/*; do
+    [ -f "$f" ] || continue
+    sed -n -e 's/^URIs: \([a-z]*\):.*/src \1/p' -e 's/^deb .* \([a-z]*\):\/\/.*/src \1/p' "$f" >>"$PF_STAGE_LOG"
+done
+"""
+STUB_CURL = r"""#!/bin/sh
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = --output ]; then printf '#!/bin/sh\nexit 0\n' >"$2"; shift; fi
+    shift
+done
+"""
+STUB_RUSTC = '#!/bin/sh\necho "rustc 1.91.0 (stub)"\n'
+
+
+def run_live_archive_stage(stage: str, extra_env: dict[str, str], mutate=None) -> tuple[int, list[str], dict[str, str], str]:
+    """Run the stage's RUN body for real under the SHELL wrapper. Returns rc, apt log, the
+    persisted apt sources, and stderr."""
+    heredoc_name, seed = LIVE_ARCHIVE_STAGES[stage]
+    found = re.search(rf"^RUN <<'{heredoc_name}'\n(.*?)^{heredoc_name}$", STAGES[stage]["block"], re.M | re.S)
+    if not found:
+        fail(f"{stage}: the {heredoc_name} RUN is missing")
+    script = found.group(1)
+    if mutate is not None:
+        script = mutate(script)
+    with tempfile.TemporaryDirectory(prefix="apt-live-stage.") as tmp:
+        root = Path(tmp)
+        for prefix in ("/etc/apt/", "/usr/local/src/", "/var/lib/apt/lists/", "/tmp/rustup-init"):
+            script = script.replace(prefix, f"{root}{prefix}")
+        script = script.replace("/toolchain-packages.txt", f"{root}/toolchain-packages.txt")
+        # The body deletes and rewrites files: refuse to run it unless every absolute path it
+        # touches is inside the temp root (the three non-paths are sed expressions and file text).
+        for path in re.findall(r"(?<![\w.:/$}-])/[A-Za-z][\w./*-]*", "\n".join(code_lines(script))):
+            if not path.startswith(f"{root}/") and path not in ("/d", "/deb", "/usr/share/keyrings/ubuntu-archive-keyring.gpg"):
+                fail(f"{stage}: the test harness would run on a real path ({path}); map it under the temp root")
+        for rel in ("etc/apt/sources.list.d", "usr/local/src", "var/lib/apt/lists", "tmp"):
+            (root / rel).mkdir(parents=True)
+        for rel, text in seed.items():
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text.replace("%ROOT%", str(root)), encoding="utf-8")
+            if rel.endswith(".sh"):
+                target.chmod(0o755)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        log = root / "stage.log"
+        log.write_text("", encoding="utf-8")
+        stubs = {"apt-get": STUB_APT_GET, "curl": STUB_CURL, "rustc": STUB_RUSTC,
+                 "dpkg": "#!/bin/sh\nexit 0\n", "dpkg-query": "#!/bin/sh\necho stub 1\n",
+                 "sha256sum": "#!/bin/sh\nexit 0\n", "rustup": "#!/bin/sh\nexit 0\n",
+                 "cargo": "#!/bin/sh\necho cargo\n", "aarch64-linux-gnu-gcc": "#!/bin/sh\necho gcc\n",
+                 "pf-assert-apt-fixed": '#!/bin/sh\necho ASSERT >>"$PF_STAGE_LOG"\n'}
+        for name, text in stubs.items():
+            (bin_dir / name).write_text(text, encoding="utf-8")
+            (bin_dir / name).chmod(0o755)
+        env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": "/root", "PF_STAGE_LOG": str(log),
+               "PF_STAGE_ROOT": str(root), "RUST_VERSION": "1.91.0", "RUSTUP_VERSION": "1.28.2",
+               "RUSTUP_INIT_SHA256": "0" * 64, **extra_env}
+        result = subprocess.run(["/bin/sh", "-c", WRAPPER, script], env=env, capture_output=True, text=True)
+        persisted = {rel: (root / rel).read_text(encoding="utf-8") for rel in seed
+                     if rel.startswith("etc/apt/sources.list.d/")}
+        for extra in (root / "etc/apt/sources.list.d").iterdir():
+            persisted[f"etc/apt/sources.list.d/{extra.name}"] = extra.read_text(encoding="utf-8")
+        return result.returncode, log.read_text(encoding="utf-8").splitlines(), persisted, result.stderr
+
+
+def scheme_violations(lines: list[str], proxied: bool) -> list[str]:
+    """Sources an apt-get read in the wrong scheme for the transport: while proxied, https is
+    the bug; direct, http after pf-assert-apt-fixed is."""
+    problems: list[str] = []
+    asserted = False
+    current = ""
+    fetches_after_fix = 0
+    for line in lines:
+        if line == "ASSERT":
+            asserted = True
+        elif line.startswith("apt-get "):
+            current = line
+            fetches_after_fix += asserted
+        elif line.startswith("src "):
+            scheme = line.split()[1]
+            if proxied and scheme != "http":
+                problems.append(f"{scheme} source read while proxied by `{current}`")
+            if not proxied and asserted and scheme != "https":
+                problems.append(f"{scheme} source read after the fix by `{current}`")
+    if not fetches_after_fix:
+        problems.append("no apt fetch ran after pf-assert-apt-fixed")
+    return problems
+
+
+persisted_by_mode: dict[str, dict[str, dict[str, str]]] = {}
+for stage in LIVE_ARCHIVE_STAGES:
+    for mode, env in (("cache", {"http_proxy": PROXY}), ("direct", {})):
+        rc, log_lines, persisted, stderr = run_live_archive_stage(stage, env)
+        if rc != 0:
+            fail(f"{stage}: the {mode}-mode RUN body failed (rc={rc}): {stderr.strip()[-300:]}")
+        problems = scheme_violations(log_lines, proxied=(mode == "cache"))
+        if problems:
+            fail(f"{stage}: {mode} mode reads sources in the wrong scheme: {problems}")
+        if any(proxy != PROXY for proxy in re.findall(r"http_proxy=<(.*)>", "\n".join(log_lines)) if mode == "cache"):
+            fail(f"{stage}: the cache-mode apt fetches lost http_proxy")
+        if any(re.search(r"^(?!#).*http://", text, re.M) for text in persisted.values()):
+            fail(f"{stage}: {mode} mode persisted a plain-http source")
+        persisted_by_mode.setdefault(stage, {})[mode] = persisted
+    if persisted_by_mode[stage]["cache"] != persisted_by_mode[stage]["direct"]:
+        fail(f"{stage}: the persisted sources differ with and without the cache; the layer must be "
+             "byte-identical either way")
+    # Red controls: the old unconditional-https recipe must be caught while proxied, and an
+    # unconditional-http one without the cache, or this check no longer discriminates.
+    rc, log_lines, _, _ = run_live_archive_stage(stage, {"http_proxy": PROXY},
+                                                 mutate=lambda body: body.replace("${pf_apt_scheme}", "https"))
+    if not any("https source read while proxied" in problem for problem in scheme_violations(log_lines, True)):
+        fail(f"negative control: {stage} rewriting to https unconditionally while proxied was not detected")
+    rc, log_lines, _, _ = run_live_archive_stage(stage, {}, mutate=lambda body: body.replace("${pf_apt_scheme}", "http"))
+    if not any("http source read after the fix" in problem for problem in scheme_violations(log_lines, False)):
+        fail(f"negative control: {stage} staying http after the fix without the cache was not detected")
+print("ok 6b - the live-archive toolchains take http through the cache and https direct, and persist "
+      "identical https sources either way (unconditional-https red control proves it)")
 
 # ---------------------------------------------------------------- 7. update fails closed
 update_calls = re.findall(r'^apt-get -o Acquire::Retries=0 "\$@" update([^\n]*)$', body, re.M)
