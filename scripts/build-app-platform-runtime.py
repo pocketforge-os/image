@@ -67,6 +67,127 @@ def elf_metadata(readelf: Path, path: Path) -> tuple[str, list[str]]:
     return sonames[0], NEEDED_RE.findall(result.stdout)
 
 
+VERSION_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)_([0-9]+(?:\.[0-9]+)*)$")
+
+
+def version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in value.split("."))
+
+
+def version_within_floor(version: str, floor: dict[str, str]) -> bool:
+    """True only for NAMESPACE_N[.N...] at or below that namespace's floor.
+
+    Private, tag-like (GLIBC_ABI_DT_RELR) and unlisted namespaces never
+    compare: they fail closed and need an explicit reviewed floor change.
+    """
+    match = VERSION_RE.match(version)
+    if match is None or match.group(1) not in floor:
+        return False
+    return version_tuple(match.group(2)) <= version_tuple(floor[match.group(1)])
+
+
+def symbol_version_floor(
+    config: dict[str, object], base_sonames: set[str]
+) -> dict[str, dict[str, str]] | None:
+    value = config.get("base_symbol_version_floor")
+    if value is None:
+        return None
+    if not isinstance(value, dict) or any(
+        not isinstance(soname, str)
+        or not isinstance(namespaces, dict)
+        or not namespaces
+        or any(
+            not isinstance(name, str)
+            or not isinstance(floor, str)
+            or VERSION_RE.match(f"{name}_{floor}") is None
+            for name, floor in namespaces.items()
+        )
+        for soname, namespaces in value.items()
+    ):
+        fail("config base_symbol_version_floor must map SONAMEs to {NAMESPACE: N.N}")
+    if set(value) != base_sonames:
+        fail("config base_symbol_version_floor must cover every base SONAME exactly")
+    return {soname: dict(sorted(value[soname].items())) for soname in sorted(value)}
+
+
+def elf_versions(readelf: Path, path: Path) -> tuple[list[str], dict[str, list[str]]]:
+    """Parse `readelf -V`: (defined versions, {needed file: [versions]})."""
+    try:
+        result = subprocess.run(
+            [str(readelf), "-V", "-W", str(path)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError as error:
+        fail(f"cannot execute readelf: {error}")
+    if result.returncode != 0:
+        fail(f"readelf -V failed for {path}: {result.stderr.strip()}")
+    section = None
+    current_file = None
+    defined: set[str] = set()
+    needs: dict[str, set[str]] = {}
+    for line in result.stdout.splitlines():
+        if line.startswith("Version definition section"):
+            section = "def"
+            continue
+        if line.startswith("Version needs section"):
+            section = "need"
+            continue
+        if line.startswith("Version symbols section"):
+            section = None
+            continue
+        if section == "def" and "Name: " in line and "Flags: BASE" not in line:
+            defined.add(line.split("Name: ", 1)[1].split()[0])
+        elif section == "need" and "File: " in line:
+            current_file = line.split("File: ", 1)[1].split()[0]
+            needs.setdefault(current_file, set())
+        elif section == "need" and "Name: " in line:
+            if current_file is None:
+                fail(f"readelf -V version need without a file: {path}")
+            needs[current_file].add(line.split("Name: ", 1)[1].split()[0])
+    return sorted(defined), {name: sorted(items) for name, items in sorted(needs.items())}
+
+
+def check_symbol_versions(
+    files: dict[str, dict[str, object]],
+    sonames: dict[str, str],
+    floor: dict[str, dict[str, str]],
+) -> None:
+    for relative, metadata in sorted(files.items()):
+        needs = metadata["version_needs"]
+        assert isinstance(needs, dict)
+        for dependency, versions in needs.items():
+            for version in versions:
+                if dependency in floor:
+                    if not version_within_floor(version, floor[dependency]):
+                        namespace = version.split("_", 1)[0]
+                        limit = floor[dependency].get(namespace)
+                        detail = (
+                            f"exceeds app-root floor {namespace}_{limit}"
+                            if limit is not None and VERSION_RE.match(version)
+                            else "has no app-root floor"
+                        )
+                        fail(
+                            f"{metadata['soname']} needs {dependency} {version}, {detail}"
+                        )
+                    continue
+                provider = sonames.get(dependency)
+                if provider is None:
+                    fail(
+                        f"{metadata['soname']} needs version {version} from "
+                        f"{dependency}, which is neither base nor bundled"
+                    )
+                defined = files[provider]["version_defs"]
+                assert isinstance(defined, list)
+                if version not in defined:
+                    fail(
+                        f"{metadata['soname']} needs {dependency} {version}, "
+                        "not defined by the bundled provider"
+                    )
+
+
 def resolve(host_root: Path, library_dirs: list[str], soname: str) -> Path:
     for directory in library_dirs:
         candidate = host_root / directory / soname
@@ -171,6 +292,7 @@ def main() -> int:
     if not isinstance(base_value, list) or any(not isinstance(item, str) for item in base_value):
         fail("config base_sonames must be a string array")
     base_sonames = set(base_value)
+    version_floor = symbol_version_floor(config, base_sonames)
     host_distribution = config.get("host_distribution")
     if host_distribution != "debian-12":
         fail("host_distribution must be debian-12")
@@ -211,11 +333,18 @@ def main() -> int:
                 "soname": soname,
                 "needed": sorted(needed),
             }
+            if version_floor is not None:
+                version_defs, version_needs = elf_versions(args.readelf, source)
+                files[relative]["version_defs"] = version_defs
+                files[relative]["version_needs"] = version_needs
             for dependency in needed:
                 if dependency in base_sonames:
                     root_provided.add(dependency)
                 elif dependency not in sonames:
                     queue.append(resolve(args.host_root, library_dirs, dependency))
+
+        if version_floor is not None:
+            check_symbol_versions(files, sonames, version_floor)
 
         data_files: dict[str, str] = {}
         for relative in data:
@@ -242,6 +371,8 @@ def main() -> int:
             "data": dict(sorted(data_files.items())),
             "json_library_paths": dict(sorted(discovery_paths.items())),
         }
+        if version_floor is not None:
+            manifest["base_symbol_version_floor"] = version_floor
         (stage / "abi.json").write_text(
             json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
             encoding="utf-8",

@@ -16,6 +16,16 @@
     "librt.so.1",
     "libstdc++.so.6"
   ],
+  "base_symbol_version_floor": {
+    "ld-linux-aarch64.so.1": {"GLIBC": "2.36"},
+    "libc.so.6": {"GLIBC": "2.36"},
+    "libdl.so.2": {"GLIBC": "2.36"},
+    "libgcc_s.so.1": {"GCC": "12.0.0"},
+    "libm.so.6": {"GLIBC": "2.36"},
+    "libpthread.so.0": {"GLIBC": "2.36"},
+    "librt.so.1": {"GLIBC": "2.36"},
+    "libstdc++.so.6": {"CXXABI": "1.3.13", "GLIBCXX": "3.4.30"}
+  },
   "seeds": [
     "usr/local/lib/gbm/dri_gbm.so",
     "usr/local/lib/dri/libdril_dri.so",
@@ -75,6 +85,7 @@
   ],
   "data": [
     "usr/local/lib/dri/zink_dri.so",
+    "usr/local/share/drirc.d/00-mesa-defaults.conf",
     "usr/local/share/drirc.d/10-pocketforge-zink.conf",
     "usr/share/glvnd/egl_vendor.d/50_mesa.json",
     "usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
