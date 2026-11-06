@@ -33,6 +33,7 @@ mkdir -p "${stub_bin}"
 cat >"${stub_bin}/apt-get" <<'STUB'
 #!/bin/sh
 # Stand-in for apt 2.6.1. PF_FAKE_UPDATE: ok | fail (fetch error) | stall | flaky (fails once).
+# PF_FAKE_INSTALL: ok | fail | flaky (a pool object 503s twice, as libdbus-1-3 did in CI).
 cmd=''; error_on=0
 for a in "$@"; do
     case "$a" in
@@ -55,6 +56,16 @@ case "$cmd" in
                 [ "$error_on" = 1 ] || exit 0   # apt 2.6.1: a failed fetch is only a warning
                 exit 100 ;;
         esac ;;
+    install)
+        mode=${PF_FAKE_INSTALL:-ok}
+        if [ "$mode" = flaky ]; then
+            n=$(cat "$PF_FAKE_LOG.i" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$PF_FAKE_LOG.i"
+            if [ "$n" -le 2 ]; then mode=fail; else mode=ok; fi
+        fi
+        if [ "$mode" = fail ]; then
+            echo "E: Failed to fetch https://snapshot.debian.org/archive/debian/x/pool/main/d/dbus/libdbus-1-3.deb  504  Gateway Timeout" >&2
+            exit 100
+        fi ;;
 esac
 exit 0
 STUB
@@ -128,6 +139,24 @@ run_script flaky "${script}" PF_FAKE_UPDATE=flaky
 [ "${rc}" -eq 0 ] || { cat "${out}" >&2; fail "one transient failure must not fail the step"; }
 [ "$(calls)" = "update update install clean" ] || fail "flaky run apt sequence: $(calls)"
 echo "ok 4 - a transient failure is retried by re-running apt with Retries 0"
+
+# ---- 4b. a flaky pool object is ridden out without refetching the indexes -----------------
+run_script flaky_install "${script}" PF_FAKE_INSTALL=flaky
+[ "${rc}" -eq 0 ] || { cat "${out}" >&2; fail "two failed installs inside the budget must not fail the step"; }
+[ "$(calls)" = "update install install install clean" ] || fail "flaky install apt sequence: $(calls)"
+grep -c 'ime_apt=FAIL step=install' "${out}" | grep -qx 2 || { cat "${out}" >&2; fail "each failed install must be reported"; }
+grep -q 'ime_apt=PASS' "${out}" || fail "a recovered run must say PASS"
+echo "ok 4b - a flaky pool object is retried; the indexes are fetched once"
+
+# ---- 4c. the retries are bounded by a time budget and say so ------------------------------
+started=$(date +%s)
+run_script budget "${script}" PF_FAKE_INSTALL=fail PF_IME_APT_ATTEMPTS=1000 PF_IME_APT_BACKOFF=1 PF_IME_APT_BUDGET=4
+elapsed=$(( $(date +%s) - started ))
+[ "${rc}" -ne 0 ] || fail "a permanently failing install must fail the step"
+[ "${elapsed}" -lt 15 ] || fail "the retry budget did not bound the step (${elapsed}s)"
+grep -q 'ime_apt=FAIL reason=budget_exhausted budget=4s' "${out}" || { cat "${out}" >&2; fail "budget exhaustion must be named"; }
+[ "$(grep -c '^update|' "${log}")" -eq 1 ] || fail "the indexes must be fetched once, got: $(calls)"
+echo "ok 4c - retries stop at the time budget with a named reason (${elapsed}s)"
 
 # ---- 5. red control: without --error-on=any the failed fetch runs on into the install -----
 sed 's/ --error-on=any//' "${script}" >"${scratch}/install-tools-no-error-on.sh"
