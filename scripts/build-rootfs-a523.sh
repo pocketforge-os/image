@@ -26,6 +26,8 @@ set -euo pipefail
 SRC_DIR="${SRC_DIR:-/work/src}"
 OUT_DIR="${OUT_DIR:-/work/out}"
 CURSOR_THEME_DIR="${CURSOR_THEME_DIR:-/work/cursor-theme}"
+# Fixed arm64 apt for CVE-2026-109518, fetched and SHA256-pinned by pf-build-base.
+PF_APT_FIX_DIR="${PF_APT_FIX_DIR:-/opt/pocketforge/apt-cve-2026-109518}"
 BOARD_DIR="${SRC_DIR}/boards/tsp-s"
 VARIANT="dev"
 OWNER_UID=""; OWNER_GID=""
@@ -51,7 +53,10 @@ fi
 export SOURCE_DATE_EPOCH
 
 SNAPSHOT_DATE="$(cat "${SRC_DIR}/snapshot-date.txt")"
-SNAPSHOT_URL="http://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE}/"
+# https: no proxy transport is plumbed into this builder (PF_APT_PROXY is
+# a133-only until tsp-1dl.14), so the fetch is always direct and has no
+# plain-http leg for a redirect to ride (CVE-2026-109518, bd tsp-hqm1p.143).
+SNAPSHOT_URL="https://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE}/"
 
 WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}"' EXIT
 mkdir -p "${OUT_DIR}"
@@ -72,6 +77,17 @@ if [ "${VARIANT}" = dev ] && [ -f "${PKG_DEV_FILE}" ]; then
 fi
 echo "  packages: ${PKG_LIST}"
 
+# CVE-2026-109518 (bd tsp-hqm1p.143): install pf-build-base's SHA256-pinned
+# fixed arm64 apt/libapt-pkg6.0 2.6.2 in place of the snapshot's vulnerable
+# 2.6.1; verify-rootfs-apt-policy.sh gates the installed version.
+APT_FIX_OPTS=()
+for apt_fix_deb in apt_2.6.2_arm64.deb libapt-pkg6.0_2.6.2_arm64.deb; do
+    [ -f "${PF_APT_FIX_DIR}/${apt_fix_deb}" ] \
+        || { echo "FATAL: CVE-2026-109518 fixed apt package is missing: ${PF_APT_FIX_DIR}/${apt_fix_deb}" >&2; exit 1; }
+    APT_FIX_OPTS+=(--include="${PF_APT_FIX_DIR}/${apt_fix_deb}")
+done
+APT_FIX_OPTS+=(--hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount)
+
 # --- mmdebstrap --------------------------------------------------------------
 ROOTFS_TAR="${WORK}/rootfs.tar"
 echo "=== mmdebstrap (arm64 bookworm minbase, under qemu) ==="
@@ -82,6 +98,7 @@ mmdebstrap \
     --aptopt='APT::Sandbox::User "root"' \
     --aptopt='Acquire::Retries "5"' \
     --include="${PKG_LIST}" \
+    "${APT_FIX_OPTS[@]}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} KREL=${KREL} ${BOARD_DIR}/rootfs-customize.sh \"\$1\"" \
     --dpkgopt='path-exclude=/usr/share/man/*' \
     --dpkgopt='path-exclude=/usr/share/doc/*' \
@@ -120,7 +137,9 @@ done
 # builder today (PF_APT_PROXY is a133-only until tsp-1dl.14), so the strip is
 # a no-op guard; the release policy is platform-independent and the gate
 # fails closed on any effective proxy key (parsed with apt-config) or private
-# build endpoint under etc/apt (bd tsp-mc9m.41.1002.5, build-6 regression).
+# build endpoint under etc/apt (bd tsp-mc9m.41.1002.5, build-6 regression),
+# any plain-http source, or an apt below the CVE-2026-109518 fix (tsp-hqm1p.143).
+"${SRC_DIR}/scripts/rewrite-rootfs-apt-sources-https.sh" "${EXT}"
 "${SRC_DIR}/scripts/strip-rootfs-apt-proxy.sh" "${EXT}"
 "${SRC_DIR}/scripts/verify-rootfs-apt-policy.sh" "${EXT}"
 

@@ -20,13 +20,21 @@
 #   2. a private build endpoint: an RFC1918 10.x / 192.168.x / 172.16-31.x
 #      address (the apt-cacher-ng build cache 10.0.32.86:3142 included) as
 #      text anywhere under etc/apt, even without a proxy key (e.g. a
-#      sources.list.d drop-in).
-# The pinned snapshot.debian.org source is public and unaffected. The dump
+#      sources.list.d drop-in);
+#   3. a plain-http apt source (any http:// on a non-comment line of
+#      etc/apt/sources.list or sources.list.d/*, including the mirror+http and
+#      tor+http forms): on-device apt must not fetch over plain http, where a
+#      hostile redirect reaches CVE-2026-109518 (bd tsp-hqm1p.143); and
+#   4. an installed apt below its line's CVE-2026-109518 fix, or a libapt-pkg
+#      that does not match it (scripts/assert-apt-fixed.sh over the rootfs
+#      dpkg database).
+# The pinned https snapshot.debian.org source is public and unaffected. The dump
 # reads only the rootfs tree (Dir override); tests/test-rootfs-apt-policy.sh
 # proves the host's /etc/apt never leaks into it.
 set -euo pipefail
 
 ROOTFS="${1:?usage: verify-rootfs-apt-policy.sh ROOTFS}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 [ -d "${ROOTFS%/}/etc/apt" ] \
     || { echo "FATAL: rootfs apt policy: ${ROOTFS%/}/etc/apt is missing" >&2; exit 1; }
@@ -85,9 +93,37 @@ case "${rc}" in
        exit 1 ;;
 esac
 
-if [ -n "${proxy_hits}" ] || [ -n "${endpoint_hits}" ]; then
+# Source policy: plain-http apt sources. rc=1 (no match) or an absent
+# sources.list.d is clean; any other grep failure fails the build.
+source_files=()
+[ ! -e etc/apt/sources.list ] || source_files+=(etc/apt/sources.list)
+[ ! -d etc/apt/sources.list.d ] || source_files+=(etc/apt/sources.list.d)
+http_hits=""
+if [ "${#source_files[@]}" -gt 0 ]; then
+    rc=0
+    http_hits="$(grep -rInE '^[^#]*http://' "${source_files[@]}")" || rc=$?
+    case "${rc}" in
+        0) ;;
+        1) http_hits="" ;;
+        *) echo "FATAL: rootfs apt policy: source grep over etc/apt failed (rc=${rc})" >&2
+           exit 1 ;;
+    esac
+fi
+
+# Package policy: the installed apt carries the CVE-2026-109518 fix.
+rc=0
+apt_fix="$("${script_dir}/assert-apt-fixed.sh" --admindir "${ROOTFS}/var/lib/dpkg")" || rc=$?
+case "${rc}" in
+    0) apt_fix_hit="" ;;
+    1) apt_fix_hit="${apt_fix}" ;;
+    *) echo "FATAL: rootfs apt policy: assert-apt-fixed.sh failed (rc=${rc}): ${apt_fix}" >&2
+       exit 1 ;;
+esac
+
+if [ -n "${proxy_hits}" ] || [ -n "${endpoint_hits}" ] || [ -n "${http_hits}" ] \
+    || [ -n "${apt_fix_hit}" ]; then
     {
-        echo "FATAL: rootfs apt policy: release rootfs must not persist build-only apt configuration"
+        echo "FATAL: rootfs apt policy: release rootfs violates the apt policy"
         if [ -n "${proxy_hits}" ]; then
             echo "  persisted proxy directive(s) (effective apt-config keys):"
             printf '%s\n' "${proxy_hits}" | sed -nE '1,20{s|^|    |;p;}'
@@ -109,10 +145,19 @@ if [ -n "${proxy_hits}" ] || [ -n "${endpoint_hits}" ]; then
             echo "  private build endpoint(s) under etc/apt:"
             printf '%s\n' "${endpoint_hits}" | sed -nE '1,20{s|^|    |;p;}'
         fi
+        if [ -n "${http_hits}" ]; then
+            echo "  plain-http apt source(s) (ship https; see scripts/rewrite-rootfs-apt-sources-https.sh):"
+            printf '%s\n' "${http_hits}" | sed -nE '1,20{s|^|    |;p;}'
+        fi
+        if [ -n "${apt_fix_hit}" ]; then
+            echo "  installed apt is not fixed for CVE-2026-109518:"
+            echo "    ${apt_fix_hit}"
+        fi
         echo "  (build transport belongs to PF_APT_PROXY at build time only;" \
              "see scripts/strip-rootfs-apt-proxy.sh)"
     } >&2
     exit 1
 fi
 
-echo "  rootfs apt policy: no persisted proxy directives or private build endpoints under etc/apt"
+echo "  rootfs apt policy: no persisted proxy directives, private build endpoints or plain-http sources under etc/apt"
+echo "  rootfs apt policy: ${apt_fix}"

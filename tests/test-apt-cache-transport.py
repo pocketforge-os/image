@@ -29,7 +29,13 @@ claim is proved against a real builder in tests/test-build-stage-environment.sh)
      the proxy: it stays https-only and never takes the plain-http cache path. The live
      cache cannot serve debian-security snapshot pool objects (504/500), so routing this
      fetch through it would turn a working build into a failing one; it stays a known
-     outage-vulnerable direct fetch until the cache can carry it.
+     outage-vulnerable direct fetch until the cache can carry it;
+  6. CVE-2026-109518 (bd tsp-hqm1p.143): every stage whose base ships a vulnerable apt
+     (pf-build-base, gpu-um-toolchain, poolsuite-toolchain) runs every apt before its
+     pf-assert-apt-fixed with Acquire::Retries=0, and the two live-archive toolchains move
+     their sources to https before any later fetch. pf-build-base's self-upgrade source
+     takes the transport the cache dictates, run through the real SHELL: plain http with
+     the proxy (the cache never carries https), https without it.
 """
 
 import json
@@ -49,6 +55,7 @@ PROXY = "http://10.0.32.86:3142"
 # The stages that run apt, reviewed against Dockerfile.pf. A new apt stage fails here until
 # a reviewer has confirmed it runs under the proxy-admitting SHELL and belongs on the list.
 EXPECTED_APT_STAGES = {
+    "pf-build-base",  # CVE-2026-109518 apt self-upgrade, frozen debian-security snapshot
     "gpu-um-toolchain",  # Ubuntu 24.04 live archive + apt.llvm.org (no snapshot exists)
     "gpu-um-build",  # frozen Debian snapshot (arm64 cross sysroot)
     "sdl",  # prepare-sdl-kmsdrm-sysroot -> apt-get, frozen snapshot
@@ -212,8 +219,9 @@ plain_http = 0
 for stage_name, line in logical:
     for match in re.finditer(r"http://[^\s'\"]+", line):
         url = match.group(0)
-        if url.startswith("http://ports.ubuntu.com/") and "URIs:" in line:
-            continue  # an apt source line: apt, the proxied tool
+        host = re.match(r"http://([^/\s'\"#]+)/", url)
+        if re.match(r"^sed\s", line) and host and f"https://{host.group(1)}/" in line:
+            continue  # a reviewed http -> https apt source rewrite (CVE-2026-109518)
         if url.startswith("http://127.0.0.1:") and stage_name == "debuginfo":
             plain_http += 1
             if "env -u http_proxy" not in line:
@@ -271,6 +279,59 @@ if direct_call != proxied_call:
 if "--proto =https" not in direct_call or "https://snapshot.debian.org/" not in direct_call:
     fail(f"the ffmpeg59 source fetch must stay https-only: {direct_call}")
 print("ok 5 - the ffmpeg59 source fetch is identical with and without the proxy (https, direct)")
+
+# ---------------------------------------------------------------- 6. CVE-2026-109518
+RETRY_SENSITIVE = ("pf-build-base", "gpu-um-toolchain", "poolsuite-toolchain")
+for name in RETRY_SENSITIVE:
+    lines = [line for stage, line in logical if stage == name]
+    asserts = [i for i, line in enumerate(lines) if line == "pf-assert-apt-fixed"]
+    if not asserts:
+        fail(f"{name}: no pf-assert-apt-fixed gate after its apt self-upgrade")
+    before = lines[: asserts[0]]
+    apt_runs = [line for line in before if re.search(r"(?:^|[\s;&|(])apt-get\s", line)]
+    if not apt_runs:
+        fail(f"{name}: no apt self-upgrade before pf-assert-apt-fixed")
+    for line in apt_runs:
+        if "-o Acquire::Retries=0" not in line:
+            fail(f"{name}: apt runs before the fix is asserted with retries on: {line[:120]}")
+    if name == "pf-build-base":
+        continue
+    after = lines[asserts[0] + 1 :]
+    first_apt = next((i for i, line in enumerate(after) if re.search(r"\bapt-get\b", line)), None)
+    rewrite = next((i for i, line in enumerate(after) if re.match(r"^sed\s", line) and "https://" in line), None)
+    if rewrite is None or first_apt is None or rewrite > first_apt:
+        fail(f"{name}: the archive sources must move to https before the next apt fetch")
+block = "\n".join(code_lines(STAGES["gpu-um-toolchain"]["block"]))
+if "s#http://apt.llvm.org/#https://apt.llvm.org/#" not in block:
+    fail("gpu-um-toolchain: apt.llvm.org must be rewritten to https in install-mesa-buildenv.sh")
+if "URIs: https://ports.ubuntu.com/ubuntu-ports" not in block:
+    fail("gpu-um-toolchain: the arm64 ports source must be https")
+
+base_block = STAGES["pf-build-base"]["block"]
+heredoc = re.search(r"^RUN <<'APTCVE2026109518'\n(.*?)^APTCVE2026109518$", base_block, re.M | re.S)
+if not heredoc:
+    fail("pf-build-base: the CVE-2026-109518 self-upgrade RUN is missing")
+body = heredoc.group(1)
+if re.search(r">\s*/etc/apt/sources\.list|/etc/apt/sources\.list\.d/", body):
+    fail("pf-build-base: the self-upgrade must not edit the persisted base sources")
+selector = re.search(r"^if \[ -n \"\$\{http_proxy:-\}\" \];.*?\n(printf .*?sources\.list\"\n)", body, re.M | re.S)
+if not selector:
+    fail("pf-build-base: the self-upgrade source must select its scheme from http_proxy")
+with tempfile.TemporaryDirectory(prefix="apt-cve-scheme.") as tmp:
+    script = f"pf_apt_tmp={tmp}\n{selector.group(0)}cat {tmp}/sources.list\n"
+
+    def source_line(extra_env: dict[str, str]) -> str:
+        env = {"PATH": "/usr/bin:/bin", "HOME": "/root", **extra_env}
+        result = subprocess.run(["/bin/sh", "-c", WRAPPER, script], env=env, check=True,
+                                capture_output=True, text=True)
+        return result.stdout.strip()
+
+    snapshot = "snapshot.debian.org/archive/debian-security/20261105T000000Z/ bookworm-security main"
+    if source_line({}) != f"deb [arch=amd64,arm64 check-valid-until=no] https://{snapshot}":
+        fail(f"pf-build-base: direct self-upgrade source is not https: {source_line({})}")
+    if source_line({"http_proxy": PROXY}) != f"deb [arch=amd64,arm64 check-valid-until=no] http://{snapshot}":
+        fail("pf-build-base: cache-mode self-upgrade source is not plain http through the cache")
+print("ok 6 - vulnerable-apt stages self-upgrade with retries off; transport follows the cache")
 
 print("PASS: every apt-running stage can use the transport cache, transport only")
 sys.exit(0)

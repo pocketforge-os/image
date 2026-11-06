@@ -43,7 +43,7 @@ mkdir -p "${fixture_src}/scripts" "${fixture_board}/initrd" \
     "${fixture_board}/bootlogo" "${fixture_src}/tools/dragonsecboot" \
     "${fixture_src}/packages/pocketforge-open-gpu-stack/DEBIAN" \
     "${fixture_bin}" "${scratch}/out" "${scratch}/libsdl3" \
-    "${scratch}/wpa" "${scratch}/cloud-init" "${scratch}/runtime" "${scratch}/launcher" \
+    "${scratch}/wpa" "${scratch}/cloud-init" "${scratch}/apt-fix" "${scratch}/runtime" "${scratch}/launcher" \
     "${scratch}/hwprobe" "${scratch}/gpu" \
     "${scratch}/mesa/usr/local/lib/gbm" \
     "${kernel_tree}/arch/arm64/boot/dts/sunxi" \
@@ -169,6 +169,8 @@ for input in libsdl3 wpa runtime launcher hwprobe gpu; do
     printf '%s fixture\n' "${input}" > "${scratch}/${input}/payload"
 done
 : > "${scratch}/cloud-init/cloud-init-pocketforge.deb"
+: > "${scratch}/apt-fix/apt_2.6.2_arm64.deb"
+: > "${scratch}/apt-fix/libapt-pkg6.0_2.6.2_arm64.deb"
 printf 'fixture SDL\n' > "${scratch}/libsdl3/libSDL3-pocketforge.so.0"
 for library in libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so; do
     printf '%s fixture\n' "${library}" > "${scratch}/mesa/usr/local/lib/${library}"
@@ -218,7 +220,7 @@ run_sd_fallback() {
     PATH="${fixture_bin}:${PATH}" \
     SRC_DIR="${fixture_src}" BLOBS_DIR="${scratch}/blobs" OUT_DIR="${scratch}/out" \
     LIBSDL3_DIR="${scratch}/libsdl3" GPU_UM_MESA_DIR="${scratch}/mesa" \
-    WPA_DIR="${scratch}/wpa" CLOUD_INIT_DIR="${scratch}/cloud-init" \
+    WPA_DIR="${scratch}/wpa" CLOUD_INIT_DIR="${scratch}/cloud-init" PF_APT_FIX_DIR="${scratch}/apt-fix" \
     RUNTIME_DIR="${scratch}/runtime" \
     LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${scratch}/hwprobe" \
     KERNEL_TSP_DIR="${kernel_tree}" GPU_KM_TSP_DIR="${scratch}/gpu" \

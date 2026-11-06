@@ -105,6 +105,7 @@ jobs:
             tests/test-a-cts-worker-terminal.sh
             tests/test-alsa-config.sh
             tests/test-apt-cache-transport.py
+            tests/test-assert-apt-fixed.sh
             tests/test-artifact-intake-put.sh
             tests/test-app-root-build-toolchain.sh
             tests/test-boot-animator.sh

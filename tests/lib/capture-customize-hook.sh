@@ -16,6 +16,9 @@
 #   OUT_HOOK    destination for the generated hook; OUT_HOOK.cmd receives the
 #               --customize-hook command line and OUT_HOOK.argv receives the
 #               exact mmdebstrap argument vector, one argument per line
+# The fixture supplies the CVE-2026-109518 fixed apt debs; a caller may point
+# PF_APT_FIX_DIR elsewhere (a negative control) and PF_APT_PROXY selects the
+# cache-mode transport as in production.
 capture_customize_hook() {
     local repo_dir="$1"
     local fixture="$2"
@@ -24,7 +27,7 @@ capture_customize_hook() {
     local status
 
     mkdir -p "${fixture}/bin" "${fixture}/out" "${fixture}/wpa" \
-        "${fixture}/cloud-init" \
+        "${fixture}/cloud-init" "${fixture}/apt-fix" \
         "${fixture}/kernel-capabilities" \
         "${fixture}/blobs/sunxi/a133/wifi-firmware" \
         "${fixture}/mesa/usr/local/lib/gbm" "${release}"
@@ -41,6 +44,8 @@ capture_customize_hook() {
     : > "${release}/powervr.ko"
     : > "${fixture}/wpa/wpa_supplicant"
     : > "${fixture}/cloud-init/cloud-init-pocketforge.deb"
+    : > "${fixture}/apt-fix/apt_2.6.2_arm64.deb"
+    : > "${fixture}/apt-fix/libapt-pkg6.0_2.6.2_arm64.deb"
     printf '%s\n' \
         'schema=1' \
         'capability=axp717-low-soc-alarm-irqs-v1' \
@@ -82,7 +87,7 @@ EOF
     PF_TEST_CUSTOMIZE_HOOK_CAPTURE="${out_hook}" \
     SRC_DIR="${repo_dir}" BLOBS_DIR="${fixture}/blobs" \
     GPU_UM_MESA_DIR="${fixture}/mesa" WPA_DIR="${fixture}/wpa" \
-    CLOUD_INIT_DIR="${fixture}/cloud-init" \
+    CLOUD_INIT_DIR="${fixture}/cloud-init" PF_APT_FIX_DIR="${PF_APT_FIX_DIR:-${fixture}/apt-fix}" \
     KERNEL_TSP_DIR="${fixture}/kernel" GPU_KM_TSP_DIR="${fixture}/unused-gpu" \
     OUT_DIR="${fixture}/out" SOURCE_DATE_EPOCH=1700000000 \
     PF_DEVICE_ID=a133-open-7x-gpu PF_KERNEL_REPO=kernel-sunxi-7.x \

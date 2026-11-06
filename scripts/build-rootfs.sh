@@ -116,6 +116,8 @@ LIBSDL3_DIR="${LIBSDL3_DIR:-/work/libsdl3}"
 GPU_UM_MESA_DIR="${GPU_UM_MESA_DIR:-/work/gpu-um-mesa}"
 WPA_DIR="${WPA_DIR:-/work/wpa}"
 CLOUD_INIT_DIR="${CLOUD_INIT_DIR:-/work/cloud-init}"
+# Fixed arm64 apt for CVE-2026-109518, fetched and SHA256-pinned by pf-build-base.
+PF_APT_FIX_DIR="${PF_APT_FIX_DIR:-/opt/pocketforge/apt-cve-2026-109518}"
 RUNTIME_DIR="${RUNTIME_DIR:-/work/runtime}"   # E2 runtime binaries (pf-input-decode) from the runtime stage (tsp-e1b.11)
 LAUNCHER_DIR="${LAUNCHER_DIR:-/work/launcher}"
 HWPROBE_DIR="${HWPROBE_DIR:-/work/hwprobe}"
@@ -236,9 +238,19 @@ source "${BOARD_DIR}/fs-uuids.env"
 # shellcheck source=scripts/kernel-module-form.sh
 source "${SRC_DIR}/scripts/kernel-module-form.sh"
 
-# Frozen snapshot mirror
+# Frozen snapshot mirror. The scheme follows the fetch transport: plain http
+# through the PF_APT_PROXY cache (the cache never carries https), https direct
+# otherwise, so a direct fetch has no plain-http leg for a redirect to ride
+# (CVE-2026-109518, bd tsp-hqm1p.143). apt verifies every byte against the
+# signed snapshot index in both modes, and the target's persisted sources are
+# rewritten to https after extraction, so the rootfs bytes do not depend on it.
 SNAPSHOT_DATE="$(cat "${SRC_DIR}/snapshot-date.txt")"
-SNAPSHOT_URL="http://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE}/"
+if [ -n "${PF_APT_PROXY:-}" ]; then
+    SNAPSHOT_SCHEME=http
+else
+    SNAPSHOT_SCHEME=https
+fi
+SNAPSHOT_URL="${SNAPSHOT_SCHEME}://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE}/"
 
 # Working directory
 WORK="$(mktemp -d)"
@@ -378,6 +390,17 @@ CLOUD_INIT_DEB="${CLOUD_INIT_DIR}/cloud-init-pocketforge.deb"
 LOCAL_PACKAGE_OPTS=(
     --include="${CLOUD_INIT_DEB}"
 )
+
+# CVE-2026-109518 (bd tsp-hqm1p.143): the frozen snapshot's apt 2.6.1 is
+# vulnerable. pf-build-base fetched the fixed arm64 apt/libapt-pkg6.0 2.6.2 pair
+# from debian-security and checked it against committed SHA256 pins; the initial
+# solve installs it in place of the snapshot's, so only those two packages move.
+# verify-rootfs-apt-policy.sh gates the installed version after extraction.
+for apt_fix_deb in apt_2.6.2_arm64.deb libapt-pkg6.0_2.6.2_arm64.deb; do
+    [ -f "${PF_APT_FIX_DIR}/${apt_fix_deb}" ] \
+        || { echo "FATAL: CVE-2026-109518 fixed apt package is missing: ${PF_APT_FIX_DIR}/${apt_fix_deb}" >&2; exit 1; }
+    LOCAL_PACKAGE_OPTS+=(--include="${PF_APT_FIX_DIR}/${apt_fix_deb}")
+done
 
 # Feed the deterministic, file-owning package produced from gpu-um-tsp's exact
 # Meson install tree into the initial apt solve. Its versioned Provides satisfy
@@ -2052,6 +2075,8 @@ chmod +x "${CUSTOMIZE_SCRIPT}"
 # mmdebstrap runs its OWN apt in the target, so it does NOT inherit the base
 # container's /etc/apt Retries — it must be passed here. (Retries survive transient
 # 503s; a sustained total outage still needs a mirror fallback / local apt cache.)
+# Retries are safe only because the host apt that mmdebstrap drives is the fixed
+# 2.6.2 pf-build-base asserts (CVE-2026-109518, bd tsp-hqm1p.143).
 # SOURCE_DATE_EPOCH is inherited for reproducibility.
 #
 # Optional transparent apt caching proxy. When PF_APT_PROXY is set (e.g. the NAS
@@ -2321,7 +2346,11 @@ python3 "${SRC_DIR}/scripts/check-app-root-bind-targets.py" \
 # otherwise ship in the release image (build-6: first-boot cloud-config died
 # on the unreachable 10.0.32.86:3142). Strip exactly the line this builder
 # persisted, then fail closed on anything left under etc/apt using apt's own
-# parser plus the private-endpoint policy (bd tsp-mc9m.41.1002.5).
+# parser plus the private-endpoint policy (bd tsp-mc9m.41.1002.5). The persisted
+# snapshot source is rewritten to https first, whichever scheme fetched the build,
+# and the gate also rejects any plain-http source and any apt below the
+# CVE-2026-109518 fix (bd tsp-hqm1p.143).
+"${SRC_DIR}/scripts/rewrite-rootfs-apt-sources-https.sh" "${ROOTFS_EXTRACTED}"
 "${SRC_DIR}/scripts/strip-rootfs-apt-proxy.sh" "${ROOTFS_EXTRACTED}" "${APT_PROXY_PERSISTED}"
 "${SRC_DIR}/scripts/verify-rootfs-apt-policy.sh" "${ROOTFS_EXTRACTED}"
 

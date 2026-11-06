@@ -23,8 +23,11 @@ if [[ -e /etc/apt/preferences.d/50mesa-snapshot ]]; then
 fi
 EOF
 
+# The apt.llvm.org https rewrite (CVE-2026-109518) is checked separately below.
+llvm_https="s#http://apt.llvm.org/#https://apt.llvm.org/#"
 transform=$(
   grep 'sed -i .* /usr/local/src/install-mesa-buildenv\.sh$' "$dockerfile" |
+    grep -vF "$llvm_https" |
     sed -n "s/^[[:space:]]*sed -i '\([^']*\)' \/usr\/local\/src\/install-mesa-buildenv\.sh$/\1/p"
 )
 
@@ -45,6 +48,24 @@ grep -q '^  rm -f /etc/apt/apt.conf.d/50mesa-snapshot$' "$fixture"
 grep -q '^  rm -f /etc/apt/preferences.d/50mesa-snapshot$' "$fixture"
 
 printf 'PASS: Dockerfile preserves conditional cleanup bodies and strips only the LLVM key EXIT trap\n'
+
+grep -Fqx "sed -i '$llvm_https' /usr/local/src/install-mesa-buildenv.sh" "$dockerfile" || {
+  printf 'FAIL: gpu-um-toolchain must rewrite apt.llvm.org to https in install-mesa-buildenv.sh\n' >&2
+  exit 1
+}
+llvm_fixture="$tmpdir/llvm-source.sh"
+# shellcheck disable=SC2016 # The upstream installer's literal shell variable.
+printf '%s\n' \
+  'deb [signed-by=/etc/apt/keyrings/apt.llvm.org.gpg] http://apt.llvm.org/${ubuntu_codename}/ llvm-toolchain-${ubuntu_codename}-20 main' \
+  >"$llvm_fixture"
+sed -i "$llvm_https" "$llvm_fixture"
+# shellcheck disable=SC2016 # Match the literal shell variable.
+grep -Fq ' https://apt.llvm.org/${ubuntu_codename}/ ' "$llvm_fixture"
+if grep -Fq 'http://' "$llvm_fixture"; then
+  printf 'FAIL: apt.llvm.org source stayed plain http after the transform\n' >&2
+  exit 1
+fi
+printf 'PASS: Dockerfile serves the apt.llvm.org source over https\n'
 
 python3 "$root/build/tests/test_gpu_um_toolchain_drift.py"
 

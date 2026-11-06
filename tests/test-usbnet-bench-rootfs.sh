@@ -213,7 +213,7 @@ release="${fixture}/kernel/7.0.0-pocketforge"
 mkdir -p "${fixture_src}/scripts" "${fixture_src}/boards/tsp" \
     "${fixture_src}/packages/pocketforge-open-gpu-stack/DEBIAN" \
     "${fixture}/bin" "${fixture}/out" "${fixture}/wpa" \
-    "${fixture}/cloud-init" \
+    "${fixture}/cloud-init" "${fixture}/apt-fix" \
     "${fixture}/blobs/sunxi/a133/wifi-firmware" "${fixture}/mesa/usr/local/lib/gbm" "${release}"
 # Keep this fixture focused on final-rootfs USB guard ordering. Stage the real
 # builder inputs but replace the independently tested GPU-tools verifier with a
@@ -289,6 +289,8 @@ done
 : > "${release}/powervr.ko"
 : > "${fixture}/wpa/wpa_supplicant"
 : > "${fixture}/cloud-init/cloud-init-pocketforge.deb"
+: > "${fixture}/apt-fix/apt_2.6.2_arm64.deb"
+: > "${fixture}/apt-fix/libapt-pkg6.0_2.6.2_arm64.deb"
 cat > "${fixture}/bin/qemu-aarch64-static" <<'EOF'
 #!/bin/sh
 exit 0
@@ -347,7 +349,7 @@ run_build() {
     PF_TEST_SRC="${root}" PF_TEST_TAMPER="${tamper}" \
     SRC_DIR="${fixture_src}" BLOBS_DIR="${fixture}/blobs" \
     GPU_UM_MESA_DIR="${fixture}/mesa" WPA_DIR="${fixture}/wpa" \
-    CLOUD_INIT_DIR="${fixture}/cloud-init" \
+    CLOUD_INIT_DIR="${fixture}/cloud-init" PF_APT_FIX_DIR="${fixture}/apt-fix" \
     KERNEL_TSP_DIR="${fixture}/kernel" GPU_KM_TSP_DIR="${fixture}/unused-gpu" \
     APP_PLATFORM_RUNTIME_CONFIG="${fixture}/app-platform-runtime.json" \
     OUT_DIR="${fixture}/out" SOURCE_DATE_EPOCH=1700000000 \

@@ -13,6 +13,14 @@ from pathlib import Path
 ARM64_DESTINATION = "/etc/apt/sources.list.d/ubuntu-arm64.sources"
 PINNED_GPU_UM_SHA = "0c3b02bd4cfd98b2fcfbc6b6c1d0a948d60bda15"
 
+# CVE-2026-109518 (bd tsp-hqm1p.143): reviewed downstream deviations from the pinned
+# upstream recipe, kept until gpu-um-tsp carries them. apt.llvm.org and ports.ubuntu.com
+# are fetched over https; the live stage must carry exactly these, nothing looser.
+LLVM_HTTPS_REWRITE = "s#http://apt.llvm.org/#https://apt.llvm.org/#"
+REVIEWED_HTTPS_STANZA = {
+    "URIs: http://ports.ubuntu.com/ubuntu-ports": "URIs: https://ports.ubuntu.com/ubuntu-ports",
+}
+
 INSTALLED_REPRO_CONTRACT = {
     "first-pass install": (
         'DESTDIR=/instroot-first SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" '
@@ -99,9 +107,13 @@ def mesa_env(text: str) -> dict[str, str]:
 
 
 def sed_strip(text: str) -> str:
-    matches = re.findall(
-        r"sed -i\s+(['\"])(.*?)\1\s+/usr/local/src/install-mesa-buildenv\.sh", text
-    )
+    matches = [
+        match
+        for match in re.findall(
+            r"sed -i\s+(['\"])(.*?)\1\s+/usr/local/src/install-mesa-buildenv\.sh", text
+        )
+        if match[1] != LLVM_HTTPS_REWRITE
+    ]
     if len(matches) != 1:
         raise ValueError(f"expected one Mesa buildenv sed strip, found {len(matches)}")
     return matches[0][1]
@@ -189,6 +201,11 @@ def main() -> int:
             ("base image", base_image(expected), base_image(actual)),
             ("sed strip expression", sed_strip(expected), sed_strip(actual)),
             (
+                "apt.llvm.org https rewrite",
+                1,
+                actual.count(f"sed -i '{LLVM_HTTPS_REWRITE}' /usr/local/src/install-mesa-buildenv.sh"),
+            ),
+            (
                 "upstream toolchain apt packages missing",
                 [],
                 sorted(set(installed_packages(expected)) - set(installed_packages(actual))),
@@ -219,7 +236,7 @@ def main() -> int:
             fail(name, "present", "missing")
             failed = True
 
-    expected_stanza = arm64_stanza(expected)
+    expected_stanza = [REVIEWED_HTTPS_STANZA.get(line, line) for line in arm64_stanza(expected)]
     actual_stanza = arm64_stanza(actual)
     for line_number, (wanted, got) in enumerate(
         itertools.zip_longest(expected_stanza, actual_stanza, fillvalue="<missing>"), 1
