@@ -92,7 +92,12 @@ ARG PF_SOC=not-shipped
 # the layer cache key and `docker history`, so cache keys and output bytes are identical
 # with and without the cache. The one thing it needs is a way past the allowlist below,
 # which unsets every variable it does not name: `http_proxy` is admitted (and only that
-# one; https_proxy/no_proxy/ALL_PROXY stay stripped, so every https fetch stays direct).
+# one; https_proxy/no_proxy/ALL_PROXY stay stripped, so curl/wget https fetches stay direct).
+# apt is the exception: it sends an https source through http_proxy as a CONNECT tunnel
+# (measured), which the cache lets through for the Debian hosts but cannot cache, so an
+# apt https source silently bypasses the cache (owned-image-build 42215946514, the Debian 13
+# app root). Every apt client therefore picks http while http_proxy is set, https otherwise
+# (tests/test-app-root-apt-transport.py for scripts/build-debian-app-root.sh).
 # Anything that fetches plain http from a non-apt RUN must bypass it (inventory, checked
 # by tests/test-apt-cache-transport.py):
 #   cts-bundle-v1   curl --noproxy '*' (artifact store over plain http)

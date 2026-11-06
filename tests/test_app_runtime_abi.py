@@ -55,13 +55,19 @@ class DebianRootBuilderTest(unittest.TestCase):
                 printf '%s\\n' "$@" >"$PF_TEST_LOG"
                 output=
                 suite=
+                mirror=
                 for argument in "$@"; do
                     case "$argument" in *.tar) output=$argument ;; esac
                     case "$argument" in bookworm|trixie) suite=$argument ;; esac
+                    case "$argument" in http://*|https://*) mirror=$argument ;; esac
                 done
-                [ -n "$output" ] && [ -n "$suite" ]
+                [ -n "$output" ] && [ -n "$suite" ] && [ -n "$mirror" ]
                 printf 'ID=debian\\nVERSION_CODENAME=%s\\n' "$suite" \\
                     >"$PF_TEST_FIXTURE/etc/os-release"
+                # Like the real mmdebstrap, persist the mirror it was given in the root's apt sources.
+                mkdir -p "$PF_TEST_FIXTURE/etc/apt"
+                printf 'deb %s %s main\\n' "$mirror" "$suite" \\
+                    >"$PF_TEST_FIXTURE/etc/apt/sources.list"
                 tar -cf "$output" -C "$PF_TEST_FIXTURE" .
                 """
             ),
