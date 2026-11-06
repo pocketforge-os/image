@@ -508,8 +508,16 @@ BOOKWORM_SYMBOL_FLOOR = {
     "libgcc_s.so.1": {"GCC": "12.0.0"},
     "libm.so.6": {"GLIBC": "2.36"},
     "libpthread.so.0": {"GLIBC": "2.36"},
+    "libresolv.so.2": {"GLIBC": "2.36"},
     "librt.so.1": {"GLIBC": "2.36"},
     "libstdc++.so.6": {"GLIBCXX": "3.4.30", "CXXABI": "1.3.13"},
+}
+# glibc's own DSOs import GLIBC_PRIVATE from the libc they were built with, so
+# they must always come from the app root's libc6, never the Bookworm slice.
+GLIBC_DSOS = {
+    "ld-linux-aarch64.so.1", "libanl.so.1", "libc.so.6", "libdl.so.2",
+    "libm.so.6", "libnsl.so.1", "libpthread.so.0", "libresolv.so.2",
+    "librt.so.1", "libutil.so.1",
 }
 
 
@@ -684,6 +692,12 @@ class A133OpenRuntimeConfigTest(unittest.TestCase):
         config = json.loads(A133_OPEN_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["base_symbol_version_floor"], BOOKWORM_SYMBOL_FLOOR)
         self.assertEqual(set(config["base_sonames"]), set(BOOKWORM_SYMBOL_FLOOR))
+
+    def test_glibc_dsos_are_never_bundled(self) -> None:
+        config = json.loads(A133_OPEN_CONFIG.read_text(encoding="utf-8"))
+        seeded = {Path(seed).name for seed in config["seeds"]}
+        self.assertEqual(seeded & GLIBC_DSOS, set())
+        self.assertIn("libresolv.so.2", config["base_sonames"])
 
 
 class LoaderVerifierTest(unittest.TestCase):
