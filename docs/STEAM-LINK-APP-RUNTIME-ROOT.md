@@ -214,17 +214,37 @@ snapshot, always for arm64, and records that selection beside the squashfs.
 
 | ABI owner | Supplied objects or resources | Mounted/resolved from |
 | --- | --- | --- |
-| App root | `ld-linux-aarch64.so.1`, libc, libm, libpthread, libdl, librt, libstdc++, and libgcc_s | selected Bookworm or Trixie squashfs |
+| App root | `ld-linux-aarch64.so.1`, libc, libm, libpthread, libdl, libresolv, librt, libstdc++, and libgcc_s | selected Bookworm or Trixie squashfs |
 | Host graphics provider | PowerVR Vulkan ICD, Mesa EGL vendor, GBM, and DRI modules | read-only platform runtime under `/run/pocketforge/platform-runtime/usr/local/lib` |
 | Host neutral graphics/WSI | GLVND EGL/GLES, Vulkan loader, libdrm, Wayland client/EGL, and xkbcommon plus their recursive non-base dependencies | read-only Debian 12 platform runtime |
-| Host discovery policy | relocated Vulkan ICD JSON, relocated GLVND JSON, and Zink `drirc` policy | read-only platform runtime `usr/share` trees |
+| Host discovery policy | relocated Vulkan ICD JSON, relocated GLVND JSON, and the complete Mesa `drirc.d` (`00-mesa-defaults.conf` plus the Zink loader policy) | read-only platform runtime `usr/share` and `usr/local/share` trees |
 | Application stack | WPE/WebKit, Steam Link, and other app-specific libraries | selected app root and its validated app library paths |
 | Session/device ABI | exact Wayland/Xwayland/audio/broker sockets and exact allowed render/input/media/sound device nodes | trusted host inventory; never copied into either userspace tree |
 
 For Debian 13, platform library directories precede app-specific and root
 directories in `LD_LIBRARY_PATH`. `VK_DRIVER_FILES`,
-`__EGL_VENDOR_LIBRARY_FILENAMES`, `LIBGL_DRIVERS_PATH`, and
-`GBM_BACKENDS_PATH` point only into the platform mount. The platform builder
+`__EGL_VENDOR_LIBRARY_FILENAMES`, `LIBGL_DRIVERS_PATH`,
+`GBM_BACKENDS_PATH`, and `DRIRC_CONFIGDIR` point only into the platform mount.
+`DRIRC_CONFIGDIR` is required because Mesa parses its compiled
+`DATADIR/drirc.d` (`/usr/local/share/drirc.d`, `src/util/xmlconfig.c`), and
+inside the app namespace that path belongs to the app root. Without it the
+`powervr -> zink` loader policy is never read. The loader then falls back to
+the kernel driver name and does not select Zink. `DRIRC_CONFIGDIR`
+replaces the whole `DATADIR` search, including `/etc/drirc`, so the runtime
+carries Mesa's `00-mesa-defaults.conf` as well, and the renderer refuses a
+runtime whose sealed data map lacks either file. No host path is bound.
+
+The builder also proves the symbol-version closure when the config sets
+`base_symbol_version_floor` (the a133-open config does). For each bundled ELF
+it reads `readelf -V`. Every version needed from a base SONAME must be at or
+below the oldest supported app root (Bookworm: `GLIBC_2.36`,
+`GLIBCXX_3.4.30`, `CXXABI_1.3.13`, `GCC_12.0.0`). Every version needed from
+a bundled SONAME must be defined by the bundled provider. Private, tag-like and
+unlisted namespaces fail the build. The manifest records `version_defs`,
+`version_needs` and the floor in `abi.json`, so they are part of the runtime
+digest. glibc's own DSOs (for example `libresolv.so.2`, which imports
+`GLIBC_PRIVATE` from the libc it was built with) are app-root base SONAMEs
+and are never bundled. The platform builder
 also relocates absolute `ICD.library_path` fields into that mount, recursively
 copies every non-base `DT_NEEDED` provider, and records the exact SONAME/path
 map plus root-provided set in `abi.json`. The loader verifier refuses missing
