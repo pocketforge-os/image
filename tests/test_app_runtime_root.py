@@ -56,9 +56,32 @@ DISCOVERY_PATHS = {
 }
 PLATFORM_DATA_FILES = {
     "usr/local/lib/dri/zink_dri.so": b"hermetic zink DRI module\n",
+    "usr/local/share/drirc.d/00-mesa-defaults.conf": b"hermetic Mesa drirc defaults\n",
     "usr/local/share/drirc.d/10-pocketforge-zink.conf": b"hermetic drirc policy\n",
     **{path: b"{}\n" for path in DISCOVERY_PATHS},
 }
+PLATFORM_MOUNT = "/run/pocketforge/platform-runtime"
+# Every environment variable that steers Mesa/GLVND/Vulkan discovery. For a
+# Debian 13 root each must resolve inside the read-only platform mount.
+MESA_DISCOVERY_ENVIRONMENT = {
+    "VK_DRIVER_FILES": (
+        f"{PLATFORM_MOUNT}/usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json"
+    ),
+    "__EGL_VENDOR_LIBRARY_FILENAMES": (
+        f"{PLATFORM_MOUNT}/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+    ),
+    "LIBGL_DRIVERS_PATH": f"{PLATFORM_MOUNT}/usr/local/lib/dri",
+    "GBM_BACKENDS_PATH": f"{PLATFORM_MOUNT}/usr/local/lib/gbm",
+    # Mesa's compiled DATADIR is /usr/local/share, which inside the app
+    # namespace is the app root, not the platform runtime.
+    "DRIRC_CONFIGDIR": f"{PLATFORM_MOUNT}/usr/local/share/drirc.d",
+}
+# sha256 of the renderer-owned part of the Debian 12 unit (everything before
+# the policy renderer's output), with the platform digest normalized. Captured
+# from main before the Debian 13 drirc change; Debian 12 must not move.
+DEBIAN_12_UNIT_PREFIX_SHA256 = (
+    "bd7e3d3a3cc6bb6af617674b8b321bb86b3aec8cd838f55da26d5afb81f5335d"
+)
 PLATFORM_ABI = {
     "schema_version": 1,
     "host_distribution": "debian-12",
@@ -367,6 +390,72 @@ class RendererTest(unittest.TestCase):
         platform_index = ld_line.index("/run/pocketforge/platform-runtime")
         app_index = ld_line.index("/opt/pocketforge/apps/org.pocketforge.steamlink")
         self.assertLess(platform_index, app_index)
+
+    def test_debian_13_mesa_discovery_resolves_inside_platform_runtime(self) -> None:
+        self.write_root_metadata("debian-13")
+        self.render(manifest(distribution="debian-13"))
+        unit = self.output.read_text(encoding="utf-8")
+        environment = {}
+        for line in unit.splitlines():
+            if line.startswith('Environment="') and line.endswith('"'):
+                name, _, value = line[len('Environment="'):-1].partition("=")
+                environment[name] = value
+        platform_path = next(
+            path for path in self.platform_store.rglob("sha256-*") if path.is_dir()
+        )
+        for name, expected in MESA_DISCOVERY_ENVIRONMENT.items():
+            self.assertEqual(environment.get(name), expected, name)
+            relative = expected.removeprefix(PLATFORM_MOUNT + "/")
+            self.assertNotEqual(relative, expected, name)
+            self.assertTrue((platform_path / relative).exists(), f"{name}: {relative}")
+        # No discovery value may name a host path or /usr/local outside the mount.
+        for name, value in environment.items():
+            if name == "LD_LIBRARY_PATH":
+                continue
+            for item in value.split(":"):
+                if item.startswith("/"):
+                    self.assertTrue(item.startswith(PLATFORM_MOUNT + "/"), f"{name}={item}")
+        # The redirected drirc directory carries Mesa's defaults and the
+        # provider's Zink loader policy, exactly as the host's DATADIR does.
+        drirc = platform_path / "usr/local/share/drirc.d"
+        self.assertEqual(
+            sorted(path.name for path in drirc.iterdir()),
+            ["00-mesa-defaults.conf", "10-pocketforge-zink.conf"],
+        )
+
+    def test_debian_13_requires_complete_drirc_directory_in_platform_abi(self) -> None:
+        self.write_root_metadata("debian-13")
+        platform_path = next(
+            path for path in self.platform_store.rglob("sha256-*") if path.is_dir()
+        )
+        bad_abi = json.loads(json.dumps(PLATFORM_ABI))
+        del bad_abi["data"]["usr/local/share/drirc.d/00-mesa-defaults.conf"]
+        (platform_path / "abi.json").write_text(
+            json.dumps(bad_abi, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        (platform_path / "usr/local/share/drirc.d/00-mesa-defaults.conf").unlink()
+        version = self.select_current_platform_tree()
+        result = self.render(
+            manifest(distribution="debian-13", platform_version=version), expect=65
+        )
+        self.assertIn("reason=platform_runtime_incompatible", result.stderr)
+        self.assertIn("usr/local/share/drirc.d/00-mesa-defaults.conf", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_debian_12_unit_is_byte_identical_without_mesa_environment(self) -> None:
+        self.render(
+            manifest(capabilities=("audio", "input", "vibration", "egress:tcp/443@*"))
+        )
+        unit = self.output.read_text(encoding="utf-8")
+        for name in (*MESA_DISCOVERY_ENVIRONMENT, "PVR_I_WANT_A_BROKEN_VULKAN_DRIVER"):
+            self.assertNotIn(name, unit)
+        prefix = unit.split("# policy schema=")[0].replace(
+            PLATFORM_VERSION.removeprefix("sha256:"), "<platform-runtime-digest>"
+        )
+        self.assertEqual(
+            hashlib.sha256(prefix.encode()).hexdigest(), DEBIAN_12_UNIT_PREFIX_SHA256
+        )
 
     def test_debian_13_platform_abi_is_required_and_owned(self) -> None:
         self.write_root_metadata("debian-13")

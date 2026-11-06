@@ -486,6 +486,205 @@ class PlatformRuntimeBuilderTest(unittest.TestCase):
         expected_digest = hashlib.sha256("".join(lines).encode()).hexdigest()
         self.assertEqual(store.name, f"sha256-{expected_digest}")
 
+    def test_config_without_symbol_floor_keeps_exact_manifest_bytes(self) -> None:
+        # Golden captured from main before the symbol-version gate: a config
+        # that does not opt in must keep its runtime bytes and digest.
+        output = self.work / "golden"
+        result = self.build(output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            hashlib.sha256((output / "abi.json").read_bytes()).hexdigest(),
+            "77a1d1bd94802f49d79077e1847b75e46f87b0bcd2ff6102e4c76905bb6819e2",
+        )
+
+
+A133_OPEN_CONFIG = ROOT / "build" / "app-platform-runtime-a133-open-v1.json"
+# Debian 12 is the oldest app root that mounts this runtime: glibc 2.36,
+# GCC 12 libstdc++ (GLIBCXX_3.4.30, CXXABI_1.3.13) and libgcc_s.
+BOOKWORM_SYMBOL_FLOOR = {
+    "ld-linux-aarch64.so.1": {"GLIBC": "2.36"},
+    "libc.so.6": {"GLIBC": "2.36"},
+    "libdl.so.2": {"GLIBC": "2.36"},
+    "libgcc_s.so.1": {"GCC": "12.0.0"},
+    "libm.so.6": {"GLIBC": "2.36"},
+    "libpthread.so.0": {"GLIBC": "2.36"},
+    "librt.so.1": {"GLIBC": "2.36"},
+    "libstdc++.so.6": {"GLIBCXX": "3.4.30", "CXXABI": "1.3.13"},
+}
+
+
+class PlatformSymbolVersionTest(unittest.TestCase):
+    """Real cc/readelf ELFs: every version need is met by the root floor or a bundled verdef."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="pf-platform-symver-test-")
+        self.work = Path(self.temp.name)
+        self.host = self.work / "host"
+        self.libdir = self.host / "usr/lib/aarch64-linux-gnu"
+        self.libdir.mkdir(parents=True)
+        (self.host / "usr/local/lib").mkdir(parents=True)
+        libc = run(["cc", "-print-file-name=libc.so.6"]).stdout.strip()
+        self.assertTrue(Path(libc).is_file(), libc)
+        self.libc_versions = self.glibc_versions(Path(libc))
+        self.compile_provider(with_version=True)
+        source = self.work / "gpu.c"
+        source.write_text(
+            "#include <string.h>\n"
+            "int pf_drm(void);\n"
+            "int pf_gpu(const char *s) { return (int)strlen(s) + pf_drm(); }\n",
+            encoding="utf-8",
+        )
+        self.check(
+            [
+                "cc", "-shared", "-fPIC", "-Wl,-soname,libpf_gpu.so.1",
+                str(source), f"-L{self.libdir}", "-l:libpfdrm.so.2",
+                "-o", str(self.host / "usr/local/lib/libpf_gpu.so.1"),
+            ]
+        )
+        self.config = self.work / "config.json"
+        self.write_config({"libc.so.6": {"GLIBC": "2.36"}})
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def check(self, args: list[str]) -> None:
+        result = run(args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @staticmethod
+    def glibc_versions(path: Path) -> set[str]:
+        return {
+            line.split("Name: ", 1)[1].split()[0]
+            for line in run(["readelf", "-V", str(path)]).stdout.splitlines()
+            if "Name: GLIBC_" in line and "Flags: BASE" not in line
+        }
+
+    def compile_provider(self, *, with_version: bool) -> None:
+        source = self.work / "drm.c"
+        source.write_text("int pf_drm(void) { return 2; }\n", encoding="utf-8")
+        args = [
+            "cc", "-shared", "-fPIC", "-Wl,-soname,libpfdrm.so.2", str(source),
+            "-o", str(self.libdir / "libpfdrm.so.2"),
+        ]
+        if with_version:
+            script = self.work / "drm.map"
+            script.write_text("PFDRM_2.4 { global: pf_drm; local: *; };\n", encoding="utf-8")
+            args.insert(-2, f"-Wl,--version-script={script}")
+        self.check(args)
+
+    def write_config(self, floor: dict[str, dict[str, str]] | None) -> None:
+        value: dict[str, object] = {
+            "schema_version": 1,
+            "host_distribution": "debian-12",
+            "library_dirs": ["usr/local/lib", "usr/lib/aarch64-linux-gnu"],
+            "base_sonames": ["libc.so.6"],
+            "seeds": ["usr/local/lib/libpf_gpu.so.1"],
+            "data": [],
+        }
+        if floor is not None:
+            value["base_symbol_version_floor"] = floor
+        self.config.write_text(json.dumps(value), encoding="utf-8")
+
+    def build(self, name: str) -> subprocess.CompletedProcess[str]:
+        return run(
+            [
+                str(PLATFORM_BUILDER), "--host-root", str(self.host),
+                "--config", str(self.config), "--output", str(self.work / name),
+            ]
+        )
+
+    def test_versions_are_satisfied_by_floor_and_bundled_verdefs(self) -> None:
+        result = self.build("runtime")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((self.work / "runtime/abi.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            manifest["base_symbol_version_floor"], {"libc.so.6": {"GLIBC": "2.36"}}
+        )
+        gpu = manifest["files"]["usr/local/lib/libpf_gpu.so.1"]["version_needs"]
+        self.assertEqual(gpu["libpfdrm.so.2"], ["PFDRM_2.4"])
+        self.assertTrue(gpu["libc.so.6"])
+        self.assertTrue(set(gpu["libc.so.6"]) <= self.libc_versions)
+        drm = manifest["files"]["usr/lib/aarch64-linux-gnu/libpfdrm.so.2"]
+        self.assertEqual(drm["version_defs"], ["PFDRM_2.4"])
+        # Deterministic: a second build is byte-identical.
+        again = self.build("again")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(
+            (self.work / "runtime/abi.json").read_bytes(),
+            (self.work / "again/abi.json").read_bytes(),
+        )
+
+    def test_base_requirement_newer_than_floor_refuses(self) -> None:
+        self.write_config({"libc.so.6": {"GLIBC": "2.0"}})
+        result = self.build("newer")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exceeds app-root floor GLIBC_2.0", result.stderr)
+        self.assertIn("libc.so.6", result.stderr)
+        self.assertFalse((self.work / "newer").exists())
+
+    def test_unlisted_namespace_or_base_soname_refuses(self) -> None:
+        self.write_config({"libc.so.6": {"GLIBCXX": "3.4.30"}})
+        result = self.build("namespace")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("has no app-root floor", result.stderr)
+        self.write_config({})
+        result = self.build("soname")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("base_symbol_version_floor must cover every base SONAME", result.stderr)
+
+    def test_bundled_provider_without_needed_version_refuses(self) -> None:
+        self.compile_provider(with_version=False)
+        result = self.build("unversioned")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "libpf_gpu.so.1 needs libpfdrm.so.2 PFDRM_2.4, not defined by the bundled provider",
+            result.stderr,
+        )
+        self.assertFalse((self.work / "unversioned").exists())
+
+    def test_private_and_malformed_versions_never_compare(self) -> None:
+        import runpy
+
+        builder = runpy.run_path(str(PLATFORM_BUILDER))
+        floor = {"GLIBC": "2.36"}
+        self.assertTrue(builder["version_within_floor"]("GLIBC_2.17", floor))
+        self.assertTrue(builder["version_within_floor"]("GLIBC_2.36", floor))
+        self.assertFalse(builder["version_within_floor"]("GLIBC_2.38", floor))
+        self.assertFalse(builder["version_within_floor"]("GLIBC_PRIVATE", floor))
+        self.assertFalse(builder["version_within_floor"]("GLIBC_ABI_DT_RELR", floor))
+        self.assertFalse(builder["version_within_floor"]("GLIBC_2.3x", floor))
+
+
+class A133OpenRuntimeConfigTest(unittest.TestCase):
+    def test_owned_mesa_closure_and_complete_drirc_directory(self) -> None:
+        config = json.loads(A133_OPEN_CONFIG.read_text(encoding="utf-8"))
+        for seed in (
+            "usr/local/lib/libEGL_mesa.so.0",
+            "usr/local/lib/libgallium_dri.so",
+            "usr/local/lib/libgbm.so.1",
+            "usr/local/lib/gbm/dri_gbm.so",
+            "usr/local/lib/libvulkan_powervr_mesa.so",
+        ):
+            self.assertIn(seed, config["seeds"])
+        for data in (
+            "usr/local/lib/dri/zink_dri.so",
+            "usr/local/share/drirc.d/00-mesa-defaults.conf",
+            "usr/local/share/drirc.d/10-pocketforge-zink.conf",
+            "usr/share/glvnd/egl_vendor.d/50_mesa.json",
+            "usr/share/vulkan/icd.d/powervr_mesa_icd.aarch64.json",
+        ):
+            self.assertIn(data, config["data"])
+        for relative, runtime_path in config["json_library_paths"].items():
+            self.assertTrue(
+                runtime_path.startswith("/run/pocketforge/platform-runtime/usr/local/lib/"),
+                relative,
+            )
+
+    def test_symbol_floor_is_the_bookworm_app_root(self) -> None:
+        config = json.loads(A133_OPEN_CONFIG.read_text(encoding="utf-8"))
+        self.assertEqual(config["base_symbol_version_floor"], BOOKWORM_SYMBOL_FLOOR)
+        self.assertEqual(set(config["base_sonames"]), set(BOOKWORM_SYMBOL_FLOOR))
+
 
 class LoaderVerifierTest(unittest.TestCase):
     def setUp(self) -> None:
