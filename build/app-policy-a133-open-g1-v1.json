@@ -15,7 +15,14 @@
       "/dev/dri/renderD128"
     ],
     "session-environment": [
-      "/run/pocketforge/session/environment"
+      "/run/pocketforge/session/environment",
+      "/dev/dri",
+      "/sys/dev/char",
+      "/sys/devices/platform",
+      "/sys/class/drm",
+      "/proc/cpuinfo",
+      "/proc/sys/vm/overcommit_memory",
+      "/dev/urandom"
     ],
     "x11-environment": [
       "/run/pocketforge/x11/policy/environment"

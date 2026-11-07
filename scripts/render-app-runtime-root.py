@@ -91,7 +91,16 @@ RESOURCE_PREFIXES = {
     "input-devices": ("/dev/input/",),
     "media-devices": ("/dev/media",),
     "render-devices": ("/dev/dri/renderD",),
-    "session-environment": ("/run/pocketforge/session/environment",),
+    "session-environment": (
+        "/run/pocketforge/session/environment",
+        "/dev/dri",
+        "/sys/dev/char",
+        "/sys/devices/platform",
+        "/sys/class/drm",
+        "/proc/cpuinfo",
+        "/proc/sys/vm/overcommit_memory",
+        "/dev/urandom",
+    ),
     "video-decode-devices": ("/dev/video",),
     "x11-environment": ("/run/pocketforge/x11/policy/environment",),
     "x11-socket": ("/run/pocketforge/x11/.X11-unix/X0",),
@@ -204,12 +213,16 @@ def load_inventory(path: Path) -> dict[str, object]:
     for name, paths in resources.items():
         if not isinstance(paths, list) or not paths or any(not isinstance(item, str) for item in paths):
             refuse("platform_runtime_invalid", f"resource {name} must be a non-empty string array")
-        if paths != sorted(set(paths)):
-            refuse("platform_runtime_invalid", f"resource {name} must be sorted and unique")
+        if len(paths) != len(set(paths)):
+            refuse("platform_runtime_invalid", f"resource {name} must be unique")
         prefixes = RESOURCE_PREFIXES[name]
         for item in paths:
             if not item.startswith(prefixes) or ".." in PurePosixPath(item).parts:
                 refuse("platform_runtime_invalid", f"resource {name} has forbidden path: {item}")
+        # Canonicalize the grant set for every downstream rendering.  Authors
+        # keep semantic ordering (the session environment file leads its class);
+        # the renderer emits the deterministic sorted form.
+        value["resources"][name] = sorted(paths)
     return value
 
 

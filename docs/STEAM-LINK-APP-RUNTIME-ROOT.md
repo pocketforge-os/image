@@ -317,11 +317,12 @@ an executable contract prototype, not the production parser or installer.
 
 ## Capabilities and least privilege
 
-The host, not the app, owns the resource inventory. Each entry is a sorted list
-of exact paths selected from enumerated prefixes; wildcard device grants are
-forbidden. Socket binds are similarly exact and are created/ACL'd for the app
-service identity by the owning platform service. The renderer starts with a
-private `/dev` and a closed device policy.
+The host, not the app, owns the resource inventory. Each entry is a unique list
+of exact paths selected from enumerated prefixes; the renderer canonicalizes it
+to sorted order. Wildcard device grants are forbidden. Socket binds are
+similarly exact and are created/ACL'd for the app service identity by the
+owning platform service. The renderer starts with a private `/dev` and a
+closed device policy.
 
 Per the 2026-10-03 session-contract reconciliation, display and audio resources
 come only from the compositor-neutral publication under

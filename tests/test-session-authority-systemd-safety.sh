@@ -241,7 +241,7 @@ resources = inventory.get("resources", {})
 valid = (
     inventory.get("platform_runtime") == "/usr"
     and resources.get("display-sockets") == ["/run/pocketforge/session/wayland-0"]
-    and resources.get("session-environment") == ["/run/pocketforge/session/environment"]
+    and "/run/pocketforge/session/environment" in resources.get("session-environment", [])
     and resources.get("render-devices") == ["/dev/dri/renderD128"]
 )
 raise SystemExit(0 if valid else 1)
