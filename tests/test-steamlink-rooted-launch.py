@@ -113,7 +113,7 @@ exec "{state_shell_path}"
         if source is None:
             source = work / ("resource-" + str(len(readonly)))
             # Directory grants (Mesa sysfs/dri trees) must bind a directory source.
-            if path in ("/dev/dri", "/sys/class/drm", "/sys/dev/char", "/sys/devices/platform"):
+            if path in ("/dev/dri", "/sys/class/drm", "/sys/dev/char", "/sys/devices/platform", "/sys/devices/system/cpu"):
                 source.mkdir()
             else:
                 source.touch()

@@ -63,7 +63,7 @@ install -D -m 0644 /dev/null "${app_overlay}/app.toml"
 # cannot bind a tree onto the sealed image.
 while IFS= read -r mountpoint; do
     case "${mountpoint}" in
-        /dev/dri|/sys/class/drm|/sys/dev/char|/sys/devices/platform)
+        /dev/dri|/sys/class/drm|/sys/dev/char|/sys/devices/platform|/sys/devices/system/cpu)
             install -d -m 0755 "${app_root_overlay}${mountpoint}"
             ;;
         *)
