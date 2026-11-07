@@ -22,7 +22,10 @@
       "/sys/class/drm",
       "/proc/cpuinfo",
       "/proc/sys/vm/overcommit_memory",
-      "/dev/urandom"
+      "/dev/urandom",
+      "/proc/meminfo",
+      "/proc/stat",
+      "/sys/devices/system/cpu"
     ],
     "x11-environment": [
       "/run/pocketforge/x11/policy/environment"
