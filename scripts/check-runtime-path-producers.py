@@ -278,7 +278,9 @@ def add_inventory_consumers(path: Path, consumers: dict[str, list[str]]) -> None
         for value in values:
             if not value.startswith("/"):
                 raise AuditError(f"{path}: resource path is not absolute: {value}")
-            if not value.startswith("/dev/"):
+            # Kernel-owned pseudo-filesystems are mounted by the initramfs or
+            # kernel, not produced into the image by a pipeline component.
+            if not value.startswith(("/dev/", "/proc/", "/sys/")):
                 consumers.setdefault(value, []).append(f"{path}:resource:{resource}")
 
 
@@ -302,7 +304,7 @@ def add_unit_consumers(path: Path, consumers: dict[str, list[str]]) -> None:
                 continue
             if not source.startswith("/"):
                 raise AuditError(f"{path}:{directive}: source is not absolute: {source}")
-            if not source.startswith("/dev/"):
+            if not source.startswith(("/dev/", "/proc/", "/sys/")):
                 consumers.setdefault(source, []).append(f"{path}:{directive}")
 
 

@@ -57,11 +57,19 @@ install -D -m 0644 /dev/null \
     "${app_root_overlay}/usr/share/pocketforge/app-policy/${app_id}.resources.json"
 install -D -m 0644 /dev/null "${app_overlay}/app.toml"
 
-# Keep policy-owned mountpoints derived from the policy itself.  Each current
-# target is a device node, socket, or regular file at runtime, for which an
-# empty regular file is the correct pre-bind placeholder in the sealed image.
+# Keep policy-owned mountpoints derived from the policy itself.  Device nodes,
+# sockets, and proc/sysfs files need an empty regular file as their pre-bind
+# placeholder; the read-only directory grants need a directory, or systemd
+# cannot bind a tree onto the sealed image.
 while IFS= read -r mountpoint; do
-    install -D -m 0644 /dev/null "${app_root_overlay}${mountpoint}"
+    case "${mountpoint}" in
+        /dev/dri|/sys/class/drm|/sys/dev/char|/sys/devices/platform)
+            install -d -m 0755 "${app_root_overlay}${mountpoint}"
+            ;;
+        *)
+            install -D -m 0644 /dev/null "${app_root_overlay}${mountpoint}"
+            ;;
+    esac
 done < <(awk -F= '
     $1 == "BindReadOnlyPaths" || $1 == "BindPaths" {
         count = split($2, values, /[[:space:]]+/)
