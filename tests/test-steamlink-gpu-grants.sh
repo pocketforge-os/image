@@ -11,7 +11,9 @@ import json, pathlib, sys
 inv = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 frag = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
 need = ["/dev/dri", "/sys/dev/char", "/sys/devices/platform", "/sys/class/drm",
-        "/proc/cpuinfo", "/proc/sys/vm/overcommit_memory", "/dev/urandom"]
+        "/proc/cpuinfo", "/proc/sys/vm/overcommit_memory", "/dev/urandom",
+        # sat3w/sat3x: PVR sizes its heap from these; denied -> 484 MiB heap, ZINK vkCreateDevice OOM
+        "/proc/meminfo", "/proc/stat", "/sys/devices/system/cpu"]
 env = inv["resources"]["session-environment"]
 for p in need:
     if p not in env:
