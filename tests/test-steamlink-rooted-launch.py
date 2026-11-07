@@ -112,7 +112,11 @@ exec "{state_shell_path}"
         source = environment_sources.get(path)
         if source is None:
             source = work / ("resource-" + str(len(readonly)))
-            source.touch()
+            # Directory grants (Mesa sysfs/dri trees) must bind a directory source.
+            if path in ("/dev/dri", "/sys/class/drm", "/sys/dev/char", "/sys/devices/platform"):
+                source.mkdir()
+            else:
+                source.touch()
         readonly += ["--ro-bind", str(source), path]
     for path in policy["unit"]["bind_read_write"]:
         write(path, "")
