@@ -49,6 +49,9 @@ install -D -m 0644 \
 install -D -m 0644 \
     "${src}/../build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
     "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf"
+install -D -m 0644 \
+    "${src}/../build/pf-app@org.pocketforge.steamlink.service.d/20-pad-order.conf" \
+    "${rootfs}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/20-pad-order.conf"
 
 # The session is never enabled or selected as the default. A user opts into a
 # resident session by explicitly starting pocketforge-gamescope-resident.service.

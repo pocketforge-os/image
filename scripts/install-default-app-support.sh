@@ -35,6 +35,7 @@ platform="${runtime_stage}/share/platform-capabilities.toml"
 shell="${launcher_stage}/bin/pf-shell"
 broker="${runtime_stage}/bin/pf-input-broker"
 broker_unit="${runtime_stage}/systemd/pf-input-broker.service"
+pad_rule="${runtime_stage}/udev/70-pf-app-pad.rules"
 library="${runtime_stage}/lib/libpocketforge.so.1"
 descriptors="${runtime_stage}/share/devices"
 descriptor="${descriptors}/${descriptor_id}/capabilities.toml"
@@ -51,7 +52,7 @@ broker_supervisor="${overlay}/usr/lib/pocketforge/pf-input-broker-supervisor"
 
 if [ "${gpu_model}" != open ]; then
     for forbidden in "${helper}" "${fetcher}" "${authority}" "${sampler}" "${platform}" "${shell}" \
-        "${broker}" "${broker_unit}" "${library}" "${descriptors}" \
+        "${broker}" "${broker_unit}" "${pad_rule}" "${library}" "${descriptors}" \
         "${neutral_descriptors}"; do
         [ ! -e "${forbidden}" ] || {
             echo "FATAL: default-app artifact staged for non-open profile: ${forbidden}" >&2
@@ -62,7 +63,7 @@ if [ "${gpu_model}" != open ]; then
 fi
 
 for required in "${helper}" "${fetcher}" "${fetch_unit}" "${fetch_tmpfiles}" "${authority}" "${sampler}" "${platform}" "${shell}" "${unit}" \
-    "${broker}" "${broker_unit}" "${library}" "${descriptor}" \
+    "${broker}" "${broker_unit}" "${pad_rule}" "${library}" "${descriptor}" \
     "${neutral_descriptor}" "${broker_dropin}" "${shell_dropin}" \
     "${cursor_dropin}" "${input_sysusers}" "${input_tmpfiles}" \
     "${broker_supervisor}"; do
@@ -119,6 +120,8 @@ install -D -m 0644 "${fetch_tmpfiles}" "${rootfs}/usr/lib/tmpfiles.d/pf-app-fetc
 
 install -D -m 0755 "${broker}" "${rootfs}/usr/bin/pf-input-broker"
 install -D -m 0644 "${broker_unit}" "${rootfs}/etc/systemd/system/pf-input-broker.service"
+install -D -m 0644 "${pad_rule}" \
+    "${rootfs}/etc/udev/rules.d/70-pf-app-pad.rules"
 install -D -m 0644 "${broker_dropin}" \
     "${rootfs}/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 install -D -m 0644 "${shell_dropin}" \

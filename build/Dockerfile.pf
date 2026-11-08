@@ -1688,6 +1688,8 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   if grep -qa 'ld-musl\|ld-linux' "${BROKER_BIN}"; then echo "FATAL: pf-input-broker is dynamically linked (expected static musl)"; exit 1; fi
   install -D -m 0755 "${BROKER_BIN}" /out/bin/pf-input-broker
   install -D -m 0644 crates/pf-input-broker/systemd/pf-input-broker.service /out/systemd/pf-input-broker.service
+  [ -f "crates/pf-input-broker/systemd/70-pf-app-pad.rules" ] || { echo "FATAL: 70-pf-app-pad.rules absent from runtime source"; exit 1; }
+  install -D -m 0644 crates/pf-input-broker/systemd/70-pf-app-pad.rules /out/udev/70-pf-app-pad.rules
   # (3) libpocketforge.so.1 — the cdylib ps-platform dlopens by that file name. It is
   #     the gnu-target cdylib from the SDK build above (crate-type staticlib+cdylib),
   #     linked against the toolchain's glibc sysroot. Gates: aarch64 ET_DYN, max
@@ -1729,6 +1731,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     printf '  pf-app-launch sha256=%s\n' "$(sha256sum /out/bin/pf-app-launch | cut -d' ' -f1)"
     printf '  pf-app-fetch sha256=%s\n' "$(sha256sum /out/bin/pf-app-fetch | cut -d' ' -f1)"
     printf '  pf-input-broker sha256=%s\n' "$(sha256sum /out/bin/pf-input-broker | cut -d' ' -f1)"
+    printf '  udev/70-pf-app-pad.rules sha256=%s\n' "$(sha256sum /out/udev/70-pf-app-pad.rules | cut -d' ' -f1)"
     printf '  libpocketforge.so.1 sha256=%s\n' "$(sha256sum /out/lib/libpocketforge.so.1 | cut -d' ' -f1)"
     printf '  devices/%s/capabilities.toml sha256=%s\n' "${PF_DEVICE_DESCRIPTOR_ID}" "${DESCRIPTOR_SHA256}"
     for font in "Manrope[wght].ttf" "Manrope-OFL.txt" \
