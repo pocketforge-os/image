@@ -41,6 +41,7 @@ PYTHON
 test -x "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/steamlink-fetch.py"
 grep -F -- '--runtime-builds-root "${app}/verified-builds"' "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/pf-launch" >/dev/null
 test -f "${overlay}/opt/pocketforge/apps/org.pocketforge.steamlink/valve-steamlink-release-key.gpg"
+test -s "${overlay}/etc/asound.conf"
 if find "${overlay}" -name '*.tar.gz' -o -name '*.sig' | grep -q .; then
     echo 'Valve payload reached app-root overlay' >&2
     exit 1
@@ -203,6 +204,8 @@ make_rootfs() {
         "${target}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d"
     install -m 0644 "${root}/rootfs-overlay/etc/systemd/system/pf-app@.service" \
         "${target}/etc/systemd/system/pf-app@.service"
+    install -D -m 0644 "${root}/device-config/alsa/asound.conf.sun4i-codec" \
+        "${target}/etc/asound.conf"
     printf '%s\n' legacy-host-root-policy \
         >"${target}/etc/systemd/system/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf"
     digest=$(printf '%064d' 1)
@@ -484,6 +487,24 @@ if PF_TEST_BAD_PACKAGES=1 \
 fi
 grep -F 'root metadata package closure differs' "${scratch}/bad-packages.err" >/dev/null
 test ! -e "${bad_packages_rootfs}/opt/pocketforge/apps/org.pocketforge.steamlink"
+
+# The platform /etc/asound.conf is the DUT's only audio configuration; a rootfs
+# without it must fail before any app-root artifact is installed.
+missing_asound_rootfs="${scratch}/missing-asound-rootfs"
+make_rootfs "${missing_asound_rootfs}"
+rm "${missing_asound_rootfs}/etc/asound.conf"
+if PF_STEAMLINK_ROOT_BUILDER="${bin}/root-builder" \
+    PF_STEAMLINK_ROOT_RENDERER="${bin}/root-renderer" \
+    PF_STEAMLINK_POLICY_RENDERER="${bin}/policy-renderer" \
+    PF_REAL_ROOT_RENDERER="${root}/scripts/render-app-runtime-root.py" \
+    PF_REAL_POLICY_FRAGMENT="${root}/build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf" \
+        "${installer}" "${missing_asound_rootfs}" 20261010T000000Z root \
+        >"${scratch}/missing-asound.out" 2>"${scratch}/missing-asound.err"; then
+    echo 'rootfs without the platform ALSA configuration was accepted' >&2
+    exit 1
+fi
+grep -F 'missing platform ALSA configuration' "${scratch}/missing-asound.err" >/dev/null
+test ! -e "${missing_asound_rootfs}/opt/pocketforge/apps/org.pocketforge.steamlink"
 
 if [ "${PF_TEST_REQUIRE_REAL_SQUASHFS:-0}" = 1 ]; then
     command -v mksquashfs >/dev/null
