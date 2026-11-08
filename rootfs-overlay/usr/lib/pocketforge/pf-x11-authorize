@@ -69,6 +69,26 @@ def require_socket_identity(path: Path, expected: tuple[int, int]) -> None:
         raise SocketGenerationChanged
 
 
+MAX_SKIPPED_EVENTS = 64
+
+
+def recv_reply(client: socket.socket) -> bytes:
+    """Read the next 32-byte reply/error, skipping interleaved X11 events.
+
+    A server may queue events (codes 2..127, bit 0x80 = SendEvent) ahead of the
+    reply; a respawning Xwayland did so in G' gps1. Replies and errors are the
+    only packets this client acts on.
+    """
+    for _ in range(MAX_SKIPPED_EVENTS + 1):
+        packet = recv_exact(client, 32)
+        if packet[0] in (0, 1):
+            return packet
+        if (packet[0] & 0x7F) < 2:
+            fail(f"unexpected_x11_reply byte={packet[0]}")
+    fail("unexpected_x11_reply events_only")
+    raise AssertionError("unreachable")
+
+
 def project_socket(path: Path, gid: int, mode: int) -> tuple[int, int]:
     try:
         before = path.stat(follow_symlinks=False)
@@ -133,11 +153,9 @@ def connect_authorized(
             # Force the request through the server and fail closed on a protocol
             # error. GetInputFocus is harmless and has a fixed-size reply.
             client.sendall(struct.pack("<BBH", 43, 0, 1))
-            reply = recv_exact(client, 32)
+            reply = recv_reply(client)
             if reply[0] == 0:
                 fail("server_rejected_acl")
-            if reply[0] != 1:
-                fail("unexpected_x11_reply")
             require_socket_identity(path, identity)
             return client
         except SocketGenerationChanged:
@@ -176,7 +194,7 @@ def probe(client: socket.socket, poll_seconds: float) -> None:
     client.settimeout(max(0.1, poll_seconds))
     try:
         client.sendall(struct.pack("<BBH", 43, 0, 1))
-        reply = recv_exact(client, 32)
+        reply = recv_reply(client)
     except (OSError, SystemExit) as error:
         raise ConnectionError("x11 server generation ended") from error
     if reply[0] != 1:
