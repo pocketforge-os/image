@@ -3,7 +3,8 @@
   "resources": {
     "audio-devices": [
       "/dev/snd/controlC0",
-      "/dev/snd/pcmC0D0p"
+      "/dev/snd/pcmC0D0p",
+      "/dev/snd/timer"
     ],
     "display-sockets": [
       "/run/pocketforge/session/wayland-0"
