@@ -13,6 +13,8 @@ export PF_APP_POLICY_RENDER=/work/target/debug/pf-app-policy-render
 (cd /work/target/debug && sha256sum pf-app-launch pf-app-policy-render) > /work/SHA256SUMS
 tests/test-app-runtime-root.sh
 tests/test-steamlink-app-policy.sh "$PF_APP_POLICY_RENDER"
+python3 -I tests/test-steamlink-pad-grant.py
+python3 -I tests/test-pad-rule-installed.py
 tests/test-steamlink-first-run-install.sh
 tests/test-default-app-platform.sh
 PF_RUNTIME_UNITS_DIR=/workspace/runtime-pair/systemd tests/test-runtime-path-producers.sh

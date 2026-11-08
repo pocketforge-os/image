@@ -102,7 +102,7 @@ aarch64_fixture() {
     dd if=/dev/zero of="$1" bs=64 count=1 status=none
     printf '\267\000' | dd of="$1" bs=1 seek=18 conv=notrunc status=none
 }
-mkdir -p "${runtime}/systemd" "${runtime}/lib" "${runtime}/share/devices/a133" \
+mkdir -p "${runtime}/udev" "${runtime}/systemd" "${runtime}/lib" "${runtime}/share/devices/a133" \
     "${runtime}/share/device"
 aarch64_fixture "${runtime}/bin/pf-input-broker"
 chmod 0755 "${runtime}/bin/pf-input-broker"
@@ -113,6 +113,7 @@ chmod 0755 "${runtime}/bin/pf-hang-sampler"
 aarch64_fixture "${runtime}/lib/libpocketforge.so.1"
 printf '%s\n' '[Unit]' 'Description=runtime broker unit fixture' '[Install]' \
     'WantedBy=multi-user.target' > "${runtime}/systemd/pf-input-broker.service"
+cp "${root}/tests/fixtures/70-pf-app-pad.rules" "${runtime}/udev/70-pf-app-pad.rules"
 printf '[identity]\nid = "a133"\n' > "${runtime}/share/devices/a133/capabilities.toml"
 cp "${runtime}/share/devices/a133/capabilities.toml" \
     "${runtime}/share/device/capabilities.toml"
@@ -155,6 +156,7 @@ test -x "${rootfs}/usr/bin/pf-input-broker"
 cmp "${runtime}/bin/pf-input-broker" "${rootfs}/usr/bin/pf-input-broker"
 cmp "${runtime}/systemd/pf-input-broker.service" \
     "${rootfs}/etc/systemd/system/pf-input-broker.service"
+cmp "${runtime}/udev/70-pf-app-pad.rules" "${rootfs}/etc/udev/rules.d/70-pf-app-pad.rules"
 cmp "${overlay}/pf-input-broker.service.d/10-app-session.conf" \
     "${rootfs}/etc/systemd/system/pf-input-broker.service.d/10-app-session.conf"
 cmp "${overlay}/pf-shell-selected.service.d/10-input-broker.conf" \
@@ -186,7 +188,7 @@ if find "${rootfs}" -path '*.wants/*' -name 'pf-input-broker.service' | grep -q 
 fi
 
 # Every open input-delivery artifact is required: removing any one fails closed.
-for missing in bin/pf-input-broker bin/pf-hang-sampler systemd/pf-input-broker.service \
+for missing in bin/pf-input-broker bin/pf-hang-sampler systemd/pf-input-broker.service udev/70-pf-app-pad.rules \
     lib/libpocketforge.so.1 share/devices/a133/capabilities.toml \
     share/device/capabilities.toml; do
     mv "${runtime}/${missing}" "${tmp}/held"
@@ -248,7 +250,7 @@ for gpu_model in ddk none; do
     find "${non_open_rootfs}" -printf '%P %y %m\n' | LC_ALL=C sort > "${tmp}/after"
     cmp "${tmp}/before" "${tmp}/after"
 done
-for leak in bin/pf-app-launch bin/pf-app-fetch bin/pf-hang-sampler bin/pf-input-broker systemd/pf-input-broker.service \
+for leak in bin/pf-app-launch bin/pf-app-fetch bin/pf-hang-sampler bin/pf-input-broker systemd/pf-input-broker.service udev/70-pf-app-pad.rules \
     lib/libpocketforge.so.1 share/devices/a133/capabilities.toml \
     share/device/capabilities.toml; do
     mkdir -p "$(dirname "${tmp}/closed-runtime/${leak}")"
