@@ -2,6 +2,11 @@ FROM debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4
 
 ENV container=docker
 
+# bookworm's apt 2.6 retries by default (Acquire::Retries 3) with the retry delay on,
+# and with it apt-get update can stop for good once one index fails transiently while
+# another on the same host succeeds (LP #2003851, tsp-mc9m.60.29.84.67). The retries
+# stay; the delay goes.
+RUN printf '%s\n' 'Acquire::Retries::Delay "false";' > /etc/apt/apt.conf.d/99-pf-retry-delay
 RUN apt-get update -qq \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
         dbus \

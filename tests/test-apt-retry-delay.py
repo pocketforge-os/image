@@ -29,7 +29,14 @@ Contract under test:
   3. every mmdebstrap call (build-rootfs.sh, build-rootfs-a523.sh,
      build-debian-app-root.sh) passes --aptopt 'Acquire::Retries::Delay "false"':
      mmdebstrap runs apt with its own config, so no drop-in reaches it;
-  4. red controls: each regression of 1-3 is refused;
+  3b. the test-only container recipes that run apt (tsp-mc9m.60.29.84.67): in
+     tests/input-harness/Containerfile.guest-payload (the pinned build container,
+     through the NAS cache) and tests/session-authority-systemd/{,probe/}Containerfile
+     (bookworm, apt's default retries) every stage that runs apt with retries has
+     the drop-in before that run, itself or in a stage it is built on, and every
+     mmdebstrap call there carries the aptopt. tests/input-harness/Containerfile is
+     out of scope only while it builds on trixie, whose apt 3.0.3 has the fix;
+  4. red controls: each regression of 1-3b is refused;
   5. live, where apt-get and dpkg exist: the effective apt config of each path
      carries `apt-get update` through a loopback origin that cuts the first fetch of
      two of three suites' Release after the headers, and the pinned container's
@@ -54,6 +61,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONTAINER = ROOT / "build" / "Dockerfile"
 DOCKERFILE_PF = ROOT / "build" / "Dockerfile.pf"
+TEST_RECIPES = ("tests/input-harness/Containerfile.guest-payload",
+                "tests/session-authority-systemd/Containerfile",
+                "tests/session-authority-systemd/probe/Containerfile")
+# Recipes whose base apt carries the LP #2003851 fix: the base they must keep.
+FIXED_APT_BASES = {
+    "tests/input-harness/Containerfile": (
+        "ARG BASE_IMAGE=debian@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f",
+        "trixie, apt 3.0.3"),
+}
 MMDEBSTRAP_SCRIPTS = ("scripts/build-rootfs.sh", "scripts/build-rootfs-a523.sh",
                       "scripts/build-debian-app-root.sh")
 DELAY_OFF = 'Acquire::Retries::Delay "false";'
@@ -121,14 +137,14 @@ def container_problems(text: str) -> list[str]:
 
 # ---------------------------------------------------------------- 2. Dockerfile.pf
 def parse_stages(text: str) -> dict[str, dict]:
+    """Stages by name; an unnamed stage is keyed #<its index>."""
     pattern = re.compile(r"^FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?\s*$", re.M)
     found = list(pattern.finditer(text))
     stages: dict[str, dict] = {}
     for index, match in enumerate(found):
         end = found[index + 1].start() if index + 1 < len(found) else len(text)
-        if match.group(2):
-            stages[match.group(2)] = {"parent": match.group(1),
-                                      "lines": code_lines(text[match.start():end])}
+        stages[match.group(2) or f"#{index}"] = {"parent": match.group(1),
+                                                 "lines": code_lines(text[match.start():end])}
     return stages
 
 
@@ -202,21 +218,69 @@ def mmdebstrap_problems(name: str, text: str) -> list[str]:
     return problems
 
 
+# ---------------------------------------------------------------- 3b. test recipes
+def recipe_mmdebstrap_calls(text: str) -> list[list[str]]:
+    """mmdebstrap commands inside a recipe's RUN lines, up to the next ; or &&."""
+    calls = []
+    for line in code_lines(joined(text)):
+        for match in re.finditer(r"(?<![\w./-])mmdebstrap\s+((?:[^;&']|'[^']*'|&(?!&))*)", line):
+            calls.append(["mmdebstrap"] + shlex.split(match.group(1)))
+    return calls
+
+
+def recipe_problems(name: str, text: str) -> list[str]:
+    stages = parse_stages(text)
+    problems = []
+    for stage, spec in stages.items():
+        first = next((i for i, line in enumerate(spec["lines"]) if retrying_apt(line)), None)
+        if first is None:
+            continue
+        own = [i for i, line in enumerate(spec["lines"]) if line.strip() == DROP_IN_RUN]
+        chain, current = [], spec["parent"]
+        while current in stages and current not in chain:
+            chain.append(current)
+            current = stages[current]["parent"]
+        inherited = any(any(line.strip() == DROP_IN_RUN for line in stages[s]["lines"]) for s in chain)
+        if not inherited and not (own and own[0] < first):
+            problems.append(f"reason=apt_retry_delay_deadlock {name} stage {stage}: runs apt with "
+                            f"retries before any retry-delay drop-in: {spec['lines'][first].strip()[:100]}")
+    for argv in recipe_mmdebstrap_calls(text):
+        opts = aptopts(argv)
+        if retries_on(opts) and DELAY_OFF not in opts:
+            problems.append(f"reason=apt_retry_delay_deadlock {name}: mmdebstrap retries without "
+                            f"--aptopt '{DELAY_OFF.rstrip(';')}': {opts}")
+    return problems
+
+
+def fixed_base_problems(name: str, text: str) -> list[str]:
+    base, why = FIXED_APT_BASES[name]
+    if base not in text.splitlines():
+        return [f"reason=apt_retry_delay_deadlock {name}: its base is no longer `{base}` ({why}); "
+                "read the new base's apt version and add the recipe to TEST_RECIPES if it lacks "
+                "the LP #2003851 fix"]
+    return []
+
+
 def all_problems(texts: dict[str, str]) -> list[str]:
     problems = container_problems(texts["build/Dockerfile"])
     problems += pf_problems(texts["build/Dockerfile.pf"])
     for name in MMDEBSTRAP_SCRIPTS:
         problems += mmdebstrap_problems(name, texts[name])
+    for name in TEST_RECIPES:
+        problems += recipe_problems(name, texts[name])
+    for name in FIXED_APT_BASES:
+        problems += fixed_base_problems(name, texts[name])
     return problems
 
 
 TEXTS = {name: (ROOT / name).read_text(encoding="utf-8")
-         for name in ("build/Dockerfile", "build/Dockerfile.pf") + MMDEBSTRAP_SCRIPTS}
+         for name in ("build/Dockerfile", "build/Dockerfile.pf") + MMDEBSTRAP_SCRIPTS
+         + TEST_RECIPES + tuple(FIXED_APT_BASES)}
 problems = all_problems(TEXTS)
 if problems:
     fail("\n  ".join(problems))
-ok("the build container's persisted snippet, every apt stage of Dockerfile.pf and every "
-   "mmdebstrap call retry with Acquire::Retries::Delay \"false\"")
+ok("the build container's persisted snippet, every apt stage of Dockerfile.pf and of the "
+   "test recipes, and every mmdebstrap call retry with Acquire::Retries::Delay \"false\"")
 
 # ---------------------------------------------------------------- 4. red controls
 DELAY_ITEM = "'Acquire::Retries::Delay \"false\";' \\\n"
@@ -237,6 +301,18 @@ for name in ROOT_STAGES:
         lambda stage: lambda t: drop_stage_drop_in(t, stage))(name))
 controls["pf-build-base drop-in after its first retrying apt run"] = (
     "build/Dockerfile.pf", lambda t: move_base_drop_in_late(t))
+for name in TEST_RECIPES:
+    controls[f"{name} without its drop-in"] = (name, (
+        lambda t: t.replace(DROP_IN_RUN + "\n", "", 1)))
+controls["the session-authority drop-in after its apt run"] = (
+    "tests/session-authority-systemd/Containerfile", lambda t: move_drop_in_after_apt(t))
+controls["a guest-payload mmdebstrap call without the delay aptopt"] = (
+    "tests/input-harness/Containerfile.guest-payload", lambda t: t.replace(
+        " --aptopt='Acquire::Retries::Delay \"false\"'", "", 1))
+controls["the input harness on a base without the apt fix"] = (
+    "tests/input-harness/Containerfile", lambda t: t.replace(
+        FIXED_APT_BASES["tests/input-harness/Containerfile"][0],
+        "ARG BASE_IMAGE=debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171", 1))
 
 
 def stage_span(text: str, stage: str) -> tuple[int, int]:
@@ -260,6 +336,22 @@ def move_base_drop_in_late(text: str) -> str:
         return text
     block = block.replace(DROP_IN_RUN + "\n", "", 1).rstrip("\n") + "\n" + DROP_IN_RUN + "\n\n"
     return text[:start] + block + text[end:]
+
+
+def move_drop_in_after_apt(text: str) -> str:
+    """The drop-in moved to just after the RUN that starts with apt-get update."""
+    lines = text.splitlines(keepends=True)
+    if DROP_IN_RUN + "\n" not in lines:
+        return text
+    lines.remove(DROP_IN_RUN + "\n")
+    start = next((i for i, line in enumerate(lines) if line.startswith("RUN apt-get update")), None)
+    if start is None:
+        return text
+    end = start
+    while lines[end].rstrip("\n").endswith("\\"):
+        end += 1
+    lines.insert(end + 1, DROP_IN_RUN + "\n")
+    return "".join(lines)
 
 
 for label, (name, mutate) in controls.items():
@@ -410,6 +502,11 @@ else:
     }
     for name in MMDEBSTRAP_SCRIPTS:
         for index, argv in enumerate(mmdebstrap_calls(TEXTS[name])):
+            paths[f"{name} mmdebstrap call {index + 1}"] = {"99mmdebstrap": sanitize(aptopts(argv))}
+    # The test recipes' apt stages run on the pinned container (guest payload) or on
+    # bookworm's defaults (session authority): covered above. Their mmdebstrap calls:
+    for name in TEST_RECIPES:
+        for index, argv in enumerate(recipe_mmdebstrap_calls(TEXTS[name])):
             paths[f"{name} mmdebstrap call {index + 1}"] = {"99mmdebstrap": sanitize(aptopts(argv))}
     for label, parts in paths.items():
         state, detail = replay(parts, LIVE_TIMEOUT_S)
