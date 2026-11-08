@@ -106,6 +106,8 @@ mkdir -p "${runtime}/systemd" "${runtime}/lib" "${runtime}/share/devices/a133" \
     "${runtime}/share/device"
 aarch64_fixture "${runtime}/bin/pf-input-broker"
 chmod 0755 "${runtime}/bin/pf-input-broker"
+aarch64_fixture "${runtime}/bin/pf-app-fetch"
+chmod 0755 "${runtime}/bin/pf-app-fetch"
 aarch64_fixture "${runtime}/bin/pf-hang-sampler"
 chmod 0755 "${runtime}/bin/pf-hang-sampler"
 aarch64_fixture "${runtime}/lib/libpocketforge.so.1"
@@ -134,6 +136,11 @@ ln -s /etc/systemd/system/pf-input-broker.service \
     "${rootfs}/etc/systemd/system/multi-user.target.wants/pf-input-broker.service"
 "${installer}" open "${rootfs}" "${runtime}" "${launcher}" "${unit}"
 test -x "${rootfs}/usr/bin/pf-app-launch"
+test -x "${rootfs}/usr/bin/pf-app-fetch"
+cmp "${root}/rootfs-overlay/etc/systemd/system/pf-app-fetch@.service" \
+    "${rootfs}/etc/systemd/system/pf-app-fetch@.service"
+cmp "${root}/rootfs-overlay/usr/lib/tmpfiles.d/pf-app-fetch.conf" \
+    "${rootfs}/usr/lib/tmpfiles.d/pf-app-fetch.conf"
 cmp "${runtime}/share/platform-capabilities.toml" \
     "${rootfs}/usr/share/pocketforge/platform-capabilities.toml"
 cmp "${unit}" "${rootfs}/etc/systemd/system/pf-app@.service"
@@ -241,7 +248,7 @@ for gpu_model in ddk none; do
     find "${non_open_rootfs}" -printf '%P %y %m\n' | LC_ALL=C sort > "${tmp}/after"
     cmp "${tmp}/before" "${tmp}/after"
 done
-for leak in bin/pf-app-launch bin/pf-hang-sampler bin/pf-input-broker systemd/pf-input-broker.service \
+for leak in bin/pf-app-launch bin/pf-app-fetch bin/pf-hang-sampler bin/pf-input-broker systemd/pf-input-broker.service \
     lib/libpocketforge.so.1 share/devices/a133/capabilities.toml \
     share/device/capabilities.toml; do
     mkdir -p "$(dirname "${tmp}/closed-runtime/${leak}")"

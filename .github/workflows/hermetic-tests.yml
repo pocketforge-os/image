@@ -169,6 +169,7 @@ jobs:
             tests/test-overlay-coverage.sh
             tests/test-poolsuite-rootfs-install.sh
             tests/test-poolsuite-variant-stage.sh
+            tests/test-pf-app-fetch-unit.sh
             tests/test-pf-app-session-graph.sh
             tests/test-power-menu-wiring.sh
             tests/test-recovery-entry.sh
