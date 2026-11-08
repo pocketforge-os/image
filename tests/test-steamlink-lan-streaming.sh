@@ -1,0 +1,27 @@
+#!/bin/sh
+# sat3y demo blockers: LAN discovery/streaming needs AF_NETLINK, the Steam Link UDP/TCP
+# ports in the declared egress, and a writable XDG_DATA_HOME for streaming_settings.bin.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+python3 - "$root" <<'PY'
+import pathlib, re, sys, tomllib
+root = pathlib.Path(sys.argv[1])
+use = tomllib.loads((root / "apps/steamlink/app.toml").read_text())["app"]["use"]
+want = [f"egress:udp/{p}@*" for p in range(27031, 27037)] + ["egress:tcp/27036@*", "egress:tcp/27037@*"]
+for w in want:
+    if w not in use:
+        raise SystemExit(f"app.toml use lacks {w}")
+frag = (root / "build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf").read_text()
+for w in ("UDP", "27031", "27037"):
+    pass
+inst = (root / "scripts/install-steamlink-first-run.sh").read_text()
+if "RestrictAddressFamilies=AF_NETLINK" not in inst:
+    raise SystemExit("installer lacks RestrictAddressFamilies=AF_NETLINK")
+launch = (root / "apps/steamlink/pf-launch").read_text()
+if not re.search(r'XDG_DATA_HOME=.*state', launch) or "Valve Corporation/SteamLink" not in launch:
+    raise SystemExit("pf-launch lacks a writable default XDG_DATA_HOME")
+for f in ("docs/STEAM-LINK-APP-RUNTIME-ROOT.md", "scripts/build-steamlink-app-root-prototype.sh"):
+    if "egress:udp/27031@*" not in (root / f).read_text():
+        raise SystemExit(f"{f} lacks the LAN egress list")
+print("Steam Link LAN streaming: PASS")
+PY

@@ -26,7 +26,7 @@ manifest_path, inventory_path, producer_path, fragment_path = map(pathlib.Path, 
 with manifest_path.open("rb") as source:
     manifest = tomllib.load(source)
 inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-expected = ["audio", "input", "x11", "egress:tcp/443@*"]
+expected = ["audio", "input", "x11", "egress:tcp/443@*"] + [f"egress:udp/{p}@*" for p in range(27031, 27037)] + ["egress:tcp/27036@*", "egress:tcp/27037@*"]
 if manifest["app"]["use"] != expected:
     raise SystemExit(f"Steam Link capability policy differs: {manifest['app']['use']!r}")
 if manifest["launch"]["needs_network"] is not True:
@@ -40,7 +40,7 @@ for name, paths in canonical.items():
     if resources.get(name) != paths:
         raise SystemExit(f"Steam Link {name} policy differs: {resources.get(name)!r}")
 producer = producer_path.read_text(encoding="utf-8")
-literal = "'use = [\"audio\", \"input\", \"x11\", \"egress:tcp/443@*\"]'"
+literal = "'use = [" + ", ".join("\"%s\"" % u for u in expected) + "]'"
 if literal not in producer:
     raise SystemExit("Steam Link app-root producer capability policy differs")
 if ".resolv.conf.systemd-resolved.bak" in producer:
@@ -82,7 +82,7 @@ if grep -Fq '/run/pocketforge/x11' "$tmp/non-x11.conf"; then
     exit 1
 fi
 
-sed 's/, "egress:tcp\/443@\*"//' "$manifest" >"$tmp/network-without-authority.toml"
+sed -E 's/, "egress:[^"]*"//g' "$manifest" >"$tmp/network-without-authority.toml"
 # shellcheck disable=SC2086
 if "$renderer" --manifest "$tmp/network-without-authority.toml" $common \
     --format systemd-dropin >"$tmp/negative.conf" 2>"$tmp/negative.err"; then

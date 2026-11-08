@@ -179,6 +179,8 @@ python3 "${root_renderer}" \
 cat >>"${dropin}" <<'EOF'
 # Steam Link's sealed FFmpeg59 ABI is separate from the graphics platform slice.
 BindReadOnlyPaths=/usr/lib/pocketforge/platform-runtimes/steamlink-ffmpeg59/v1
+# LAN discovery (255.255.255.255 / ff02::1) needs AF_NETLINK; runtime has no capability for it yet.
+RestrictAddressFamilies=AF_NETLINK
 # Alias only the fetcher's build subtree under the app's read/execute rule.
 # Staged file modes remain the verified fetcher's explicit execution boundary.
 BindPaths=/var/lib/pocketforge/apps/org.pocketforge.steamlink/state/steamlink-fetch/builds:/opt/pocketforge/apps/org.pocketforge.steamlink/verified-builds:rbind
