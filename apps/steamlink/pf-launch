@@ -4,6 +4,11 @@ set -eu
 app=/opt/pocketforge/apps/org.pocketforge.steamlink
 state=${XDG_STATE_HOME:-/var/lib/pocketforge/apps/org.pocketforge.steamlink/state}
 
+# Writable per-app data home: Steam Link writes streaming_settings.bin/device_id.txt here.
+XDG_DATA_HOME=${XDG_DATA_HOME:-${state}/data}
+export XDG_DATA_HOME
+mkdir -p "${XDG_DATA_HOME}/Valve Corporation/SteamLink"
+
 exec /usr/bin/python3 "${app}/steamlink-fetch.py" \
     --state-root "${state}/steamlink-fetch" \
     --runtime-builds-root "${app}/verified-builds" \

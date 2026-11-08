@@ -19,14 +19,16 @@ grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 # The paired runtime/launcher include short-power-key intake and the rooted
 # app parser/X11 namespace contract. Reject every older or crossed source generation,
 # including the immediately preceding matched pair.
-expected_runtime=7d92ef9fa5a6c1dca21d7f0e1e568c0cf2de6bc8
+expected_runtime=78f43d3c92a7c7655e115779f20e1168b53ec1c1
 pre_root_runtime=da971c761e40ef153a0133039273cbd0901a8b03
+pre182_runtime=7d92ef9fa5a6c1dca21d7f0e1e568c0cf2de6bc8
 pre_power_runtime=8c87d7b60ceb604489b6343355732504a06d743c
 preceding_runtime=a64273cab3a67b2706af502c28412e8435d6df5c
 pre168_runtime=196fd1e235916f6d30204b4ee178c62d50631c41
 pre167_runtime=4dbadfd36f5c08098f45d64fa0d8cbbaa8a9d074
-expected_launcher=2df03a48a91f7b4dfe2626848af80f4eca6398da
+expected_launcher=f2b98927bc79ab61eaef0a7748c75f6b8c1e2b27
 pre_root_launcher=80f9dd87a68dbcda4dbbc78ae546afc469ba3aa8
+pre185_launcher=2df03a48a91f7b4dfe2626848af80f4eca6398da
 pre_power_launcher=900db88c7c27f3286ac0baad4199db8f6748cb81
 pre176_launcher=3c67ac7c30741fa9e5d9675b34de12592a0e19dd
 pre175_launcher=c11bc89b8df758f22cdc8df73e6688c854266e17
@@ -56,7 +58,9 @@ test "$launcher_guard" = "$expected_launcher"
 test "$(grep -Fc "$expected_runtime" "$pair_workflow")" -eq 2
 test "$(grep -Fc "$expected_launcher" "$pair_workflow")" -eq 2
 test "$(grep -Fc "$pre_root_runtime" "$pair_workflow")" -eq 0
+test "$(grep -Fc "$pre182_runtime" "$pair_workflow")" -eq 0
 test "$(grep -Fc "$pre_root_launcher" "$pair_workflow")" -eq 0
+test "$(grep -Fc "$pre185_launcher" "$pair_workflow")" -eq 0
 test "$(grep -Fc "$prior_runtime" "$pair_workflow")" -eq 0
 test "$(grep -Fc "$preceding_runtime" "$pair_workflow")" -eq 0
 test "$(grep -Fc "$pre167_runtime" "$pair_workflow")" -eq 0
@@ -81,6 +85,7 @@ new_guard_accepts "$expected_runtime" "$expected_launcher"
 # A policy-only build must reject both old sides and each crossed producer/consumer.
 reject_guard_pair "$pre_root_runtime" "$pre_root_launcher"
 reject_guard_pair "$expected_runtime" "$pre_root_launcher"
+reject_guard_pair "$expected_runtime" "$pre185_launcher"
 reject_guard_pair "$pre_root_runtime" "$expected_launcher"
 reject_guard_pair "$pre_power_runtime" "$pre_power_launcher"
 reject_guard_pair "$expected_runtime" "$pre_power_launcher"
