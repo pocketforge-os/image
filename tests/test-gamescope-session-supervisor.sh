@@ -487,7 +487,7 @@ def serve():
             address_length = struct.unpack_from("<H", header, 6)[0]
             seen.append((header[4], body[:address_length]))
             assert recv_exact(client, 4) == struct.pack("<BBH", 43, 0, 1)
-            client.sendall(b"\1" + b"\0" * 31)
+            client.sendall(b"\1\0\2\0" + b"\0" * 28)
 
 thread = threading.Thread(target=serve)
 thread.start()
@@ -594,7 +594,7 @@ def serve_replacement():
         address_length = struct.unpack_from("<H", header, 6)[0]
         received.append((header[4], body[:address_length]))
         assert recv_exact(second, 4) == struct.pack("<BBH", 43, 0, 1)
-        second.sendall(b"\1" + b"\0" * 31)
+        second.sendall(b"\1\0\2\0" + b"\0" * 28)
 
 server = threading.Thread(target=serve_replacement)
 server.start()
@@ -656,7 +656,7 @@ def serve_x11() -> None:
             assert path.stat().st_gid == os.getgid()
             assert path.stat().st_mode & 0o777 == 0o660
             assert client.recv(4) == struct.pack("<BBH", 43, 0, 1)
-            client.sendall(b"\1" + b"\0" * 31)
+            client.sendall(b"\1\0\2\0" + b"\0" * 28)
         if generation == 0:
             path.chmod(0o777)
             time.sleep(0.2)

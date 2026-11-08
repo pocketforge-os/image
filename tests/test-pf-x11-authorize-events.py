@@ -72,12 +72,17 @@ def attempt(packets, final):
             t.join(3)
 
 
-ok = b"\1" + b"\0" * 31
+ok = b"\1\0" + struct.pack("<H", 2) + b"\0" * 28
 assert attempt([], ok) is None, "plain reply"
 assert attempt([event()], ok) is None, "event before reply must be skipped"
 assert attempt([event(28), event(0x80 | 28), event(2)], ok) is None, "several events (incl. send_event flag)"
-err = attempt([], b"\0" + b"\0" * 31)
+err = attempt([], b"\0\0" + struct.pack("<H", 2) + b"\0" * 28)
 assert err and "server_rejected_acl" in err, f"X error must still fail closed: {err}"
+assert attempt([event(34)], ok) is None, "MappingNotify (34) before the reply"
+generic = bytes([35]) + b"\0\0\0" + struct.pack("<I", 2) + b"\0" * 24 + b"\0" * 8
+assert attempt([generic], ok) is None, "GenericEvent carries 4*length extra bytes"
+bad = attempt([], b"\1\0" + struct.pack("<H", 9) + b"\0" * 28)
+assert bad and "seq_mismatch" in bad, f"wrong sequence must fail closed: {bad}"
 flood = attempt([event() for _ in range(200)], None)
 assert flood and "unexpected_x11_reply" in flood, f"events-only server must fail closed: {flood}"
 print("PF_X11_AUTHORIZE_EVENTS PASS")

@@ -70,21 +70,30 @@ def require_socket_identity(path: Path, expected: tuple[int, int]) -> None:
 
 
 MAX_SKIPPED_EVENTS = 64
+GENERIC_EVENT = 35
 
 
-def recv_reply(client: socket.socket) -> bytes:
-    """Read the next 32-byte reply/error, skipping interleaved X11 events.
+def recv_reply(client: socket.socket, seq: int) -> bytes:
+    """Read the reply/error to request number `seq`, skipping interleaved events.
 
-    A server may queue events (codes 2..127, bit 0x80 = SendEvent) ahead of the
-    reply; a respawning Xwayland did so in G' gps1. Replies and errors are the
-    only packets this client acts on.
+    A server may queue events ahead of the reply (MappingNotify, 34, goes to
+    every client unasked on a keymap change; a respawning Xwayland did this in
+    G' gps1). Event codes are 2..127 with the SendEvent bit 0x80 ignored; a
+    GenericEvent (35) carries 4*length more bytes. Each skipped code is logged.
+    A reply or error whose sequence number differs is a protocol violation.
     """
     for _ in range(MAX_SKIPPED_EVENTS + 1):
         packet = recv_exact(client, 32)
+        code = packet[0] & 0x7F
         if packet[0] in (0, 1):
+            if struct.unpack_from("<H", packet, 2)[0] != seq & 0xFFFF:
+                fail(f"unexpected_x11_reply byte={packet[0]} seq_mismatch")
             return packet
-        if (packet[0] & 0x7F) < 2:
+        if code < 2:
             fail(f"unexpected_x11_reply byte={packet[0]}")
+        print(f"x11-authorize skipped_event code={code}", flush=True)
+        if code == GENERIC_EVENT:
+            recv_exact(client, struct.unpack_from("<I", packet, 4)[0] * 4)
     fail("unexpected_x11_reply events_only")
     raise AssertionError("unreachable")
 
@@ -153,7 +162,7 @@ def connect_authorized(
             # Force the request through the server and fail closed on a protocol
             # error. GetInputFocus is harmless and has a fixed-size reply.
             client.sendall(struct.pack("<BBH", 43, 0, 1))
-            reply = recv_reply(client)
+            reply = recv_reply(client, 2)
             if reply[0] == 0:
                 fail("server_rejected_acl")
             require_socket_identity(path, identity)
@@ -190,11 +199,11 @@ def notify_ready() -> None:
         notify.sendto(b"READY=1\nSTATUS=Xwayland gamer ACL monitor active", address)
 
 
-def probe(client: socket.socket, poll_seconds: float) -> None:
+def probe(client: socket.socket, poll_seconds: float, seq: int) -> None:
     client.settimeout(max(0.1, poll_seconds))
     try:
         client.sendall(struct.pack("<BBH", 43, 0, 1))
-        reply = recv_reply(client)
+        reply = recv_reply(client, seq)
     except (OSError, SystemExit) as error:
         raise ConnectionError("x11 server generation ended") from error
     if reply[0] != 1:
@@ -208,11 +217,13 @@ def monitor(
     client = connect_authorized(path, user, gid, mode, timeout)
     print(f"x11-authorization-ready user={user}", flush=True)
     notify_ready()
+    seq = 2  # ChangeHosts=1 and GetInputFocus=2 were this connection's requests
     try:
         while True:
             time.sleep(poll_seconds)
+            seq += 1
             try:
-                probe(client, poll_seconds)
+                probe(client, poll_seconds, seq)
             except ConnectionError:
                 # wlroots may replace Xwayland's child while Gamescope and X0
                 # keep the same filesystem socket. The old connection ends at
@@ -220,6 +231,7 @@ def monitor(
                 # the replacement can be used by the published app path.
                 client.close()
                 client = connect_authorized(path, user, gid, mode, timeout)
+                seq = 2
     finally:
         client.close()
 
