@@ -2,6 +2,8 @@
 # Install the generic default-app mechanism only for the A133-open profile.
 #
 # The atomic A133-open set: pf-app-launch, the dormant pf-app@.service template,
+# pf-app-fetch with its dormant pf-app-fetch@.service and boot sweep (bd
+# tsp-ziac.4.3.5: pinned [fetch] staging before first launch),
 # the platform contract, and (bd: tsp-f3fm.202.1 B4) default-app input delivery:
 # pf-input-broker with its runtime unit plus the image's app-session drop-in (never
 # enabled), the pf-shell-selected ordering drop-in, libpocketforge.so.1, the one
@@ -26,6 +28,7 @@ overlay="$(dirname -- "$(dirname -- "$(dirname -- "${systemd_source}")")")"
 descriptor_id=a133
 
 helper="${runtime_stage}/bin/pf-app-launch"
+fetcher="${runtime_stage}/bin/pf-app-fetch"
 authority="${runtime_stage}/bin/pf-session-authorityd"
 sampler="${runtime_stage}/bin/pf-hang-sampler"
 platform="${runtime_stage}/share/platform-capabilities.toml"
@@ -40,12 +43,14 @@ neutral_descriptor="${neutral_descriptors}/capabilities.toml"
 broker_dropin="${systemd_source}/pf-input-broker.service.d/10-app-session.conf"
 shell_dropin="${systemd_source}/pf-shell-selected.service.d/10-input-broker.conf"
 cursor_dropin="${systemd_source}/pf-app@.service.d/30-cursor-theme.conf"
+fetch_unit="${systemd_source}/pf-app-fetch@.service"
+fetch_tmpfiles="${overlay}/usr/lib/tmpfiles.d/pf-app-fetch.conf"
 input_sysusers="${overlay}/usr/lib/sysusers.d/pf-input.conf"
 input_tmpfiles="${overlay}/usr/lib/tmpfiles.d/pf-input.conf"
 broker_supervisor="${overlay}/usr/lib/pocketforge/pf-input-broker-supervisor"
 
 if [ "${gpu_model}" != open ]; then
-    for forbidden in "${helper}" "${authority}" "${sampler}" "${platform}" "${shell}" \
+    for forbidden in "${helper}" "${fetcher}" "${authority}" "${sampler}" "${platform}" "${shell}" \
         "${broker}" "${broker_unit}" "${library}" "${descriptors}" \
         "${neutral_descriptors}"; do
         [ ! -e "${forbidden}" ] || {
@@ -56,7 +61,7 @@ if [ "${gpu_model}" != open ]; then
     exit 0
 fi
 
-for required in "${helper}" "${authority}" "${sampler}" "${platform}" "${shell}" "${unit}" \
+for required in "${helper}" "${fetcher}" "${fetch_unit}" "${fetch_tmpfiles}" "${authority}" "${sampler}" "${platform}" "${shell}" "${unit}" \
     "${broker}" "${broker_unit}" "${library}" "${descriptor}" \
     "${neutral_descriptor}" "${broker_dropin}" "${shell_dropin}" \
     "${cursor_dropin}" "${input_sysusers}" "${input_tmpfiles}" \
@@ -93,6 +98,8 @@ require_static() {
 }
 require_aarch64 "${helper}"
 require_static "${helper}"
+require_aarch64 "${fetcher}"
+require_static "${fetcher}"
 require_aarch64 "${sampler}"
 require_static "${sampler}"
 require_aarch64 "${broker}"
@@ -105,6 +112,10 @@ install -D -m 0644 "${platform}" \
 install -D -m 0644 "${unit}" "${rootfs}/etc/systemd/system/pf-app@.service"
 install -D -m 0644 "${cursor_dropin}" \
     "${rootfs}/etc/systemd/system/pf-app@.service.d/30-cursor-theme.conf"
+
+install -D -m 0755 "${fetcher}" "${rootfs}/usr/bin/pf-app-fetch"
+install -D -m 0644 "${fetch_unit}" "${rootfs}/etc/systemd/system/pf-app-fetch@.service"
+install -D -m 0644 "${fetch_tmpfiles}" "${rootfs}/usr/lib/tmpfiles.d/pf-app-fetch.conf"
 
 install -D -m 0755 "${broker}" "${rootfs}/usr/bin/pf-input-broker"
 install -D -m 0644 "${broker_unit}" "${rootfs}/etc/systemd/system/pf-input-broker.service"
@@ -129,6 +140,11 @@ if find "${rootfs}/etc/systemd/system" -path '*.wants/*' -name 'pf-app@*.service
     echo "FATAL: pf-app@.service must be installed but never enabled" >&2
     exit 1
 fi
+if find "${rootfs}/etc/systemd/system" -path '*.wants/*' -name 'pf-app-fetch@*.service' -print -quit \
+    | grep -q .; then
+    echo "FATAL: pf-app-fetch@.service must be installed but never enabled" >&2
+    exit 1
+fi
 # The runtime unit's [Install] WantedBy=multi-user.target would grab the pad at
 # boot and break pf-shell's EVIOCGRAB. It is started only as a pf-app@ dependency.
 while IFS= read -r -d '' enabled; do
@@ -141,4 +157,4 @@ if find "${rootfs}/etc/systemd/system" -path '*.wants/*' -name 'pf-input-broker.
     exit 1
 fi
 
-echo "[customize] default-app helper, dormant unit template, platform contract, app-session input broker (not enabled), libpocketforge.so.1, devices/${descriptor_id} descriptor, and its byte-identical device-neutral copy installed"
+echo "[customize] default-app helper, dormant unit template, pf-app-fetch with its dormant setup unit and boot sweep, platform contract, app-session input broker (not enabled), libpocketforge.so.1, devices/${descriptor_id} descriptor, and its byte-identical device-neutral copy installed"

@@ -1,0 +1,99 @@
+# pf-app-fetch@<app-id>: stage an app's pinned [fetch] block before first launch
+# (infra-107.4 section 4.6, W3 of tsp-ziac.4.3; bd tsp-ziac.4.3.5).
+#
+# Started only by the root pf-session-authorityd when the user picks "set up"
+# (W4 adds its start_setup/cancel_setup templates); never enabled, no [Install].
+# It runs as the app's state owner (gamer) with exactly pf-app@'s StateDirectory,
+# so systemd never re-chowns the payload. The app cannot write the payload or the
+# receipt: W2 renders ReadOnlyPaths=<dest> and InaccessiblePaths=.pf-fetch for
+# pf-app@. Outcome for the launcher: /var/lib/pocketforge/apps/%i/.pf-fetch/
+# result.json and receipt.json (0644 in a 0755 directory).
+#
+# EGRESS: what is ENFORCED and what is only DECLARED.
+# Enforced by the kernel (cgroup BPF, mount namespace, Landlock, seccomp):
+#   - Address families: AF_INET and AF_INET6 only.
+#   - Destinations: public addresses only. IPAddressDeny= drops link-local,
+#     multicast, RFC 1918, CGNAT and ULA traffic; IPAddressAllow=localhost keeps
+#     the systemd-resolved stub (127.0.0.53) reachable.
+#   - Ports: the binary applies Landlock to itself before any socket (release
+#     builds require ABI >= 4 and fail closed): TCP connect only to the declared
+#     fetch ports (443, or an explicit URL port) and 53, no TCP bind; with ABI 10,
+#     UDP send only to 53. Filesystem: read-write, never execute, beneath
+#     /var/lib/pocketforge/apps/<id> only, plus read-only resolver files.
+#   - No exec: NoExecPaths=/ with ExecPaths= only the binary; no capabilities;
+#     NoNewPrivileges; no access to /run/pocketforge (authority, broker, prefs).
+# Declared, and checked in the binary only (NOT kernel-enforced):
+#   - The host scope: every hop, including each redirect, must be https and in
+#     (declared host, port) plus the platform redirect table (github.com ->
+#     release-assets/objects.githubusercontent.com). It is validated before each
+#     connect and fixture-tested, but a compromised binary could reach any public
+#     host on those ports. systemd 252 has no NFTSet= and the a133 kernel has no
+#     netfilter; host-level enforcement is a follow-on bead.
+# Integrity never depends on the host scope: the image-verified size + SHA256
+# pin gates every byte before anything is extracted.
+
+[Unit]
+Description=PocketForge app asset setup for %i
+Documentation=https://github.com/pocketforge-os/runtime/tree/main/crates/pf-app-fetch
+RequiresMountsFor=/var/lib/pocketforge/apps
+After=local-fs.target network.target systemd-resolved.service systemd-tmpfiles-setup.service
+Conflicts=pf-app@%i.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+User=gamer
+Group=gamer
+ExecStart=/usr/bin/pf-app-fetch --app-id %i --descriptor /opt/pocketforge/apps/%i/app.toml --state-dir /var/lib/pocketforge/apps/%i
+StateDirectory=pocketforge/apps/%i
+StateDirectoryMode=0700
+UMask=0022
+# A slow Wi-Fi download must not hit the oneshot default of 90 s.
+TimeoutStartSec=30min
+# SIGTERM is reported as reason=cancelled; every step is kill-safe.
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+Restart=no
+
+# Filesystem
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadOnlyPaths=/opt/pocketforge/apps/%i
+InaccessiblePaths=-/run/pocketforge
+InaccessiblePaths=-/run/pf-ime
+InaccessiblePaths=-/run/pf-app
+NoExecPaths=/
+ExecPaths=/usr/bin/pf-app-fetch
+ProtectProc=invisible
+ProcSubset=pid
+
+# Network
+RestrictAddressFamilies=AF_INET AF_INET6
+IPAddressAllow=localhost
+IPAddressDeny=link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 240.0.0.0/4 fc00::/7
+
+# Privileges and kernel surface
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service landlock_create_ruleset landlock_add_rule landlock_restrict_self
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+Nice=5
+IOSchedulingClass=idle

@@ -1478,7 +1478,7 @@ COPY --from=image-src build/pf-descriptor-validate.rs /work/runtime/crates/pf-in
 RUN <<'RUNTIME'
 set -eux
 mkdir -p /out/bin /out/systemd /out/tmpfiles.d /out/sdk/include /out/sdk/lib
-[ "${PF_RUNTIME_SHA}" = "9b42a8df66e8d8efed0bb14dedda2de28378c7eb" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
+[ "${PF_RUNTIME_SHA}" = "8a493f00101b03894783ef8941df59f2abba5388" ] || { echo "FATAL: runtime pin drift: ${PF_RUNTIME_SHA}"; exit 1; }
 # Device-descriptor contract (B3 platform#217): the ID/SHA-256 pair and the staged
 # files exist for A133-open only. Non-open: all three must be empty (prints nothing).
 # Open: exactly devices/a133/capabilities.toml plus the byte-identical device-neutral
@@ -1574,6 +1574,16 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   CARGO_NET_LOCKED=1 \
   RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
   cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-app-launch --bin pf-app-launch
+  # pf-app-fetch (bd tsp-ziac.4.3.5) links rustls' ring provider, which compiles C and
+  # assembly through cc-rs. runtime's .cargo/config.toml names ci-rust's
+  # aarch64-linux-gnu-gcc; this stage has only the Arm toolchain, and an environment
+  # variable wins over [env]. The objects are freestanding and rust-lld still links the
+  # static musl binary, checked below like every other runtime binary.
+  CARGO_NET_LOCKED=1 \
+  CC_aarch64_unknown_linux_musl=aarch64-none-linux-gnu-gcc \
+  AR_aarch64_unknown_linux_musl=aarch64-none-linux-gnu-ar \
+  RUSTFLAGS="--remap-path-prefix=/work/runtime=. -C link-arg=--build-id=sha1" \
+  cargo build --offline --locked --release --target "${PF_RUNTIME_TARGET}" -p pf-app-fetch --bin pf-app-fetch
   AUTHORITY_BIN="target/${PF_RUNTIME_TARGET}/release/pf-session-authorityd"
   HANG_SAMPLER_BIN="target/${PF_RUNTIME_TARGET}/release/pf-hang-sampler"
   PREFSD_BIN="target/${PF_RUNTIME_TARGET}/release/pf-prefsd"
@@ -1581,6 +1591,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   VOLUMED_BIN="target/${PF_RUNTIME_TARGET}/release/pf-volumed"
   VOLUME_KEYS_BIN="target/${PF_RUNTIME_TARGET}/release/pf-volume-keys"
   APP_LAUNCH_BIN="target/${PF_RUNTIME_TARGET}/release/pf-app-launch"
+  APP_FETCH_BIN="target/${PF_RUNTIME_TARGET}/release/pf-app-fetch"
   [ -f "${AUTHORITY_BIN}" ] || { echo "FATAL: pf-session-authorityd not built at ${AUTHORITY_BIN}"; exit 1; }
   [ -f "${HANG_SAMPLER_BIN}" ] || { echo "FATAL: pf-hang-sampler not built at ${HANG_SAMPLER_BIN}"; exit 1; }
   [ -f "${PREFSD_BIN}" ] || { echo "FATAL: pf-prefsd not built at ${PREFSD_BIN}"; exit 1; }
@@ -1588,6 +1599,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   [ -f "${VOLUMED_BIN}" ] || { echo "FATAL: pf-volumed not built at ${VOLUMED_BIN}"; exit 1; }
   [ -f "${VOLUME_KEYS_BIN}" ] || { echo "FATAL: pf-volume-keys not built at ${VOLUME_KEYS_BIN}"; exit 1; }
   [ -f "${APP_LAUNCH_BIN}" ] || { echo "FATAL: pf-app-launch not built at ${APP_LAUNCH_BIN}"; exit 1; }
+  [ -f "${APP_FETCH_BIN}" ] || { echo "FATAL: pf-app-fetch not built at ${APP_FETCH_BIN}"; exit 1; }
   AUTHORITY_EM="$(od -An -tx1 -j18 -N2 "${AUTHORITY_BIN}" | tr -d ' ')"
   [ "${AUTHORITY_EM}" = "b700" ] || { echo "FATAL: pf-session-authorityd is not aarch64 (e_machine=${AUTHORITY_EM}, want b700)"; exit 1; }
   if grep -qa 'ld-musl\|ld-linux' "${AUTHORITY_BIN}"; then echo "FATAL: pf-session-authorityd is dynamically linked (expected static musl)"; exit 1; fi
@@ -1609,6 +1621,12 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   APP_LAUNCH_EM="$(od -An -tx1 -j18 -N2 "${APP_LAUNCH_BIN}" | tr -d ' ')"
   [ "${APP_LAUNCH_EM}" = "b700" ] || { echo "FATAL: pf-app-launch is not aarch64 (e_machine=${APP_LAUNCH_EM}, want b700)"; exit 1; }
   if grep -qa 'ld-musl\|ld-linux' "${APP_LAUNCH_BIN}"; then echo "FATAL: pf-app-launch is dynamically linked (expected static musl)"; exit 1; fi
+  APP_FETCH_EM="$(od -An -tx1 -j18 -N2 "${APP_FETCH_BIN}" | tr -d ' ')"
+  [ "${APP_FETCH_EM}" = "b700" ] || { echo "FATAL: pf-app-fetch is not aarch64 (e_machine=${APP_FETCH_EM}, want b700)"; exit 1; }
+  if grep -qa 'ld-musl\|ld-linux' "${APP_FETCH_BIN}"; then echo "FATAL: pf-app-fetch is dynamically linked (expected static musl)"; exit 1; fi
+  # The debug-only test hooks (loopback resolver, test CA, kill points) must be compiled
+  # out: their PF_APP_FETCH_TEST_ prefix exists only in debug builds.
+  if grep -qa 'PF_APP_FETCH_TEST_' "${APP_FETCH_BIN}"; then echo "FATAL: pf-app-fetch was built with test hooks"; exit 1; fi
   install -D -m 0755 "${AUTHORITY_BIN}" /out/bin/pf-session-authorityd
   install -D -m 0755 "${HANG_SAMPLER_BIN}" /out/bin/pf-hang-sampler
   install -D -m 0755 "${PREFSD_BIN}" /out/bin/pf-prefsd
@@ -1616,6 +1634,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
   install -D -m 0755 "${VOLUMED_BIN}" /out/bin/pf-volumed
   install -D -m 0755 "${VOLUME_KEYS_BIN}" /out/bin/pf-volume-keys
   install -D -m 0755 "${APP_LAUNCH_BIN}" /out/bin/pf-app-launch
+  install -D -m 0755 "${APP_FETCH_BIN}" /out/bin/pf-app-fetch
   install -D -m 0644 systemd/pf-session-authorityd.service /out/systemd/pf-session-authorityd.service
   install -D -m 0644 systemd/pf-prefsd.service /out/systemd/pf-prefsd.service
   install -D -m 0644 systemd/pf-powerd.service /out/systemd/pf-powerd.service
@@ -1708,6 +1727,7 @@ if [ "${PF_GPU_MODEL:-ddk}" = "open" ]; then
     printf '  pf-volumed sha256=%s\n' "$(sha256sum /out/bin/pf-volumed | cut -d' ' -f1)"
     printf '  pf-volume-keys sha256=%s\n' "$(sha256sum /out/bin/pf-volume-keys | cut -d' ' -f1)"
     printf '  pf-app-launch sha256=%s\n' "$(sha256sum /out/bin/pf-app-launch | cut -d' ' -f1)"
+    printf '  pf-app-fetch sha256=%s\n' "$(sha256sum /out/bin/pf-app-fetch | cut -d' ' -f1)"
     printf '  pf-input-broker sha256=%s\n' "$(sha256sum /out/bin/pf-input-broker | cut -d' ' -f1)"
     printf '  libpocketforge.so.1 sha256=%s\n' "$(sha256sum /out/lib/libpocketforge.so.1 | cut -d' ' -f1)"
     printf '  devices/%s/capabilities.toml sha256=%s\n' "${PF_DEVICE_DESCRIPTOR_ID}" "${DESCRIPTOR_SHA256}"
@@ -2277,7 +2297,7 @@ COPY --from=image-src scripts/check-launcher-runtime-contract.sh /usr/local/bin/
 RUN <<'LAUNCHEROPEN'
 set -eux
 mkdir -p /out/bin
-[ "${PF_LAUNCHER_SHA}" = "3b808f7ac825266a8757c2d13f6ae4621ffbd95f" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
+[ "${PF_LAUNCHER_SHA}" = "302b420f23262069a92046cf1122869a2d9f4753" ] || { echo "FATAL: F13 launcher pin drift: ${PF_LAUNCHER_SHA}"; exit 1; }
 # pf-shell vendors these fifteen runtime crates. Compare every source tree, not
 # only today's daemon-facing subset: the remaining crates share wire types and
 # can acquire contract-bearing code without requiring another allowlist update.
