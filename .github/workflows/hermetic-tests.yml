@@ -110,6 +110,7 @@ jobs:
             tests/test-artifact-intake-put.sh
             tests/test-app-root-apt-transport.py
             tests/test-app-root-build-toolchain.sh
+            tests/test-pf-app-namespace-paths.py
             tests/test-boot-animator.sh
             tests/test-browser-platform-defaults.sh
             tests/test-build-cache-audit-isolation.sh
