@@ -38,7 +38,7 @@ common=(
 "${renderer}" --manifest "${manifest}" "${common[@]}" \
     --format systemd-dropin > "${tmp}/positive.conf"
 grep -Fx 'SupplementaryGroups=audio input video' "${tmp}/positive.conf"
-grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' "${tmp}/positive.conf"
+grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' "${tmp}/positive.conf"
 grep -Fx 'PrivateNetwork=no' "${tmp}/positive.conf"
 grep -Fx '# egress tcp * 80' "${tmp}/positive.conf"
 grep -Fx '# egress tcp * 443' "${tmp}/positive.conf"

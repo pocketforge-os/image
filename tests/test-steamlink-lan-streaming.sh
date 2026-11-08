@@ -12,11 +12,8 @@ for w in want:
     if w not in use:
         raise SystemExit(f"app.toml use lacks {w}")
 frag = (root / "build/pf-app@org.pocketforge.steamlink.service.d/10-policy.conf").read_text()
-for w in ("UDP", "27031", "27037"):
-    pass
-inst = (root / "scripts/install-steamlink-first-run.sh").read_text()
-if "RestrictAddressFamilies=AF_NETLINK" not in inst:
-    raise SystemExit("installer lacks RestrictAddressFamilies=AF_NETLINK")
+if "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK" not in frag:
+    raise SystemExit("10-policy.conf lacks AF_NETLINK for the networked app")
 launch = (root / "apps/steamlink/pf-launch").read_text()
 if not re.search(r'XDG_DATA_HOME=.*state', launch) or "Valve Corporation/SteamLink" not in launch:
     raise SystemExit("pf-launch lacks a writable default XDG_DATA_HOME")

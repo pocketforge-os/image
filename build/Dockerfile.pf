@@ -2080,7 +2080,7 @@ install -D -m 0644 /work/pf-app@.service \
 cat /tmp/app-policy.service-fragment \
   >> /out/systemd/pf-app@org.pocketforge.poolsuite.service
 grep -Fx 'SupplementaryGroups=audio input video' /tmp/app-policy.service-fragment
-grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' /tmp/app-policy.service-fragment
+grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' /tmp/app-policy.service-fragment
 grep -Fx 'PrivateNetwork=no' /tmp/app-policy.service-fragment
 grep -Fx '# egress tcp * 80' /tmp/app-policy.service-fragment
 grep -Fx '# egress tcp * 443' /tmp/app-policy.service-fragment
