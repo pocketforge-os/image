@@ -1636,7 +1636,7 @@ grep -Fqx '        run: python3 tests/verify-input-broker-wiring.py' "${workflow
 grep -Fq 'exit-before-ready' "${root}/tests/session-authority-systemd/fake-input-broker" || exit 1
 precondition_output="$(python3 "${precondition_verifier}")"
 grep -Fqx \
-    'session-authority path-preconditions: PASS conditions=1 providers=11 fb0=regular units=7' \
+    'session-authority path-preconditions: PASS conditions=1 providers=10 fb0=regular units=7' \
     <<<"${precondition_output}" || exit 1
 sed '\|^COPY pocketforge-gamescope-x11.conf /usr/lib/tmpfiles.d/pocketforge-gamescope-x11.conf$|d' \
     "${recipe}" >"${tmp}/missing-production-tmpfiles.Containerfile"

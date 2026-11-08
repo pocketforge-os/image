@@ -36,6 +36,13 @@ lines = conf.splitlines()
 check("BindPaths=/dev/input/pf-app-pad:/dev/input/event0" in lines, "10-policy.conf lacks pad BindPaths")
 check("DeviceAllow=/dev/input/pf-app-pad rw" in lines, "10-policy.conf lacks pad DeviceAllow rw")
 check(not any(l.startswith("BindReadOnlyPaths=/dev/input") for l in lines), "10-policy.conf binds /dev/input read-only")
+# Fail-closed on a missing pad: the source must be a plain (non-optional) BindPaths
+# so systemd fails namespace setup (status 226) when /dev/input/pf-app-pad is absent.
+# CI cannot prove this; the real-systemd harness loads no rendered drop-in.
+pad_binds = [l for l in lines if "pf-app-pad" in l and l.startswith(("BindPaths", "BindReadOnlyPaths"))]
+check(pad_binds == ["BindPaths=/dev/input/pf-app-pad:/dev/input/event0"], f"pad bind is not exactly the plain form: {pad_binds}")
+check(not any(re.match(r"Bind(ReadOnly)?Paths=-", l) and "/dev/input" in l for l in lines),
+      "10-policy.conf uses an optional (-) bind for /dev/input")
 check(not any(re.match(r"(BindPaths|BindReadOnlyPaths|DeviceAllow)=/dev/input/event\d+[ :]?", l) and
               not l.startswith("BindPaths=/dev/input/pf-app-pad:") for l in lines),
       "10-policy.conf uses a raw eventN as a source")
