@@ -8,6 +8,12 @@ scripts/check-launcher-runtime-contract.sh launcher-pair runtime-pair \
 PF_HANG_RUNTIME_ROOT=runtime-pair tests/test-hang-sampler-image.sh
 (cd runtime-pair && cargo build --locked --manifest-path Cargo.toml \
     -p pf-app-launch --bins --target-dir /work/target)
+# pf-app-fetch is runtime-only (the launcher does not vendor it, so it is not in the
+# contract list above). Build it from the same pinned source so the pair job compiles
+# the stager the image ships, including rustls' ring C/asm via cc-rs (image#381 N-2).
+(cd runtime-pair && cargo build --locked --manifest-path Cargo.toml \
+    -p pf-app-fetch --bins --target-dir /work/target)
+test -x /work/target/debug/pf-app-fetch
 export PF_APP_LAUNCH=/work/target/debug/pf-app-launch
 export PF_APP_POLICY_RENDER=/work/target/debug/pf-app-policy-render
 (cd /work/target/debug && sha256sum pf-app-launch pf-app-policy-render) > /work/SHA256SUMS
