@@ -88,6 +88,10 @@ def check_unit(path, made):
 made = tmpfiles_dirs()
 for p in [UNIT] + DROPINS:
     check_unit(p, made)
+    # A '+' (fully privileged) ExecStartPre in a pf-app@ unit fails 226/NAMESPACE on systemd 252
+    # while the sandboxed commands of the same unit start (image G preg2/preg3). Run it as a oneshot unit.
+    for m in re.finditer(r"^Exec(Start|Stop)Pre?=([+!]+)", p.read_text(), re.M | re.I):
+        failures.append(f"{p.relative_to(ROOT)}: Exec*= with '{m.group(2)}' prefix; use an ordered oneshot unit")
 
 # Controls: a path nothing creates must be reported.
 sample = ROOT / ".ns-neg-control.tmp"

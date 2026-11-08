@@ -28,6 +28,7 @@ on:
       - 'tests/test-pad-rule-installed.py'
       - 'tests/fixtures/70-pf-app-pad.rules'
       - 'build/pf-app@org.pocketforge.steamlink.service.d/20-pad-order.conf'
+      - 'build/pf-app-pad-settle.service'
       - 'scripts/install-default-app-support.sh'
       - 'scripts/install-gamescope-session.sh'
       - 'tests/test-steamlink-first-run-install.sh'
