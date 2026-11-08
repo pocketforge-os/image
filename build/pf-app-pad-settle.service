@@ -1,0 +1,11 @@
+[Unit]
+Description=Wait for the App Pad udev symlink before Steam Link's mount namespace is built
+Documentation=file:///usr/share/pocketforge/app-policy/org.pocketforge.steamlink.resources.json
+# Image-owned. Pulled by pf-app@org.pocketforge.steamlink via 20-pad-order.conf (Requires=/After=).
+# The settle must run outside the app unit: an ExecStartPre=+ command in pf-app@ fails with
+# 226/NAMESPACE on systemd 252 (image G preg2/preg3, window ab778470 V2 PASS).
+After=pf-input-broker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/udevadm settle --timeout=5

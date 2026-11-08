@@ -32,14 +32,19 @@ for needle in ('ATTRS{name}=="PocketForge App Pad"', 'ATTRS{id/bustype}=="0006"'
 
 d = ROOT / "build/pf-app@org.pocketforge.steamlink.service.d"
 order = (d / "20-pad-order.conf").read_text().splitlines()
-check("After=pf-input-broker.service" in order, "steamlink drop-in does not order After=pf-input-broker.service")
-check("ExecStartPre=+/usr/bin/udevadm settle --timeout=5" in order, "steamlink drop-in lacks the udevadm settle ExecStartPre")
+check("After=pf-input-broker.service pf-app-pad-settle.service" in order, "drop-in does not order after the broker and the settle oneshot")
+check("Requires=pf-app-pad-settle.service" in order, "drop-in does not require the settle oneshot")
+check(not any(l.startswith("ExecStartPre") for l in order), "drop-in must not carry ExecStartPre (the '+' spawn fails 226/NAMESPACE on systemd 252)")
+settle = (ROOT / "build/pf-app-pad-settle.service").read_text().splitlines()
+check("Type=oneshot" in settle and "ExecStart=/usr/bin/udevadm settle --timeout=5" in settle, "settle oneshot is not a oneshot udevadm settle")
+check("After=pf-input-broker.service" in settle, "settle oneshot is not ordered after the broker")
 check(any(l.startswith("#") and "Wants=" in l for l in order), "drop-in must state why there is no Wants=")
 policy = (d / "10-policy.conf").read_text().splitlines()
 check("BindPaths=/dev/input/pf-app-pad:/dev/input/event0" in policy, "non-optional pad bind changed")
 check(not any(l.startswith(("Wants=", "BindPaths=-")) for l in order), "order drop-in must not add Wants= or optional binds")
 gs = (ROOT / "scripts/install-gamescope-session.sh").read_text()
 check("20-pad-order.conf" in gs, "gamescope installer does not install 20-pad-order.conf")
+check("pf-app-pad-settle.service" in gs, "gamescope installer does not install pf-app-pad-settle.service")
 
 if failures:
     print("\n".join("FAIL: " + f for f in failures))
