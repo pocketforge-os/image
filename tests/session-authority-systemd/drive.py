@@ -44,6 +44,7 @@ BROKER_CONTROL = GRAB / "broker-control.sock"
 BROKER_MODE = GRAB / "broker-mode"
 BROKER_ATTEMPTS = GRAB / "broker-attempts"
 UINPUT = Path("/dev/uinput")
+PAD = Path("/dev/input/pf-app-pad")
 DESCRIPTOR = "/usr/share/pocketforge/device/capabilities.toml"
 # tsp-f3fm.219 (runtime#103): the authority ticks itself once per second and gives the
 # restored shell this long to acknowledge presentation before RecoveryRequired.
@@ -835,7 +836,8 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     require(probe["PF_DESCRIPTOR"] == DESCRIPTOR, f"PF_DESCRIPTOR: {probe}")
     require(probe["descriptor_readable"] is True, f"descriptor unreadable in app sandbox: {probe}")
     # The signed G1 inventory grants this input-capable fixture the raw
-    # /dev/input/pf-app-pad route, not broker-sockets. The launcher must make that
+    # identity route /dev/input/pf-app-pad (bound onto a free eventN), not
+    # broker-sockets. The launcher must make that
     # compiled route authoritative by removing the unit's ambient selector.
     # Broker service lifetime and controller ownership are asserted separately.
     require(
@@ -1121,6 +1123,40 @@ def assert_broker_failure_never_traps() -> str:
         f"broker failure receipt is not a systemd_start_failed Crash: {receipt}",
     )
     require(not session_events(events(), scope, "returned"), "broker failure published Returned")
+    return scope.session_id
+
+
+def assert_missing_pad_fails_closed() -> str:
+    """T13: with /dev/input/pf-app-pad absent the app unit never starts (no fall back to event0)."""
+    command("systemctl", "reset-failed", APP_UNIT, BROKER_UNIT, check=False)
+    MODE.write_text("hold\n")
+    before_invocations = invocation_count()
+    hidden = PAD.with_name("pf-app-pad.hidden")
+    PAD.rename(hidden)
+    try:
+        scope = launch()
+        released = True
+        try:
+            wait_for(lambda: not unit_is_active(TARGET_UNIT), f"target release without pad in {scope.session_id}")
+            wait_for(lambda: unit_is_active(OWNER_UNIT), f"owner restore without pad in {scope.session_id}")
+            wait_for_owner_grab(scope.session_id)
+        except TestFailure:
+            released = False
+    finally:
+        hidden.rename(PAD)
+    app_result = property_value(APP_UNIT, "Result")
+    evidence(f"missing_pad session={scope.session_id} app_result={app_result} panel_returned={'yes' if released else 'no'}")
+    require(invocation_count() == before_invocations, "app started although /dev/input/pf-app-pad was absent")
+    require(app_result != "success", f"app unit succeeded without the pad: {app_result!r}")
+    require(released, "user trapped: absent pad left the target active or the owner down")
+    require_session_phase(scope, "Restoring", "PresentationAcknowledged")
+    observed = rpc({"method": "observe", "observation": {"kind": "presentation_acknowledged"}})
+    require(observed.get("result") == "ok", f"presentation acknowledgement failed: {observed}")
+    receipt = history_entry(scope.session_id)["receipt"]
+    require(
+        isinstance(receipt, dict) and "Crash" in receipt,
+        f"absent-pad launch did not end as a Crash receipt: {receipt}",
+    )
     return scope.session_id
 
 
@@ -1837,7 +1873,7 @@ def main() -> None:
         framebuffer.is_file() and framebuffer.stat().st_size == 0,
         "/dev/fb0 test prerequisite is absent or is not an empty regular file",
     )
-    for prerequisite in (UINPUT, Path("/dev/input/pf-gamepad"), GRAB_LOCK):
+    for prerequisite in (UINPUT, Path("/dev/input/pf-gamepad"), PAD, GRAB_LOCK):
         require(prerequisite.is_file(), f"{prerequisite} test prerequisite is not a regular file")
     wait_for(
         lambda: unit_is_active(AUTHORITY_UNIT) and authority_is_responding(),
@@ -1884,6 +1920,7 @@ def main() -> None:
     r4 = probe_systemctl_stop_after_sigkill(order)
     sigkill_session = assert_system_menu_fallback_after_sigkill(order, r4)
     broker_failure_session = assert_broker_failure_never_traps()
+    missing_pad_session = assert_missing_pad_fails_closed()
     exit_before_ready_session = assert_broker_exit_before_ready_never_traps()
     exit_mid_session = assert_broker_exit_mid_session_never_traps(order)
     evidence(
@@ -1892,7 +1929,7 @@ def main() -> None:
         f"{abort_crash_session},{graceful_session},r4-probe,"
         f"{sigkill_session},"
         f"{exit_mid_session} "
-        f"broker_failure_session={broker_failure_session} "
+        f"broker_failure_session={broker_failure_session} missing_pad_session={missing_pad_session} "
         f"broker_exit_before_ready_session={exit_before_ready_session} "
         f"R4=ForcedClose systemctl_stop_exit_after_sigkill={r4['stop_exit']}"
     )

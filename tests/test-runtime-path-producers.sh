@@ -48,7 +48,7 @@ inventory, producers = (json.loads(Path(path).read_text(encoding="utf-8")) for p
 assert inventory["resources"]["broker-sockets"] == [
     "/run/pocketforge/input-broker.sock"
 ]
-assert inventory["resources"]["input-devices"] == ["/dev/input/pf-app-pad"]
+assert inventory["resources"]["input-devices"] == ["/dev/input/event0"]
 assert producers["producers"]["/run/pocketforge/input-broker.sock"] == {
     "unit": "pf-input-broker.service",
     "type": "socket",
