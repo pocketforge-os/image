@@ -9,7 +9,7 @@
       "/run/pocketforge/session/wayland-0"
     ],
     "input-devices": [
-      "/dev/input/event0"
+      "/dev/input/pf-app-pad"
     ],
     "render-devices": [
       "/dev/dri/renderD128"

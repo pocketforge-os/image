@@ -749,6 +749,7 @@ def launch_if_requested(build: VerifiedBuild, launch: bool) -> None:
         environment["SDL_GAMECONTROLLERCONFIG_FILE"] = str(
             Path(data_home) / "Valve Corporation/SteamLink/controller_map.txt"
         )
+        environment["SDL_JOYSTICK_DISABLE_UDEV"] = "1"
         os.chdir(top)
         os.execve(shell, [str(shell)], environment)
 
