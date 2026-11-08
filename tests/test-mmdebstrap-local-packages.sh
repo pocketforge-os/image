@@ -85,6 +85,13 @@ fi
 # Direct transport: https mirror, no proxy (CVE-2026-109518, bd tsp-hqm1p.143).
 assert_transport "${argv}" https 0
 
+# apt's retry delay is off for mmdebstrap's own apt (tsp-hqm1p.142, LP #2003851); the
+# full contract and its live replay are tests/test-apt-retry-delay.py.
+if [ "$(count_exact "${argv}" '--aptopt=Acquire::Retries::Delay "false"')" -ne 1 ]; then
+    echo "FAIL: build-rootfs.sh did not hand mmdebstrap --aptopt=Acquire::Retries::Delay \"false\"" >&2
+    exit 1
+fi
+
 # Cache transport: plain http through the cache, which never carries https.
 cache_hook="${scratch}/cache/customize-hook.sh"
 mkdir -p "${scratch}/cache"

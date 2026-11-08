@@ -108,6 +108,7 @@ mmdebstrap \
     --aptopt='Acquire::Check-Valid-Until "false"' \
     --aptopt='APT::Sandbox::User "root"' \
     --aptopt='Acquire::Retries "5"' \
+    --aptopt='Acquire::Retries::Delay "false"' \
     --include="${PKG_LIST}" \
     "${APT_FIX_OPTS[@]}" \
     --customize-hook="env POCKETFORGE_VARIANT=${VARIANT} KREL=${KREL} ${BOARD_DIR}/rootfs-customize.sh \"\$1\"" \

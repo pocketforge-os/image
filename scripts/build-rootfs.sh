@@ -2077,6 +2077,11 @@ chmod +x "${CUSTOMIZE_SCRIPT}"
 # 503s; a sustained total outage still needs a mirror fallback / local apt cache.)
 # Retries are safe only because the host apt that mmdebstrap drives is the fixed
 # 2.6.2 pf-build-base asserts (CVE-2026-109518, bd tsp-hqm1p.143).
+# Acquire::Retries::Delay is off (tsp-hqm1p.142): with the default delay, apt 2.6
+# can stop for good in its update once one index fails transiently while another
+# on the same host succeeds (LP #2003851), as the NAS cache's truncated InRelease
+# answer makes it do. Like the other aptopts it persists in the rootfs, so the
+# device's own apt runs with the delay off too.
 # SOURCE_DATE_EPOCH is inherited for reproducibility.
 #
 # Optional transparent apt caching proxy. When PF_APT_PROXY is set (e.g. the NAS
@@ -2240,6 +2245,7 @@ mmdebstrap \
     --aptopt='Acquire::Check-Valid-Until "false"' \
     --aptopt='APT::Sandbox::User "root"' \
     --aptopt='Acquire::Retries "5"' \
+    --aptopt='Acquire::Retries::Delay "false"' \
     "${APT_PROXY_OPT[@]}" \
     --include="${PKG_LIST}" \
     "${LOCAL_PACKAGE_OPTS[@]}" \

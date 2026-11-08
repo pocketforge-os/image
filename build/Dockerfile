@@ -264,6 +264,11 @@ ARG APT_SNAPSHOT_HOST=snapshot.debian.org
 # snapshot.debian.org and carry [check-valid-until=no] so the resolution is
 # deterministic across time. multiarch (arm64 + amd64) is already configured
 # below; the snapshot mirror serves both.
+# The persisted snippet retries with Acquire::Retries::Delay "false" (tsp-hqm1p.142):
+# with the default delay, apt 2.6 can stop for good in `apt-get update` once one index
+# fails transiently while another on the same host succeeds (LP #2003851).
+# Dockerfile.pf also writes the setting as its own drop-in, so a stage built on an
+# older pin of this container gets it too.
 RUN dpkg --add-architecture arm64 \
  && rm -f /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list \
  && printf '%s\n' \
@@ -279,6 +284,7 @@ RUN dpkg --add-architecture arm64 \
  && printf '%s\n' \
         'Acquire::Check-Valid-Until "false";' \
         'Acquire::Retries "5";' \
+        'Acquire::Retries::Delay "false";' \
         > /etc/apt/apt.conf.d/99-pocketforge-snapshot \
  && echo "${APT_SNAPSHOT_DATE}" > /etc/pocketforge-apt-snapshot-date
 
