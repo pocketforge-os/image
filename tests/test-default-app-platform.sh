@@ -11,7 +11,7 @@ runtime_source="${tmp}/runtime"
 mkdir -p "${runtime_source}/crates/pf-app-manifest/src"
 printf '%s\n' \
     'pub const KNOWN_CAPABILITIES: &[&str] = &[' \
-    '    "input", "vibration", "entropy", "audio", "settings", "x11",' \
+    '    "input", "vibration", "entropy", "audio", "settings", "x11", "rumble",' \
     '];' \
     'pub const KNOWN_GLES_VERSIONS: &[&str] = &["2.0", "3.0", "3.1", "3.2"];' \
     'pub const KNOWN_VULKAN_VERSIONS: &[&str] = &["1.0", "1.1", "1.2", "1.3", "1.4"];' \
@@ -154,7 +154,7 @@ from pathlib import Path
 legacy = tomllib.loads(Path(sys.argv[1]).read_text())
 g1 = tomllib.loads(Path(sys.argv[2]).read_text())
 assert "x11" not in legacy["supported_capabilities"], legacy
-assert g1["supported_capabilities"] == ["audio", "entropy", "input", "settings", "x11"], g1
+assert g1["supported_capabilities"] == ["audio", "entropy", "input", "rumble", "settings", "x11"], g1
 PY
 
 # Descriptor v3 adds [input_profile] while retaining the v2 memory/graphics,

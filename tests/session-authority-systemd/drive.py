@@ -835,7 +835,7 @@ def assert_app_session_wiring(scope: SessionEventScope) -> dict[str, Any]:
     require(probe["PF_DESCRIPTOR"] == DESCRIPTOR, f"PF_DESCRIPTOR: {probe}")
     require(probe["descriptor_readable"] is True, f"descriptor unreadable in app sandbox: {probe}")
     # The signed G1 inventory grants this input-capable fixture the raw
-    # /dev/input/event0 route, not broker-sockets. The launcher must make that
+    # /dev/input/pf-app-pad route, not broker-sockets. The launcher must make that
     # compiled route authoritative by removing the unit's ambient selector.
     # Broker service lifetime and controller ownership are asserted separately.
     require(

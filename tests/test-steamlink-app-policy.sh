@@ -26,7 +26,7 @@ manifest_path, inventory_path, producer_path, fragment_path = map(pathlib.Path, 
 with manifest_path.open("rb") as source:
     manifest = tomllib.load(source)
 inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-expected = ["audio", "input", "x11", "egress:tcp/443@*"] + [f"egress:{pr}/{p}@*" for pr in ("tcp", "udp") for p in range(27015, 27031)] + [f"egress:udp/{p}@*" for p in range(27031, 27037)] + ["egress:tcp/27036@*", "egress:tcp/27037@*"]
+expected = ["audio", "input", "rumble", "x11", "egress:tcp/443@*"] + [f"egress:{pr}/{p}@*" for pr in ("tcp", "udp") for p in range(27015, 27031)] + [f"egress:udp/{p}@*" for p in range(27031, 27037)] + ["egress:tcp/27036@*", "egress:tcp/27037@*"]
 if manifest["app"]["use"] != expected:
     raise SystemExit(f"Steam Link capability policy differs: {manifest['app']['use']!r}")
 if manifest["launch"]["needs_network"] is not True:
