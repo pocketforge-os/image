@@ -19,8 +19,9 @@ grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 # The paired runtime/launcher include short-power-key intake and the rooted
 # app parser/X11 namespace contract. Reject every older or crossed source generation,
 # including the immediately preceding matched pair.
-expected_runtime=7d92ef9fa5a6c1dca21d7f0e1e568c0cf2de6bc8
+expected_runtime=78f43d3c92a7c7655e115779f20e1168b53ec1c1
 pre_root_runtime=da971c761e40ef153a0133039273cbd0901a8b03
+pre182_runtime=7d92ef9fa5a6c1dca21d7f0e1e568c0cf2de6bc8
 pre_power_runtime=8c87d7b60ceb604489b6343355732504a06d743c
 preceding_runtime=a64273cab3a67b2706af502c28412e8435d6df5c
 pre168_runtime=196fd1e235916f6d30204b4ee178c62d50631c41
@@ -56,6 +57,7 @@ test "$launcher_guard" = "$expected_launcher"
 test "$(grep -Fc "$expected_runtime" "$pair_workflow")" -eq 2
 test "$(grep -Fc "$expected_launcher" "$pair_workflow")" -eq 2
 test "$(grep -Fc "$pre_root_runtime" "$pair_workflow")" -eq 0
+test "$(grep -Fc "$pre182_runtime" "$pair_workflow")" -eq 0
 test "$(grep -Fc "$pre_root_launcher" "$pair_workflow")" -eq 0
 test "$(grep -Fc "$prior_runtime" "$pair_workflow")" -eq 0
 test "$(grep -Fc "$preceding_runtime" "$pair_workflow")" -eq 0
