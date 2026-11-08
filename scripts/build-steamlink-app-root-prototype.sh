@@ -267,7 +267,7 @@ printf '%s\n' \
     'name = "Steam Link"' \
     'version = "1.3.32.316"' \
     'category = "stream"' \
-    'use = ["audio", "input", "x11", "egress:tcp/443@*", "egress:udp/27031@*", "egress:udp/27032@*", "egress:udp/27033@*", "egress:udp/27034@*", "egress:udp/27035@*", "egress:udp/27036@*", "egress:tcp/27036@*", "egress:tcp/27037@*"]' \
+    'use = ["audio", "input", "x11", "egress:tcp/443@*", "egress:tcp/27015@*", "egress:tcp/27016@*", "egress:tcp/27017@*", "egress:tcp/27018@*", "egress:tcp/27019@*", "egress:tcp/27020@*", "egress:tcp/27021@*", "egress:tcp/27022@*", "egress:tcp/27023@*", "egress:tcp/27024@*", "egress:tcp/27025@*", "egress:tcp/27026@*", "egress:tcp/27027@*", "egress:tcp/27028@*", "egress:tcp/27029@*", "egress:tcp/27030@*", "egress:udp/27015@*", "egress:udp/27016@*", "egress:udp/27017@*", "egress:udp/27018@*", "egress:udp/27019@*", "egress:udp/27020@*", "egress:udp/27021@*", "egress:udp/27022@*", "egress:udp/27023@*", "egress:udp/27024@*", "egress:udp/27025@*", "egress:udp/27026@*", "egress:udp/27027@*", "egress:udp/27028@*", "egress:udp/27029@*", "egress:udp/27030@*", "egress:udp/27031@*", "egress:udp/27032@*", "egress:udp/27033@*", "egress:udp/27034@*", "egress:udp/27035@*", "egress:udp/27036@*", "egress:tcp/27036@*", "egress:tcp/27037@*"]' \
     '' \
     '[runtime]' \
     'family = "pocketforge/a133-powervr"' \
