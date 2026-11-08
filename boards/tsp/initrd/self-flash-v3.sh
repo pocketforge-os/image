@@ -572,6 +572,8 @@ sf_v3_install_stamp() {
     cmp -s "$sf_v3_stamp_expected" "$sf_v3_stamp_final" || return 1
     SF_V3_STAMP_END_MS="$(sf_v3_now_ms)"
     export SF_V3_RECEIPT_PADDED_SHA256 SF_V3_STAMP_END_MS
+    sf_v3_progress_marker stamp 100
+    return 0
 }
 
 sf_v3_load_armed_transaction() {
@@ -970,6 +972,71 @@ sf_v3_clean_work() {
     mkdir -p "$SF_V3_WORK" || return 1
 }
 
+# ---- PF_SELF_FLASH_V3_PROGRESS (observability only) -------------------------
+# Marker grammar is parsed by pocketforge-automation
+# scripts/lib/pf_self_flash_v3_live.py:_PROGRESS and must fullmatch:
+#   PF_SELF_FLASH_V3_PROGRESS phase=(start|write|write-end|stamp) percent=N
+# so bytes/elapsed ride on a separate PF_SELF_FLASH_V3_PROGRESS_DETAIL line.
+# Every helper here returns 0 and swallows errors: progress can never fail or
+# block the write. Only busybox applets already required by the initrd are used.
+SF_V3_PROC="${SF_V3_PROC:-/proc}"
+SF_V3_PROGRESS_INTERVAL="${SF_V3_PROGRESS_INTERVAL:-2}"
+
+sf_v3_progress_marker() {
+    # $1 phase  $2 percent
+    printf 'PF_SELF_FLASH_V3_PROGRESS phase=%s percent=%s\n' "$1" "$2" >&2 || :
+    return 0
+}
+
+# Find the sink dd by its of= argument and print its cumulative write(2) bytes.
+sf_v3_progress_bytes() {
+    # Fast path: the sink pid found on an earlier sample.
+    if [ -n "$sf_v3_pp_cached" ]; then
+        sf_v3_pw="$(sed -n 's/^wchar: *//p' "$sf_v3_pp_cached/io" 2>/dev/null)"
+        case "$sf_v3_pw" in
+            ''|*[!0-9]*) sf_v3_pp_cached= ;;
+            *) printf '%s\n' "$sf_v3_pw"; return 0 ;;
+        esac
+    fi
+    for sf_v3_pp in "$SF_V3_PROC"/[0-9]*; do
+        [ -r "$sf_v3_pp/cmdline" ] || continue
+        case "$(tr '\000' ' ' <"$sf_v3_pp/cmdline" 2>/dev/null)" in
+            *"dd "*"of=$SF_V3_SD_IO "*) ;;
+            *) continue ;;
+        esac
+        sf_v3_pw="$(sed -n 's/^wchar: *//p' "$sf_v3_pp/io" 2>/dev/null)"
+        case "$sf_v3_pw" in ''|*[!0-9]*) continue ;; esac
+        sf_v3_pp_cached="$sf_v3_pp"
+        printf '%s\n' "$sf_v3_pw"
+        return 0
+    done
+    return 1
+}
+
+sf_v3_progress_sampler() {
+    # Runs in a background subshell. Emits phase=write for 1..99 percent only,
+    # strictly increasing, plus a DETAIL line with bytes written and elapsed.
+    sf_v3_ps_start="$(sf_v3_now_ms)"
+    sf_v3_ps_last=0
+    sf_v3_pp_cached=
+    sf_v3_ps_tmp="$SF_V3_WORK/progress.sample"
+    while :; do
+        sleep "$SF_V3_PROGRESS_INTERVAL" 2>/dev/null || sleep 1
+        sf_v3_progress_bytes >"$sf_v3_ps_tmp" 2>/dev/null || continue
+        read -r sf_v3_ps_bytes <"$sf_v3_ps_tmp" || continue
+        sf_v3_ps_pct=$(( sf_v3_ps_bytes * 100 / SF_V3_TARGET_RAW_BYTES )) 2>/dev/null || continue
+        [ "$sf_v3_ps_pct" -gt "$sf_v3_ps_last" ] || continue
+        [ "$sf_v3_ps_pct" -lt 100 ] || sf_v3_ps_pct=99
+        [ "$sf_v3_ps_pct" -gt "$sf_v3_ps_last" ] || continue
+        sf_v3_ps_last="$sf_v3_ps_pct"
+        sf_v3_ps_now="$(sf_v3_now_ms)"
+        sf_v3_progress_marker write "$sf_v3_ps_pct"
+        printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=write bytes=%s total=%s elapsed_ms=%s\n' \
+            "$sf_v3_ps_bytes" "$SF_V3_TARGET_RAW_BYTES" \
+            "$(( sf_v3_ps_now - sf_v3_ps_start ))" >&2 || :
+    done
+}
+
 sf_v3_stream_write() {
     SF_V3_XZ_RESULT=fail
     SF_V3_RAW_STREAM_BYTES=unknown
@@ -1004,6 +1071,12 @@ sf_v3_stream_write() {
     sf_v3_count_result="$SF_V3_WORK/raw-count.result"
     mkfifo "$sf_v3_hash_fifo" "$sf_v3_count_fifo" || return 1
 
+    sf_v3_progress_marker start 0
+    sf_v3_progress_pid=
+    # Subshell with no `set -e` effect; failure to fork just means no progress.
+    ( sf_v3_progress_sampler ) </dev/null &
+    sf_v3_progress_pid=$!
+
     sha256sum <"$sf_v3_hash_fifo" >"$sf_v3_hash_result" &
     sf_v3_hash_pid=$!
     wc -c <"$sf_v3_count_fifo" >"$sf_v3_count_result" &
@@ -1019,6 +1092,10 @@ sf_v3_stream_write() {
     fi
     if wait "$sf_v3_hash_pid"; then sf_v3_hash_rc=0; else sf_v3_hash_rc=$?; fi
     if wait "$sf_v3_count_pid"; then sf_v3_count_rc=0; else sf_v3_count_rc=$?; fi
+    if [ -n "$sf_v3_progress_pid" ]; then
+        kill "$sf_v3_progress_pid" 2>/dev/null || :
+        wait "$sf_v3_progress_pid" 2>/dev/null || :
+    fi
 
     if [ "$sf_v3_hash_rc" -eq 0 ]; then
         read -r SF_V3_RAW_STREAM_SHA256 sf_v3_hash_name <"$sf_v3_hash_result" \
@@ -1052,6 +1129,7 @@ sf_v3_stream_write() {
     SF_V3_XZ_RESULT=pass
     SF_V3_WRITE_RESULT=pass
     export SF_V3_XZ_RESULT SF_V3_WRITE_RESULT
+    sf_v3_progress_marker write-end 100
     sf_v3_clean_work
 }
 
