@@ -118,6 +118,9 @@ else
     mirror_scheme=https
 fi
 mirror="${mirror_scheme}://snapshot.debian.org/archive/debian/${snapshot}/"
+# apt retries by default (Acquire::Retries 3), and with the default retry delay apt 2.6 can
+# stop for good in its update once one index fails transiently while another on the same
+# host succeeds (LP #2003851, tsp-hqm1p.142): the delay is off, the retries stay.
 mmdebstrap \
     --mode="${mode}" \
     --variant=minbase \
@@ -125,6 +128,7 @@ mmdebstrap \
     --format=tar \
     --include="${package_csv}" \
     --aptopt='Acquire::Check-Valid-Until "false";' \
+    --aptopt='Acquire::Retries::Delay "false";' \
     "${suite}" "${stage}/rootfs.tar" "${mirror}"
 
 mkdir "${stage}/rootfs"

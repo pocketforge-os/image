@@ -138,6 +138,16 @@ SHELL ["/bin/sh", "-c", "for pf_env_name in $(env | sed 's/=.*//'); do case \"$p
 # The arm64 apt pair is kept for the rootfs builders' mmdebstrap (build-rootfs*.sh
 # --include), checked against committed SHA256 pins, so the device rootfs ships the fixed
 # apt too.
+#
+# tsp-hqm1p.142: apt 2.3 to 3.0.2 (bookworm's 2.6.x, noble's 2.8.x) can stop for good in
+# `apt-get update` when one index fails transiently and waits out Acquire::Retries::Delay (on by
+# default) while another index on the same host succeeds (LP #2003851, fixed in apt 3.0.3). The
+# NAS apt-cacher-ng supplies the trigger: two clients revalidate one InRelease at once and one
+# gets the headers and a closed connection (the wpa stage stall, tsp-mc9m.60.29.84.67).
+# Acquire::http::Timeout cannot end that wait, because no request is outstanding. Retries stay
+# on and the delay goes, before the first apt run that retries, for every derived stage.
+# tests/test-apt-retry-delay.py replays the failure against apt.
+RUN printf '%s\n' 'Acquire::Retries::Delay "false";' > /etc/apt/apt.conf.d/99-pf-retry-delay
 COPY --chmod=0555 --from=image-src scripts/assert-apt-fixed.sh /usr/local/bin/pf-assert-apt-fixed
 RUN <<'APTCVE2026109518'
 set -eux
@@ -661,6 +671,9 @@ COPY --chmod=0555 --from=image-src scripts/assert-apt-fixed.sh /usr/local/bin/pf
 # snapshot.ubuntu.com requires Ubuntu Pro for /ubuntu-ports/, so using a
 # snapshot for amd64 while arm64 comes from the live archive breaks Multi-Arch packages.
 ENV MESA_UBUNTU_SNAPSHOT=none
+# tsp-hqm1p.142: apt's retry delay is off, as in pf-build-base (noble's apt 2.8 has the same
+# delayed-retry deadlock, LP #2003851). The live-archive apt runs below use the default retries.
+RUN printf '%s\n' 'Acquire::Retries::Delay "false";' > /etc/apt/apt.conf.d/99-pf-retry-delay
 RUN <<'GPUUMTOOLCHAIN'
 set -eux
 # CVE-2026-109518 (bd tsp-hqm1p.143): the pinned noble base ships apt 2.8.3, which
@@ -1908,6 +1921,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:${PATH}
 COPY --chmod=0555 --from=image-src scripts/assert-apt-fixed.sh /usr/local/bin/pf-assert-apt-fixed
+# tsp-hqm1p.142: apt's retry delay is off, as in pf-build-base (LP #2003851). The live-archive
+# apt runs below use the default retries.
+RUN printf '%s\n' 'Acquire::Retries::Delay "false";' > /etc/apt/apt.conf.d/99-pf-retry-delay
 RUN <<'POOLSUITETOOLCHAIN'
 set -eux
 # CVE-2026-109518 (bd tsp-hqm1p.143): the pinned bookworm-slim base ships apt 2.6.1 over
