@@ -19,7 +19,7 @@ grep -q 'FATAL: launcher/runtime contract drift:' "$guard"
 # The paired runtime/launcher include short-power-key intake and the rooted
 # app parser/X11 namespace contract. Reject every older or crossed source generation,
 # including the immediately preceding matched pair.
-expected_runtime=9b42a8df66e8d8efed0bb14dedda2de28378c7eb
+expected_runtime=8a493f00101b03894783ef8941df59f2abba5388
 pre184_runtime=78f43d3c92a7c7655e115779f20e1168b53ec1c1
 pre_root_runtime=da971c761e40ef153a0133039273cbd0901a8b03
 pre182_runtime=7d92ef9fa5a6c1dca21d7f0e1e568c0cf2de6bc8
