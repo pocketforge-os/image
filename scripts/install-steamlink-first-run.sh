@@ -80,6 +80,15 @@ done < <(awk -F= '
         }
     }
 ' "${policy_fragment}")
+# The DUT has no sound server: SDL3 inside Steam Link goes straight to ALSA via
+# libasound2t64's built-in asym/plug/softvol/dmix plugins. Carry the platform
+# configuration (card id "Codec") into the sealed app root.
+platform_asound_conf="${rootfs}/etc/asound.conf"
+[ -f "${platform_asound_conf}" ] || {
+    echo "steamlink-first-run: missing platform ALSA configuration: ${platform_asound_conf}" >&2
+    exit 66
+}
+install -D -m 0644 "${platform_asound_conf}" "${app_root_overlay}/etc/asound.conf"
 install -m 0755 "${app_source}/pf-launch" "${app_overlay}/pf-launch"
 install -m 0755 "${app_source}/steamlink-fetch.py" "${app_overlay}/steamlink-fetch.py"
 install -m 0644 "${app_source}/valve-steamlink-release-key.gpg" \
@@ -98,6 +107,7 @@ root_output="${work}/root-output"
     --mode "${builder_mode}" \
     --package python3 \
     --package gpgv \
+    --package libasound2t64 \
     --overlay "${app_root_overlay}" \
     --systemd-resolved-stub \
     --output "${root_output}"
@@ -112,7 +122,7 @@ expected = {"schema_version": 1, "distribution": "debian-13", "suite": "trixie",
 for key, wanted in expected.items():
     if value.get(key) != wanted:
         raise SystemExit(f"steamlink-first-run: root metadata {key} differs")
-expected_packages = ["ca-certificates", "gpgv", "libc6", "libgcc-s1", "libstdc++6", "python3"]
+expected_packages = ["ca-certificates", "gpgv", "libasound2t64", "libc6", "libgcc-s1", "libstdc++6", "python3"]
 if value.get("packages") != expected_packages:
     raise SystemExit("steamlink-first-run: root metadata package closure differs")
 PY

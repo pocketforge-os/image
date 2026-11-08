@@ -56,7 +56,7 @@ data = b"opaque app-root fixture\\n"
 (out / "root.raw").write_bytes(data)
 (out / "root.metadata.json").write_text(json.dumps({"schema_version":1,
  "distribution":"debian-13", "suite":"trixie", "architecture":"arm64",
- "packages":["ca-certificates","gpgv","libc6","libgcc-s1","libstdc++6","python3"],
+ "packages":["ca-certificates","gpgv","libasound2t64","libc6","libgcc-s1","libstdc++6","python3"],
  "sha256":hashlib.sha256(data).hexdigest()}))
 ''')
         self.root_builder.chmod(0o755)
@@ -73,6 +73,11 @@ else:
         contract = self.root / "usr/share/pocketforge/platform-capabilities.toml"
         contract.parent.mkdir(parents=True)
         shutil.copyfile(ROOT / "tests/fixtures/app-policy/platform-capabilities-a133-open.toml", contract)
+        # build-rootfs.sh installs the platform ALSA config before the Steam
+        # Link app root; the installer requires it to be present.
+        asound = self.root / "etc/asound.conf"
+        asound.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / "device-config/alsa/asound.conf.sun4i-codec", asound)
         self.env = dict(os.environ, PF_OBJCOPY=shutil.which("objcopy"),
                         PF_STRIP=shutil.which("strip"), SRC_DIR=str(ROOT),
                         ROOTFS_EXTRACTED=str(self.root), OUT_DIR=str(self.out),
