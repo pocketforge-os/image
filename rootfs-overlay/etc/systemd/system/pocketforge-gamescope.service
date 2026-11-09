@@ -34,6 +34,9 @@ ExecStartPre=/usr/lib/pocketforge/pf-gamescope-kms-select
 ExecStartPre=+/usr/bin/systemctl stop pocketforge-boot-animator.service pf-shell-selected.service
 ExecStart=/usr/bin/gamescope --backend drm --prefer-drm ${PF_GAMESCOPE_KMS_NODE} --expose-wayland --xwayland-count 1
 Restart=no
+# Gamescope must stop its managed Xwayland before wlroots sees a dead child and
+# restarts it. Signal only the supervisor first; keep the timeout's cgroup kill.
+KillMode=mixed
 NoNewPrivileges=yes
 PrivateDevices=no
 ProtectSystem=strict

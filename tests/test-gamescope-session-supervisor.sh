@@ -339,6 +339,84 @@ sed -i '/KERNEL=="card\*"/d' "${scratch}/rule-missing-card-tag.rules"
 if check_drm_readiness_contract "${owner}" "${scratch}/rule-missing-card-tag.rules"; then
     fail "DRM readiness check accepted untagged primary nodes"
 fi
+
+check_gamescope_stop_contract() {
+    local unit=$1
+
+    python3 - "${unit}" <<'PY'
+from pathlib import Path
+import sys
+
+
+def setting(lines: list[str], name: str, default: str) -> str:
+    values = [line.removeprefix(f"{name}=") for line in lines
+              if line.startswith(f"{name}=")]
+    return values[-1] if values else default
+
+
+class StopModel:
+    """The pinned Gamescope/wlroots ownership boundary during unit stop."""
+
+    def __init__(self) -> None:
+        self.shutdown_requested = False
+        self.wlserver_cleanup = False
+        self.xwayland_restarts = 0
+
+    def gamescope_sigterm(self) -> None:
+        # Gamescope's handler asks steamcompmgr to stop; wlserver cleanup is
+        # asynchronous and has not destroyed the Xwayland server yet.
+        self.shutdown_requested = True
+
+    def xwayland_sigterm(self) -> None:
+        # Pinned wlroots restarts an established Xwayland client unless its
+        # owning server has already been destroyed by Gamescope cleanup.
+        if not self.wlserver_cleanup:
+            self.xwayland_restarts += 1
+
+    def finish_gamescope(self) -> None:
+        # Pinned Gamescope deliberately destroys Xwayland first so wlroots
+        # cannot take the restart path while the display is torn down.
+        self.wlserver_cleanup = True
+
+
+def stop(mode: str) -> StopModel:
+    model = StopModel()
+    model.gamescope_sigterm()
+    if mode == "control-group":
+        model.xwayland_sigterm()
+    model.finish_gamescope()
+    return model
+
+
+# Keep both sides of the race executable: the systemd default reproduces the
+# unwanted child restart, while main-process-first stop preserves Gamescope's
+# own cleanup ordering.
+assert stop("control-group").xwayland_restarts == 1
+assert stop("mixed").xwayland_restarts == 0
+
+lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+mode = setting(lines, "KillMode", "control-group")
+if mode != "mixed":
+    raise SystemExit(
+        f"Gamescope stop must signal only the main process before cgroup "
+        f"timeout cleanup; effective KillMode={mode}"
+    )
+PY
+}
+
+# Xwayland is a Gamescope-owned child. A cgroup-wide initial SIGTERM can kill
+# it before Gamescope reaches wlserver cleanup, activating wlroots' restart
+# path during stop. Signal Gamescope first; retain cgroup-wide SIGKILL fallback.
+check_gamescope_stop_contract "${owner}" \
+    || fail "Gamescope stop can race its Xwayland restart path"
+cp "${owner}" "${scratch}/owner-with-default-stop.service"
+sed -i '/^KillMode=/d' "${scratch}/owner-with-default-stop.service"
+if check_gamescope_stop_contract "${scratch}/owner-with-default-stop.service" \
+    >"${scratch}/default-stop.out" 2>&1; then
+    fail "Gamescope stop check accepted cgroup-wide initial SIGTERM"
+fi
+grep -F 'effective KillMode=control-group' "${scratch}/default-stop.out" >/dev/null \
+    || fail "Gamescope stop negative control missed the default kill mode"
 grep -Fx 'Restart=no' "${owner}" >/dev/null
 grep -Fx 'StartLimitBurst=1' "${owner}" >/dev/null
 grep -Fx 'StartLimitIntervalSec=infinity' "${owner}" >/dev/null
