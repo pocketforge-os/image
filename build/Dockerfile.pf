@@ -2475,6 +2475,48 @@ FROM scratch AS component-test-cursor-theme
 COPY --from=cursor-theme /tmp/out /
 
 # =============================================================================
+# rootfs-base — the cached a133 apt solve (tsp-hqm1p.182.13). mmdebstrap's qemu
+# install of the package set, about 17 of the rootfs stage's 20 minutes, runs here
+# once per solve input. Its key is only those inputs: the package lists, the
+# snapshot date, the recipe scripts, the local debs that join the solve
+# (cloud-init, the Mesa provider from gpu-um-mesa, the pf-build-base apt fix) and
+# the profile facts that select packages. No image-wide epoch and no image-src
+# tree. rootfs replays it under the unchanged customize hook, after
+# pf_rootfs_base_verify proves the base matches this build's solve.
+# tests/test-rootfs-base-split.py pins this input boundary.
+# =============================================================================
+FROM pf-build-base AS rootfs-base
+ARG PF_DEVICE_ID
+ARG PF_SOC
+ARG PF_GPU_MODEL
+ARG PF_DISPLAY_PIPELINE
+ARG PF_VARIANT=dev
+ARG PF_GAMESCOPE_MODE=not-shipped
+COPY --from=image-src snapshot-date.txt rootfs-packages.txt rootfs-packages-dev.txt rootfs-packages-mainline.txt rootfs-packages-mainline-dev.txt rootfs-packages-a133-open-7x-gpu.txt /work/src/
+COPY --from=image-src scripts/build-rootfs-base.sh scripts/rootfs-package-list.sh scripts/rewrite-rootfs-apt-sources-https.sh scripts/strip-rootfs-apt-proxy.sh /work/src/scripts/
+COPY --from=cloud-init /out /work/cloud-init
+COPY --from=gpu-um-mesa /out /work/gpu-um-mesa
+# Same privilege and the same apt-cache transport as the rootfs RUN it was split
+# from: mmdebstrap --mode=root needs SYS_ADMIN, and the predefined http_proxy
+# build-arg reaches it without entering the cache key.
+RUN --security=insecure <<'ROOTFS_BASE'
+set -eux
+mkdir -p /out
+case "${PF_SOC}" in
+  sun50iw10p1)
+    SRC_DIR=/work/src OUT_DIR=/out CLOUD_INIT_DIR=/work/cloud-init GPU_UM_MESA_DIR=/work/gpu-um-mesa \
+      PF_DEVICE_ID="${PF_DEVICE_ID}" PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
+      PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" PF_GAMESCOPE_MODE="${PF_GAMESCOPE_MODE}" \
+      PF_APT_PROXY="${http_proxy:-}" \
+      bash /work/src/scripts/build-rootfs-base.sh --variant "${PF_VARIANT}"
+    ;;
+  *)  # only the a133 rootfs is split; other SoCs keep their single pass
+    printf 'rootfs-base NOT BUILT for device=%s soc=%s\n' "${PF_DEVICE_ID}" "${PF_SOC}" > /out/.pf-rootfs-base-provenance
+    ;;
+esac
+ROOTFS_BASE
+
+# =============================================================================
 # app-root-tools — run the real preflight and reproducibility test against the
 # digest-pinned owned build container when an app declares [runtime.root]. OS
 # image builds never fetch producer tools from apt; a missing or incompatible
@@ -2565,6 +2607,7 @@ COPY --from=platform-runtime-steamlink-ffmpeg59 /out /work/platform-runtime
 COPY --from=gamescope /out /work/gamescope-package
 COPY --from=cts-bundle /out /work/cts-bundle
 COPY --chown=0:0 --from=cursor-theme /tmp/out /work/cursor-theme
+COPY --from=rootfs-base /out /work/rootfs-base
 # mmdebstrap runs --mode=root (real chroot/mount) -> needs SYS_ADMIN, which BuildKit grants only under
 # RUN --security=insecure (labs frontend + a docker-container builder created with
 # --allow-insecure-entitlement security.insecure; pf-build.sh wires the builder). See the
@@ -2613,6 +2656,7 @@ case "${PF_SOC}" in
       PF_CAR_SHA256="${PF_CAR_SHA256}" \
       PF_UBOOT_SHA="${PF_UBOOT_SHA}" PF_TFA_SHA="${PF_TFA_SHA}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" PF_APT_PROXY="${http_proxy:-}" \
+      PF_ROOTFS_BASE_DIR=/work/rootfs-base \
       bash /work/src/scripts/build-rootfs.sh --variant "${PF_VARIANT}" --substrate owned
     ;;
   sun55iw3)   # a523 (Mali-G57 Valhall JM): source-rebuilt mali_kbase.ko + closed Mali userland + AIC8800 fw
@@ -2931,6 +2975,8 @@ COPY --from=platform-runtime-steamlink-ffmpeg59 /out /platform-runtime-steamlink
 COPY --from=gamescope /out /gamescope
 COPY --from=cts-bundle /out /cts-bundle
 COPY --from=cursor-theme /tmp/out /cursor-theme
+# The cached apt solve (rootfs-base): keyed on its solve inputs, not the image.
+COPY --from=rootfs-base /out /rootfs-base
 
 # =============================================================================
 # export — the flashable artifact(s) only (FROM scratch → nothing but /out).

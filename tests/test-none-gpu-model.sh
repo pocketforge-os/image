@@ -5,6 +5,8 @@ set -eu
 root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
 dockerfile="$root/build/Dockerfile.pf"
 rootfs="$root/scripts/build-rootfs.sh"
+# The apt solve both rootfs passes share (tsp-hqm1p.182.13).
+solve="$root/scripts/rootfs-package-list.sh"
 initrd="$root/boards/tsp/initrd/build-initrd.sh"
 sd="$root/scripts/build-sd-image.sh"
 verifier="$root/scripts/verify-no-gpu-artifacts.sh"
@@ -39,7 +41,7 @@ trap 'find "$tmpdir" -mindepth 1 -delete; rmdir "$tmpdir"' EXIT
 # byte-identical; display-less dev and release lists must drop every explicit
 # root that can install or transitively select Mesa/EGL/GBM/GLES artifacts.
 package_section="$tmpdir/package-section.sh"
-sed -n '/^PKG_FILE=/,/^echo "  package list: ${PKG_LIST}"$/p' "$rootfs" >"$package_section"
+sed -n '/^PKG_FILE=/,/^echo "  package list: ${PKG_LIST}"$/p' "$solve" >"$package_section"
 
 resolve_packages() {
     variant=$1

@@ -9,6 +9,8 @@ platform_verifier="$root/scripts/verify-open-gpu-probe-platforms.sh"
 control="$root/packages/pocketforge-open-gpu-stack/DEBIAN/control"
 zink_policy="$root/packages/pocketforge-open-gpu-stack/10-pocketforge-zink.conf"
 builder="$root/scripts/build-rootfs.sh"
+# The apt solve both rootfs passes share (tsp-hqm1p.182.13).
+solve="$root/scripts/rootfs-package-list.sh"
 dockerfile="$root/build/Dockerfile.pf"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/open-gpu-provider.XXXXXX")
 trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT
@@ -76,7 +78,7 @@ echo 'open-gpu-probe-platforms-negative=PASS mutation=remove-surfaceless-extensi
 package_section="$scratch/package-section.sh"
 # shellcheck disable=SC2016 # Match the literal build-script variable.
 sed -n '/^PKG_FILE=/,/^echo "  package list: ${PKG_LIST}"$/p' \
-    "$builder" >"$package_section"
+    "$solve" >"$package_section"
 resolve_packages() {
     source_root=$1
     device_id=$2

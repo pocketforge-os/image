@@ -178,6 +178,8 @@ jobs:
             tests/test-runtime-path-producers.sh
             tests/test-rootfs-abi-check.sh
             tests/test-rootfs-apt-policy.sh
+            tests/test-rootfs-base-solve.sh
+            tests/test-rootfs-base-split.py
             tests/test-rootfs-build-logs.sh
             tests/test-rootfs-bluetooth.sh
             tests/test-rootfs-dns.sh
