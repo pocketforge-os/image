@@ -69,21 +69,21 @@ jobs:
         with:
           persist-credentials: false
           repository: pocketforge-os/runtime
-          ref: 8a493f00101b03894783ef8941df59f2abba5388
+          ref: 7b97af8ffe1acb2665b946f97f4473728ba2ccb1
           path: runtime-pair
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
           repository: pocketforge-os/launcher
-          ref: 302b420f23262069a92046cf1122869a2d9f4753
+          ref: d256ea3751379efdb93f16e9bd4faf7c2c3024d4
           path: launcher-pair
       - name: Prove exact source pair in the pinned OCI toolchain
         run: |
           set -euo pipefail
           export PF_PAIR_OUTPUT="$RUNNER_TEMP/app-policy-pair"
           printf 'PF_PAIR_OUTPUT=%s\n' "$PF_PAIR_OUTPUT" >> "$GITHUB_ENV"
-          test "$(git -C runtime-pair rev-parse HEAD)" = 8a493f00101b03894783ef8941df59f2abba5388
-          test "$(git -C launcher-pair rev-parse HEAD)" = 302b420f23262069a92046cf1122869a2d9f4753
+          test "$(git -C runtime-pair rev-parse HEAD)" = 7b97af8ffe1acb2665b946f97f4473728ba2ccb1
+          test "$(git -C launcher-pair rev-parse HEAD)" = d256ea3751379efdb93f16e9bd4faf7c2c3024d4
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$PF_IMAGE_PR_HEAD" HEAD
           test ! -e "$PF_PAIR_OUTPUT"
