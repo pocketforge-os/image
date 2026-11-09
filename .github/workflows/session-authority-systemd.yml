@@ -14,6 +14,7 @@ on:
       - tests/probe-session-authority-docker-systemd.sh
       - tests/verify-session-authority-systemd-preconditions.py
       - tests/session-authority-systemd/**
+      - tests/test-fake-gamescope-focus.sh
       - rootfs-overlay/etc/systemd/system/pf-app@.service
       - rootfs-overlay/etc/systemd/system/pf-app@*.service.d/**
       - rootfs-overlay/etc/systemd/system/pocketforge-foreground.target.d/10-owner-shell.conf
@@ -109,6 +110,41 @@ jobs:
             grep -E '^(evidence:|session-authority real-systemd: (PASS|FAIL))' \
               "$RUNNER_TEMP/session-authority-systemd-live.log" 2>/dev/null ||
               echo 'live harness produced no receipt'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  focus-client:
+    # tsp-ca44436b9799851cd483: fake-gamescope speaks runtime's golden register/snapshot/focus
+    # frames to the broker's real compositor endpoint (runtime pinned in the test, built in the
+    # digest-pinned rust:1.85-bookworm image with its vendor tree and no network).
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, pf-builder-vm]
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Run fake-gamescope focus client against the broker endpoint
+        env:
+          PF_FAKE_GAMESCOPE_FOCUS_CACHE: ${{ runner.temp }}/fake-gamescope-focus
+        run: |
+          set -o pipefail
+          tests/test-fake-gamescope-focus.sh 2>&1 |
+            tee "$RUNNER_TEMP/fake-gamescope-focus.log"
+
+      - name: Publish focus-client evidence
+        if: always()
+        run: |
+          {
+            echo '## Fake-gamescope focus client evidence'
+            echo '```text'
+            grep -E '^(rumble: |fake-gamescope focus: (PASS|FAIL))' \
+              "$RUNNER_TEMP/fake-gamescope-focus.log" 2>/dev/null ||
+              echo 'focus-client test produced no receipt'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

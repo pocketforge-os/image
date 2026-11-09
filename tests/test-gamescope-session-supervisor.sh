@@ -345,8 +345,20 @@ grep -Fx 'StartLimitIntervalSec=infinity' "${owner}" >/dev/null
 grep -F 'OnFailure=pocketforge-gamescope-fallback.service' "${owner}" >/dev/null
 grep -F 'OnSuccess=pocketforge-gamescope-fallback.service' "${owner}" >/dev/null
 grep -F 'ExecStartPre=+/usr/bin/systemctl stop pocketforge-boot-animator.service pf-shell-selected.service' "${owner}" >/dev/null
-grep -F 'SupplementaryGroups=video render pf-compositor-input' "${owner}" >/dev/null
-! grep -E 'SupplementaryGroups=.*(^| )input( |$)' "${owner}" >/dev/null
+# tsp-ca44436b9799851cd483: gamescope's focus client connects to the router's compositor.sock
+# (0660 root:pf-input-compositor in the pf-input run dir), so the unit plus its input-IPC
+# drop-in must carry pf-input and pf-input-compositor alongside pf-compositor-input.
+owner_input_ipc="${unit_root}/pocketforge-gamescope.service.d/10-input-ipc.conf"
+cmp "${root}/build/pocketforge-gamescope.service.d/10-input-ipc.conf" "${owner_input_ipc}" \
+    || fail "g1 install omitted the gamescope input-IPC drop-in"
+grep -Fx 'SupplementaryGroups=video render pf-compositor-input' "${owner}" >/dev/null
+grep -Fx 'SupplementaryGroups=pf-input pf-input-compositor' "${owner_input_ipc}" >/dev/null \
+    || fail "gamescope input-IPC drop-in does not grant pf-input pf-input-compositor"
+owner_groups="$(sed -n 's/^SupplementaryGroups=//p' "${owner}" "${owner_input_ipc}" \
+    | tr ' ' '\n' | sed '/^$/d' | LC_ALL=C sort | tr '\n' ' ')"
+[ "${owner_groups}" = 'pf-compositor-input pf-input pf-input-compositor render video ' ] \
+    || fail "gamescope effective SupplementaryGroups drifted: ${owner_groups}"
+! grep -E 'SupplementaryGroups=.*(^| )input( |$)' "${owner}" "${owner_input_ipc}" >/dev/null
 grep -F -- '--xwayland-count 1' "${owner}" >/dev/null
 fallback="${unit_root}/pocketforge-gamescope-fallback.service"
 resident="${unit_root}/pocketforge-gamescope-resident.service"
