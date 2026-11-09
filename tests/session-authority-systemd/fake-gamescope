@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import select
 import signal
 import socket
 import stat
+import struct
 import sys
 import tempfile
 import threading
@@ -100,8 +102,83 @@ def main() -> None:
         X11.unlink(missing_ok=True)
 
 
+MAX_FRAME = 64 * 1024
+
+
+def recv_exact(peer: socket.socket, size: int) -> bytes:
+    data = b""
+    while len(data) < size:
+        chunk = peer.recv(size - len(data))
+        if not chunk:
+            raise EOFError(f"broker closed after {len(data)} of {size} bytes")
+        data += chunk
+    return data
+
+
+def send_frame(peer: socket.socket, body: bytes) -> None:
+    peer.sendall(struct.pack(">I", len(body)) + body)
+
+
+def read_frame(peer: socket.socket) -> bytes:
+    (size,) = struct.unpack(">I", recv_exact(peer, 4))
+    if size > MAX_FRAME:
+        raise ValueError(f"broker frame exceeds 64 KiB: {size}")
+    return recv_exact(peer, size)
+
+
+def focus_client(path: str, golden_dir: str, omit_register: bool) -> None:
+    """Gamescope focus-client stand-in (tsp-ca44436b9799851cd483).
+
+    Speaks the compositor endpoint the way gamescope's focus client does: 4-byte big-endian
+    length + JSON body, using runtime's golden bodies (pf-input-ipc/tests/golden) byte for byte:
+    register, then the state_snapshot replay, then an App focus delta.
+    """
+    golden = Path(golden_dir)
+
+    def body(name: str) -> bytes:
+        return (golden / f"{name}.json").read_bytes().rstrip(b"\n")
+
+    register, snapshot, focus = body("register"), body("state_snapshot"), body("focus")
+    focus_doc = json.loads(focus)
+    if focus_doc.get("type") != "focus" or focus_doc["surface"].get("kind") != "app":
+        raise SystemExit("fake gamescope: golden focus frame is not an App focus")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
+        peer.settimeout(5)
+        peer.connect(path)
+        if omit_register:
+            send_frame(peer, focus)
+            try:
+                reply = peer.recv(1)
+            except ConnectionResetError:
+                reply = b""
+            if reply:
+                raise SystemExit("fake gamescope: broker answered a focus frame sent before register")
+            print("fake-gamescope focus-client: REFUSED without register")
+            return
+        send_frame(peer, register)
+        reply = json.loads(read_frame(peer))
+        if reply.get("type") != "registered" or not isinstance(reply.get("epoch"), int):
+            raise SystemExit(f"fake gamescope: unexpected register reply {reply!r}")
+        epoch = reply["epoch"]
+        # The golden bodies are epoch 1, the first epoch a fresh broker grants.
+        if epoch != json.loads(snapshot)["epoch"] or epoch != focus_doc["epoch"]:
+            raise SystemExit(f"fake gamescope: broker epoch {epoch} does not match the golden frames")
+        send_frame(peer, snapshot)
+        send_frame(peer, focus)
+        peer.shutdown(socket.SHUT_WR)
+        # The broker never answers a snapshot or focus delta; EOF is its close after ours.
+        while peer.recv(4096):
+            pass
+    print(f"fake-gamescope focus-client: PASS register=golden snapshot=golden focus=app epoch={epoch}")
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["--self-test"]:
         self_test()
+    elif sys.argv[1:2] == ["--focus-client"] and len(sys.argv) in (4, 5):
+        omit = sys.argv[4:] == ["--omit-register"]
+        if len(sys.argv) == 5 and not omit:
+            raise SystemExit("usage: fake-gamescope --focus-client SOCK GOLDEN_DIR [--omit-register]")
+        focus_client(sys.argv[2], sys.argv[3], omit)
     else:
         main()

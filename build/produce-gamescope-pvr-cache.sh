@@ -11,7 +11,7 @@ source_root=$1
 build_dir=$2
 output_root=$3
 gamescope_sha=$4
-expected_gamescope_sha=cf4475a73409295b06ec352f18497fef23422a72
+expected_gamescope_sha=dd997616269812dcaad3fdcc302b192e2f709101
 cache_name=pocketforge-gamescope-ge8300
 cache_limit_bytes=16777216
 # PR build 40770175474's two parallel, CPU-bound seeds completed within 446 s

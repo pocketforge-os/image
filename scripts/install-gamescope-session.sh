@@ -44,6 +44,9 @@ install -D -m 0644 \
     "${src}/usr/share/pocketforge/runtime-path-producers-g1.json" \
     "${rootfs}/usr/share/pocketforge/runtime-path-producers.json"
 install -D -m 0644 \
+    "${src}/../build/pocketforge-gamescope.service.d/10-input-ipc.conf" \
+    "${rootfs}/etc/systemd/system/pocketforge-gamescope.service.d/10-input-ipc.conf"
+install -D -m 0644 \
     "${src}/../build/app-policy-a133-open-g1-v1.json" \
     "${rootfs}/usr/share/pocketforge/app-policy/org.pocketforge.steamlink.resources.json"
 install -D -m 0644 \
