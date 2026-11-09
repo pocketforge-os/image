@@ -302,8 +302,8 @@ repo-wide uinput occurrence inventory with seeded red controls.
    environment; neither path patches gamescope source.
 9. **The laptop harness and the device provenance pipeline pin the same
    gamescope commit.** The harness uses
-   `cf4475a73409295b06ec352f18497fef23422a72` (pocketforge-linear tip, matching
-   `build/produce-gamescope-pvr-cache.sh`), carrying gamescope#15–#21:
+   `dd997616269812dcaad3fdcc302b192e2f709101` (pocketforge-linear tip, matching
+   `build/produce-gamescope-pvr-cache.sh`), carrying gamescope#15–#21 (plus the later KMS-output, rotation-fallback and compositor.sock focus-client changes, none of which the headless harness exercises):
    current lavapipe can start headless without
    `VK_KHR_external_semaphore_fd`; a headless client commit with no fence is
    ready immediately and nudges the compositor so the frame is presented;
