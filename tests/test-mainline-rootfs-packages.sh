@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILDER="${ROOT}/scripts/build-rootfs.sh"
+# The package-list merge both rootfs passes share (tsp-hqm1p.182.13).
+SOLVE="${ROOT}/scripts/rootfs-package-list.sh"
 MAINLINE_PACKAGES="${ROOT}/rootfs-packages-mainline.txt"
 MAINLINE_DEV_PACKAGES="${ROOT}/rootfs-packages-mainline-dev.txt"
 SHARED_PACKAGES="${ROOT}/rootfs-packages.txt"
@@ -89,14 +91,14 @@ grep -Fq '[ -f "${WPA_DIR}/wpa_supplicant" ]' "${BUILDER}"
 
 # Assert the extra list is selected only by the mainline/open model boundary.
 # shellcheck disable=SC2016
-grep -Fq 'if [ "${PF_GPU_MODEL}" = "open" ]; then' "${BUILDER}"
+grep -Fq 'if [ "${PF_GPU_MODEL}" = "open" ]; then' "${SOLVE}"
 # shellcheck disable=SC2016
-grep -Fq 'PKG_MAINLINE_FILE="${SRC_DIR}/rootfs-packages-mainline.txt"' "${BUILDER}"
+grep -Fq 'PKG_MAINLINE_FILE="${SRC_DIR}/rootfs-packages-mainline.txt"' "${SOLVE}"
 # shellcheck disable=SC2016
-grep -Fq 'PKG_LIST="${PKG_LIST},${MAINLINE_PKGS}"' "${BUILDER}"
+grep -Fq 'PKG_LIST="${PKG_LIST},${MAINLINE_PKGS}"' "${SOLVE}"
 # shellcheck disable=SC2016
-grep -Fq 'if [ "${PF_GPU_MODEL}" = "open" ] && [ "${VARIANT}" = "dev" ]; then' "${BUILDER}"
+grep -Fq 'if [ "${PF_GPU_MODEL}" = "open" ] && [ "${VARIANT}" = "dev" ]; then' "${SOLVE}"
 # shellcheck disable=SC2016
-grep -Fq 'PKG_LIST="${PKG_LIST},${MAINLINE_DEV_PKGS}"' "${BUILDER}"
+grep -Fq 'PKG_LIST="${PKG_LIST},${MAINLINE_DEV_PKGS}"' "${SOLVE}"
 
 echo "PASS: open A133 packages are scoped correctly, including open+dev-only libdrm-tests and Cedrus tooling"

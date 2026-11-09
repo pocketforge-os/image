@@ -70,8 +70,12 @@ FIXED_APT_BASES = {
         "ARG BASE_IMAGE=debian@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f",
         "trixie, apt 3.0.3"),
 }
-MMDEBSTRAP_SCRIPTS = ("scripts/build-rootfs.sh", "scripts/build-rootfs-a523.sh",
-                      "scripts/build-debian-app-root.sh")
+MMDEBSTRAP_SCRIPTS = ("scripts/build-rootfs.sh", "scripts/build-rootfs-base.sh",
+                      "scripts/build-rootfs-a523.sh", "scripts/build-debian-app-root.sh")
+# The a133 rootfs passes take their aptopts from this shared array
+# (tsp-hqm1p.182.13); a call's "${MMDEBSTRAP_*_OPTS[@]}" word expands to it.
+SHARED_OPTS_LIB = "scripts/rootfs-package-list.sh"
+SHARED_ARRAY_WORD = re.compile(r"^\$\{MMDEBSTRAP_(?:PASS|SOLVE|OVERLAY)_OPTS\[@\]\}$")
 DELAY_OFF = 'Acquire::Retries::Delay "false";'
 DROP_IN_NAME = "99-pf-retry-delay"
 DROP_IN_RUN = ("RUN printf '%s\\n' 'Acquire::Retries::Delay \"false\";' > "
@@ -186,18 +190,27 @@ def pf_problems(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------- 3. mmdebstrap
-def mmdebstrap_calls(text: str) -> list[list[str]]:
+def shared_aptopts(lib: str) -> list[str]:
+    block = re.search(r"^\s*MMDEBSTRAP_APT_OPTS=\((.*?)^\s*\)", lib, re.M | re.S)
+    return shlex.split(block.group(1)) if block else []
+
+
+def mmdebstrap_calls(text: str, lib: str = "") -> list[list[str]]:
     calls = []
     lines = code_lines(text)
+    shared = shared_aptopts(lib)
     for index, line in enumerate(lines):
-        if line.strip() != "mmdebstrap \\":
+        if line.strip() not in ("mmdebstrap \\", '"${MMDEBSTRAP}" \\'):
             continue
         command = []
         for part in lines[index:]:
             command.append(part.rstrip())
             if not part.rstrip().endswith("\\"):
                 break
-        calls.append(shlex.split(joined("\n".join(command))))
+        argv = []
+        for word in shlex.split(joined("\n".join(command))):
+            argv += shared if SHARED_ARRAY_WORD.match(word) else [word]
+        calls.append(argv)
     return calls
 
 
@@ -205,8 +218,8 @@ def aptopts(argv: list[str]) -> list[str]:
     return [a[len("--aptopt="):].rstrip(";") + ";" for a in argv if a.startswith("--aptopt=")]
 
 
-def mmdebstrap_problems(name: str, text: str) -> list[str]:
-    calls = mmdebstrap_calls(text)
+def mmdebstrap_problems(name: str, text: str, lib: str = "") -> list[str]:
+    calls = mmdebstrap_calls(text, lib)
     if not calls:
         return [f"{name}: no mmdebstrap call found"]
     problems = []
@@ -265,7 +278,7 @@ def all_problems(texts: dict[str, str]) -> list[str]:
     problems = container_problems(texts["build/Dockerfile"])
     problems += pf_problems(texts["build/Dockerfile.pf"])
     for name in MMDEBSTRAP_SCRIPTS:
-        problems += mmdebstrap_problems(name, texts[name])
+        problems += mmdebstrap_problems(name, texts[name], texts[SHARED_OPTS_LIB])
     for name in TEST_RECIPES:
         problems += recipe_problems(name, texts[name])
     for name in FIXED_APT_BASES:
@@ -274,7 +287,7 @@ def all_problems(texts: dict[str, str]) -> list[str]:
 
 
 TEXTS = {name: (ROOT / name).read_text(encoding="utf-8")
-         for name in ("build/Dockerfile", "build/Dockerfile.pf") + MMDEBSTRAP_SCRIPTS
+         for name in ("build/Dockerfile", "build/Dockerfile.pf", SHARED_OPTS_LIB) + MMDEBSTRAP_SCRIPTS
          + TEST_RECIPES + tuple(FIXED_APT_BASES)}
 problems = all_problems(TEXTS)
 if problems:
@@ -289,8 +302,8 @@ controls = {
         r"^\s*" + re.escape(DELAY_ITEM), "", t, count=1, flags=re.M)),
     "container snippet with the delay on": ("build/Dockerfile", lambda t: t.replace(
         DELAY_ITEM, "'Acquire::Retries::Delay \"true\";' \\\n", 1)),
-    "an mmdebstrap call without the delay aptopt": ("scripts/build-rootfs.sh", lambda t: re.sub(
-        r"^\s*--aptopt='Acquire::Retries::Delay \"false\"' \\\n", "", t, count=1, flags=re.M)),
+    "the shared a133 rootfs aptopts without the delay": (SHARED_OPTS_LIB, lambda t: re.sub(
+        r"^\s*--aptopt='Acquire::Retries::Delay \"false\"'\n", "", t, count=1, flags=re.M)),
     "the a523 mmdebstrap call without the delay aptopt": ("scripts/build-rootfs-a523.sh", lambda t: re.sub(
         r"^\s*--aptopt='Acquire::Retries::Delay \"false\"' \\\n", "", t, count=1, flags=re.M)),
     "the app-root mmdebstrap call without the delay aptopt": ("scripts/build-debian-app-root.sh", lambda t: re.sub(
@@ -501,7 +514,7 @@ else:
         "gpu-um-toolchain / poolsuite-toolchain (default retries)": {DROP_IN_NAME: drop_in},
     }
     for name in MMDEBSTRAP_SCRIPTS:
-        for index, argv in enumerate(mmdebstrap_calls(TEXTS[name])):
+        for index, argv in enumerate(mmdebstrap_calls(TEXTS[name], TEXTS[SHARED_OPTS_LIB])):
             paths[f"{name} mmdebstrap call {index + 1}"] = {"99mmdebstrap": sanitize(aptopts(argv))}
     # The test recipes' apt stages run on the pinned container (guest payload) or on
     # bookworm's defaults (session authority): covered above. Their mmdebstrap calls:

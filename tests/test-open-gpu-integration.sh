@@ -4,6 +4,8 @@ set -eu
 root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
 dockerfile="$root/build/Dockerfile.pf"
 customize="$root/scripts/build-rootfs.sh"
+# The apt solve both rootfs passes share (tsp-hqm1p.182.13).
+solve="$root/scripts/rootfs-package-list.sh"
 gate="$root/rootfs-overlay/usr/lib/pocketforge/open-gpu-gate.sh"
 unit="$root/rootfs-overlay/etc/systemd/system/pf-open-gpu-gate.service"
 selected_unit="$root/rootfs-overlay/etc/systemd/system/pf-shell-selected.service"
@@ -125,7 +127,7 @@ if [ -z "$fence_timeout_s" ] || [ -z "$physical_probe_timeout_s" ] ||
 fi
 grep -F 'COPY --from=gpu-um-build /probe/usr/lib/pocketforge/open-gpu-probe /out/usr/lib/pocketforge/open-gpu-probe' "$dockerfile" >/dev/null
 grep -F 'COPY --from=gpu-um-build /pocketforge-open-gpu-stack.deb /out/pocketforge-open-gpu-stack.deb' "$dockerfile" >/dev/null
-grep -F 'GPU_STACK_PROVIDER_DEB="${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb"' "$customize" >/dev/null
+grep -F 'GPU_STACK_PROVIDER_DEB="${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb"' "$solve" >/dev/null
 grep -F 'stage/usr/lib/pocketforge/open-gpu-probe' "$root/build/package-open-gpu-stack.sh" >/dev/null
 test "$(grep -Fc 'scripts/verify-open-gpu-provider.sh' "$customize")" -eq 2
 if grep -F 'cp -a /work/gpu-um-mesa/usr/local/.' "$customize" >/dev/null; then

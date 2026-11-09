@@ -5,6 +5,8 @@ root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 verifier="$root/scripts/verify-open-gpu-tools.sh"
 provider_control="$root/packages/pocketforge-open-gpu-stack/DEBIAN/control"
 builder="$root/scripts/build-rootfs.sh"
+# The apt solve both rootfs passes share (tsp-hqm1p.182.13).
+solve="$root/scripts/rootfs-package-list.sh"
 artifact_policy="$root/scripts/verify-no-gpu-artifacts.sh"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/open-gpu-tools.XXXXXX")
 trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT
@@ -21,8 +23,8 @@ for package in libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 mesa-vulkan-dri
         grep -Fx "$package" >/dev/null
 done
 
-grep -Fq 'rootfs-packages-a133-open-7x-gpu.txt' "$builder"
-grep -Fq 'pocketforge-open-gpu-stack.deb' "$builder"
+grep -Fq 'rootfs-packages-a133-open-7x-gpu.txt' "$solve"
+grep -Fq 'pocketforge-open-gpu-stack.deb' "$solve"
 test "$(grep -Fc 'scripts/verify-open-gpu-tools.sh' "$builder")" -eq 2
 
 producer="$scratch/producer"

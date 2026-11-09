@@ -4,6 +4,8 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dockerfile="${repo_dir}/build/Dockerfile.pf"
 builder="${repo_dir}/scripts/build-rootfs.sh"
+# The apt solve both rootfs passes share (tsp-hqm1p.182.13).
+solve="${repo_dir}/scripts/rootfs-package-list.sh"
 fixture="${repo_dir}/tests/fixtures/cloud-init-firstboot"
 scratch="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-cloud-init-firstboot.XXXXXX")"
 trap 'find "${scratch}" -mindepth 1 -delete; rmdir "${scratch}"' EXIT
@@ -33,7 +35,7 @@ grep -Fq "printf 'cloud_init=%s" "${repo_dir}/scripts/generate-build-id.sh" \
 
 grep -Fq 'CLOUD_INIT_DIR="${CLOUD_INIT_DIR:-/work/cloud-init}"' "${builder}" \
     || fail "rootfs builder has no cloud-init package input"
-grep -Fq -- '--include="${CLOUD_INIT_DEB}"' "${builder}" \
+grep -Fq -- '--include="${CLOUD_INIT_DEB}"' "${solve}" \
     || fail "cloud-init package is not the first local package"
 for package in netcat-openbsd procps python3 python3-configobj python3-debconf \
     python3-jinja2 python3-jsonpatch python3-jsonschema python3-oauthlib \
