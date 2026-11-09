@@ -1354,6 +1354,7 @@ COPY --from=image-src tests/test-cloud-init-firstboot.sh /work/image/tests/test-
 COPY --from=image-src tests/fixtures/cloud-init-firstboot /work/image/tests/fixtures/cloud-init-firstboot
 COPY --from=image-src build/Dockerfile.pf /work/image/build/Dockerfile.pf
 COPY --from=image-src scripts/build-rootfs.sh /work/image/scripts/build-rootfs.sh
+COPY --from=image-src scripts/rootfs-package-list.sh /work/image/scripts/rootfs-package-list.sh
 COPY --from=image-src scripts/build-sd-image.sh /work/image/scripts/build-sd-image.sh
 COPY --from=image-src scripts/generate-build-id.sh /work/image/scripts/generate-build-id.sh
 COPY --from=image-src scripts/verify-prefs-schema-xkb.py /work/image/scripts/verify-prefs-schema-xkb.py
