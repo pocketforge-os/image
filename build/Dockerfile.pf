@@ -2903,6 +2903,36 @@ cat /out/.pf-debuginfo-provenance
 DEBUGINFO
 
 # =============================================================================
+# cache-export — the cross-slot BuildKit cache boundary (tsp-hqm1p.182.13).
+# After a successful, gated image build, CI solves `--target cache-export` from
+# the same L1 cache and exports it, mode=max, to the executing slot's registry
+# ref, so a warm build on another slot reuses every component. It reaches every
+# stage rootfs/assemble consume and nothing keyed on the image-wide
+# SOURCE_DATE_EPOCH, so the per-commit rootfs/assemble layers are never uploaded.
+# Its output is never shipped. tests/test-cache-export-stage.py pins both sides.
+# =============================================================================
+FROM scratch AS cache-export
+COPY --from=app-root-tools /usr/local/libexec /app-root-tools
+COPY --from=fetch /out /fetch
+COPY --from=kernel /out /kernel
+COPY --from=gpu-km /out /gpu-km
+COPY --from=gpu-fw /out /gpu-fw
+COPY --from=gpu-um-mesa /out /gpu-um-mesa
+COPY --from=bootchain /out /bootchain
+COPY --from=sdl /out /sdl
+COPY --from=wpa /out /wpa
+COPY --from=cloud-init /out /cloud-init
+COPY --from=runtime /out /runtime
+COPY --from=hwprobe /out /hwprobe
+COPY --from=poolsuite /out /poolsuite
+COPY --from=recovery /out /recovery
+COPY --from=launcher /out /launcher
+COPY --from=platform-runtime-steamlink-ffmpeg59 /out /platform-runtime-steamlink-ffmpeg59
+COPY --from=gamescope /out /gamescope
+COPY --from=cts-bundle /out /cts-bundle
+COPY --from=cursor-theme /tmp/out /cursor-theme
+
+# =============================================================================
 # export — the flashable artifact(s) only (FROM scratch → nothing but /out).
 # `pf build … --output type=local,dest=$PF_OUT_DIR` extracts this stage.
 # =============================================================================
