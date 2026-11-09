@@ -15,6 +15,63 @@ fail() {
     exit 1
 }
 
+# Keep the package-stage fixture hermetic: every image-owned path it reads must
+# be copied to the same relative path below /work/image.
+python3 - "${repo_dir}" "${BASH_SOURCE[0]}" "${dockerfile}" <<'PY'
+import re
+import sys
+from pathlib import Path, PurePosixPath
+
+repo = Path(sys.argv[1]).resolve()
+fixture_path = Path(sys.argv[2]).resolve()
+dockerfile_path = Path(sys.argv[3])
+fixture = fixture_path.read_text(encoding="utf-8")
+dockerfile_text = dockerfile_path.read_text(encoding="utf-8")
+
+dependencies = set(re.findall(r"\$\{repo_dir\}/([-A-Za-z0-9_./@+]+)", fixture))
+dependencies.add(fixture_path.relative_to(repo).as_posix())
+
+stage = re.search(
+    r"(?ms)^FROM[ \t]+\S+[ \t]+AS[ \t]+cloud-init[ \t]*$\n"
+    r"(?P<body>.*?)(?=^FROM[ \t]|\Z)",
+    dockerfile_text,
+)
+if stage is None:
+    raise SystemExit("FAIL: cloud-init package stage is missing")
+
+copies = re.findall(
+    r"(?m)^COPY[ \t]+--from=image-src[ \t]+(\S+)[ \t]+(\S+)[ \t]*$",
+    stage.group("body"),
+)
+
+
+def stages_at_matching_path(dependency: str) -> bool:
+    dependency_path = PurePosixPath(dependency)
+    expected = PurePosixPath("/work/image") / dependency_path
+    for source, destination in copies:
+        source_path = PurePosixPath(source)
+        try:
+            remainder = dependency_path.relative_to(source_path)
+        except ValueError:
+            continue
+        if remainder.parts and not (repo / source).is_dir():
+            continue
+        if PurePosixPath(destination) / remainder == expected:
+            return True
+    return False
+
+missing = sorted(path for path in dependencies if not stages_at_matching_path(path))
+if missing:
+    for path in missing:
+        print(
+            "FAIL: cloud-init stage does not stage image-owned fixture input "
+            f"at /work/image/{path}: {path}",
+            file=sys.stderr,
+        )
+    raise SystemExit(1)
+print(f"cloud-init-stage-inputs-test=PASS inputs={len(dependencies)}")
+PY
+
 # The image build owns the source-to-package boundary. The receipt check keeps a
 # mismatched named context from being labeled with the requested revision, and
 # the behavioral fixture runs before the package can enter the rootfs.
