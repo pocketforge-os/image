@@ -395,6 +395,15 @@ def section_asset_audit(work):
         and "parallel=" in guest_build_tools,
         "payload guest build does not use and report runner capacity",
     )
+    require(
+        "-DSDL_WAYLAND=ON" in guest_build_tools
+        and "-DSDL_WAYLAND_SHARED=ON" in guest_build_tools
+        and "sdl-build-contract.txt" in payload_builder
+        and "sdl_commit=${SDL_COMMIT}" in payload_builder
+        and "sdl_wayland=ON" in payload_builder
+        and "sdl_wayland_shared=ON" in payload_builder,
+        "payload does not make and preserve the SDL Wayland build contract",
+    )
     with open(os.path.join(HARNESS, "run-guest.sh"), "r", encoding="utf-8") as handle:
         guest_runner = handle.read()
     require(

@@ -75,6 +75,12 @@ install -d "$stage/payload/dev" "$stage/payload/bin" "$stage/payload/lib" \
     "$stage/payload/validate"
 cp -a "$stage/build-root/out/bin/." "$stage/payload/bin/"
 cp -a "$stage/build-root/out/lib/." "$stage/payload/lib/"
+cat > "$stage/payload/guest/sdl-build-contract.txt" <<EOF
+sdl_commit=${SDL_COMMIT}
+sdl_wayland=ON
+sdl_wayland_shared=ON
+sdl_video_driver_sunxifb=OFF
+EOF
 cp "$repo/tests/input-harness/guest/agent.py" "$stage/payload/guest/agent.py"
 cp "$repo/tests/input-harness/run-guest.sh" "$stage/payload/run-guest.sh"
 cp -a "$repo/tests/input-harness/session/." "$stage/payload/session/"

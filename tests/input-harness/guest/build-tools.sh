@@ -11,6 +11,7 @@ meson install -C /src/libei/build
 cmake -S /src/sdl3 -B /src/sdl-build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DSDL_STATIC=OFF -DSDL_SHARED=ON -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
+    -DSDL_WAYLAND=ON -DSDL_WAYLAND_SHARED=ON \
     -DSDL_VIDEO_DRIVER_SUNXIFB=OFF
 parallel="$(nproc)"
 [[ "$parallel" =~ ^[0-9]+$ && "$parallel" -gt 0 ]] || {
