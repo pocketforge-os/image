@@ -94,7 +94,8 @@ expect_fail unsafe-combination 'canary config must not enable CONFIG_VIDEO_SUN50
 # invoke the verifier after all rootfs producers, before ext4 assembly.
 grep -Fq 'COPY --from=kernel /out/build/config /work/kernel-config' "$dockerfile"
 grep -Fq 'KERNEL_CONFIG=/work/kernel-config' "$dockerfile"
-# shellcheck disable=SC2016 -- matching the literal Dockerfile expansion.
+# Match the literal Dockerfile expansion rather than expanding it in this test.
+# shellcheck disable=SC2016
 grep -Fq 'PF_KERNEL_DEFCONFIG="${PF_KERNEL_DEFCONFIG}"' "$dockerfile"
 grep -Fq 'a133_kexec_canary.config)' "$dockerfile"
 grep -Fq 'make a133_defconfig' "$dockerfile"
