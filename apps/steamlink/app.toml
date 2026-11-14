@@ -10,7 +10,7 @@ use = ["audio", "input", "rumble", "x11", "egress:tcp/443@*", "egress:tcp/27015@
 [runtime]
 family = "pocketforge/a133-powervr"
 abi = "1"
-platform-version = "20"
+platform-version = "21"
 
 # The image builder replaces both sentinel digests with artifacts produced and
 # verified in the same build before this descriptor can reach a rootfs.

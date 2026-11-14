@@ -101,7 +101,7 @@ use = ["audio", "input", "rumble", "x11", "egress:tcp/443@*", "egress:tcp/27015@
 [runtime]
 family = "pocketforge/a133-powervr"
 abi = "1"
-platform-version = "20"
+platform-version = "21"
 
 [runtime.root]
 schema = 1

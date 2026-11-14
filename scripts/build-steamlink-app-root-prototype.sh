@@ -272,7 +272,7 @@ printf '%s\n' \
     '[runtime]' \
     'family = "pocketforge/a133-powervr"' \
     'abi = "1"' \
-    'platform-version = "20"' \
+    'platform-version = "21"' \
     '' \
     '[runtime.root]' \
     'schema = 1' \

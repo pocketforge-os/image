@@ -6,7 +6,7 @@ if [ "$#" -ne 1 ]; then
     exit 2
 fi
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 renderer=$1
 manifest=${root}/apps/steamlink/app.toml
 inventory=${root}/build/app-policy-a133-open-g1-v1.json
@@ -58,9 +58,24 @@ if required_system_bus in fragment:
 PY
 
 common="--platform-contract $platform --resource-inventory $inventory --app-dir /opt/pocketforge/apps/org.pocketforge.steamlink --platform-runtime /usr --xdg-config /var/lib/pocketforge/apps/org.pocketforge.steamlink/config --xdg-state /var/lib/pocketforge/apps/org.pocketforge.steamlink/state --xdg-cache /var/cache/pocketforge/apps/org.pocketforge.steamlink"
+sed -E 's/^platform-version = "[^"]+"$/platform-version = "20"/' \
+    "$manifest" >"$tmp/platform-version-20.toml"
+grep -Fx 'platform-version = "20"' "$tmp/platform-version-20.toml" >/dev/null
+# shellcheck disable=SC2086
+if "$renderer" --manifest "$tmp/platform-version-20.toml" $common \
+    --format systemd-dropin >"$tmp/version-mismatch.conf" \
+    2>"$tmp/version-mismatch.err"; then
+    echo 'Steam Link platform version 20 passed against platform version 21' >&2
+    exit 1
+fi
+grep -F 'platform_version_mismatch: application platform version does not match platform' \
+    "$tmp/version-mismatch.err" >/dev/null
+
 # Deliberate word splitting keeps this POSIX-shell test runnable under /bin/sh.
 # shellcheck disable=SC2086
 "$renderer" --manifest "$manifest" $common --format systemd-dropin >"$tmp/positive.conf"
+grep -Fx 'platform-version = "21"' "$manifest" >/dev/null
+grep -Fq "'platform-version = \"21\"'" "$producer"
 grep -Fx 'SupplementaryGroups=audio input pf-session video' \
     "$tmp/positive.conf" >/dev/null
 grep -Fx 'BindPaths=/run/pocketforge/x11/.X11-unix/X0:/tmp/.X11-unix/X0' \
@@ -92,4 +107,4 @@ fi
 grep -F 'launch.needs_network must match explicit egress authorities' \
     "$tmp/negative.err" >/dev/null
 
-echo 'Steam Link exact app policy: PASS (positive and negative controls)'
+echo 'Steam Link exact app policy: PASS (positive, version-mismatch, and authority controls)'
