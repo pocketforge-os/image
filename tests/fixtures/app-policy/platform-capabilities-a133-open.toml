@@ -1,7 +1,7 @@
 schema_version = 1
 runtime_family = "pocketforge/a133-powervr"
 runtime_abi = "1"
-platform_version = "20"
+platform_version = "21"
 supported_capabilities = ["audio", "input", "open_url", "rumble", "x11"]
 production = true
 landlock_mode = "required"
