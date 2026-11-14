@@ -769,7 +769,7 @@ def section_asset_audit(work):
         )
         require(
             pins.get("GAMESCOPE_COMMIT")
-            == "dd997616269812dcaad3fdcc302b192e2f709101",
+            == "73b3067780af4839ffa85d425cfb26923959139a",
             f"pins.env lost the producer-verified gamescope pin: {pins.get('GAMESCOPE_COMMIT')!r}",
         )
         require(
@@ -786,7 +786,7 @@ def section_asset_audit(work):
         with open(os.path.join(HARNESS, "Containerfile"), "r", encoding="utf-8") as handle:
             containerfile = handle.read()
         require(
-            'ARG GAMESCOPE_COMMIT=dd997616269812dcaad3fdcc302b192e2f709101'
+            'ARG GAMESCOPE_COMMIT=73b3067780af4839ffa85d425cfb26923959139a'
             in containerfile,
             "Containerfile does not default to the headless-safe gamescope pin",
         )
