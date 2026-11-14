@@ -20,6 +20,7 @@ haveged
 htop
 iproute2
 iw
+kexec-tools
 kmod
 libatomic1
 libavcodec59

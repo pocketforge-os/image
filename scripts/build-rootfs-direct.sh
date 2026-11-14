@@ -26,6 +26,34 @@ PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL:-}"
 PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE:-}"
 PF_KERNEL_REPO="${PF_KERNEL_REPO:-}"
+PF_KERNEL_DEFCONFIG="${PF_KERNEL_DEFCONFIG:-}"
+KERNEL_CONFIG="${KERNEL_CONFIG:-}"
+
+# The legacy SD-image path packages Image and the DTB directly from the complete
+# KERNEL_TSP_DIR build tree.  For the A133 7.x kernel, bind rootfs verification
+# to that same tree's resolved config and make the legacy mode explicit.  A
+# canary caller must opt in with its fragment name; any other selector is an
+# ambiguous safety contract and must fail before rootfs assembly starts.
+if [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ]; then
+    packaged_kernel_config="${KERNEL_TSP_DIR}/.config"
+    if [ -n "${KERNEL_CONFIG}" ] && [ "${KERNEL_CONFIG}" != "${packaged_kernel_config}" ]; then
+        echo "build-rootfs-direct: KERNEL_CONFIG must identify the packaged kernel tree config: ${packaged_kernel_config}" >&2
+        exit 2
+    fi
+    KERNEL_CONFIG="${packaged_kernel_config}"
+    PF_KERNEL_DEFCONFIG="${PF_KERNEL_DEFCONFIG:-a133_defconfig}"
+    case "${PF_KERNEL_DEFCONFIG}" in
+        a133_defconfig|a133_kexec_canary.config) ;;
+        *)
+            echo "build-rootfs-direct: unsupported PF_KERNEL_DEFCONFIG '${PF_KERNEL_DEFCONFIG}' for kernel-sunxi-7.x" >&2
+            exit 2
+            ;;
+    esac
+    if [ ! -f "${KERNEL_CONFIG}" ] || [ -L "${KERNEL_CONFIG}" ]; then
+        echo "build-rootfs-direct: resolved kernel config is missing or not a regular file: ${KERNEL_CONFIG}" >&2
+        exit 1
+    fi
+fi
 
 case "${PF_DEVICE_ID}" in
     [a-z0-9]*) ;;
@@ -115,6 +143,7 @@ fi
 PF_TFA_SHA=""
 export PF_DEVICE_ID PF_VARIANT PF_IMAGE_SHA PF_KERNEL_SHA PF_KERNEL_CAPABILITY_RECEIPT PF_GPU_SHA
 export PF_GPU_MODEL PF_GPU_KM_MODEL PF_KERNEL_REQUIRED_MODULES PF_DISPLAY_PIPELINE
+export PF_KERNEL_REPO PF_KERNEL_DEFCONFIG KERNEL_CONFIG
 export PF_LIBSDL3_SHA PF_WPA_SHA PF_CLOUD_INIT_SHA PF_RUNTIME_SHA PF_LAUNCHER_SHA PF_HWPROBE_SHA PF_SIM_SHA PF_BLOBS_SHA
 export PF_VENDOR_MANIFEST_SHA PF_CAR_SHA256 PF_UBOOT_SHA PF_TFA_SHA
 export CLOUD_INIT_DIR HWPROBE_DIR KERNEL_MODULES_ROOT

@@ -315,7 +315,20 @@ export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%a %b %e %
 printf '' > .scmversion
 
 # --- Configure from the committed owned defconfig ---------------------------------------
-make "${PF_KERNEL_DEFCONFIG}"
+# The A133 G2D diagnostic intentionally excludes classic KEXEC: a poisoned
+# diagnostic may require physical power removal.  A bounded SD re-entry canary
+# therefore starts from the unchanged shipping baseline and applies the
+# explicit source-owned fragment.  Every normal profile stays on its selected
+# defconfig and retains G2D.
+case "${PF_KERNEL_DEFCONFIG}" in
+  a133_kexec_canary.config)
+    [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ] \
+      || { echo "GUARD FAIL: a133_kexec_canary.config requires kernel-sunxi-7.x"; exit 1; }
+    make a133_defconfig
+    make a133_kexec_canary.config
+    ;;
+  *) make "${PF_KERNEL_DEFCONFIG}" ;;
+esac
 
 # --- VERMAGIC / REPRODUCIBILITY GUARDS (hard fail) -------------------------------------
 # Mirrors platform/families/sunxi/build-kernel.sh pf_kernel_assert_repro_guards() — keep
@@ -2560,6 +2573,7 @@ ARG PF_GPU_MODEL
 ARG PF_GPU_KM_MODEL
 # The profile kernel.repo selects the ALSA card config (card id is per kernel; bd tsp-f3fm.220).
 ARG PF_KERNEL_REPO
+ARG PF_KERNEL_DEFCONFIG
 ARG PF_KERNEL_REQUIRED_MODULES
 ARG PF_DISPLAY_PIPELINE
 ARG PF_VARIANT=dev
@@ -2609,6 +2623,7 @@ COPY --from=image-src build/app-platform-runtime-a133-open-v1.json /work/app-pla
 COPY --from=fetch  /out /work/blobs
 COPY --from=kernel /out/lib/modules /work/kernel-tsp
 COPY --from=kernel /out/build/capabilities /work/kernel-capabilities
+COPY --from=kernel /out/build/config /work/kernel-config
 COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
 COPY --from=gpu-fw /out             /work/gpu-fw-tsp
 COPY --from=gpu-um-mesa /out        /work/gpu-um-mesa
@@ -2659,6 +2674,8 @@ case "${PF_SOC}" in
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
       PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL}" \
       PF_KERNEL_REPO="${PF_KERNEL_REPO}" \
+      PF_KERNEL_DEFCONFIG="${PF_KERNEL_DEFCONFIG}" \
+      KERNEL_CONFIG=/work/kernel-config \
       PF_KERNEL_CAPABILITY_RECEIPT=/work/kernel-capabilities/axp717-low-soc-alarm-irqs-v1 \
       PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES}" \
       PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \
