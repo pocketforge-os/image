@@ -169,7 +169,7 @@ for header in \
 done
 [ -x "${READELF}" ] || command -v "${READELF}" >/dev/null 2>&1 \
     || fail "target readelf is unavailable: ${READELF}"
-for library in gbm ffi wayland-client wayland-egl wayland-cursor xkbcommon; do
+for library in drm gbm ffi wayland-client wayland-egl wayland-cursor xkbcommon; do
     "${READELF}" -h "${TARGET_LIBDIR}/lib${library}.so" \
         | grep -E 'Machine:[[:space:]]+AArch64' >/dev/null \
         || fail "materialized lib${library}.so is not AArch64"

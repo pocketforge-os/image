@@ -137,10 +137,19 @@ for header in \
     xkbcommon/xkbcommon.h; do
     test -f "${positive}/target/usr/include/${header}"
 done
-for library in gbm ffi wayland-client wayland-egl wayland-cursor xkbcommon; do
+for library in drm gbm ffi wayland-client wayland-egl wayland-cursor xkbcommon; do
     aarch64-linux-gnu-readelf -h "${positive}/target/usr/lib/lib${library}.so" \
         | grep -Eq 'Machine:[[:space:]]+AArch64'
 done
+
+wrong_arch_drm="${TMPDIR_TEST}/wrong-arch-drm"
+make_fixture "${wrong_arch_drm}"
+cc -shared -fPIC "${wrong_arch_drm}/fixture.c" \
+    -o "${wrong_arch_drm}/system/usr/lib/aarch64-linux-gnu/libdrm.so.2.4.0"
+if run_helper "${wrong_arch_drm}" "${wrong_arch_drm}/target" >/dev/null 2>&1; then
+    echo 'FAIL: production preparation accepted non-AArch64 libdrm' >&2
+    exit 1
+fi
 
 missing_wayland="${TMPDIR_TEST}/missing-wayland"
 make_fixture "${missing_wayland}"
