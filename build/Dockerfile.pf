@@ -1945,6 +1945,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:${PATH}
 COPY --chmod=0555 --from=image-src scripts/assert-apt-fixed.sh /usr/local/bin/pf-assert-apt-fixed
+COPY --chmod=0555 --from=image-src scripts/verify-poolsuite-wayland-toolchain.sh /usr/local/bin/verify-poolsuite-wayland-toolchain
 # tsp-hqm1p.142: apt's retry delay is off, as in pf-build-base (LP #2003851). The live-archive
 # apt runs below use the default retries.
 RUN printf '%s\n' 'Acquire::Retries::Delay "false";' > /etc/apt/apt.conf.d/99-pf-retry-delay
@@ -1962,6 +1963,11 @@ apt-get -o Acquire::Retries=0 install -y --no-install-recommends apt ca-certific
 pf-assert-apt-fixed
 sed -i "s#http://deb.debian.org/#${pf_apt_scheme}://deb.debian.org/#g" /etc/apt/sources.list.d/debian.sources
 if [ "${pf_apt_scheme}" = https ] && grep -nE '^[^#]*http://' /etc/apt/sources.list.d/debian.sources; then exit 1; fi
+# sdl3-sys cross-compiles its bundled SDL with the AArch64 compiler and requires
+# real target Wayland/EGL/xkbcommon headers, libraries, and pkg-config metadata.
+# The old stage installed only the cross compiler and libc sysroot, so all five
+# SDL probes resolved OFF and its required Wayland configuration aborted.
+dpkg --add-architecture arm64
 apt-get update
 apt-get install -y --no-install-recommends \
   binutils-aarch64-linux-gnu \
@@ -1972,10 +1978,16 @@ apt-get install -y --no-install-recommends \
   g++-aarch64-linux-gnu \
   gcc-aarch64-linux-gnu \
   git \
+  libegl-dev:arm64 \
   libc6-dev-arm64-cross \
+  libwayland-dev:arm64 \
+  libwayland-egl-backend-dev:arm64 \
+  libxkbcommon-dev:arm64 \
   ninja-build \
   pkg-config \
-  python3
+  python3 \
+  wayland-protocols
+/usr/local/bin/verify-poolsuite-wayland-toolchain
 curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
   "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init" \
   --output /tmp/rustup-init
@@ -2048,6 +2060,11 @@ set -eux
   exit 1
 }
 export SOURCE_DATE_EPOCH="${PF_POOLSUITE_SOURCE_DATE_EPOCH:?}"
+# CMake's FindPkgConfig invokes the unprefixed pkg-config binary. Route it only
+# to the AArch64 multiarch metadata; native-host .pc files must never satisfy
+# SDL's cross-build feature probes.
+export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+unset PKG_CONFIG_PATH PKG_CONFIG_SYSROOT_DIR
 RUSTFLAGS="-C link-arg=-Wl,--build-id=sha1" ./ci/device-build.sh --offline
 APP=target/aarch64-unknown-linux-gnu/release/ps-app
 test -f "${APP}"
