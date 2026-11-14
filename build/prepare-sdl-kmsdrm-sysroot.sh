@@ -1,7 +1,8 @@
 #!/bin/sh
-# Complete and verify the legacy ARM64 cross sysroot used by SDL's dynamic
-# KMSDRM build.  The pinned r4 image already carries libdrm-dev:arm64 and the
-# frozen apt sources; open SDL alone adds libgbm-dev:arm64 here.
+# Complete and verify the legacy ARM64 cross sysroot used by SDL's open-model
+# KMSDRM + Wayland build.  Debian multiarch packages install outside the vendor
+# toolchain sysroot, so this transform installs and materializes the target
+# development closure where SDL's target-only pkg-config lookup consumes it.
 set -eu
 
 fail() {
@@ -15,6 +16,7 @@ EXPECTED_SNAPSHOT_FILE=${PF_SDL_EXPECTED_SNAPSHOT_FILE:-/work/image-snapshot-dat
 CONTAINER_SNAPSHOT_FILE=${PF_SDL_CONTAINER_SNAPSHOT_FILE:-${SYSTEM_ROOT}/etc/pocketforge-apt-snapshot-date}
 SOURCE_LIBDIR=${PF_SDL_SOURCE_LIBDIR:-${SYSTEM_ROOT}/usr/lib/aarch64-linux-gnu}
 SOURCE_INCLUDEDIR=${PF_SDL_SOURCE_INCLUDEDIR:-${SYSTEM_ROOT}/usr/include}
+SOURCE_MULTIARCH_INCLUDEDIR=${PF_SDL_SOURCE_MULTIARCH_INCLUDEDIR:-${SOURCE_INCLUDEDIR}/aarch64-linux-gnu}
 APT_DIR=${PF_SDL_APT_DIR:-${SYSTEM_ROOT}/etc/apt}
 SKIP_APT=${PF_SDL_SKIP_APT:-0}
 READELF=${PF_SDL_READELF:-/opt/arm-10.3-2021.07/bin/aarch64-none-linux-gnu-readelf}
@@ -56,10 +58,22 @@ EOF
 case "${SKIP_APT}" in
     0)
         apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libgbm-dev:arm64
-        dpkg-query -W -f='${Status} ${Architecture}\n' libgbm-dev:arm64 \
-            | grep -Fx 'install ok installed arm64' >/dev/null \
-            || fail "libgbm-dev:arm64 was not installed from the frozen snapshot"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libffi-dev:arm64 \
+            libgbm-dev:arm64 \
+            libwayland-dev:arm64 \
+            libwayland-egl-backend-dev:arm64 \
+            libxkbcommon-dev:arm64
+        for package in \
+            libffi-dev:arm64 \
+            libgbm-dev:arm64 \
+            libwayland-dev:arm64 \
+            libwayland-egl-backend-dev:arm64 \
+            libxkbcommon-dev:arm64; do
+            dpkg-query -W -f='${Status} ${Architecture}\n' "${package}" \
+                | grep -Fx 'install ok installed arm64' >/dev/null \
+                || fail "${package} was not installed from the frozen snapshot"
+        done
         apt-get clean
         find "${SYSTEM_ROOT}/var/lib/apt/lists" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
         ;;
@@ -71,10 +85,15 @@ esac
 [ -d "${SOURCE_INCLUDEDIR}" ] || fail "ARM64 source include directory is missing: ${SOURCE_INCLUDEDIR}"
 [ -e "${SOURCE_LIBDIR}/libdrm.so" ] || fail "target libdrm.so is missing from ${SOURCE_LIBDIR}"
 [ -e "${SOURCE_LIBDIR}/libgbm.so" ] || fail "target libgbm.so is missing from ${SOURCE_LIBDIR}"
+for library in ffi wayland-client wayland-egl wayland-cursor xkbcommon; do
+    [ -e "${SOURCE_LIBDIR}/lib${library}.so" ] \
+        || fail "target lib${library}.so is missing from ${SOURCE_LIBDIR}"
+done
 
 mkdir -p "${TARGET_LIBDIR}" "${TARGET_INCLUDEDIR}" "${TARGET_PKG_CONFIG_LIBDIR}"
 find "${SOURCE_LIBDIR}" -maxdepth 1 \
-    \( -name 'libdrm*' -o -name 'libgbm*' \) \
+    \( -name 'libdrm*' -o -name 'libgbm*' -o -name 'libffi*' \
+       -o -name 'libwayland-*' -o -name 'libxkbcommon*' \) \
     -exec cp -a -- {} "${TARGET_LIBDIR}/" \;
 
 rewrite_pc() {
@@ -86,6 +105,7 @@ rewrite_pc() {
     sed \
         -e 's|/usr/lib/aarch64-linux-gnu|${prefix}/lib|g' \
         -e 's|${prefix}/lib/aarch64-linux-gnu|${prefix}/lib|g' \
+        -e 's|${exec_prefix}/lib/aarch64-linux-gnu|${exec_prefix}/lib|g' \
         -e 's|/usr/include|${prefix}/include|g' \
         -e "s|^prefix=.*|prefix=${TARGET_SYSROOT}/usr|" \
         "${source_pc}" > "${target_pc}"
@@ -93,6 +113,11 @@ rewrite_pc() {
 
 rewrite_pc libdrm || fail "target libdrm.pc is missing from ${SOURCE_LIBDIR}/pkgconfig"
 rewrite_pc gbm || fail "target gbm.pc is missing from ${SOURCE_LIBDIR}/pkgconfig"
+rewrite_pc libffi || fail "target libffi.pc is missing from ${SOURCE_LIBDIR}/pkgconfig"
+for module in wayland-client wayland-egl wayland-cursor xkbcommon; do
+    rewrite_pc "${module}" \
+        || fail "target ${module}.pc is missing from ${SOURCE_LIBDIR}/pkgconfig"
+done
 # Debian Bookworm does not ship libkms.pc, but preserve and rewrite it when a
 # source package does.  This matches the canonical f5 standalone recipe.
 rewrite_pc libkms || true
@@ -103,10 +128,22 @@ for header in gbm.h xf86drm.h xf86drmMode.h; do
     [ -f "${SOURCE_INCLUDEDIR}/${header}" ] || fail "target header is missing: ${header}"
     cp -a "${SOURCE_INCLUDEDIR}/${header}" "${TARGET_INCLUDEDIR}/"
 done
+[ -d "${SOURCE_MULTIARCH_INCLUDEDIR}" ] || fail "target multiarch headers are missing"
+for header in ffi.h ffitarget.h; do
+    [ -f "${SOURCE_MULTIARCH_INCLUDEDIR}/${header}" ] \
+        || fail "target multiarch header is missing: ${header}"
+    cp -a "${SOURCE_MULTIARCH_INCLUDEDIR}/${header}" "${TARGET_INCLUDEDIR}/"
+done
+for header in wayland-client.h wayland-egl.h wayland-cursor.h; do
+    [ -f "${SOURCE_INCLUDEDIR}/${header}" ] || fail "target header is missing: ${header}"
+done
+cp -a "${SOURCE_INCLUDEDIR}"/wayland-*.h "${TARGET_INCLUDEDIR}/"
+[ -d "${SOURCE_INCLUDEDIR}/xkbcommon" ] || fail "target xkbcommon headers are missing"
+cp -a "${SOURCE_INCLUDEDIR}/xkbcommon" "${TARGET_INCLUDEDIR}/"
 
 export PKG_CONFIG_LIBDIR="${TARGET_PKG_CONFIG_LIBDIR}"
 unset PKG_CONFIG_PATH
-for module in libdrm gbm; do
+for module in libdrm gbm libffi wayland-client wayland-egl wayland-cursor xkbcommon; do
     pkg-config --exists "${module}" || fail "target pkg-config module is missing: ${module}"
     [ "$(pkg-config --variable=pcfiledir "${module}")" = "${TARGET_PKG_CONFIG_LIBDIR}" ] \
         || fail "${module}.pc resolved outside the target sysroot"
@@ -125,13 +162,17 @@ if [ -f "${TARGET_PKG_CONFIG_LIBDIR}/libkms.pc" ]; then
         || fail "libkms.pc resolved a non-target includedir"
 fi
 
-for header in gbm.h xf86drm.h xf86drmMode.h; do
+for header in \
+    gbm.h xf86drm.h xf86drmMode.h ffi.h ffitarget.h \
+    wayland-client.h wayland-egl.h wayland-cursor.h xkbcommon/xkbcommon.h; do
     [ -f "${TARGET_INCLUDEDIR}/${header}" ] || fail "materialized target header is missing: ${header}"
 done
 [ -x "${READELF}" ] || command -v "${READELF}" >/dev/null 2>&1 \
     || fail "target readelf is unavailable: ${READELF}"
-"${READELF}" -h "${TARGET_LIBDIR}/libgbm.so" \
-    | grep -E 'Machine:[[:space:]]+AArch64' >/dev/null \
-    || fail "materialized libgbm.so is not AArch64"
+for library in drm gbm ffi wayland-client wayland-egl wayland-cursor xkbcommon; do
+    "${READELF}" -h "${TARGET_LIBDIR}/lib${library}.so" \
+        | grep -E 'Machine:[[:space:]]+AArch64' >/dev/null \
+        || fail "materialized lib${library}.so is not AArch64"
+done
 
-echo "SDL KMSDRM sysroot PASS snapshot=${expected_snapshot} sysroot=${TARGET_SYSROOT}"
+echo "SDL open-model sysroot PASS snapshot=${expected_snapshot} sysroot=${TARGET_SYSROOT}"

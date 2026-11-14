@@ -1186,11 +1186,10 @@ if [ "${PF_GPU_MODEL}" = "none" ]; then
   cat /out/lib/.pf-sdl-provenance
   exit 0
 fi
-# The digest-pinned r4 container already carries libdrm-dev:arm64 and frozen
-# amd64/arm64 Bookworm sources.  Dynamic KMSDRM additionally needs target GBM,
-# top-level DRM headers, and target-only pkg-config metadata.  Complete that
-# legacy sysroot only for the open model; closed DDK and none never apt-install
-# or materialize these dependencies.
+# The digest-pinned r4 container carries frozen amd64/arm64 Bookworm sources,
+# but Debian's ARM64 development files live outside the vendor toolchain
+# sysroot. Complete its target-only KMSDRM + Wayland closure for the open model;
+# closed DDK and none never apt-install or materialize these dependencies.
 if [ "${PF_GPU_MODEL}" = "open" ]; then
   /usr/local/bin/prepare-sdl-kmsdrm-sysroot
 fi
