@@ -105,5 +105,16 @@ ext4_line=$(grep -n '^mke2fs -t ext4' "$builder" | cut -d: -f1)
 if [ -z "$verify_line" ] || [ -z "$ext4_line" ] || [ "$verify_line" -ge "$ext4_line" ]; then
 	fail 'rootfs verifier is not wired before ext4 assembly'
 fi
+grep -Fq 'a133_kexec_canary.config) kexec_mode=canary' "$builder" \
+	|| fail 'rootfs builder does not map the canary fragment to canary verification'
+grep -Fq 'a133_defconfig) kexec_mode=baseline' "$builder" \
+	|| fail 'rootfs builder does not map the shipping defconfig to baseline verification'
+# Match the literal shell condition in the builder; expansion here would test
+# this test process's environment instead of the source contract.
+# shellcheck disable=SC2016
+if sed -n '/if \[ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x \]/,/^fi$/p' "$builder" \
+	| grep -Fq 'kexec_mode=auto'; then
+	fail 'rootfs builder permits an ambiguous A133 7.x verification mode'
+fi
 
 echo 'rootfs-kexec-test=PASS package=kexec-tools baseline=g2d canary=kexec_load'

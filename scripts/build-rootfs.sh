@@ -2263,7 +2263,10 @@ if [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ]; then
     case "${PF_KERNEL_DEFCONFIG}" in
         a133_kexec_canary.config) kexec_mode=canary ;;
         a133_defconfig) kexec_mode=baseline ;;
-        *) kexec_mode=auto ;;
+        *)
+            echo "FATAL: kernel-sunxi-7.x requires PF_KERNEL_DEFCONFIG=a133_defconfig or a133_kexec_canary.config (got '${PF_KERNEL_DEFCONFIG}')" >&2
+            exit 1
+            ;;
     esac
     "${SRC_DIR}/scripts/verify-rootfs-kexec.sh" \
         "${ROOTFS_EXTRACTED}" "${KERNEL_CONFIG}" "${kexec_mode}"

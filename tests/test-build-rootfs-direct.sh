@@ -11,6 +11,7 @@ for input in src blobs libsdl3 wpa cloud-init runtime launcher hwprobe kernel gp
 done
 mkdir -p "${scratch}/kernel/lib/modules/fixture-release"
 printf 'module tree input\n' > "${scratch}/kernel/lib/modules/fixture-release/modules.builtin"
+printf 'CONFIG_VIDEO_SUN50I_G2D_MIX=y\n# CONFIG_KEXEC is not set\n' > "${scratch}/kernel/.config"
 cp "${scratch}/kernel/payload" "${scratch}/kernel-payload.original"
 cp "${scratch}/hwprobe/payload" "${scratch}/hwprobe-payload.original"
 cp "${repo_dir}/scripts/generate-build-id.sh" "${scratch}/src/generate-build-id.sh"
@@ -150,10 +151,96 @@ if PF_DEVICE_ID='' \
 fi
 grep -F "invalid PF_DEVICE_ID ''" "${scratch}/empty-device.err" >/dev/null
 
+# The legacy A133 7.x path must bind the rootfs gate to the config in the same
+# complete kernel tree that supplies Image/DTB.  Shipping direct builds default
+# explicitly to baseline; canary mode remains an explicit caller choice.
+contract_builder="${scratch}/contract-build-rootfs.sh"
+cat > "${contract_builder}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "${KERNEL_CONFIG}" = "${EXPECT_KERNEL_CONFIG}" ]
+[ "${PF_KERNEL_DEFCONFIG}" = "${EXPECT_KERNEL_DEFCONFIG}" ]
+printf '%s %s\n' "${PF_KERNEL_DEFCONFIG}" "${KERNEL_CONFIG}" > "${OUT_DIR}/direct-kexec-contract"
+EOF
+chmod +x "${contract_builder}"
+
+run_kexec_contract() {
+    env -u KERNEL_CONFIG -u PF_KERNEL_DEFCONFIG \
+        SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
+        LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
+        CLOUD_INIT_DIR="${scratch}/cloud-init" \
+        RUNTIME_DIR="${scratch}/runtime" LAUNCHER_DIR="${scratch}/launcher" \
+        HWPROBE_DIR="${missing_hwprobe}" KERNEL_TSP_DIR="${scratch}/kernel" \
+        GPU_KM_TSP_DIR="${scratch}/gpu" OUT_DIR="${scratch}/out" \
+        ROOTFS_BUILDER="${contract_builder}" SOURCE_DATE_EPOCH=1700000000 \
+        PF_KERNEL_REPO=kernel-sunxi-7.x \
+        EXPECT_KERNEL_CONFIG="${scratch}/kernel/.config" \
+        EXPECT_KERNEL_DEFCONFIG=a133_defconfig \
+        bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release
+}
+run_kexec_contract
+[ "$(cat "${scratch}/out/direct-kexec-contract")" = \
+    "a133_defconfig ${scratch}/kernel/.config" ] || {
+    echo "FAIL: direct baseline did not receive its packaged kernel config and mode" >&2
+    exit 1
+}
+
+cp "${scratch}/kernel/.config" "${scratch}/baseline.config"
+printf 'CONFIG_KEXEC_CORE=y\nCONFIG_KEXEC=y\n' > "${scratch}/kernel/.config"
+PF_KERNEL_REPO=kernel-sunxi-7.x \
+PF_KERNEL_DEFCONFIG=a133_kexec_canary.config \
+EXPECT_KERNEL_CONFIG="${scratch}/kernel/.config" \
+EXPECT_KERNEL_DEFCONFIG=a133_kexec_canary.config \
+SRC_DIR="${scratch}/src" BLOBS_DIR="${scratch}/blobs" \
+LIBSDL3_DIR="${scratch}/libsdl3" WPA_DIR="${scratch}/wpa" \
+CLOUD_INIT_DIR="${scratch}/cloud-init" RUNTIME_DIR="${scratch}/runtime" \
+LAUNCHER_DIR="${scratch}/launcher" HWPROBE_DIR="${missing_hwprobe}" \
+KERNEL_TSP_DIR="${scratch}/kernel" GPU_KM_TSP_DIR="${scratch}/gpu" \
+OUT_DIR="${scratch}/out" ROOTFS_BUILDER="${contract_builder}" \
+SOURCE_DATE_EPOCH=1700000000 \
+bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release
+[ "$(cat "${scratch}/out/direct-kexec-contract")" = \
+    "a133_kexec_canary.config ${scratch}/kernel/.config" ] || {
+    echo "FAIL: direct canary did not preserve its explicit kernel config and mode" >&2
+    exit 1
+}
+mv "${scratch}/baseline.config" "${scratch}/kernel/.config"
+
+if PF_KERNEL_REPO=kernel-sunxi-7.x \
+    KERNEL_CONFIG="${scratch}/unrelated.config" KERNEL_TSP_DIR="${scratch}/kernel" \
+    bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release \
+    2>"${scratch}/unrelated-kernel-config.err"; then
+    echo "FAIL: direct A133 7.x path accepted a config unrelated to its packaged kernel tree" >&2
+    exit 1
+fi
+grep -F "KERNEL_CONFIG must identify the packaged kernel tree config: ${scratch}/kernel/.config" \
+    "${scratch}/unrelated-kernel-config.err" >/dev/null
+
+if PF_KERNEL_REPO=kernel-sunxi-7.x PF_KERNEL_DEFCONFIG=unexpected.config \
+    KERNEL_TSP_DIR="${scratch}/kernel" \
+    bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release \
+    2>"${scratch}/invalid-defconfig.err"; then
+    echo "FAIL: direct A133 7.x path accepted an ambiguous verification mode" >&2
+    exit 1
+fi
+grep -F "unsupported PF_KERNEL_DEFCONFIG 'unexpected.config'" \
+    "${scratch}/invalid-defconfig.err" >/dev/null
+
+mv "${scratch}/kernel/.config" "${scratch}/kernel.config.saved"
+if PF_KERNEL_REPO=kernel-sunxi-7.x KERNEL_TSP_DIR="${scratch}/kernel" \
+    bash "${repo_dir}/scripts/build-rootfs-direct.sh" --variant release \
+    2>"${scratch}/missing-kernel-config.err"; then
+    echo "FAIL: direct A133 7.x path accepted a missing packaged kernel config" >&2
+    exit 1
+fi
+grep -F "resolved kernel config is missing or not a regular file: ${scratch}/kernel/.config" \
+    "${scratch}/missing-kernel-config.err" >/dev/null
+mv "${scratch}/kernel.config.saved" "${scratch}/kernel/.config"
+
 case "${first}" in
     'device=trimui-smart-pro-a133 build='????????????) ;;
     *) echo "FAIL: direct build-id is not a single cat-readable line: ${first}" >&2; exit 1 ;;
 esac
 
-printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-hwprobe=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\nPASS release-without-hwprobe\nPASS dev-requires-hwprobe\nPASS invalid-device-rejected\nPASS empty-device-rejected\n' \
+printf 'PASS direct-absent-userdata identical=%s\nPASS changed-kernel=%s\nPASS changed-hwprobe=%s\nPASS changed-owned-uboot=%s\nPASS explicit-vendor=%s\nPASS release-without-hwprobe\nPASS dev-requires-hwprobe\nPASS invalid-device-rejected\nPASS empty-device-rejected\nPASS direct-kexec-baseline\nPASS direct-kexec-canary\nPASS direct-kexec-unrelated-config-rejected\nPASS direct-kexec-ambiguous-rejected\nPASS direct-kexec-missing-config-rejected\n' \
     "${first}" "${different}" "${different_hwprobe}" "${different_uboot}" "${vendor}"
