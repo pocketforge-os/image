@@ -39,6 +39,7 @@ test-dockerfile-pf-transforms:
 	@tests/test-initrd-selfflash-watchdog.sh
 	@tests/test-initrd-selfflash-v2.sh
 	@tests/test-poolsuite-variant-stage.sh
+	@tests/test-poolsuite-wayland-toolchain.sh
 	@python3 -B tests/test-poolsuite-source-digest.py
 	@tests/test-poolsuite-rootfs-install.sh
 	@tests/test-default-app-platform.sh

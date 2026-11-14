@@ -432,6 +432,10 @@ def run_live_archive_stage(stage: str, extra_env: dict[str, str], mutate=None) -
         for prefix in ("/etc/apt/", "/usr/local/src/", "/var/lib/apt/lists/", "/tmp/rustup-init"):
             script = script.replace(prefix, f"{root}{prefix}")
         script = script.replace("/toolchain-packages.txt", f"{root}/toolchain-packages.txt")
+        script = script.replace(
+            "/usr/local/bin/verify-poolsuite-wayland-toolchain",
+            "verify-poolsuite-wayland-toolchain",
+        )
         # The body deletes and rewrites files: refuse to run it unless every absolute path it
         # touches is inside the temp root (the three non-paths are sed expressions and file text).
         for path in re.findall(r"(?<![\w.:/$}-])/[A-Za-z][\w./*-]*", "\n".join(code_lines(script))):
@@ -453,7 +457,8 @@ def run_live_archive_stage(stage: str, extra_env: dict[str, str], mutate=None) -
                  "dpkg": "#!/bin/sh\nexit 0\n", "dpkg-query": "#!/bin/sh\necho stub 1\n",
                  "sha256sum": "#!/bin/sh\nexit 0\n", "rustup": "#!/bin/sh\nexit 0\n",
                  "cargo": "#!/bin/sh\necho cargo\n", "aarch64-linux-gnu-gcc": "#!/bin/sh\necho gcc\n",
-                 "pf-assert-apt-fixed": '#!/bin/sh\necho ASSERT >>"$PF_STAGE_LOG"\n'}
+                 "pf-assert-apt-fixed": '#!/bin/sh\necho ASSERT >>"$PF_STAGE_LOG"\n',
+                 "verify-poolsuite-wayland-toolchain": "#!/bin/sh\nexit 0\n"}
         for name, text in stubs.items():
             (bin_dir / name).write_text(text, encoding="utf-8")
             (bin_dir / name).chmod(0o755)
