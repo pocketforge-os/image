@@ -43,8 +43,13 @@ printf '#!/bin/sh\nexit 0\n' >"$work/rootfs/usr/sbin/kexec"
 chmod 0755 "$work/rootfs/usr/sbin/kexec"
 printf 'CONFIG_KEXEC_CORE=y\nCONFIG_KEXEC=y\n' >"$work/kernel.config"
 
-"$verifier" "$work/rootfs" "$work/kernel.config" >/dev/null \
-	|| fail 'verifier rejected a valid rootfs and resolved kernel config'
+"$verifier" "$work/rootfs" "$work/kernel.config" canary >/dev/null \
+	|| fail 'verifier rejected a valid canary rootfs and resolved kernel config'
+
+printf 'CONFIG_VIDEO_SUN50I_G2D_MIX=y\n# CONFIG_KEXEC is not set\n' >"$work/kernel.config"
+"$verifier" "$work/rootfs" "$work/kernel.config" baseline >/dev/null \
+	|| fail 'verifier rejected the valid G2D baseline config'
+expect_canary_config="$work/kernel.config"
 
 expect_fail() {
 	local label=$1 expected=$2
@@ -65,27 +70,39 @@ expect_fail non-executable '/usr/sbin/kexec is not executable' \
 	"$verifier" "$work/rootfs" "$work/kernel.config"
 chmod 0755 "$work/rootfs/usr/sbin/kexec"
 
+expect_fail disabled-canary 'expected canary config, resolved baseline' \
+	"$verifier" "$work/rootfs" "$expect_canary_config" canary
+
 mv "$work/rootfs/usr/sbin/kexec" "$work/kexec.saved"
 expect_fail missing '/usr/sbin/kexec is missing or not a regular file' \
 	"$verifier" "$work/rootfs" "$work/kernel.config"
 mv "$work/kexec.saved" "$work/rootfs/usr/sbin/kexec"
 
 printf '# CONFIG_KEXEC is not set\nCONFIG_KEXEC_CORE=y\n' >"$work/kernel.config"
-expect_fail disabled-kexec 'requires CONFIG_KEXEC=y exactly once' \
+expect_fail ambiguous-baseline 'baseline config requires CONFIG_VIDEO_SUN50I_G2D_MIX=y exactly once' \
 	"$verifier" "$work/rootfs" "$work/kernel.config"
 
 printf 'CONFIG_KEXEC=y\n# CONFIG_KEXEC_CORE is not set\n' >"$work/kernel.config"
-expect_fail missing-core 'requires CONFIG_KEXEC_CORE=y exactly once' \
+expect_fail missing-core 'canary config requires CONFIG_KEXEC_CORE=y exactly once' \
+	"$verifier" "$work/rootfs" "$work/kernel.config"
+
+printf 'CONFIG_KEXEC=y\nCONFIG_KEXEC_CORE=y\nCONFIG_VIDEO_SUN50I_G2D_MIX=y\n' >"$work/kernel.config"
+expect_fail unsafe-combination 'canary config must not enable CONFIG_VIDEO_SUN50I_G2D_MIX' \
 	"$verifier" "$work/rootfs" "$work/kernel.config"
 
 # The owned build must pass the resolved config from the same kernel stage and
 # invoke the verifier after all rootfs producers, before ext4 assembly.
 grep -Fq 'COPY --from=kernel /out/build/config /work/kernel-config' "$dockerfile"
 grep -Fq 'KERNEL_CONFIG=/work/kernel-config' "$dockerfile"
+# shellcheck disable=SC2016 -- matching the literal Dockerfile expansion.
+grep -Fq 'PF_KERNEL_DEFCONFIG="${PF_KERNEL_DEFCONFIG}"' "$dockerfile"
+grep -Fq 'a133_kexec_canary.config)' "$dockerfile"
+grep -Fq 'make a133_defconfig' "$dockerfile"
+grep -Fq 'make a133_kexec_canary.config' "$dockerfile"
 verify_line=$(grep -n 'scripts/verify-rootfs-kexec.sh' "$builder" | cut -d: -f1)
 ext4_line=$(grep -n '^mke2fs -t ext4' "$builder" | cut -d: -f1)
 if [ -z "$verify_line" ] || [ -z "$ext4_line" ] || [ "$verify_line" -ge "$ext4_line" ]; then
 	fail 'rootfs verifier is not wired before ext4 assembly'
 fi
 
-echo 'rootfs-kexec-test=PASS package=kexec-tools loader=/usr/sbin/kexec api=kexec_load'
+echo 'rootfs-kexec-test=PASS package=kexec-tools baseline=g2d canary=kexec_load'

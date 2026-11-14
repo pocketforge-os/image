@@ -48,6 +48,7 @@ PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 # required here so fixture runs that stop before the hook keep working; the
 # installer fails the real build when it is empty or unknown.
 PF_KERNEL_REPO="${PF_KERNEL_REPO:-}"
+PF_KERNEL_DEFCONFIG="${PF_KERNEL_DEFCONFIG:-}"
 PF_KERNEL_SHA="${PF_KERNEL_SHA:-}"
 PF_KERNEL_CAPABILITY_RECEIPT="${PF_KERNEL_CAPABILITY_RECEIPT:-}"
 # Resolved config from the exact kernel stage whose Image is packaged.
@@ -2256,11 +2257,16 @@ if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
 fi
 
 # The OTA SD re-entry canary invokes the classic loader directly. Gate the
-# exact 7.x A133 build before ext4 assembly on both userspace and the resolved
-# config copied from the kernel stage; a package-list entry alone is not proof.
+# exact 7.x A133 build before ext4 assembly on the loader plus one of the two
+# deliberate resolved modes: shipping G2D baseline or G2D-free kexec canary.
 if [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ]; then
+    case "${PF_KERNEL_DEFCONFIG}" in
+        a133_kexec_canary.config) kexec_mode=canary ;;
+        a133_defconfig) kexec_mode=baseline ;;
+        *) kexec_mode=auto ;;
+    esac
     "${SRC_DIR}/scripts/verify-rootfs-kexec.sh" \
-        "${ROOTFS_EXTRACTED}" "${KERNEL_CONFIG}"
+        "${ROOTFS_EXTRACTED}" "${KERNEL_CONFIG}" "${kexec_mode}"
 fi
 
 # Report rootfs size
