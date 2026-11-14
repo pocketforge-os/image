@@ -2609,6 +2609,7 @@ COPY --from=image-src build/app-platform-runtime-a133-open-v1.json /work/app-pla
 COPY --from=fetch  /out /work/blobs
 COPY --from=kernel /out/lib/modules /work/kernel-tsp
 COPY --from=kernel /out/build/capabilities /work/kernel-capabilities
+COPY --from=kernel /out/build/config /work/kernel-config
 COPY --from=gpu-km /out/modules     /work/gpu-km-tsp
 COPY --from=gpu-fw /out             /work/gpu-fw-tsp
 COPY --from=gpu-um-mesa /out        /work/gpu-um-mesa
@@ -2659,6 +2660,7 @@ case "${PF_SOC}" in
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
       PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL}" \
       PF_KERNEL_REPO="${PF_KERNEL_REPO}" \
+      KERNEL_CONFIG=/work/kernel-config \
       PF_KERNEL_CAPABILITY_RECEIPT=/work/kernel-capabilities/axp717-low-soc-alarm-irqs-v1 \
       PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES}" \
       PF_DISPLAY_PIPELINE="${PF_DISPLAY_PIPELINE}" \

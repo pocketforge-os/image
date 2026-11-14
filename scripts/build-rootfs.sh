@@ -50,6 +50,8 @@ PF_KERNEL_REQUIRED_MODULES="${PF_KERNEL_REQUIRED_MODULES:-}"
 PF_KERNEL_REPO="${PF_KERNEL_REPO:-}"
 PF_KERNEL_SHA="${PF_KERNEL_SHA:-}"
 PF_KERNEL_CAPABILITY_RECEIPT="${PF_KERNEL_CAPABILITY_RECEIPT:-}"
+# Resolved config from the exact kernel stage whose Image is packaged.
+KERNEL_CONFIG="${KERNEL_CONFIG:-}"
 declare -a KERNEL_REQUIRED_MODULE_LIST=()
 
 is_a133_open_7x_gpu_device() {
@@ -2251,6 +2253,14 @@ echo "[cr-symbols] final ELF build-id gate + complete image build-id manifest"
     "${ROOTFS_EXTRACTED}" "${OUT_DIR}" --manifest-only
 if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
     python3 "${SRC_DIR}/scripts/verify-app-platform-runtime.py" "${ROOTFS_EXTRACTED}"
+fi
+
+# The OTA SD re-entry canary invokes the classic loader directly. Gate the
+# exact 7.x A133 build before ext4 assembly on both userspace and the resolved
+# config copied from the kernel stage; a package-list entry alone is not proof.
+if [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ]; then
+    "${SRC_DIR}/scripts/verify-rootfs-kexec.sh" \
+        "${ROOTFS_EXTRACTED}" "${KERNEL_CONFIG}"
 fi
 
 # Report rootfs size
