@@ -2,18 +2,18 @@
 # read from the merged driver source below (bd tsp-ihne1.11, re-based by
 # tsp-mc9m.60.29.65.26 to the platform.lock pin).
 #   repo:   pocketforge-os/kernel-sunxi-7.x
-#   commit: 3ee1b219a1b534dbda5f0a186e8038b8913b8cf1  (platform.lock kernel-sunxi-7.x pin)
+#   commit: 011fd206aa4fe91237ace0f087fcff995b192184  (platform.lock kernel-sunxi-7.x pin)
 #   file:   sound/soc/sunxi/sun4i-codec.c
 # The fixture used to pin 3010de56dbd1057513c035fff8623f80596fe9e8, which
 # predates the A133 capture path (kernel-sunxi-7.x#132/#141): that pin has no
 # Mic1 Boost Volume and no Mic pin switch, yet both exist on the hardware the
-# image builds (platform.lock pins 3ee1b219; the H616 codec exposes
+# image builds (platform.lock pins 011fd206; the H616 codec exposes
 # "Mic1 Boost Volume" numid=5, 0..31, reset 0).
 # Complete for the A133 component and card controls, plus the boolean jack
 # control created by snd_soc_card_jack_new_pins("Headphone Jack", ...).
 # "Mic Switch" is the DAPM pin switch for the Mic endpoint; the boot defaults
 # deliberately do not set it (the mic boost is a level, not a route).
-# Re-derive: git show 3ee1b219a1b534dbda5f0a186e8038b8913b8cf1:sound/soc/sunxi/sun4i-codec.c | sed -n '2252,2268p;2569,2573p;2662,2668p'
+# Re-derive: git show 011fd206aa4fe91237ace0f087fcff995b192184:sound/soc/sunxi/sun4i-codec.c | sed -n '2252,2268p;2569,2573p;2662,2668p'
 # Columns (TAB-separated): name, kind, spec, source line
 #   int <min> <max> | bool | enum <item>|<item>...
 DAC Playback Volume	int	0 63	sun4i-codec.c:2253

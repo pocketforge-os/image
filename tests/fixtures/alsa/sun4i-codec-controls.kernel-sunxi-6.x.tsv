@@ -2,13 +2,8 @@
 # ("allwinner,sun50i-a133-codec" -> H616 card, "H616 Audio Codec"), read from
 # the driver source at the kernel pin below (bd tsp-f3fm.220).
 #   repo:   pocketforge-os/kernel-sunxi-6.x
-#   commit: 095f0c0b95eba4e05a1c6c8f9d88d7b28179a054  (platform.lock kernel-sunxi-6.x pin)
+#   commit: 6ccb87902144babc2838b03840c0413bf0941ab4  (platform.lock kernel-sunxi-6.x pin)
 #   file:   sound/soc/sunxi/sun4i-codec.c
-# sound/soc/sunxi/sun4i-codec.c is byte-identical to the previously pinned
-# 6ccb87902144babc2838b03840c0413bf0941ab4 (verified diff), so the rows below
-# are unchanged. The 6.x driver has no A133 capture path: it creates no
-# Mic1 Boost Volume control (the A133 card binds the H616 component), so that
-# control is intentionally absent from this fixture and from 6.x installs.
 # Complete for this card: the H616 codec component controls (plain and DAPM
 # mixer/mux) plus the card's one pin switch. The TSP DTS's aux speaker amp
 # (simple-audio-amplifier with only enable-gpios) adds no controls.
@@ -16,7 +11,7 @@
 # (SOC_MIXER_ARRAY over one array), so soc-dapm names them without a widget
 # prefix. A mux control takes the widget name. SOC_DAPM_PIN_SWITCH("Speaker")
 # appends " Switch".
-# Re-derive: git show 095f0c0b95eba4e05a1c6c8f9d88d7b28179a054:sound/soc/sunxi/sun4i-codec.c | sed -n '1067,1068p;1887,1921p;1964,1966p'
+# Re-derive: git show 6ccb87902144babc2838b03840c0413bf0941ab4:sound/soc/sunxi/sun4i-codec.c | sed -n '1067,1068p;1887,1921p;1964,1966p'
 # Columns (TAB-separated): name, kind, spec, source line
 #   int <min> <max> | bool | enum <item>|<item>...
 DAC Playback Volume	int	0 63	sun4i-codec.c:1888
