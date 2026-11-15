@@ -2286,7 +2286,8 @@ EXT4_SIZE_BLOCKS=$(( EXT4_SIZE_MB * 1024 ))   # 1K blocks for mke2fs
 echo "  ext4 target: ${EXT4_SIZE_MB} MiB (${EXT4_SIZE_BLOCKS} x 1K blocks)"
 
 # The marker binds the contract to the baked partition-5 geometry. genimage's
-# fixed layout starts userdata at sector 251904; its sectors equal the exact
+# fixed layout (boards/tsp/genimage.cfg: boot at 36M, fixed size 32M, env x2,
+# 64M boot-resource) starts userdata at sector 274432; its sectors equal the exact
 # ext4 byte length assembled below. Emit this only when the dev-only helper was
 # installed, after sizing is final and before the ext4 is created.
 if [ -x "${ROOTFS_EXTRACTED}/usr/lib/pocketforge/self-flash-v3-stage" ]; then
@@ -2302,7 +2303,7 @@ GuardBytes=4194304
 ControlBytes=4194304
 SeedMaxBytes=16777216
 SlotBytes=65536
-BakedRootPartitionStartSector=251904
+BakedRootPartitionStartSector=274432
 BakedRootPartitionSectors=${SELF_FLASH_V3_BAKED_ROOT_SECTORS}
 EOF
     chown root:root "${ROOTFS_EXTRACTED}/etc/pocketforge-selfflash-v3"

@@ -351,7 +351,7 @@ class InstalledPolicyTests(unittest.TestCase):
 
         builder = BUILDER.read_text(encoding="utf-8")
         for literal in (
-            "BakedRootPartitionStartSector=251904",
+            "BakedRootPartitionStartSector=274432",
             "BakedRootPartitionSectors=${SELF_FLASH_V3_BAKED_ROOT_SECTORS}",
             "-m 0700",
         ):

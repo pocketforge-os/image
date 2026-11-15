@@ -290,6 +290,14 @@ BOOTIMG_SIZE="$(stat -c%s "${BOOTIMG_FILE}")"
 BOOTIMG_SHA="$(sha256sum "${BOOTIMG_FILE}" | cut -d' ' -f1)"
 echo "  boot.img: ${BOOTIMG_SIZE} bytes, sha256: ${BOOTIMG_SHA}"
 
+# boards/tsp/genimage.cfg fixes the boot partition at 32M so the userdata start
+# sector baked into the self-flash v3 marker stays valid (BOOT_PARTITION_BYTES).
+BOOT_PARTITION_BYTES=$(( 32 * 1024 * 1024 ))
+if [ "${BOOTIMG_SIZE}" -gt "${BOOT_PARTITION_BYTES}" ]; then
+    echo "FATAL: boot.img (${BOOTIMG_SIZE} bytes) exceeds the fixed boot partition (${BOOT_PARTITION_BYTES} bytes); change genimage.cfg size, the marker constant in build-rootfs.sh and tests together" >&2
+    exit 1
+fi
+
 # Verify ANDROID! magic
 MAGIC="$(xxd -l 8 -p "${BOOTIMG_FILE}")"
 if [ "${MAGIC}" != "414e44524f494421" ]; then
