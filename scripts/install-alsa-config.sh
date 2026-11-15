@@ -6,9 +6,11 @@
 #   kernel-sunxi-4.9           vendor BSP sun50iw10 codec, card id "audiocodec".
 #                              Installs the stock /etc/asound.conf, byte for byte.
 #   kernel-sunxi-6.x|7.x       mainline sun4i-codec ("allwinner,sun50i-a133-codec"
-#                              -> H616 card "H616 Audio Codec"), card id "Codec",
-#                              playback only. Installs the sun4i-codec asound.conf
-#                              and the boot-time speaker-path mixer defaults.
+#                              -> H616 card "H616 Audio Codec"), card id "Codec".
+#                              6.x exposes playback controls only; 7.x adds the
+#                              A133 capture path (Mic1 Boost Volume, kernel#132).
+#                              Installs the sun4i-codec asound.conf and the
+#                              boot-time speaker-path mixer defaults.
 # Any other value, including an empty one, is a build error: a silent default
 # is how the open-kernel images shipped a config naming a card they do not have.
 #
@@ -50,14 +52,24 @@ case "${family}" in
     sun4i-codec)
         case "${kernel_repo}" in
             kernel-sunxi-6.x)
-                mixer_defaults="${src}/device-config/alsa/mixer-defaults.sun4i-codec"
+                # The base defaults file documents the full A133 control set of
+                # the newest open pin, including the IO8 U11 Mic1 Boost Volume
+                # default. The kernel-sunxi-6.x driver has no A133 capture path,
+                # so it does not create Mic1 Boost Volume at all (proven by
+                # tests/fixtures/alsa/sun4i-codec-controls.kernel-sunxi-6.x.tsv);
+                # applying it would fail the boot oneshot. Strip it here.
+                install -d -m 0755 "${rootfs}/usr/share/pocketforge/alsa"
+                sed '/^Mic1 Boost Volume=/d' \
+                    "${src}/device-config/alsa/mixer-defaults.sun4i-codec" \
+                    > "${rootfs}/usr/share/pocketforge/alsa/mixer-defaults.sun4i-codec"
+                chmod 0644 "${rootfs}/usr/share/pocketforge/alsa/mixer-defaults.sun4i-codec"
                 ;;
             kernel-sunxi-7.x)
                 mixer_defaults="${src}/device-config/alsa/mixer-defaults.sun4i-codec-7.x"
+                install -D -m 0644 "${mixer_defaults}" \
+                    "${rootfs}/usr/share/pocketforge/alsa/mixer-defaults.sun4i-codec"
                 ;;
         esac
-        install -D -m 0644 "${mixer_defaults}" \
-            "${rootfs}/usr/share/pocketforge/alsa/mixer-defaults.sun4i-codec"
         install -D -m 0755 "${src}/rootfs-overlay/usr/lib/pocketforge/audio-defaults.sh" \
             "${rootfs}/usr/lib/pocketforge/audio-defaults.sh"
         install -D -m 0644 "${src}/rootfs-overlay/etc/systemd/system/pocketforge-audio-defaults.service" \

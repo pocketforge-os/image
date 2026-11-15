@@ -30,3 +30,12 @@ Line Out Source Playback Route=Stereo
 Line Out Playback Volume=26
 Line Out Playback Switch=on
 Speaker Switch=on
+#
+# Mic1 Boost Volume (IO8 U11, tsp-mc9m.60.29.65.26): the A133 capture path's
+# mic preamp boost, range 0..31 (SOC_SINGLE("Mic1 Boost Volume",
+# SUN50I_A133_ADC_ACTL, SUN50I_A133_ADC_MIC1_GAIN, 0x1f, 0)). The reset value 0
+# puts the 1 kHz check tone under the noise floor; on-device measurements found
+# 8..31 all pass and 16 gives the best 1 kHz SNR. kernel-sunxi-6.x has no A133
+# capture path and no such control; install-alsa-config.sh strips this line for
+# 6.x roots (see tests/fixtures/alsa/sun4i-codec-controls.kernel-sunxi-6.x.tsv).
+Mic1 Boost Volume=16

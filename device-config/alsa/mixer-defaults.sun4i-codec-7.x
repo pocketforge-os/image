@@ -12,3 +12,9 @@
 # (headphones out = speaker, in = headphones) after this oneshot.
 DAC Playback Volume=38
 Headphone Playback Volume=7
+#
+# Mic1 Boost Volume (IO8 U11, tsp-mc9m.60.29.65.26): A133 capture-path mic
+# preamp boost, range 0..31 (sun4i-codec.c:2266 at the platform.lock pin 011fd206). Reset 0 fails the 1 kHz mic
+# tone check (tone under the noise floor); 8..31 all pass and 16 gives the
+# best 1 kHz SNR.
+Mic1 Boost Volume=16
