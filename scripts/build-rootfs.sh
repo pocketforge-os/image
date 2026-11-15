@@ -57,7 +57,7 @@ declare -a KERNEL_REQUIRED_MODULE_LIST=()
 
 is_a133_open_7x_gpu_device() {
     case "$1" in
-        a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio) return 0 ;;
+        a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -207,7 +207,7 @@ case "${PF_GAMESCOPE_MODE}" in
         ;;
     g1)
         case "${PF_DEVICE_ID}" in
-            a133-open-7x-gpu|a133-open-7x-gpu-cts) ;;
+            a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-cts) ;;
             *)
                 echo "FATAL: Gamescope g1 package is restricted to an a133-open-7x-gpu profile" >&2
                 exit 1
@@ -468,7 +468,7 @@ case "${PF_GAMESCOPE_MODE}" in
     not-shipped) ;;
     g1)
         case "${PF_DEVICE_ID}" in
-            a133-open-7x-gpu|a133-open-7x-gpu-cts) ;;
+            a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-cts) ;;
             *)
                 echo "FATAL: refusing Gamescope package on ${PF_DEVICE_ID}" >&2
                 exit 1
@@ -635,7 +635,7 @@ install_low_battery_shutdown() {
     local actual_receipt expected_receipt
 
     case "${device}" in
-        a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio) ;;
+        a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio) ;;
         *)
             echo "[customize] low-battery shutdown: NOT-SHIPPED (kernel=${kernel_repo} device=${device})"
             return 0
@@ -1810,7 +1810,7 @@ install_low_battery_shutdown "${ROOTFS}" "${PF_KERNEL_REPO}" "${PF_KERNEL_SHA}" 
 
 if [ "${VARIANT}" = "dev" ]; then
     case "${PF_DEVICE_ID}" in
-        trimui-smart-pro-a133|a133-open-7x|a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
+        trimui-smart-pro-a133|a133-open-7x|a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
             install -D -o root -g root -m 0700 \
                 /work/src/rootfs-overlay/usr/lib/pocketforge/self-flash-v3-stage \
                 "${ROOTFS}/usr/lib/pocketforge/self-flash-v3-stage"

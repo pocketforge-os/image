@@ -70,7 +70,7 @@ fi
 # the source-built, file-owning provider selected below; the our-stack tripwire
 # proves that apt did not install a Debian Mesa driver implementation instead.
 case "${PF_DEVICE_ID}" in
-    a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
+    a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
         [ -f "${PKG_A133_OPEN_7X_GPU_FILE}" ] \
             || { echo "FATAL: ${PKG_A133_OPEN_7X_GPU_FILE} not found" >&2; exit 1; }
         GPU_TOOL_PKGS="$(grep -v '^\s*#' "${PKG_A133_OPEN_7X_GPU_FILE}" | grep -v '^\s*$' | tr '\n' ',' | sed 's/,$//')"
@@ -126,7 +126,7 @@ fi
 # neutral GLVND client libraries (libegl1/libgles2/libgl1/libglx0) and Xwayland
 # stay present.
 case "${PF_DEVICE_ID}" in
-    a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
+    a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
         GPU_STACK_REPLACED_PACKAGES="libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgbm1 mesa-opencl-icd mesa-va-drivers mesa-vdpau-drivers mesa-vulkan-drivers libosmesa6"
         for package in ${GPU_STACK_REPLACED_PACKAGES}; do
             PKG_LIST="$(printf '%s\n' "${PKG_LIST}" | tr ',' '\n' |
@@ -166,7 +166,7 @@ done
 # Debian's graphics relationships while Conflicts/Replaces prevent a second
 # Mesa vendor from entering the rootfs.
 case "${PF_DEVICE_ID}" in
-    a133-open-7x-gpu|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
+    a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio)
         GPU_STACK_PROVIDER_DEB="${GPU_UM_MESA_DIR}/pocketforge-open-gpu-stack.deb"
         [ -f "${GPU_STACK_PROVIDER_DEB}" ] \
             || { echo "FATAL: source-built open GPU stack provider is missing: ${GPU_STACK_PROVIDER_DEB}" >&2; exit 1; }
