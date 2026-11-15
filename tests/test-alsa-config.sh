@@ -408,6 +408,12 @@ grep -q "card '${OPEN_CARD}' not present" "${TMP}/defaults.out" \
     || fail "audio-defaults.sh missing-card failure lacks its reason: $(cat "${TMP}/defaults.out")"
 pass "audio-defaults.sh fails on a missing control (after applying the rest) and on a missing card"
 
+# IO8 U11 (tsp-mc9m.60.29.65.26): the capture path needs Mic1 Boost Volume
+# above its reset value 0 or the speaker tone sits under the noise floor.
+grep -qx 'Mic1 Boost Volume=16' "${defaults}" \
+    || fail "mixer defaults do not set Mic1 Boost Volume=16 (U11: boost 0 fails the mic tone check, 8..31 pass)"
+pass "mixer defaults set Mic1 Boost Volume=16"
+
 # ---- negative control: the same test over image main before the fix ------
 # Only the test's own inputs are overlaid on the pre-fix tree: this script,
 # the capture helper, the driver fixtures and the stock file (byte-identical
