@@ -41,6 +41,10 @@ PF_KERNEL_REPO="${PF_KERNEL_REPO:-}"
 # /out/build/config). Optional; with PF_DISPLAY_PIPELINE it lets build-initrd.sh
 # decide whether the first-light frame-000 helper can work (bd tsp-3rd3.7).
 KERNEL_CONFIG="${KERNEL_CONFIG:-}"
+# Optional Odyssey SDR50 opt-in DTB (tsp-mc9m.60.29.33.16). When set (owned-spl
+# only) it is CMA-guarded, layout-checked and staged on FAT p4 as dtb-sdr50.bin
+# beside the unchanged default dtb.bin. The owned bootcmd never loads it.
+KERNEL_SDR50_DTB="${KERNEL_SDR50_DTB:-}"
 
 # Parse arguments
 M1B_MODE=0
@@ -194,6 +198,17 @@ echo "  dtb: copied from kernel-tsp (pre-compiled)"
 DTB_SIZE="$(stat -c%s "${DTB_FILE}")"
 DTB_SHA="$(sha256sum "${DTB_FILE}" | cut -d' ' -f1)"
 echo "  dtb:    ${DTB_FILE} (${DTB_SIZE} bytes, sha256: ${DTB_SHA})"
+
+SDR50_DTB_FILE=""
+if [ -n "${KERNEL_SDR50_DTB}" ]; then
+    [ "${BOOT_CHAIN}" = "owned-spl" ] \
+        || { echo "FATAL: KERNEL_SDR50_DTB is only staged by --boot-chain owned-spl (got '${BOOT_CHAIN}')" >&2; exit 1; }
+    [ -s "${KERNEL_SDR50_DTB}" ] \
+        || { echo "FATAL: SDR50 opt-in DTB not found at ${KERNEL_SDR50_DTB} (kernel build lacks it)" >&2; exit 1; }
+    SDR50_DTB_FILE="${WORK}/dtb-sdr50.bin"
+    cp "${KERNEL_SDR50_DTB}" "${SDR50_DTB_FILE}"
+    echo "  dtb-sdr50: ${SDR50_DTB_FILE} ($(stat -c%s "${SDR50_DTB_FILE}") bytes, sha256: $(sha256sum "${SDR50_DTB_FILE}" | cut -d' ' -f1))"
+fi
 
 # ---- step 3: pack boot_package.fex -----------------------------------------
 echo ""
@@ -380,6 +395,12 @@ if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
     CMA_GUARD_ARGS+=(--uboot-config "${UBOOT_CONFIG}")
 fi
 python3 "${SRC_DIR}/scripts/check-a133-cma-bootargs.py" "${CMA_GUARD_ARGS[@]}"
+# The SDR50 opt-in DTB boots with the same cmdline, U-Boot config and env, so
+# it must pass the same guard (CMA_GUARD_ARGS[1] is the --dtb value).
+if [ -n "${KERNEL_SDR50_DTB}" ]; then
+    CMA_GUARD_ARGS[1]="${SDR50_DTB_FILE:?SDR50 opt-in DTB was not prepared}"
+    python3 "${SRC_DIR}/scripts/check-a133-cma-bootargs.py" "${CMA_GUARD_ARGS[@]}"
+fi
 
 # Create the empty FAT32 boot-resource partition image.
 # genimage's vfat{} handler runs 'mcopy rootpath/* ::' which fails when rootpath
@@ -428,6 +449,20 @@ if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
     mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${KERNEL_IMAGE}"   "::/Image"
     mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${DTB_FILE}"       "::/dtb.bin"
     mcopy -i "${GENIMAGE_INPUT}/boot-resource.vfat" "${WORK}/initrd.gz" "::/initrd.gz"
+    # SDR50 opt-in DTB (tsp-mc9m.60.29.33.16): staged beside, never instead of,
+    # dtb.bin. The helper layout-checks it, reads the FAT copy back byte for byte
+    # and re-asserts ::/dtb.bin still equals the default DTB.
+    if [ -n "${KERNEL_SDR50_DTB}" ]; then
+        bash "${SRC_DIR}/scripts/stage-a133-sdr50-dtb.sh" \
+            --fat "${GENIMAGE_INPUT}/boot-resource.vfat" \
+            --dtb "${SDR50_DTB_FILE:?SDR50 opt-in DTB was not prepared}" \
+            --dest "::/dtb-sdr50.bin" \
+            --default-dtb "${DTB_FILE}" \
+            --layout-check "${UBOOT_LAYOUT_CHECK}" \
+            --uboot-config "${UBOOT_CONFIG}" \
+            --image "${KERNEL_IMAGE}" \
+            --initrd "${WORK}/initrd.gz"
+    fi
 
     # u-boot-tsp-a133#51 scans out a native portrait framebuffer mounted as a
     # landscape panel, so its logo asset is the animator's pinned first frame
@@ -569,9 +604,12 @@ if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
         exit 1
     fi
     echo "  SPL: OWNED u-boot-sunxi-with-spl.bin verified @0x20000 (${SPL_LEN} B, sha ${OWNED_SPL_SHA})"
-    python3 "${TOOLS_DIR}/verify-owned-spl-fat.py" \
-        "${GENIMAGE_INPUT}/boot-resource.vfat"
-    echo "  boot-resource p4: owned-SPL payload verified (Image, dtb.bin, initrd.gz, boot/pocketforge-logo.bmp present)"
+    FAT_VERIFY_ARGS=("${GENIMAGE_INPUT}/boot-resource.vfat")
+    if [ -n "${KERNEL_SDR50_DTB}" ]; then
+        FAT_VERIFY_ARGS+=(--require dtb-sdr50.bin)
+    fi
+    python3 "${TOOLS_DIR}/verify-owned-spl-fat.py" "${FAT_VERIFY_ARGS[@]}"
+    echo "  boot-resource p4: owned-SPL payload verified (Image, dtb.bin, initrd.gz, boot/pocketforge-logo.bmp${KERNEL_SDR50_DTB:+, dtb-sdr50.bin} present)"
 fi
 
 # ---- step 6: compress + checksum -------------------------------------------

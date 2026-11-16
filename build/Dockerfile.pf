@@ -360,7 +360,18 @@ done
 dts="$(find arch/arm64/boot/dts -name "${PF_KERNEL_DTB%.dtb}.dts" -print -quit)"
 [ -n "$dts" ] || { echo "DTB source ${PF_KERNEL_DTB%.dtb}.dts not found under arch/arm64/boot/dts"; exit 1; }
 dtb_target="${dts#arch/arm64/boot/dts/}"; dtb_target="${dtb_target%.dts}.dtb"
-make -j"$(nproc)" Image modules "${dtb_target}"
+# Odyssey SDR50 opt-in companion DTB (tsp-mc9m.60.29.33.16, kernel-sunxi-7.x#179).
+# A Linux 7.x build of the shipping Odyssey DTB must also build its SDR50 sibling
+# so the owned-SPL assemble can stage it on FAT p4 as dtb-sdr50.bin (inert: the
+# bootcmd loads only dtb.bin). Missing source = a kernel pin before #179: fail closed.
+sdr50_dts=""
+sdr50_target=""
+if [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ] && [ "${PF_KERNEL_DTB}" = sun50i-a133-pocketforge-odyssey.dtb ]; then
+  sdr50_dts="$(dirname "${dts}")/sun50i-a133-pocketforge-odyssey-sdr50.dts"
+  [ -f "${sdr50_dts}" ] || { echo "DTB source ${sdr50_dts} not found: the locked kernel predates the SDR50 opt-in DT (kernel-sunxi-7.x#179)"; exit 1; }
+  sdr50_target="${sdr50_dts#arch/arm64/boot/dts/}"; sdr50_target="${sdr50_target%.dts}.dtb"
+fi
+make -j"$(nproc)" Image modules "${dtb_target}" ${sdr50_target:+"${sdr50_target}"}
 # Linux 6.1+ generates utsversion.h; the 4.9 tree keeps UTS_VERSION in
 # compile.h. Prefer the newer header when both exist so it cannot be bypassed.
 uts_header=include/generated/utsversion.h
@@ -374,6 +385,9 @@ grep -Fq "#${KBUILD_BUILD_VERSION} " "${uts_header}" \
 krel="$(cat include/config/kernel.release)"
 install -D -m0644 arch/arm64/boot/Image      /out/boot/Image
 install -D -m0644 "${dts%.dts}.dtb"          "/out/boot/${PF_KERNEL_DTB}"
+if [ -n "${sdr50_dts}" ]; then
+  install -D -m0644 "${sdr50_dts%.dts}.dtb"  /out/boot/sun50i-a133-pocketforge-odyssey-sdr50.dtb
+fi
 make INSTALL_MOD_PATH=/out modules_install
 # modules_install leaves build/source symlinks pointing at /work/kernel (absent in the
 # rootfs) — drop them so they cannot leak a dangling link into the reproducible image.
@@ -2859,9 +2873,17 @@ case "${PF_BOOT_PROTO}" in
     mkdir -p /work/kernel-tsp/arch/arm64/boot/dts/sunxi
     cp /work/kboot/Image                    /work/kernel-tsp/arch/arm64/boot/Image
     cp "/work/kboot/${PF_KERNEL_DTB}"       /work/kernel-tsp/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb
+    # The kernel stage builds the SDR50 opt-in sibling for every Linux 7.x Odyssey DTB
+    # (tsp-mc9m.60.29.33.16); require it here too so a stale kernel stage fails closed.
+    SDR50_DTB=""
+    if [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ] && [ "${PF_KERNEL_DTB}" = sun50i-a133-pocketforge-odyssey.dtb ]; then
+      SDR50_DTB=/work/kboot/sun50i-a133-pocketforge-odyssey-sdr50.dtb
+      [ -s "${SDR50_DTB}" ] || { echo "assemble FAIL: kernel stage did not produce ${SDR50_DTB} (SDR50 opt-in DTB)"; exit 1; }
+    fi
     cp /work/rootfs/userdata.ext4           /out/userdata.ext4
     SRC_DIR=/work/src BLOBS_DIR=/work/blobs OUT_DIR=/out \
       KERNEL_TSP_DIR=/work/kernel-tsp GPU_KM_TSP_DIR=/work/gpu-km-tsp \
+      KERNEL_SDR50_DTB="${SDR50_DTB}" \
       PF_GPU_MODEL="${PF_GPU_MODEL:-ddk}" \
       PF_GPU_KM_MODEL="${PF_GPU_KM_MODEL}" \
       PF_KERNEL_REPO="${PF_KERNEL_REPO}" \
