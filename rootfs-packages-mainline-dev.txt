@@ -12,3 +12,8 @@ v4l-utils
 gstreamer1.0-tools
 gstreamer1.0-plugins-base
 gstreamer1.0-plugins-bad
+
+# Software H.264 baseline (tsp-mc9m.60.29.88.13): ugly ships gst x264enc;
+# x264 is the CLI. ffmpeg already links libx264, so it is not rebuilt.
+gstreamer1.0-plugins-ugly
+x264
