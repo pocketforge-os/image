@@ -510,13 +510,55 @@ claim host verification even if the tail receipt says `pass`.
 ## Initrd write graph and success
 
 The initrd has no dependency on the overwritten root filesystem. After its
-eligibility and arm checks, it writes `started`, unmounts every partition of
-the SD, and runs a checked producer/consumer graph equivalent to:
+eligibility and arm checks it runs two phases.
+
+**Phase 1, verify (no SD write).** The staged range is decompressed once into
+`/dev/null` through the checked graph
 
 ```text
 raw tail range -> xz integrity/decompress -> tee SHA-256 and byte count
-               -> dd to whole SD with direct I/O where supported and fsync
+               -> /dev/null
 ```
+
+and must satisfy every xz, byte-count and SHA-256 condition below. A failure
+here records `failed` (`FailurePhase=xz`, `FailureReason=stage-verify-failed`)
+and leaves the SD byte-for-byte on the old image: the old boot chain is still
+complete and bootable.
+
+**Phase 2, write.** Only then it writes `started`, unmounts every partition of
+the SD, and decompresses the staged range three times, each into one range of
+the whole SD with `fsync` before the next range starts:
+
+1. `[BootChainBytes, TargetRawBytes)`: the root partitions, 36 MiB onward;
+2. `[SplRegionBytes, BootChainBytes)`: TOC1 and `boot.img`;
+3. `[0, SplRegionBytes)`: protective MBR, GPT and the SPL, written last
+   (`BootChainBytes` = 36 MiB, `SplRegionBytes` = 1 MiB).
+
+Nothing is buffered in RAM or on the SD; the stream is simply decompressed once
+per range.
+
+### Interruption semantics
+
+A reset or power cut during phase 2 leaves:
+
+| Cut during | SD state |
+|---|---|
+| range 1 (root partitions) | complete **old** boot chain (SPL, GPT, TOC1, `boot.img`); partly new root partitions. The old chain boots; the generation is spent (see below). |
+| range 2 (TOC1, `boot.img`) | old SPL and GPT with partly new TOC1/`boot.img`. This window is bounded to about 35 MiB of writes. |
+| range 3 (SPL region) | new TOC1/`boot.img`/root; the SPL region is partly written. Bounded to 1 MiB (well under a second). |
+
+The boot chain is therefore never again a mix across the whole ~2% prefix for
+the full duration of the write; the mixed windows are ranges 2 and 3 only. The
+SD has no A/B boot chain, so these two windows cannot be made zero; the SPL
+being last means a new SPL is never paired with a partial rootfs.
+
+The `started` receipt survives an interruption (it lives in the staged tail,
+which is outside every write range). It still blocks automatic retry: the
+generation is consumed and recovery of a mixed window is FEL. A `started`
+receipt with no `failed` or `pass` now means an interrupted write; it is
+distinguishable from a verify failure (`failed`, `stage-verify-failed`, SD
+untouched). Tests: `tests/test-initrd-selfflash-v3-killpoints.sh` cuts the sink
+at every range boundary and asserts these states.
 
 Every process status is captured. Unsupported pipefail semantics are a build
 failure; the implementation may instead use named pipes and explicit PID
