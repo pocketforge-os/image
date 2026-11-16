@@ -746,7 +746,7 @@ sf_v3_write_sink() {
     dd of="$SF_V3_SD_IO" bs="$SF_V3_TRANSFER_BYTES" \
         iflag=skip_bytes,count_bytes,fullblock oflag=seek_bytes \
         skip="$1" seek="$1" count="$(( $2 - $1 ))" \
-        conv=notrunc,fsync status=none || return 1
+        conv=notrunc,fsync status=none || { cat >/dev/null; return 1; }
     # Drain the rest so the decompressor ends cleanly, not on SIGPIPE.
     cat >/dev/null
 }
