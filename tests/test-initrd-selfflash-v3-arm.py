@@ -766,7 +766,7 @@ class InitrdArmTests(unittest.TestCase):
             'truncate -s "$SF_V3_CARD_BYTES" "$SF_V3_SD" && '
             "printf REPLACED | dd of=\"$SF_V3_SD\" bs=1 conv=notrunc status=none && "
             "SF_V3_TARGET_RAW_BYTES=8 && "
-            "printf ORIGINAL | sf_v3_write_sink && "
+            "printf ORIGINAL | sf_v3_write_sink 0 8 && "
             "sf_v3_receipt_defaults && "
             "sf_v3_write_receipt started none none"
         )

@@ -725,10 +725,30 @@ sf_v3_install_seed() {
     export SF_V3_SEED_RESULT SF_V3_SEED_END_MS
 }
 
+# Write-order contract (tsp-1a7a5b84): the decompressed stream is verified in
+# full (xz integrity, byte count, SHA-256) into /dev/null before the first
+# destructive write. The SD is then written in three ranges, each fsynced:
+#   1. [BOOT_CHAIN_BYTES, raw)  rootfs/userdata partitions, no boot chain
+#   2. [SPL_REGION_BYTES, BOOT_CHAIN_BYTES)  TOC1, boot.img
+#   3. [0, SPL_REGION_BYTES)  protective MBR, GPT and the SPL, last
+# so the old SPL stays valid until the final range starts. The stream is
+# decompressed once per range; nothing is buffered in RAM.
+SF_V3_BOOT_CHAIN_BYTES="${SF_V3_BOOT_CHAIN_BYTES:-37748736}"
+SF_V3_SPL_REGION_BYTES="${SF_V3_SPL_REGION_BYTES:-1048576}"
+
+sf_v3_verify_sink() {
+    dd of=/dev/null bs="$SF_V3_TRANSFER_BYTES" \
+        count="$SF_V3_TARGET_RAW_BYTES" iflag=count_bytes,fullblock status=none
+}
+
+# $1 first byte, $2 end byte (exclusive) of the raw range to write.
 sf_v3_write_sink() {
     dd of="$SF_V3_SD_IO" bs="$SF_V3_TRANSFER_BYTES" \
-        count="$SF_V3_TARGET_RAW_BYTES" iflag=count_bytes,fullblock \
-        conv=notrunc,fsync status=none
+        iflag=skip_bytes,count_bytes,fullblock oflag=seek_bytes \
+        skip="$1" seek="$1" count="$(( $2 - $1 ))" \
+        conv=notrunc,fsync status=none || { cat >/dev/null; return 1; }
+    # Drain the rest so the decompressor ends cleanly, not on SIGPIPE.
+    cat >/dev/null
 }
 
 sf_v3_resolve_selected_card_sys() {
@@ -889,9 +909,20 @@ sf_v3_run_armed_transaction() {
     SF_V3_INITRD_START_MS="$(sf_v3_now_ms)"
     SF_V3_WRITE_START_MS="$(sf_v3_now_ms)"
     export SF_V3_INITRD_START_MS SF_V3_WRITE_START_MS
+
+    # Nothing destructive happens before the whole staged stream verifies, so a
+    # corrupt candidate leaves the old SD image untouched.
+    if ! sf_v3_stream_verify; then
+        SF_V3_WRITE_END_MS="$(sf_v3_now_ms)"
+        export SF_V3_WRITE_END_MS
+        if ! sf_v3_record_failure xz stage-verify-failed; then
+            printf 'self-flash-v3: failure receipt write failed after verify\n' >&2
+        fi
+        return 1
+    fi
     sf_v3_write_receipt started none none || return 1
 
-    if ! sf_v3_stream_write; then
+    if ! sf_v3_stream_write_ranges; then
         SF_V3_WRITE_END_MS="$(sf_v3_now_ms)"
         export SF_V3_WRITE_END_MS
         if ! sf_v3_record_failure xz stream-failed; then
@@ -1037,7 +1068,7 @@ sf_v3_progress_sampler() {
     done
 }
 
-sf_v3_stream_write() {
+sf_v3_stream_verify() {
     SF_V3_XZ_RESULT=fail
     SF_V3_RAW_STREAM_BYTES=unknown
     SF_V3_RAW_STREAM_SHA256=unknown
@@ -1071,12 +1102,6 @@ sf_v3_stream_write() {
     sf_v3_count_result="$SF_V3_WORK/raw-count.result"
     mkfifo "$sf_v3_hash_fifo" "$sf_v3_count_fifo" || return 1
 
-    sf_v3_progress_marker start 0
-    sf_v3_progress_pid=
-    # Subshell with no `set -e` effect; failure to fork just means no progress.
-    ( sf_v3_progress_sampler ) </dev/null &
-    sf_v3_progress_pid=$!
-
     sha256sum <"$sf_v3_hash_fifo" >"$sf_v3_hash_result" &
     sf_v3_hash_pid=$!
     wc -c <"$sf_v3_count_fifo" >"$sf_v3_count_result" &
@@ -1085,17 +1110,13 @@ sf_v3_stream_write() {
     if sf_v3_read_stage \
         | unxz \
         | tee "$sf_v3_hash_fifo" "$sf_v3_count_fifo" \
-        | sf_v3_write_sink; then
+        | sf_v3_verify_sink; then
         sf_v3_pipeline_rc=0
     else
         sf_v3_pipeline_rc=$?
     fi
     if wait "$sf_v3_hash_pid"; then sf_v3_hash_rc=0; else sf_v3_hash_rc=$?; fi
     if wait "$sf_v3_count_pid"; then sf_v3_count_rc=0; else sf_v3_count_rc=$?; fi
-    if [ -n "$sf_v3_progress_pid" ]; then
-        kill "$sf_v3_progress_pid" 2>/dev/null || :
-        wait "$sf_v3_progress_pid" 2>/dev/null || :
-    fi
 
     if [ "$sf_v3_hash_rc" -eq 0 ]; then
         read -r SF_V3_RAW_STREAM_SHA256 sf_v3_hash_name <"$sf_v3_hash_result" \
@@ -1127,10 +1148,55 @@ sf_v3_stream_write() {
         || { sf_v3_clean_work; return 1; }
 
     SF_V3_XZ_RESULT=pass
-    SF_V3_WRITE_RESULT=pass
-    export SF_V3_XZ_RESULT SF_V3_WRITE_RESULT
-    sf_v3_progress_marker write-end 100
+    export SF_V3_XZ_RESULT
     sf_v3_clean_work
+}
+
+# One checked decompression of the staged range into one write range.
+sf_v3_write_range() {
+    [ "$2" -gt "$1" ] || return 0
+    sf_v3_read_stage | unxz | sf_v3_write_sink "$1" "$2"
+}
+
+sf_v3_stream_write_ranges() {
+    sf_v3_require_pipefail || return 1
+    set -o pipefail || return 1
+    sf_v3_wr_raw="$SF_V3_TARGET_RAW_BYTES"
+    sf_v3_wr_chain="$SF_V3_BOOT_CHAIN_BYTES"
+    sf_v3_wr_spl="$SF_V3_SPL_REGION_BYTES"
+    [ "$sf_v3_wr_chain" -gt "$sf_v3_wr_raw" ] && sf_v3_wr_chain="$sf_v3_wr_raw"
+    [ "$sf_v3_wr_spl" -gt "$sf_v3_wr_chain" ] && sf_v3_wr_spl="$sf_v3_wr_chain"
+    mkdir -p "$SF_V3_WORK" || return 1
+
+    sf_v3_progress_marker start 0
+    sf_v3_progress_pid=
+    # Subshell with no `set -e` effect; failure to fork just means no progress.
+    ( sf_v3_progress_sampler ) </dev/null &
+    sf_v3_progress_pid=$!
+
+    sf_v3_wr_rc=0
+    sf_v3_write_range "$sf_v3_wr_chain" "$sf_v3_wr_raw" || sf_v3_wr_rc=$?
+    [ "$sf_v3_wr_rc" -ne 0 ] \
+        || sf_v3_write_range "$sf_v3_wr_spl" "$sf_v3_wr_chain" || sf_v3_wr_rc=$?
+    [ "$sf_v3_wr_rc" -ne 0 ] \
+        || sf_v3_write_range 0 "$sf_v3_wr_spl" || sf_v3_wr_rc=$?
+
+    if [ -n "$sf_v3_progress_pid" ]; then
+        kill "$sf_v3_progress_pid" 2>/dev/null || :
+        wait "$sf_v3_progress_pid" 2>/dev/null || :
+    fi
+    sf_v3_clean_work
+    [ "$sf_v3_wr_rc" -eq 0 ] || return 1
+    SF_V3_WRITE_RESULT=pass
+    export SF_V3_WRITE_RESULT
+    sf_v3_progress_marker write-end 100
+}
+
+# Verify, then write (the armed transaction calls the two halves itself so the
+# `started` receipt lands between them).
+sf_v3_stream_write() {
+    sf_v3_stream_verify || return 1
+    sf_v3_stream_write_ranges
 }
 
 # The final receipt always records this literal. No v3 function reads the

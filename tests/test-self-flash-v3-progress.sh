@@ -58,7 +58,7 @@ sf_v3_write_sink() {
             dd bs=32768 count=1 iflag=fullblock status=none
             n=$((n + 1)); sleep 0.6
         done
-    } | sf_v3_write_sink_real
+    } | sf_v3_write_sink_real "$@"
 }
 SF_V3_TRANSFER_BYTES=32768
 SF_V3_PROGRESS_INTERVAL=0.1
