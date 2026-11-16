@@ -31,7 +31,9 @@ for package in \
     v4l-utils \
     gstreamer1.0-tools \
     gstreamer1.0-plugins-base \
-    gstreamer1.0-plugins-bad; do
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    x264; do
     count="$(packages "${MAINLINE_DEV_PACKAGES}" | awk -v expected="${package}" \
         '$0 == expected { count++ } END { print count + 0 }')"
     if [ "${count}" -ne 1 ]; then
@@ -45,7 +47,9 @@ for shared_list in "${SHARED_PACKAGES}" "${SHARED_DEV_PACKAGES}" "${MAINLINE_PAC
         v4l-utils \
         gstreamer1.0-tools \
         gstreamer1.0-plugins-base \
-        gstreamer1.0-plugins-bad; do
+        gstreamer1.0-plugins-bad \
+        gstreamer1.0-plugins-ugly \
+        x264; do
         if packages "${shared_list}" | grep -Fxq "${package}"; then
             echo "FAIL: ${package} leaked into ${shared_list}" >&2
             exit 1
