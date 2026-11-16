@@ -16,7 +16,15 @@ REQUIRED = ("Image", "dtb.bin", "initrd.gz", "boot/pocketforge-logo.bmp")
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("fat_image", type=Path)
+    parser.add_argument(
+        "--require",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="additional FAT path that must be present (e.g. dtb-sdr50.bin)",
+    )
     args = parser.parse_args()
+    required = REQUIRED + tuple(args.require)
 
     if not args.fat_image.is_file():
         print(
@@ -28,7 +36,7 @@ def main() -> int:
         print("verify-owned-spl-fat.py: FATAL: reason=mdir_missing", file=sys.stderr)
         return 1
 
-    for path in REQUIRED:
+    for path in required:
         result = subprocess.run(
             ["mdir", "-b", "-i", str(args.fat_image), f"::/{path}"],
             check=False,
@@ -41,7 +49,7 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-    print("PASS: owned-SPL FAT p4 contains Image, dtb.bin, initrd.gz and boot/pocketforge-logo.bmp")
+    print(f"PASS: owned-SPL FAT p4 contains {', '.join(required)}")
     return 0
 
 
