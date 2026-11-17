@@ -808,22 +808,50 @@ def cmd_build(a: argparse.Namespace) -> int:
 
 # ---------------------------------------------------------------------------------------------------------- verify
 class Report:
-    def __init__(self, allow_missing: bool) -> None:
-        self.failed = False
-        self.allow_missing = allow_missing
+    """Per-check lines plus one `CHECK <n> gate PASS|FAIL` verdict per check.
 
-    def line(self, n: int, name: str, ok: bool, detail: str) -> None:
-        self.failed |= not ok
+    A gate PASSes only if at least one built-in (pure-python) line for that check passed and no line for it failed.
+    External cross-checks (sfdisk, fsck.vfat, mtype, fdtget, dtc) add lines when the tool exists; a missing tool is a
+    FAIL line, or with --allow-missing-tools a SKIP line that is neutral for the gate. A gate line is never SKIP.
+    """
+
+    def __init__(self, allow_missing: bool) -> None:
+        self.allow_missing = allow_missing
+        self.builtin_pass: dict[int, int] = {n: 0 for n in range(1, 8)}
+        self.fails: dict[int, int] = {n: 0 for n in range(1, 8)}
+
+    def line(self, n: int, name: str, ok: bool, detail: str, *, builtin: bool = True) -> None:
+        if not ok:
+            self.fails[n] += 1
+        elif builtin:
+            self.builtin_pass[n] += 1
         print(f"CHECK {n} {name} {'PASS' if ok else 'FAIL'} {detail}".rstrip(), flush=True)
+
+    def xline(self, n: int, name: str, ok: bool, detail: str) -> None:
+        self.line(n, name, ok, detail, builtin=False)
 
     def tool(self, n: int, name: str, tool: str) -> str | None:
         path = shutil.which(tool)
         if path is None:
             if self.allow_missing:
-                print(f"CHECK {n} {name} SKIP tool_missing={tool} (--allow-missing-tools)", flush=True)
+                print(f"CHECK {n} {name} SKIP tool_missing={tool} (--allow-missing-tools; cross-check only)",
+                      flush=True)
             else:
-                self.line(n, name, False, f"tool_missing={tool}")
+                self.xline(n, name, False, f"tool_missing={tool}")
         return path
+
+    def gates(self) -> bool:
+        ok_all = True
+        for n in range(1, 8):
+            ok = self.fails[n] == 0 and self.builtin_pass[n] > 0
+            ok_all &= ok
+            print(f"CHECK {n} gate {'PASS' if ok else 'FAIL'} builtin_pass={self.builtin_pass[n]} "
+                  f"fail={self.fails[n]}", flush=True)
+        return ok_all
+
+    @property
+    def failed(self) -> bool:
+        return any(self.fails.values())
 
 
 def run_tool(argv: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
@@ -932,7 +960,7 @@ def _verify(rep: Report, a, image: Path, ddk: Path, spl: bytes, plan: Plan | Non
                 txt = r.stdout.decode(errors="replace") if r.returncode == 0 else ""
                 return [ln.replace(str(p), "IMG") for ln in txt.splitlines() if not ln.startswith("device:")]
             dd, di = dump(ddk), dump(image)
-            rep.line(3, "sfdisk_dump", bool(dd) and dd == di, f"{len(di)} lines identical to the DDK table")
+            rep.xline(3, "sfdisk_dump", bool(dd) and dd == di, f"{len(di)} lines identical to the DDK table")
         fs = None
         if p4 is not None:
             try:
@@ -948,7 +976,7 @@ def _verify(rep: Report, a, image: Path, ddk: Path, spl: bytes, plan: Plan | Non
                 part.write_bytes(dout.read(p4.start, p4.end - p4.start))
                 r = run_tool(["fsck.vfat", "-n", str(part)])
                 tail = (r.stdout + r.stderr).decode(errors="replace").strip().splitlines()
-                rep.line(3, "fsck_vfat", r.returncode == 0, f"rc={r.returncode} {tail[-1] if tail else ''}")
+                rep.xline(3, "fsck_vfat", r.returncode == 0, f"rc={r.returncode} {tail[-1] if tail else ''}")
                 part.unlink()
             # 4 read-back ---------------------------------------------------------------------------------------
             got: dict[str, bytes] = {}
@@ -982,16 +1010,18 @@ def _verify(rep: Report, a, image: Path, ddk: Path, spl: bytes, plan: Plan | Non
                 env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
                 for name in NEW_FILES:
                     r = run_tool(["mtype", "-i", f"{image}@@{p4.start}", f"::/{name}"], env=env)
-                    rep.line(4, f"mtype_{name}", r.returncode == 0 and r.stdout == plan.files[name],
+                    rep.xline(4, f"mtype_{name}", r.returncode == 0 and r.stdout == plan.files[name],
                              f"rc={r.returncode} sha256={sha256(r.stdout)}")
             # 5 dtb ---------------------------------------------------------------------------------------------
             dtb = got.get("dtb.bin", b"")
             if dtb and plan is not None:
                 try:
+                    fdt_parse(dtb)
+                    rep.line(5, "fdt_parse", True, f"built-in parser: {len(dtb)} B, header/struct/strings valid")
                     for name, ok, detail in check_dtb_content(dtb, plan.vendor_dtb):
                         rep.line(5, name, ok, detail)
                 except TransformError as exc:
-                    rep.line(5, "fdt_python", False, str(exc))
+                    rep.line(5, "fdt_parse", False, str(exc))
                 dtbf = tmpdir / "dtb.bin"
                 dtbf.write_bytes(dtb)
                 if rep.tool(5, "fdtget", "fdtget"):
@@ -1002,18 +1032,18 @@ def _verify(rep: Report, a, image: Path, ddk: Path, spl: bytes, plan: Plan | Non
                     for args, want in q:
                         r = run_tool(["fdtget", *args])
                         val = r.stdout.decode(errors="replace").strip()
-                        rep.line(5, "fdtget", r.returncode == 0 and val == want, f"{args[3]} {args[4]} = {val!r}")
+                        rep.xline(5, "fdtget", r.returncode == 0 and val == want, f"{args[3]} {args[4]} = {val!r}")
                     r = run_tool(["fdtget", "-p", str(dtbf), "/reserved-memory/bl31@40000000"])
-                    rep.line(5, "fdtget", "no-map" in r.stdout.decode(errors="replace").split(), "bl31 has no-map")
+                    rep.xline(5, "fdtget", "no-map" in r.stdout.decode(errors="replace").split(), "bl31 has no-map")
                     r = run_tool(["fdtget", "-p", str(dtbf), "/reserved-memory/linux,cma"])
                     props = r.stdout.decode(errors="replace").split()
-                    rep.line(5, "fdtget", "linux,cma-default" in props and "reusable" in props,
+                    rep.xline(5, "fdtget", "linux,cma-default" in props and "reusable" in props,
                              "linux,cma has reusable + linux,cma-default")
                 if rep.tool(5, "dtc_decompile", "dtc"):
                     r = run_tool(["dtc", "-q", "-I", "dtb", "-O", "dts", "-o", os.devnull, str(dtbf)])
-                    rep.line(5, "dtc_decompile", r.returncode == 0, f"rc={r.returncode}")
+                    rep.xline(5, "dtc_decompile", r.returncode == 0, f"rc={r.returncode}")
             else:
-                rep.line(5, "fdt_python", False, "no dtb.bin read back")
+                rep.line(5, "fdt_parse", False, "no dtb.bin read back")
             # 6 address map ------------------------------------------------------------------------------------
             if got.get("Image") and got.get("initrd.gz") and dtb:
                 for name, ok, detail in address_map(got["Image"], len(got["initrd.gz"]), len(dtb)):
@@ -1034,7 +1064,8 @@ def _verify(rep: Report, a, image: Path, ddk: Path, spl: bytes, plan: Plan | Non
     finally:
         din.close()
         dout.close()
-    if not rep.failed and plan is not None:
+    gates_ok = rep.gates() and plan is not None
+    if gates_ok:
         desc = {
             "Schema": "pocketforge.ddk-owned-spl-image/v1",
             "ImageRawSHA256": img_sha,
@@ -1056,8 +1087,8 @@ def _verify(rep: Report, a, image: Path, ddk: Path, spl: bytes, plan: Plan | Non
         print(f"DESCRIPTOR_JSON {text}")
         if a.descriptor_out:
             Path(a.descriptor_out).write_text(json.dumps(desc, sort_keys=True, indent=2) + "\n")
-    print(f"VERIFY result={'FAIL' if rep.failed or plan is None else 'PASS'}")
-    return 1 if rep.failed or plan is None else 0
+    print(f"VERIFY result={'PASS' if gates_ok else 'FAIL'}")
+    return 0 if gates_ok else 1
 
 
 def main(argv: list[str]) -> int:
