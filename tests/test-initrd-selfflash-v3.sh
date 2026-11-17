@@ -142,4 +142,40 @@ if sf_v3_stream_write; then
     fail 'unsupported pipefail negative control was accepted'
 fi
 
-printf 'SELF_FLASH_V3_INITRD_TEST result=PASS controls=positive,corrupt,truncated,short,trailing,raw-sha,write,pipefail\n'
+eval "$(declare -f sf_v3_require_pipefail_real | sed '1s/sf_v3_require_pipefail_real/sf_v3_require_pipefail/')"
+
+# Hand-off (tsp-fd3619f30f92cf9c62f5): a verified write never ends in a bare
+# warm reset, and a failed write never hands off. The full table lives in
+# tests/test-initrd-selfflash-v3-handoff.sh.
+init="$root/boards/tsp/initrd/init"
+declare -F sf_v3_handoff >/dev/null || fail 'sf_v3_handoff missing'
+v3_gate="$(sed -n '/^# BEGIN POCKETFORGE SELF-FLASH V3 GATE/,/^# END POCKETFORGE SELF-FLASH V3 GATE/p' "$init")"
+if grep -q 'reboot -f' <<<"$v3_gate"; then
+    fail 'v3 gate ends a verified write with a bare reboot -f'
+fi
+grep -q 'sf_v3_handoff 0' <<<"$v3_gate" || fail 'v3 gate does not call the hand-off'
+# A wrongly admitted hand-off must hit a recording stub, never the host.
+mkdir -p "$tmp/bin"
+for stub in reboot poweroff; do
+    printf '#!/bin/sh\necho %s >>"%s"\n' "$stub" "$tmp/handoff-calls" >"$tmp/bin/$stub"
+    chmod 0755 "$tmp/bin/$stub"
+done
+PATH="$tmp/bin:$PATH"
+SF_V3_KEXEC_BIN="$tmp/absent-kexec"
+
+reset_disk
+stage_xz "$xz_good"
+set_contract
+sf_v3_stream_write || fail 'hand-off positive write refused'
+SF_V3_STAMP_RESULT=fail
+handoff_rc=0
+sf_v3_handoff 0 2>/dev/null || handoff_rc=$?
+[[ "$handoff_rc" == 2 ]] || fail "hand-off after unstamped write rc=$handoff_rc want 2"
+expect_stream_failure handoff-corrupt "$xz_corrupt"
+SF_V3_STAMP_RESULT=pass
+handoff_rc=0
+sf_v3_handoff 1 2>/dev/null || handoff_rc=$?
+[[ "$handoff_rc" == 2 ]] || fail "hand-off after failed write rc=$handoff_rc want 2"
+[[ ! -e "$tmp/handoff-calls" ]] || fail 'unverified write reached reboot/poweroff'
+
+printf 'SELF_FLASH_V3_INITRD_TEST result=PASS controls=positive,corrupt,truncated,short,trailing,raw-sha,write,pipefail,handoff-unverified\n'

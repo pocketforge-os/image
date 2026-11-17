@@ -815,8 +815,11 @@ if [ "$PF_ROOT_MODE" != volatile ] \
             watchdog_disarm_for_selfflash
             if sf_v3_run_armed_transaction; then
                 sync
-                reboot -f
-                sf_v3_terminal_recovery "target reboot returned"
+                # Hand off without a bare warm reset (which can fall through to
+                # eMMC): kexec, else poweroff when cold wake is wired, else
+                # a forced reboot. Any return is terminal.
+                sf_v3_handoff 0
+                sf_v3_terminal_recovery "target hand-off returned (mode=$SF_V3_HANDOFF_MODE fallback=$SF_V3_HANDOFF_FALLBACK_REASON)"
             fi
             sf_v3_terminal_recovery "transaction failed"
         fi

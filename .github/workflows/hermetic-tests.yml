@@ -145,6 +145,7 @@ jobs:
             tests/test-initrd-selfflash-v2.sh
             tests/test-initrd-selfflash-v3.sh
             tests/test-initrd-selfflash-v3-killpoints.sh
+            tests/test-initrd-selfflash-v3-handoff.sh
             tests/test-initrd-selfflash-v3-arm.py
             tests/test-initrd-busybox-find.sh
             tests/test-self-flash-v3-growth.py

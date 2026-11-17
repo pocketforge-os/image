@@ -291,7 +291,7 @@ echo "=== verifying busybox provides initrd applets ==="
 BB_APPLETS="$("${STAGING}/bin/busybox" --list 2>/dev/null || true)"
 if [ -n "$BB_APPLETS" ]; then
     for ap in awk blockdev grep unxz sha256sum dd findfs head sed tr reboot mount umount sync \
-            tee wc mkfifo tar sort cmp stat readlink; do
+            tee wc mkfifo tar sort cmp stat readlink od poweroff gunzip; do
         printf '%s\n' "$BB_APPLETS" | grep -qx "$ap" \
             || { echo "FATAL: busybox lacks applet '$ap' (needed by /init)" >&2; exit 1; }
     done

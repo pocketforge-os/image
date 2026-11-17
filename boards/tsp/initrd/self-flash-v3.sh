@@ -1199,8 +1199,242 @@ sf_v3_stream_write() {
     sf_v3_stream_write_ranges
 }
 
-# The final receipt always records this literal. No v3 function reads the
-# written image back; FEL recovery retains its separate full-readback contract.
+# The final receipt always records this literal. No v3 function verifies the
+# written image by readback (the hand-off below reads only the target's GPT and
+# boot.img in order to load them); FEL recovery retains its full-readback contract.
 sf_v3_receipt_readback_field() {
     printf '%s\n' 'FullDeviceReadback=not-performed'
 }
+
+# BEGIN POCKETFORGE SELF-FLASH V3 HANDOFF
+# After a verified write the initrd must leave for the NEW target without a bare
+# warm reset: on the A133 a warm `reboot -f` can fall through to the eMMC
+# TinaLinux chain. Decision table (docs/SELF-FLASH-V3-HANDOFF.md):
+#   kexec_load available + kexec binary present -> kexec the target boot.img
+#   otherwise, cold-wake marker says wired      -> poweroff -f
+#   otherwise                                   -> reboot -f (previous behavior)
+# kexec load/exec failure is recorded and falls back to reboot -f. An absent
+# binary on a kexec-capable kernel is a typed refusal. Nothing here writes any
+# block device; target reads go only through the admitted SD fd ($SF_V3_SD_IO).
+SF_V3_KEXEC_BIN="${SF_V3_KEXEC_BIN:-/sbin/kexec}"
+SF_V3_KEXEC_LOADED_SYSFS="${SF_V3_KEXEC_LOADED_SYSFS:-/sys/kernel/kexec_loaded}"
+SF_V3_KEXEC_LOAD_DISABLED="${SF_V3_KEXEC_LOAD_DISABLED:-/proc/sys/kernel/kexec_load_disabled}"
+SF_V3_KERNEL_CONFIG_GZ="${SF_V3_KERNEL_CONFIG_GZ:-/proc/config.gz}"
+SF_V3_COLD_WAKE_MARKER="${SF_V3_COLD_WAKE_MARKER:-/etc/pocketforge-cold-wake}"
+SF_V3_TARGET_BOOT_PARTITION=boot
+SF_V3_GPT_MAX_ENTRIES=128
+
+sf_v3_handoff_emit() {
+    printf '%s\n' "$*" >&2 || :
+    return 0
+}
+
+# $1 file  $2 byte offset: unsigned little-endian 32-bit value.
+sf_v3_le_u32() {
+    sf_v3_le_value="$(od -An -tu4 -j "$2" -N 4 "$1" 2>/dev/null | tr -d ' \n')"
+    sf_v3_uint "$sf_v3_le_value" || [ "$sf_v3_le_value" = 0 ] || return 1
+    printf '%s\n' "$sf_v3_le_value"
+}
+
+sf_v3_le_u64() {
+    sf_v3_le_lo="$(sf_v3_le_u32 "$1" "$2")" || return 1
+    sf_v3_le_hi="$(sf_v3_le_u32 "$1" $(( $2 + 4 )))" || return 1
+    [ "$sf_v3_le_hi" -lt 2097152 ] || return 1
+    printf '%s\n' $(( sf_v3_le_hi * 4294967296 + sf_v3_le_lo ))
+}
+
+# $1 byte offset  $2 byte count  $3 output file: exact read from the admitted SD.
+sf_v3_handoff_read() {
+    dd if="$SF_V3_SD_IO" of="$3" bs="$SF_V3_TRANSFER_BYTES" skip="$1" count="$2" \
+        iflag=skip_bytes,count_bytes,fullblock status=none 2>/dev/null || return 1
+    [ "$(stat -c %s "$3" 2>/dev/null)" = "$2" ]
+}
+
+# The write is verified only when the transaction returned 0 AND every recorded
+# result says pass with the exact descriptor byte count and digest.
+sf_v3_handoff_verified() {
+    [ "${1:-1}" = 0 ] || return 1
+    [ "${SF_V3_XZ_RESULT:-}" = pass ] || return 1
+    [ "${SF_V3_WRITE_RESULT:-}" = pass ] || return 1
+    [ "${SF_V3_STAMP_RESULT:-}" = pass ] || return 1
+    sf_v3_sha "${SF_V3_TARGET_RAW_SHA256:-}" || return 1
+    [ "${SF_V3_RAW_STREAM_SHA256:-}" = "$SF_V3_TARGET_RAW_SHA256" ] || return 1
+    sf_v3_uint "${SF_V3_TARGET_RAW_BYTES:-}" || return 1
+    [ "${SF_V3_RAW_STREAM_BYTES:-}" = "$SF_V3_TARGET_RAW_BYTES" ] || return 1
+    [ -n "${SF_V3_SD_IO:-}" ] && [ -r "$SF_V3_SD_IO" ]
+}
+
+# Kernel capability for kexec_load(2): KEXEC_CORE sysfs present, loading not
+# disabled, and, when the kernel exposes its config, CONFIG_KEXEC=y (a
+# KEXEC_FILE-only kernel has the first two but no kexec_load).
+sf_v3_kernel_kexec_load() {
+    SF_V3_KEXEC_KERNEL_REASON=available
+    if [ ! -e "$SF_V3_KEXEC_LOADED_SYSFS" ]; then
+        SF_V3_KEXEC_KERNEL_REASON=kexec_core_absent
+        return 1
+    fi
+    sf_v3_kexec_disabled="$(cat "$SF_V3_KEXEC_LOAD_DISABLED" 2>/dev/null)" || {
+        SF_V3_KEXEC_KERNEL_REASON=kexec_load_disabled_unreadable
+        return 1
+    }
+    if [ "$sf_v3_kexec_disabled" != 0 ]; then
+        SF_V3_KEXEC_KERNEL_REASON=kexec_load_disabled
+        return 1
+    fi
+    if [ -e "$SF_V3_KERNEL_CONFIG_GZ" ]; then
+        if ! gunzip -c "$SF_V3_KERNEL_CONFIG_GZ" 2>/dev/null | grep -qx 'CONFIG_KEXEC=y'; then
+            SF_V3_KEXEC_KERNEL_REASON=kexec_load_not_configured
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# Exact two-line marker; anything else (absent, extended, symlink) is not wired.
+sf_v3_cold_wake_wired() {
+    [ -f "$SF_V3_COLD_WAKE_MARKER" ] && [ ! -L "$SF_V3_COLD_WAKE_MARKER" ] || return 1
+    [ "$(wc -l <"$SF_V3_COLD_WAKE_MARKER")" -eq 2 ] || return 1
+    [ "$(sed -n 1p "$SF_V3_COLD_WAKE_MARKER")" = 'Schema=pocketforge.cold-wake/v1' ] || return 1
+    [ "$(sed -n 2p "$SF_V3_COLD_WAKE_MARKER")" = 'ColdWake=wired' ] || return 1
+}
+
+# Side-effect-free decision. Sets SF_V3_HANDOFF_MODE (kexec|poweroff|reboot).
+sf_v3_handoff_decide() {
+    SF_V3_HANDOFF_KEXEC=unavailable
+    SF_V3_HANDOFF_COLD_WAKE=absent
+    if sf_v3_cold_wake_wired; then SF_V3_HANDOFF_COLD_WAKE=wired; fi
+    if sf_v3_kernel_kexec_load; then
+        if [ -f "$SF_V3_KEXEC_BIN" ] && [ -x "$SF_V3_KEXEC_BIN" ]; then
+            SF_V3_HANDOFF_KEXEC=available
+            SF_V3_HANDOFF_MODE=kexec
+            return 0
+        fi
+        SF_V3_HANDOFF_KEXEC=refused
+        SF_V3_KEXEC_KERNEL_REASON=kexec_binary_absent
+    fi
+    if [ "$SF_V3_HANDOFF_COLD_WAKE" = wired ]; then
+        SF_V3_HANDOFF_MODE=poweroff
+    else
+        SF_V3_HANDOFF_MODE=reboot
+    fi
+}
+
+# Extract kernel, ramdisk and cmdline of the NEW target's Android boot.img from
+# the GPT partition named "boot" that the verified write just laid down. The
+# partition must lie wholly inside the written range [0, TargetRawBytes).
+sf_v3_handoff_extract_target() {
+    SF_V3_HANDOFF_DIR="$SF_V3_WORK/handoff"
+    rm -rf "$SF_V3_HANDOFF_DIR" && mkdir -p "$SF_V3_HANDOFF_DIR" || return 1
+    sf_v3_h="$SF_V3_HANDOFF_DIR"
+    sf_v3_s="$SF_V3_LOGICAL_SECTOR_BYTES"
+    sf_v3_handoff_read "$sf_v3_s" "$sf_v3_s" "$sf_v3_h/gpt-header" || return 1
+    [ "$(head -c 8 "$sf_v3_h/gpt-header")" = 'EFI PART' ] || return 1
+    sf_v3_gpt_lba="$(sf_v3_le_u64 "$sf_v3_h/gpt-header" 72)" || return 1
+    sf_v3_gpt_n="$(sf_v3_le_u32 "$sf_v3_h/gpt-header" 80)" || return 1
+    sf_v3_gpt_esz="$(sf_v3_le_u32 "$sf_v3_h/gpt-header" 84)" || return 1
+    [ "$sf_v3_gpt_esz" = 128 ] && [ "$sf_v3_gpt_n" -ge 1 ] \
+        && [ "$sf_v3_gpt_n" -le "$SF_V3_GPT_MAX_ENTRIES" ] && [ "$sf_v3_gpt_lba" -ge 2 ] \
+        || return 1
+    sf_v3_gpt_bytes=$(( sf_v3_gpt_n * sf_v3_gpt_esz ))
+    [ $(( sf_v3_gpt_lba * sf_v3_s + sf_v3_gpt_bytes )) -le "$SF_V3_TARGET_RAW_BYTES" ] || return 1
+    sf_v3_handoff_read $(( sf_v3_gpt_lba * sf_v3_s )) "$sf_v3_gpt_bytes" \
+        "$sf_v3_h/gpt-entries" || return 1
+    sf_v3_boot_matches=0
+    sf_v3_i=0
+    while [ "$sf_v3_i" -lt "$sf_v3_gpt_n" ]; do
+        sf_v3_e=$(( sf_v3_i * sf_v3_gpt_esz ))
+        sf_v3_name="$(dd if="$sf_v3_h/gpt-entries" bs=1 skip=$(( sf_v3_e + 56 )) count=72 \
+            status=none 2>/dev/null | tr -d '\000')"
+        if [ "$sf_v3_name" = "$SF_V3_TARGET_BOOT_PARTITION" ]; then
+            sf_v3_boot_first="$(sf_v3_le_u64 "$sf_v3_h/gpt-entries" $(( sf_v3_e + 32 )))" || return 1
+            sf_v3_boot_last="$(sf_v3_le_u64 "$sf_v3_h/gpt-entries" $(( sf_v3_e + 40 )))" || return 1
+            sf_v3_boot_matches=$(( sf_v3_boot_matches + 1 ))
+        fi
+        sf_v3_i=$(( sf_v3_i + 1 ))
+    done
+    [ "$sf_v3_boot_matches" = 1 ] || return 1
+    [ "$sf_v3_boot_first" -gt "$sf_v3_gpt_lba" ] \
+        && [ "$sf_v3_boot_last" -ge "$sf_v3_boot_first" ] || return 1
+    sf_v3_boot_start=$(( sf_v3_boot_first * sf_v3_s ))
+    sf_v3_boot_bytes=$(( (sf_v3_boot_last - sf_v3_boot_first + 1) * sf_v3_s ))
+    [ $(( sf_v3_boot_start + sf_v3_boot_bytes )) -le "$SF_V3_TARGET_RAW_BYTES" ] || return 1
+
+    # Android boot image header v0 (abootimg): magic, kernel_size@8,
+    # ramdisk_size@16, second_size@24, page_size@36, cmdline[512]@64.
+    sf_v3_handoff_read "$sf_v3_boot_start" 2048 "$sf_v3_h/bootimg-header" || return 1
+    [ "$(head -c 8 "$sf_v3_h/bootimg-header")" = 'ANDROID!' ] || return 1
+    sf_v3_k_bytes="$(sf_v3_le_u32 "$sf_v3_h/bootimg-header" 8)" || return 1
+    sf_v3_r_bytes="$(sf_v3_le_u32 "$sf_v3_h/bootimg-header" 16)" || return 1
+    sf_v3_page="$(sf_v3_le_u32 "$sf_v3_h/bootimg-header" 36)" || return 1
+    case "$sf_v3_page" in 2048|4096) ;; *) return 1 ;; esac
+    sf_v3_uint "$sf_v3_k_bytes" && sf_v3_uint "$sf_v3_r_bytes" || return 1
+    sf_v3_k_off="$sf_v3_page"
+    sf_v3_r_off=$(( sf_v3_page + (sf_v3_k_bytes + sf_v3_page - 1) / sf_v3_page * sf_v3_page ))
+    [ $(( sf_v3_r_off + sf_v3_r_bytes )) -le "$sf_v3_boot_bytes" ] || return 1
+    SF_V3_HANDOFF_CMDLINE="$(dd if="$sf_v3_h/bootimg-header" bs=1 skip=64 count=512 \
+        status=none 2>/dev/null | tr '\000' '\n' | head -n 1)"
+    [ -n "$SF_V3_HANDOFF_CMDLINE" ] || return 1
+    SF_V3_HANDOFF_KERNEL="$sf_v3_h/kernel"
+    SF_V3_HANDOFF_RAMDISK="$sf_v3_h/ramdisk"
+    sf_v3_handoff_read $(( sf_v3_boot_start + sf_v3_k_off )) "$sf_v3_k_bytes" \
+        "$SF_V3_HANDOFF_KERNEL" || return 1
+    sf_v3_handoff_read $(( sf_v3_boot_start + sf_v3_r_off )) "$sf_v3_r_bytes" \
+        "$SF_V3_HANDOFF_RAMDISK" || return 1
+    # arm64 Image header magic "ARM\x64" at byte 56.
+    [ "$(dd if="$SF_V3_HANDOFF_KERNEL" bs=1 skip=56 count=4 status=none 2>/dev/null)" = ARMd ] \
+        || return 1
+}
+
+# kexec into the extracted target. The running (firmware fixed-up) FDT is
+# reused: kexec-tools defaults to /sys/firmware/fdt when no --dtb is given.
+sf_v3_handoff_kexec() {
+    if ! sf_v3_handoff_extract_target; then
+        SF_V3_HANDOFF_FALLBACK_REASON=target_boot_image_invalid
+        return 1
+    fi
+    if ! "$SF_V3_KEXEC_BIN" -l "$SF_V3_HANDOFF_KERNEL" \
+            --initrd="$SF_V3_HANDOFF_RAMDISK" \
+            --command-line="$SF_V3_HANDOFF_CMDLINE"; then
+        SF_V3_HANDOFF_FALLBACK_REASON=kexec_load_failed
+        return 1
+    fi
+    sync
+    "$SF_V3_KEXEC_BIN" -e || :
+    SF_V3_HANDOFF_FALLBACK_REASON=kexec_exec_returned
+    return 1
+}
+
+# $1: exit status of sf_v3_run_armed_transaction. Returns 2 (no action) for a
+# failed or unverified write; otherwise it acts and only returns if the final
+# reset/poweroff itself returned (status 1). The caller treats any return as
+# terminal.
+sf_v3_handoff() {
+    SF_V3_HANDOFF_MODE=none
+    SF_V3_HANDOFF_FALLBACK_REASON=none
+    if ! sf_v3_handoff_verified "${1:-1}"; then
+        sf_v3_handoff_emit 'PF_SELF_FLASH_V3_HANDOFF_REFUSED mode=any reason=write_not_verified'
+        return 2
+    fi
+    sf_v3_handoff_decide
+    if [ "$SF_V3_HANDOFF_KEXEC" = refused ]; then
+        sf_v3_handoff_emit 'PF_SELF_FLASH_V3_HANDOFF_REFUSED mode=kexec reason=kexec_binary_absent'
+    fi
+    sf_v3_handoff_emit "PF_SELF_FLASH_V3_HANDOFF decision=$SF_V3_HANDOFF_MODE kexec=$SF_V3_HANDOFF_KEXEC kexec_reason=$SF_V3_KEXEC_KERNEL_REASON cold_wake=$SF_V3_HANDOFF_COLD_WAKE"
+    sync
+    case "$SF_V3_HANDOFF_MODE" in
+        kexec)
+            sf_v3_handoff_kexec || :
+            sf_v3_handoff_emit "PF_SELF_FLASH_V3_HANDOFF_FALLBACK from=kexec to=reboot reason=$SF_V3_HANDOFF_FALLBACK_REASON"
+            sync
+            reboot -f
+            ;;
+        poweroff)
+            poweroff -f
+            ;;
+        *)
+            reboot -f
+            ;;
+    esac
+    return 1
+}
+# END POCKETFORGE SELF-FLASH V3 HANDOFF
