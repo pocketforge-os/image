@@ -1020,6 +1020,26 @@ sf_v3_clean_work() {
 # onto fd 1, and busybox sets comm to the applet name, so a dd is identified by
 # comm=dd plus the fd that resolves to the pinned card ($SF_V3_SD_IO):
 #   write: fd 1 (the sink dd)   verify: fd 0 (the stage reader)
+# That lookup only gives liveness (proc=found|noio|absent): the base kernel
+# 8c11370b has no CONFIG_TASK_IO_ACCOUNTING, so /proc/<pid>/io (rchar/wchar) is
+# absent there (proc=noio) and is only a fallback byte source (src=proc).
+#
+# Byte source (src=sysfs): the card's own block counters in
+# $SF_V3_SYS_BLOCK/<disk>/stat, <disk> being the basename of the node fd 9
+# resolves to (/dev/mmcblk0 -> mmcblk0; a partition node is looked up as
+# <sys>/*/<part>/stat). Field 7 is sectors written, field 3 sectors read, both
+# in 512-byte units whatever the device block size. Both are baselined when the
+# sampler starts, so earlier writes (receipts) and, in the write phase, earlier
+# reads never count, and the write phase counts written sectors only (the
+# per-range stage reads are field 3). Percent counts every sector written by
+# all three ranges against the whole target:
+#   percent = (sectors written since start) * 512 * 100 / SF_V3_TARGET_RAW_BYTES
+# Range 1 [chain, raw) carries 0..~(raw-chain)/raw, range 2 [spl, chain) and the
+# boot chain range 3 [0, spl), written last, carry the rest; percent is capped
+# at 99 (100 is write-end, printed only after all three ranges succeeded). The
+# counter moves at writeback completion, so it lags the dd by at most the dirty
+# page cache, which each range's conv=fsync drains.
+SF_V3_SYS_BLOCK="${SF_V3_SYS_BLOCK:-/sys/block}"
 SF_V3_PROC="${SF_V3_PROC:-/proc}"
 SF_V3_PROGRESS_INTERVAL="${SF_V3_PROGRESS_INTERVAL:-2}"
 SF_V3_PROGRESS_HEARTBEAT_MS="${SF_V3_PROGRESS_HEARTBEAT_MS:-5000}"
@@ -1069,14 +1089,58 @@ sf_v3_progress_bytes() {
     return 1
 }
 
+# $1 card node (resolved, e.g. /dev/mmcblk0): print its block stat file path.
+sf_v3_progress_stat_path() {
+    sf_v3_sn="${1##*/}"
+    case "$sf_v3_sn" in ''|.|..) return 1 ;; esac
+    if [ -r "$SF_V3_SYS_BLOCK/$sf_v3_sn/stat" ]; then
+        printf '%s\n' "$SF_V3_SYS_BLOCK/$sf_v3_sn/stat"
+        return 0
+    fi
+    for sf_v3_sp in "$SF_V3_SYS_BLOCK"/*/"$sf_v3_sn"/stat; do
+        [ -r "$sf_v3_sp" ] || continue
+        printf '%s\n' "$sf_v3_sp"
+        return 0
+    done
+    return 1
+}
+
+# $1 block stat file: set sf_v3_sr (field 3, sectors read) and sf_v3_sw
+# (field 7, sectors written); 1 if unreadable or not numeric. No fork.
+sf_v3_progress_stat_read() {
+    sf_v3_sr=
+    sf_v3_sw=
+    # shellcheck disable=SC2034  # fields 1,2,4,5,6 and the rest are skipped
+    read -r sf_v3_s1 sf_v3_s2 sf_v3_sr sf_v3_s4 sf_v3_s5 sf_v3_s6 sf_v3_sw sf_v3_s8 \
+        2>/dev/null <"$1" || return 1
+    case "$sf_v3_sr:$sf_v3_sw" in *[!0-9:]*|:*|*:) return 1 ;; esac
+}
+
+# $1 block stat file: print "sectors_read sectors_written".
+sf_v3_progress_stat() {
+    sf_v3_progress_stat_read "$1" || return 1
+    printf '%s %s\n' "$sf_v3_sr" "$sf_v3_sw"
+}
+
+# Sampler only: set sf_v3_ps_cur to the card's sectors read (verify) or
+# written (write) now; 1 if the card has no usable stat.
+sf_v3_progress_sector_now() {
+    [ -n "$sf_v3_ps_stat" ] && sf_v3_progress_stat_read "$sf_v3_ps_stat" || return 1
+    sf_v3_ps_cur="$sf_v3_sw"
+    [ "$sf_v3_ps_phase" != verify ] || sf_v3_ps_cur="$sf_v3_sr"
+}
+
 sf_v3_progress_sampler() {
     # $1 verify|write. Runs in a background subshell.
     # write: phase=write markers for 1..99 percent only, strictly increasing,
-    #        each with a DETAIL line (bytes written, elapsed).
+    #        each with a DETAIL line (bytes written, elapsed, sectors, src).
     # both:  a heartbeat DETAIL line at least every SF_V3_PROGRESS_HEARTBEAT_MS
     #        (the first on the first sample) whether or not the dd was found, so
     #        the silent verify and range 1 before its first whole percent (the
     #        sink skips BOOT_CHAIN bytes before writing any) still show liveness.
+    # bytes= is sectors*512 since the start when src=sysfs (written in the
+    # write phase, read in verify), the dd's own wchar/rchar when src=proc
+    # (per dd, so per range), else 0 (src=absent). sectors= is the sysfs count.
     sf_v3_ps_phase="$1"
     sf_v3_ps_fd=1
     sf_v3_ps_total="$SF_V3_TARGET_RAW_BYTES"
@@ -1085,6 +1149,14 @@ sf_v3_progress_sampler() {
         sf_v3_ps_total="$SF_V3_COMPRESSED_BYTES"
     fi
     sf_v3_ps_target="$(readlink -f "$SF_V3_SD_IO" 2>/dev/null)"
+    sf_v3_ps_stat=
+    [ -z "$sf_v3_ps_target" ] \
+        || sf_v3_ps_stat="$(sf_v3_progress_stat_path "$sf_v3_ps_target" 2>/dev/null)" \
+        || sf_v3_ps_stat=
+    # Baseline before the first sleep: the write phase starts before range 1's
+    # first sector (its sink first skips BOOT_CHAIN bytes of the stream).
+    sf_v3_ps_base=
+    sf_v3_progress_sector_now && sf_v3_ps_base="$sf_v3_ps_cur"
     sf_v3_ps_start="$(sf_v3_now_ms)"
     case "$sf_v3_ps_start" in ''|*[!0-9]*) sf_v3_ps_start=0 ;; esac
     sf_v3_ps_beat=$(( sf_v3_ps_start - SF_V3_PROGRESS_HEARTBEAT_MS ))
@@ -1111,8 +1183,24 @@ sf_v3_progress_sampler() {
         case "$sf_v3_ps_read:$sf_v3_ps_bytes" in
             *[!0-9:]*|:*|*:) sf_v3_ps_proc=absent; sf_v3_ps_read=0; sf_v3_ps_bytes=0 ;;
         esac
+        sf_v3_ps_src=absent
+        [ "$sf_v3_ps_proc" = found ] && sf_v3_ps_src=proc
+        sf_v3_ps_sect=0
+        if sf_v3_progress_sector_now; then
+            # A stat that was unreadable at start is baselined late (undercount).
+            [ -n "$sf_v3_ps_base" ] || sf_v3_ps_base="$sf_v3_ps_cur"
+            if [ "$sf_v3_ps_cur" -ge "$sf_v3_ps_base" ] 2>/dev/null; then
+                sf_v3_ps_src=sysfs
+                sf_v3_ps_sect=$(( sf_v3_ps_cur - sf_v3_ps_base ))
+                if [ "$sf_v3_ps_phase" = verify ]; then
+                    sf_v3_ps_read=$(( sf_v3_ps_sect * 512 ))
+                else
+                    sf_v3_ps_bytes=$(( sf_v3_ps_sect * 512 ))
+                fi
+            fi
+        fi
         sf_v3_ps_elapsed=$(( sf_v3_ps_now - sf_v3_ps_start ))
-        if [ "$sf_v3_ps_phase" = write ] && [ "$sf_v3_ps_proc" = found ]; then
+        if [ "$sf_v3_ps_phase" = write ] && [ "$sf_v3_ps_src" != absent ]; then
             sf_v3_ps_pct=$(( sf_v3_ps_bytes * 100 / SF_V3_TARGET_RAW_BYTES )) 2>/dev/null \
                 || sf_v3_ps_pct=0
             [ "$sf_v3_ps_pct" -lt 100 ] 2>/dev/null || sf_v3_ps_pct=99
@@ -1120,8 +1208,9 @@ sf_v3_progress_sampler() {
                 sf_v3_ps_last="$sf_v3_ps_pct"
                 sf_v3_ps_beat="$sf_v3_ps_now"
                 sf_v3_progress_marker write "$sf_v3_ps_pct"
-                printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=write bytes=%s total=%s elapsed_ms=%s\n' \
-                    "$sf_v3_ps_bytes" "$sf_v3_ps_total" "$sf_v3_ps_elapsed" >&2 || :
+                printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=write bytes=%s total=%s elapsed_ms=%s sectors=%s src=%s\n' \
+                    "$sf_v3_ps_bytes" "$sf_v3_ps_total" "$sf_v3_ps_elapsed" "$sf_v3_ps_sect" \
+                    "$sf_v3_ps_src" >&2 || :
                 continue
             fi
         fi
@@ -1129,12 +1218,13 @@ sf_v3_progress_sampler() {
             2>/dev/null || continue
         sf_v3_ps_beat="$sf_v3_ps_now"
         if [ "$sf_v3_ps_phase" = verify ]; then
-            printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=verify bytes=%s total=%s elapsed_ms=%s proc=%s\n' \
-                "$sf_v3_ps_read" "$sf_v3_ps_total" "$sf_v3_ps_elapsed" "$sf_v3_ps_proc" >&2 || :
+            printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=verify bytes=%s total=%s elapsed_ms=%s proc=%s sectors=%s src=%s\n' \
+                "$sf_v3_ps_read" "$sf_v3_ps_total" "$sf_v3_ps_elapsed" "$sf_v3_ps_proc" \
+                "$sf_v3_ps_sect" "$sf_v3_ps_src" >&2 || :
         else
-            printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=write bytes=%s total=%s elapsed_ms=%s read=%s proc=%s\n' \
+            printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=write bytes=%s total=%s elapsed_ms=%s read=%s proc=%s sectors=%s src=%s\n' \
                 "$sf_v3_ps_bytes" "$sf_v3_ps_total" "$sf_v3_ps_elapsed" "$sf_v3_ps_read" \
-                "$sf_v3_ps_proc" >&2 || :
+                "$sf_v3_ps_proc" "$sf_v3_ps_sect" "$sf_v3_ps_src" >&2 || :
         fi
     done
 }
