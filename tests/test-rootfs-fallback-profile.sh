@@ -183,7 +183,7 @@ for firmware in fw_xr829.bin fw_xr829_bt.bin; do
 done
 
 printf 'kernel image\n' > "${kernel_tree}/arch/arm64/boot/Image"
-printf 'CONFIG_VIDEO_SUN50I_G2D_MIX=y\n# CONFIG_KEXEC is not set\n' \
+printf 'CONFIG_KEXEC_CORE=y\nCONFIG_KEXEC=y\nCONFIG_VIDEO_SUN50I_G2D_MIX=y\n' \
     > "${kernel_tree}/.config"
 python3 "${repo_dir}/tests/helpers/make-cma-test-dtb.py" \
     --output "${kernel_tree}/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb" \

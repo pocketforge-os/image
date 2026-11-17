@@ -11,7 +11,7 @@ for input in src blobs libsdl3 wpa cloud-init runtime launcher hwprobe kernel gp
 done
 mkdir -p "${scratch}/kernel/lib/modules/fixture-release"
 printf 'module tree input\n' > "${scratch}/kernel/lib/modules/fixture-release/modules.builtin"
-printf 'CONFIG_VIDEO_SUN50I_G2D_MIX=y\n# CONFIG_KEXEC is not set\n' > "${scratch}/kernel/.config"
+printf 'CONFIG_KEXEC_CORE=y\nCONFIG_KEXEC=y\nCONFIG_VIDEO_SUN50I_G2D_MIX=y\n' > "${scratch}/kernel/.config"
 cp "${scratch}/kernel/payload" "${scratch}/kernel-payload.original"
 cp "${scratch}/hwprobe/payload" "${scratch}/hwprobe-payload.original"
 cp "${repo_dir}/scripts/generate-build-id.sh" "${scratch}/src/generate-build-id.sh"
@@ -186,7 +186,7 @@ run_kexec_contract
 }
 
 cp "${scratch}/kernel/.config" "${scratch}/baseline.config"
-printf 'CONFIG_KEXEC_CORE=y\nCONFIG_KEXEC=y\n' > "${scratch}/kernel/.config"
+printf 'CONFIG_KEXEC_CORE=y\nCONFIG_KEXEC=y\nCONFIG_VIDEO_SUN50I_G2D_MIX=y\n# canary\n' > "${scratch}/kernel/.config"
 PF_KERNEL_REPO=kernel-sunxi-7.x \
 PF_KERNEL_DEFCONFIG=a133_kexec_canary.config \
 EXPECT_KERNEL_CONFIG="${scratch}/kernel/.config" \

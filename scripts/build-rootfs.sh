@@ -2256,9 +2256,10 @@ if is_a133_open_7x_gpu_device "${PF_DEVICE_ID}"; then
     python3 "${SRC_DIR}/scripts/verify-app-platform-runtime.py" "${ROOTFS_EXTRACTED}"
 fi
 
-# The OTA SD re-entry canary invokes the classic loader directly. Gate the
-# exact 7.x A133 build before ext4 assembly on the loader plus one of the two
-# deliberate resolved modes: shipping G2D baseline or G2D-free kexec canary.
+# OTA SD re-entry invokes the classic loader directly. Gate the exact 7.x
+# A133 build before ext4 assembly on the loader plus one of the two deliberate
+# modes (shipping a133_defconfig baseline or a133_kexec_canary.config canary);
+# since kernel-sunxi-7.x#185 both resolve classic kexec WITH G2D MIX built in.
 if [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ]; then
     case "${PF_KERNEL_DEFCONFIG}" in
         a133_kexec_canary.config) kexec_mode=canary ;;

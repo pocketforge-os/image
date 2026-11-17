@@ -1,16 +1,19 @@
 #!/bin/sh
-# Verify the common kexec loader and the resolved 7.x A133 kernel mode.  The
-# normal image must retain the G2D power-removal diagnostic with classic kexec
-# off; the bounded canary mode must expose kexec_load(2) with G2D absent.
+# Verify the common kexec loader and the resolved 7.x A133 kernel config.
+# Since kernel-sunxi-7.x#185 both deliberate modes -- the shipping
+# a133_defconfig baseline and the a133_kexec_canary.config canary -- resolve
+# classic kexec_load(2) (CONFIG_KEXEC + CONFIG_KEXEC_CORE) WITH G2D MIX built
+# in: the MIX driver's .shutdown quiesces the mixer before machine_kexec().
+# The config no longer distinguishes the modes, so the caller names one.
 set -eu
 
-rootfs="${1:?usage: verify-rootfs-kexec.sh ROOTFS KERNEL_CONFIG [auto|baseline|canary]}"
-kernel_config="${2:?usage: verify-rootfs-kexec.sh ROOTFS KERNEL_CONFIG [auto|baseline|canary]}"
-expected_mode="${3:-auto}"
+rootfs="${1:?usage: verify-rootfs-kexec.sh ROOTFS KERNEL_CONFIG baseline|canary}"
+kernel_config="${2:?usage: verify-rootfs-kexec.sh ROOTFS KERNEL_CONFIG baseline|canary}"
+expected_mode="${3:?usage: verify-rootfs-kexec.sh ROOTFS KERNEL_CONFIG baseline|canary}"
 loader="${rootfs}/usr/sbin/kexec"
 
 case "$expected_mode" in
-	auto|baseline|canary) ;;
+	baseline|canary) ;;
 	*) echo "FATAL: kexec rootfs verification: invalid expected mode: ${expected_mode}" >&2; exit 2 ;;
 esac
 
@@ -46,31 +49,11 @@ g2d_count=$(count_enabled VIDEO_SUN50I_G2D_MIX)
 [ "$g2d_count" -le 1 ] \
 	|| { echo "FATAL: kexec rootfs verification: CONFIG_VIDEO_SUN50I_G2D_MIX=y appears ${g2d_count} times" >&2; exit 1; }
 
-if [ "$kexec_count" -eq 1 ]; then
-	[ "$core_count" -eq 1 ] || {
-		echo 'FATAL: kexec rootfs verification: canary config requires CONFIG_KEXEC_CORE=y exactly once' >&2
+for symbol in KEXEC KEXEC_CORE VIDEO_SUN50I_G2D_MIX; do
+	[ "$(count_enabled "$symbol")" -eq 1 ] || {
+		echo "FATAL: kexec rootfs verification: ${expected_mode} config requires CONFIG_${symbol}=y exactly once" >&2
 		exit 1
 	}
-	[ "$g2d_count" -eq 0 ] || {
-		echo 'FATAL: kexec rootfs verification: canary config must not enable CONFIG_VIDEO_SUN50I_G2D_MIX' >&2
-		exit 1
-	}
-	actual_mode=canary
-else
-	[ "$g2d_count" -eq 1 ] || {
-		echo 'FATAL: kexec rootfs verification: baseline config requires CONFIG_VIDEO_SUN50I_G2D_MIX=y exactly once' >&2
-		exit 1
-	}
-	actual_mode=baseline
-fi
+done
 
-if [ "$expected_mode" != auto ] && [ "$actual_mode" != "$expected_mode" ]; then
-	echo "FATAL: kexec rootfs verification: expected ${expected_mode} config, resolved ${actual_mode}" >&2
-	exit 1
-fi
-
-if [ "$actual_mode" = canary ]; then
-	echo 'rootfs-kexec=PASS mode=canary loader=/usr/sbin/kexec api=kexec_load g2d=disabled'
-else
-	echo 'rootfs-kexec=PASS mode=baseline loader=/usr/sbin/kexec api=unavailable g2d=enabled'
-fi
+echo "rootfs-kexec=PASS mode=${expected_mode} loader=/usr/sbin/kexec api=kexec_load g2d=enabled"
