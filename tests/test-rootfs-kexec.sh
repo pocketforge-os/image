@@ -120,6 +120,33 @@ for mode in baseline canary; do
 		"$verifier" "$work/rootfs" "$work/kernel.config" "$mode"
 done
 
+# One run reports every miss: three missing items -> three MISSING lines, one
+# summary, non-zero exit.  A single miss still fails; a complete fixture passes.
+printf 'CONFIG_KEXEC_CORE=y\n' >"$work/kernel.config"
+chmod 0644 "$work/rootfs/usr/sbin/kexec"
+set +e
+multi=$("$verifier" "$work/rootfs" "$work/kernel.config" baseline 2>&1)
+rc=$?
+set -e
+chmod 0755 "$work/rootfs/usr/sbin/kexec"
+[ "$rc" -ne 0 ] || fail 'multi-miss fixture unexpectedly passed'
+for item in loader CONFIG_KEXEC CONFIG_VIDEO_SUN50I_G2D_MIX; do
+	grep -q "^MISSING item=${item} " <<<"$multi" || fail "multi-miss: no MISSING line for ${item}: ${multi}"
+done
+[ "$(grep -c '^MISSING ' <<<"$multi")" = 3 ] || fail "multi-miss: expected exactly 3 MISSING lines: ${multi}"
+grep -Fxq 'rootfs-kexec=FAIL mode=baseline missing=3' <<<"$multi" || fail "multi-miss: bad summary: ${multi}"
+
+printf 'CONFIG_KEXEC_CORE=y\nCONFIG_KEXEC=y\n' >"$work/kernel.config"
+set +e
+single=$("$verifier" "$work/rootfs" "$work/kernel.config" canary 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail 'single-miss fixture unexpectedly passed'
+[ "$(grep -c '^MISSING ' <<<"$single")" = 1 ] || fail "single-miss: expected 1 MISSING line: ${single}"
+grep -Fxq 'rootfs-kexec=FAIL mode=canary missing=1' <<<"$single" || fail "single-miss: bad summary: ${single}"
+write_valid_config
+"$verifier" "$work/rootfs" "$work/kernel.config" canary >/dev/null || fail 'complete fixture rejected after multi-miss checks'
+
 # Optional: a real resolved .config (e.g. from kernel b0d35624 a133_defconfig)
 # must pass both modes.
 if [ -n "${PF_ROOTFS_KEXEC_REAL_CONFIG:-}" ]; then

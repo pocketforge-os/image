@@ -17,43 +17,45 @@ case "$expected_mode" in
 	*) echo "FATAL: kexec rootfs verification: invalid expected mode: ${expected_mode}" >&2; exit 2 ;;
 esac
 
-[ -d "$rootfs" ] || {
-	echo "FATAL: kexec rootfs verification: rootfs is not a directory: ${rootfs}" >&2
-	exit 1
+# Every check runs and every miss is reported in one pass (one MISSING line
+# per item plus a summary), so a single CI build exposes all of them.
+# Output (stderr, one record per line):
+#   MISSING item=<id> detail=<text>
+#   rootfs-kexec=FAIL mode=<mode> missing=<N>
+missing=0
+miss() {
+	missing=$((missing + 1))
+	echo "MISSING item=$1 detail=kexec rootfs verification: $2" >&2
 }
-if [ ! -f "$loader" ] || [ -L "$loader" ]; then
-	echo 'FATAL: kexec rootfs verification: /usr/sbin/kexec is missing or not a regular file' >&2
-	exit 1
-fi
-[ -x "$loader" ] || {
-	echo 'FATAL: kexec rootfs verification: /usr/sbin/kexec is not executable' >&2
-	exit 1
-}
-if [ ! -f "$kernel_config" ] || [ -L "$kernel_config" ]; then
-	echo "FATAL: kexec rootfs verification: packaged kernel config is missing or not a regular file: ${kernel_config}" >&2
-	exit 1
-fi
-
-count_enabled() {
-	grep -cx "CONFIG_$1=y" "$kernel_config" || true
-}
-
-kexec_count=$(count_enabled KEXEC)
-core_count=$(count_enabled KEXEC_CORE)
-g2d_count=$(count_enabled VIDEO_SUN50I_G2D_MIX)
-
-[ "$kexec_count" -le 1 ] \
-	|| { echo "FATAL: kexec rootfs verification: CONFIG_KEXEC=y appears ${kexec_count} times" >&2; exit 1; }
-[ "$core_count" -le 1 ] \
-	|| { echo "FATAL: kexec rootfs verification: CONFIG_KEXEC_CORE=y appears ${core_count} times" >&2; exit 1; }
-[ "$g2d_count" -le 1 ] \
-	|| { echo "FATAL: kexec rootfs verification: CONFIG_VIDEO_SUN50I_G2D_MIX=y appears ${g2d_count} times" >&2; exit 1; }
-
-for symbol in KEXEC KEXEC_CORE VIDEO_SUN50I_G2D_MIX; do
-	[ "$(count_enabled "$symbol")" -eq 1 ] || {
-		echo "FATAL: kexec rootfs verification: ${expected_mode} config requires CONFIG_${symbol}=y exactly once" >&2
+finish() {
+	if [ "$missing" -gt 0 ]; then
+		echo "rootfs-kexec=FAIL mode=${expected_mode} missing=${missing}" >&2
 		exit 1
-	}
-done
+	fi
+}
 
+if [ ! -d "$rootfs" ]; then
+	miss rootfs "rootfs is not a directory: ${rootfs}"
+	finish
+fi
+if [ ! -f "$loader" ] || [ -L "$loader" ]; then
+	miss loader '/usr/sbin/kexec is missing or not a regular file'
+elif [ ! -x "$loader" ]; then
+	miss loader '/usr/sbin/kexec is not executable'
+fi
+
+if [ ! -f "$kernel_config" ] || [ -L "$kernel_config" ]; then
+	miss kernel-config "packaged kernel config is missing or not a regular file: ${kernel_config}"
+else
+	for symbol in KEXEC KEXEC_CORE VIDEO_SUN50I_G2D_MIX; do
+		n=$(grep -cx "CONFIG_${symbol}=y" "$kernel_config" || true)
+		if [ "$n" -gt 1 ]; then
+			miss "CONFIG_${symbol}" "CONFIG_${symbol}=y appears ${n} times"
+		elif [ "$n" -ne 1 ]; then
+			miss "CONFIG_${symbol}" "${expected_mode} config requires CONFIG_${symbol}=y exactly once"
+		fi
+	done
+fi
+
+finish
 echo "rootfs-kexec=PASS mode=${expected_mode} loader=/usr/sbin/kexec api=kexec_load g2d=enabled"
