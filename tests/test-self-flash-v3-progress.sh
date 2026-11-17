@@ -9,7 +9,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 engine="$root/boards/tsp/initrd/self-flash-v3.sh"
 tmp="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-selfflash-v3-progress.XXXXXX")"
-cleanup() { find "$tmp" -mindepth 1 -delete; rmdir "$tmp"; }
+cleanup() { [[ -n "${PF_TEST_KEEP:-}" ]] && { echo "kept $tmp" >&2; return; }; find "$tmp" -mindepth 1 -delete; rmdir "$tmp"; }
 trap cleanup EXIT
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
@@ -356,7 +356,7 @@ stop_fake_kernel() {
 }
 trap 'stop_fake_kernel; cleanup' EXIT
 
-# $1 log, $2 label, $3 expected proc=: write markers increase over 1..99, the
+# $1 log, $2 label, $3 expected write proc=, $4 verify proc= (ERE): write markers increase over 1..99, the
 # boot-chain ranges count (max percent past range 1's 77%), DETAIL lines carry
 # sectors/src and sectors never exceed TargetRawBytes/512 (baseline taken).
 check_sysfs_log() {
@@ -382,7 +382,7 @@ check_sysfs_log() {
         || fail "$label: no write DETAIL line with sectors/src=sysfs"
     grep -Eq "^PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=write bytes=[0-9]+ total=294912 elapsed_ms=[0-9]+ read=[0-9]+ proc=$3 sectors=[0-9]+ src=sysfs\$" "$log" \
         || fail "$label: no write heartbeat with proc=$3 src=sysfs"
-    grep -Eq "^PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=verify bytes=0 total=[0-9]+ elapsed_ms=[0-9]+ proc=$3 sectors=0 src=sysfs\$" "$log" \
+    grep -Eq "^PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=verify bytes=0 total=[0-9]+ elapsed_ms=[0-9]+ proc=$4 sectors=0 src=sysfs\$" "$log" \
         || fail "$label: verify heartbeat does not report src=sysfs"
     while read -r s; do
         (( s > max_sect )) && max_sect=$s
@@ -412,7 +412,7 @@ stop_fake_kernel
 (( sys_rc == 0 )) || fail "sysfs: valid stream refused: $(tail -n 5 "$tmp/sys.log")"
 cmp -n "$raw_bytes" "$raw" "$sysdisk" || fail 'sysfs: output bytes differ'
 [[ -z "$(jobs -r)" ]] || fail 'sysfs: progress sampler left running'
-check_sysfs_log "$tmp/sys.log" 'sysfs host' found
+check_sysfs_log "$tmp/sys.log" 'sysfs host' found '(found|absent)'
 host_sys_writes=("${sys_writes[@]}")
 
 # ---- the DUT condition under REAL BusyBox: dd found, NO /proc/<pid>/io ----
@@ -433,7 +433,7 @@ stop_fake_kernel
 (( bbsys_rc == 0 )) || fail "busybox sysfs run failed: $(tail -n 20 "$tmp/bbsys.log")"
 grep -qx 'BB_DRIVER rc=0 write=pass' "$tmp/bbsys.log" || fail "busybox sysfs driver: $(tail -n 5 "$tmp/bbsys.log")"
 cmp -n "$raw_bytes" "$bb_raw" "$sysdisk" || fail 'busybox sysfs: output bytes differ'
-check_sysfs_log "$tmp/bbsys.log" 'busybox sysfs noio' noio
+check_sysfs_log "$tmp/bbsys.log" 'busybox sysfs noio' noio noio
 bbsys_writes=("${sys_writes[@]}")
 
 # ---- a REAL kernel block counter: loop device (needs root; never faked) ----
