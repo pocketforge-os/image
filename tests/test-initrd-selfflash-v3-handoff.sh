@@ -14,7 +14,7 @@
 #   failed or unverified write                          | no hand-off at all
 #
 # Every case runs against a file-backed card; the hand-off may only ever read it.
-# shellcheck disable=SC2034  # SF_V3_* are consumed by the sourced engine
+# shellcheck disable=SC2034,SC2016  # SF_V3_* feed the sourced engine; literal greps
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
