@@ -52,8 +52,11 @@ exactly as verified; nothing is persisted to the SD.
   `KEXEC_FILE`-only kernel). Without `/proc/config.gz` a `KEXEC_FILE`-only kernel
   fails at `kexec -l` (ENOSYS) and takes the recorded reboot fallback.
 - **kexec binary**: regular executable file at `/sbin/kexec`. BusyBox has no
-  kexec applet, and the initrd does not stage kexec-tools yet, so every initrd
-  built today takes the typed refusal on a kexec-capable kernel.
+  kexec applet. Every `--variant dev` initrd gets a static AArch64 kexec-tools
+  2.0.32 build at this path (see "Static kexec" below). Release initrds do not
+  carry it and do not carry the self-flash engine. Only a dev initrd built
+  before tsp-624ea955036f01d58629 takes the `kexec_binary_absent` refusal on a
+  kexec-capable kernel.
 - **Cold-wake marker**: `/etc/pocketforge-cold-wake` in the initrd, a regular
   file (not a symlink) with exactly these two lines:
 
@@ -86,22 +89,61 @@ used; if a target needs a different DTB, use the cold or reboot path until that
 is supported. GPT CRCs are not checked; the whole written range was already
 checked against `TargetRawSHA256`.
 
+## Static kexec
+
+Bead `tsp-624ea955036f01d58629`. `boards/tsp/initrd/build-kexec-static.sh`
+builds kexec-tools from the upstream release tarball, which is committed byte
+for byte in `third_party/kexec-tools/` together with its kernel.org signature.
+`third_party/kexec-tools/SOURCE.md` has the provenance, signing key and flags.
+The build runs in the pinned build container with no network and links
+statically against glibc 2.33. The builder refuses to continue if either pin
+does not match:
+
+| Pin | SHA-256 |
+|---|---|
+| source `kexec-tools-2.0.32.tar.xz` | `8f81422a5fd2362cf6cb001b511e535565ed0f32c2f4451fb5eb68fed6710a5d` |
+| `/sbin/kexec` (742248 bytes, stripped) | `09b191b07a4d24e7ccf3546199b68368cf02931706db67b3305662c00fd098c2` |
+
+`build-initrd.sh` stages it only inside the dev-only self-flash block. With
+`PF_TEST_BUILD_CONTAINER=<container.pin image>`,
+`tests/test-initrd-selfflash-v3-handoff.sh` builds the dev initrd twice in the
+container. It checks that the two builds are byte-identical and that the packed
+`/sbin/kexec` is a regular 0755 static AArch64 file with the pinned digest.
+
+The kernel side, `CONFIG_KEXEC=y` with G2D kept, is kernel#185. On a kernel
+that lacks it, the table's `unavailable` rows still apply.
+
 ## Contract and digest effect
 
-- `docs/SELF-FLASH-V3.md` is **unchanged**, so `ContractSHA256` (the digest in
-  `/etc/pocketforge-selfflash-v3` and in the runner's request) stays
-  `6e87faeeda40125128e6a182918a89a1beea38a6a9942c2b9c43a194e126908e`. Its
-  "reboots into the target" step is carried out through the table above.
-- The initrd digest **changes**: `/init` and `/lib/pocketforge-self-flash-v3.sh`
-  are new bytes. Any pinned initrd or `boot.img` hash for a dev image must be
-  re-taken from a container build of this change.
-- `build-initrd.sh` now also requires the `od`, `poweroff` and `gunzip` BusyBox
-  applets. The staged files are otherwise unchanged.
+- `docs/SELF-FLASH-V3.md` is **unchanged** by both image#407 and this change.
+  `ContractSHA256` therefore stays
+  `6e87faeeda40125128e6a182918a89a1beea38a6a9942c2b9c43a194e126908e`. That is
+  the digest in `/etc/pocketforge-selfflash-v3`, in the normal-root marker and
+  in the runner's request. A base and a target built from this change carry
+  the same contract. A base built before it also carries the same contract,
+  but its initrd has no kexec. The hand-off runs in the **base** initrd, so it
+  can kexec only when the base itself was built with this change.
+- **InitrdSHA256 changes for dev images only.** The dev initrd gains
+  `/sbin/kexec` (plus 361 KB compressed in the 7.x open fixture below). Every
+  base descriptor `InitrdSHA256`, and every pinned dev `initrd.gz` or
+  `boot.img` hash, must be re-taken from a container build of this change. The
+  value is the effective `/boot/initrd.gz` of that image. It depends on the
+  kernel, the modules and `SOURCE_DATE_EPOCH`, so the repo pins no single
+  value. Release initrds are byte-identical to before.
+- Reference fixture: the 7.x open model (`--gpu-model open --gpu-km-model
+  in-tree-7.x --kernel-required-modules powervr`, empty `modules.builtin`)
+  built with `SOURCE_DATE_EPOCH=1790605388`. Results:
+  - dev initrd: `5396fe7162f8c27a122fb740969df26a6e17d9f6e189be00430b5f45f69107b3` (1014504 B) before, now
+    `f92adca2083c52bfa7393101ac48bc1916b38dccf845a222c4364934f97758ee`
+    (1375746 B);
+  - release initrd: unchanged at
+    `2f7b1a81ca6a405acbb2f01ba7742c51235de55ab632500aad4808a306bc4a90`.
+- image#407 made `build-initrd.sh` also require the `od`, `poweroff` and
+  `gunzip` BusyBox applets.
 
 ## Follow-ups (not in this change)
 
-- Stage a static arm64 `kexec` in the dev initrd (it belongs in the build
-  container; it is not hand-built here). The kernel side is
-  `tsp-76dbc3f58842be997200` (kexec on the default kernel).
 - A producer for `/etc/pocketforge-cold-wake` once a kit lane proves cold wake
   is wired (automation#2489 activation modes).
+- A device lane that proves `kexec -l`/`-e` on kernel#185 lands in the target
+  (no device action was taken here).

@@ -8,6 +8,8 @@
 #   /lib/modules/*.ko             (PowerVR set from blobs/tsp/kernel-4.9.191)
 #   /etc/pocketforge-initrd-version
 #   /etc/pocketforge-m1b-mode     (ONLY when --m1b-mode)
+#   /sbin/kexec                   (ONLY for --variant dev: static kexec-tools,
+#                                  pinned source, build-kexec-static.sh)
 #   /lib/pocketforge-first-frame/ (ONLY for a DRM-fbdev display; see below)
 #
 # Run INSIDE the pocketforge/build container (needs busybox-static:arm64 from
@@ -437,6 +439,10 @@ EOF
     grep -Fq "SF_V3_EXPECTED_CONTRACT_SHA256=\"\${SF_V3_EXPECTED_CONTRACT_SHA256:-${SELF_FLASH_V3_CONTRACT_SHA}}\"" \
         "${STAGING}/lib/pocketforge-self-flash-v3.sh" \
         || { echo "FATAL: self-flash v3 contract substitution failed" >&2; exit 1; }
+    # Static kexec for the v3 post-write hand-off (tsp-624ea955036f01d58629):
+    # built from the committed, pinned kexec-tools source; see
+    # third_party/kexec-tools/SOURCE.md and docs/SELF-FLASH-V3-HANDOFF.md.
+    bash "${INITRD_SRC}/build-kexec-static.sh" --src "${SRC_DIR}" --out "${STAGING}/sbin/kexec"
     chmod 0644 "${STAGING}/etc/pocketforge-selfflash"
     chmod 0644 "${STAGING}/etc/pocketforge-selfflash-v2"
     chmod 0644 "${STAGING}/etc/pocketforge-selfflash-v3"
