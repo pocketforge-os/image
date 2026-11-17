@@ -1008,10 +1008,21 @@ sf_v3_clean_work() {
 # scripts/lib/pf_self_flash_v3_live.py:_PROGRESS and must fullmatch:
 #   PF_SELF_FLASH_V3_PROGRESS phase=(start|write|write-end|stamp) percent=N
 # so bytes/elapsed ride on a separate PF_SELF_FLASH_V3_PROGRESS_DETAIL line.
+# Only the grammar line is runner progress; DETAIL lines (including the verify
+# and write heartbeats) are operator/log evidence and never fullmatch it.
 # Every helper here returns 0 and swallows errors: progress can never fail or
 # block the write. Only busybox applets already required by the initrd are used.
+#
+# Finding the dd: the initrd shell is busybox ash with standalone applets, so dd
+# is forked WITHOUT exec (a NOEXEC applet). Its /proc/<pid>/cmdline is the
+# shell's argv ("/bin/busybox sh /init"), never "dd ... of=...", so a command
+# line match can never see it. busybox (and GNU) dd move if= onto fd 0 and of=
+# onto fd 1, and busybox sets comm to the applet name, so a dd is identified by
+# comm=dd plus the fd that resolves to the pinned card ($SF_V3_SD_IO):
+#   write: fd 1 (the sink dd)   verify: fd 0 (the stage reader)
 SF_V3_PROC="${SF_V3_PROC:-/proc}"
 SF_V3_PROGRESS_INTERVAL="${SF_V3_PROGRESS_INTERVAL:-2}"
+SF_V3_PROGRESS_HEARTBEAT_MS="${SF_V3_PROGRESS_HEARTBEAT_MS:-5000}"
 
 sf_v3_progress_marker() {
     # $1 phase  $2 percent
@@ -1019,53 +1030,121 @@ sf_v3_progress_marker() {
     return 0
 }
 
-# Find the sink dd by its of= argument and print its cumulative write(2) bytes.
-sf_v3_progress_bytes() {
-    # Fast path: the sink pid found on an earlier sample.
-    if [ -n "$sf_v3_pp_cached" ]; then
-        sf_v3_pw="$(sed -n 's/^wchar: *//p' "$sf_v3_pp_cached/io" 2>/dev/null)"
-        case "$sf_v3_pw" in
-            ''|*[!0-9]*) sf_v3_pp_cached= ;;
-            *) printf '%s\n' "$sf_v3_pw"; return 0 ;;
+# $1 pid dir, $2 fd: print "rchar wchar" if $1 is a dd whose fd $2 is the card.
+# Returns 1 if it is not that dd, 2 if it is but /proc/<pid>/io is unavailable
+# (a kernel without CONFIG_TASK_IO_ACCOUNTING has no such file).
+sf_v3_progress_io() {
+    read -r sf_v3_pc 2>/dev/null <"$1/comm" || return 1
+    [ "$sf_v3_pc" = dd ] || return 1
+    [ "$(readlink -f "$1/fd/$2" 2>/dev/null)" = "$sf_v3_ps_target" ] || return 1
+    sf_v3_pr=
+    sf_v3_pw=
+    while read -r sf_v3_pk sf_v3_pv; do
+        case "$sf_v3_pk" in
+            rchar:) sf_v3_pr="$sf_v3_pv" ;;
+            wchar:) sf_v3_pw="$sf_v3_pv" ;;
         esac
+    done 2>/dev/null <"$1/io" || return 2
+    case "$sf_v3_pr:$sf_v3_pw" in *[!0-9:]*|:*|*:) return 2 ;; esac
+    printf '%s %s\n' "$sf_v3_pr" "$sf_v3_pw"
+}
+
+# $1 fd: print "rchar wchar" of the dd holding the card on fd $1.
+# Returns as sf_v3_progress_io (1 also when no such dd exists).
+sf_v3_progress_bytes() {
+    [ -n "$sf_v3_ps_target" ] || return 1
+    # Fast path: the dd found on an earlier sample (revalidated: pids recycle).
+    if [ -n "$sf_v3_pp_cached" ]; then
+        sf_v3_progress_io "$sf_v3_pp_cached" "$1" && sf_v3_pb_rc=0 || sf_v3_pb_rc=$?
+        [ "$sf_v3_pb_rc" -eq 1 ] || return "$sf_v3_pb_rc"
+        sf_v3_pp_cached=
     fi
     for sf_v3_pp in "$SF_V3_PROC"/[0-9]*; do
-        [ -r "$sf_v3_pp/cmdline" ] || continue
-        case "$(tr '\000' ' ' <"$sf_v3_pp/cmdline" 2>/dev/null)" in
-            *"dd "*"of=$SF_V3_SD_IO "*) ;;
-            *) continue ;;
-        esac
-        sf_v3_pw="$(sed -n 's/^wchar: *//p' "$sf_v3_pp/io" 2>/dev/null)"
-        case "$sf_v3_pw" in ''|*[!0-9]*) continue ;; esac
+        [ -e "$sf_v3_pp/fd/$1" ] || continue
+        sf_v3_progress_io "$sf_v3_pp" "$1" && sf_v3_pb_rc=0 || sf_v3_pb_rc=$?
+        [ "$sf_v3_pb_rc" -ne 1 ] || continue
         sf_v3_pp_cached="$sf_v3_pp"
-        printf '%s\n' "$sf_v3_pw"
-        return 0
+        return "$sf_v3_pb_rc"
     done
     return 1
 }
 
 sf_v3_progress_sampler() {
-    # Runs in a background subshell. Emits phase=write for 1..99 percent only,
-    # strictly increasing, plus a DETAIL line with bytes written and elapsed.
+    # $1 verify|write. Runs in a background subshell.
+    # write: phase=write markers for 1..99 percent only, strictly increasing,
+    #        each with a DETAIL line (bytes written, elapsed).
+    # both:  a heartbeat DETAIL line at least every SF_V3_PROGRESS_HEARTBEAT_MS
+    #        (the first on the first sample) whether or not the dd was found, so
+    #        the silent verify and range 1 before its first whole percent (the
+    #        sink skips BOOT_CHAIN bytes before writing any) still show liveness.
+    sf_v3_ps_phase="$1"
+    sf_v3_ps_fd=1
+    sf_v3_ps_total="$SF_V3_TARGET_RAW_BYTES"
+    if [ "$sf_v3_ps_phase" = verify ]; then
+        sf_v3_ps_fd=0
+        sf_v3_ps_total="$SF_V3_COMPRESSED_BYTES"
+    fi
+    sf_v3_ps_target="$(readlink -f "$SF_V3_SD_IO" 2>/dev/null)"
     sf_v3_ps_start="$(sf_v3_now_ms)"
+    case "$sf_v3_ps_start" in ''|*[!0-9]*) sf_v3_ps_start=0 ;; esac
+    sf_v3_ps_beat=$(( sf_v3_ps_start - SF_V3_PROGRESS_HEARTBEAT_MS ))
     sf_v3_ps_last=0
     sf_v3_pp_cached=
-    sf_v3_ps_tmp="$SF_V3_WORK/progress.sample"
+    sf_v3_ps_tmp="$SF_V3_WORK/progress-$sf_v3_ps_phase.sample"
     while :; do
         sleep "$SF_V3_PROGRESS_INTERVAL" 2>/dev/null || sleep 1
-        sf_v3_progress_bytes >"$sf_v3_ps_tmp" 2>/dev/null || continue
-        read -r sf_v3_ps_bytes <"$sf_v3_ps_tmp" || continue
-        sf_v3_ps_pct=$(( sf_v3_ps_bytes * 100 / SF_V3_TARGET_RAW_BYTES )) 2>/dev/null || continue
-        [ "$sf_v3_ps_pct" -gt "$sf_v3_ps_last" ] || continue
-        [ "$sf_v3_ps_pct" -lt 100 ] || sf_v3_ps_pct=99
-        [ "$sf_v3_ps_pct" -gt "$sf_v3_ps_last" ] || continue
-        sf_v3_ps_last="$sf_v3_ps_pct"
         sf_v3_ps_now="$(sf_v3_now_ms)"
-        sf_v3_progress_marker write "$sf_v3_ps_pct"
-        printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=write bytes=%s total=%s elapsed_ms=%s\n' \
-            "$sf_v3_ps_bytes" "$SF_V3_TARGET_RAW_BYTES" \
-            "$(( sf_v3_ps_now - sf_v3_ps_start ))" >&2 || :
+        case "$sf_v3_ps_now" in ''|*[!0-9]*) sf_v3_ps_now="$sf_v3_ps_start" ;; esac
+        sf_v3_ps_proc=absent
+        sf_v3_ps_read=0
+        sf_v3_ps_bytes=0
+        if sf_v3_progress_bytes "$sf_v3_ps_fd" >"$sf_v3_ps_tmp" 2>/dev/null; then
+            sf_v3_ps_rc=0
+        else
+            sf_v3_ps_rc=$?
+        fi
+        case "$sf_v3_ps_rc" in
+            0) read -r sf_v3_ps_read sf_v3_ps_bytes 2>/dev/null <"$sf_v3_ps_tmp" \
+                   && sf_v3_ps_proc=found ;;
+            2) sf_v3_ps_proc=noio ;;
+        esac
+        case "$sf_v3_ps_read:$sf_v3_ps_bytes" in
+            *[!0-9:]*|:*|*:) sf_v3_ps_proc=absent; sf_v3_ps_read=0; sf_v3_ps_bytes=0 ;;
+        esac
+        sf_v3_ps_elapsed=$(( sf_v3_ps_now - sf_v3_ps_start ))
+        if [ "$sf_v3_ps_phase" = write ] && [ "$sf_v3_ps_proc" = found ]; then
+            sf_v3_ps_pct=$(( sf_v3_ps_bytes * 100 / SF_V3_TARGET_RAW_BYTES )) 2>/dev/null \
+                || sf_v3_ps_pct=0
+            [ "$sf_v3_ps_pct" -lt 100 ] 2>/dev/null || sf_v3_ps_pct=99
+            if [ "$sf_v3_ps_pct" -gt "$sf_v3_ps_last" ] 2>/dev/null; then
+                sf_v3_ps_last="$sf_v3_ps_pct"
+                sf_v3_ps_beat="$sf_v3_ps_now"
+                sf_v3_progress_marker write "$sf_v3_ps_pct"
+                printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=write bytes=%s total=%s elapsed_ms=%s\n' \
+                    "$sf_v3_ps_bytes" "$sf_v3_ps_total" "$sf_v3_ps_elapsed" >&2 || :
+                continue
+            fi
+        fi
+        [ $(( sf_v3_ps_now - sf_v3_ps_beat )) -ge "$SF_V3_PROGRESS_HEARTBEAT_MS" ] \
+            2>/dev/null || continue
+        sf_v3_ps_beat="$sf_v3_ps_now"
+        if [ "$sf_v3_ps_phase" = verify ]; then
+            printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=verify bytes=%s total=%s elapsed_ms=%s proc=%s\n' \
+                "$sf_v3_ps_read" "$sf_v3_ps_total" "$sf_v3_ps_elapsed" "$sf_v3_ps_proc" >&2 || :
+        else
+            printf 'PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=write bytes=%s total=%s elapsed_ms=%s read=%s proc=%s\n' \
+                "$sf_v3_ps_bytes" "$sf_v3_ps_total" "$sf_v3_ps_elapsed" "$sf_v3_ps_read" \
+                "$sf_v3_ps_proc" >&2 || :
+        fi
     done
+}
+
+# $1 sampler pid (may be empty).
+sf_v3_progress_stop() {
+    [ -n "$1" ] || return 0
+    kill "$1" 2>/dev/null || :
+    wait "$1" 2>/dev/null || :
+    return 0
 }
 
 sf_v3_stream_verify() {
@@ -1107,6 +1186,9 @@ sf_v3_stream_verify() {
     wc -c <"$sf_v3_count_fifo" >"$sf_v3_count_result" &
     sf_v3_count_pid=$!
 
+    # Heartbeat only; failure to fork just means no verify DETAIL lines.
+    ( sf_v3_progress_sampler verify ) </dev/null &
+    sf_v3_verify_progress_pid=$!
     if sf_v3_read_stage \
         | unxz \
         | tee "$sf_v3_hash_fifo" "$sf_v3_count_fifo" \
@@ -1117,6 +1199,7 @@ sf_v3_stream_verify() {
     fi
     if wait "$sf_v3_hash_pid"; then sf_v3_hash_rc=0; else sf_v3_hash_rc=$?; fi
     if wait "$sf_v3_count_pid"; then sf_v3_count_rc=0; else sf_v3_count_rc=$?; fi
+    sf_v3_progress_stop "$sf_v3_verify_progress_pid"
 
     if [ "$sf_v3_hash_rc" -eq 0 ]; then
         read -r SF_V3_RAW_STREAM_SHA256 sf_v3_hash_name <"$sf_v3_hash_result" \
@@ -1171,7 +1254,7 @@ sf_v3_stream_write_ranges() {
     sf_v3_progress_marker start 0
     sf_v3_progress_pid=
     # Subshell with no `set -e` effect; failure to fork just means no progress.
-    ( sf_v3_progress_sampler ) </dev/null &
+    ( sf_v3_progress_sampler write ) </dev/null &
     sf_v3_progress_pid=$!
 
     sf_v3_wr_rc=0
@@ -1181,10 +1264,7 @@ sf_v3_stream_write_ranges() {
     [ "$sf_v3_wr_rc" -ne 0 ] \
         || sf_v3_write_range 0 "$sf_v3_wr_spl" || sf_v3_wr_rc=$?
 
-    if [ -n "$sf_v3_progress_pid" ]; then
-        kill "$sf_v3_progress_pid" 2>/dev/null || :
-        wait "$sf_v3_progress_pid" 2>/dev/null || :
-    fi
+    sf_v3_progress_stop "$sf_v3_progress_pid"
     sf_v3_clean_work
     [ "$sf_v3_wr_rc" -eq 0 ] || return 1
     SF_V3_WRITE_RESULT=pass

@@ -134,6 +134,23 @@ fi
 grep -Eq '^PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=verify ' "$tmp/noproc.log" \
     || fail 'noproc: verify heartbeat must not depend on finding the process'
 
+# ---- dd found but no /proc/<pid>/io (kernel without CONFIG_TASK_IO_ACCOUNTING) ----
+# Heartbeats must say so (proc=noio, not absent), and the write must still pass.
+fakeproc="$tmp/fakeproc"; mkdir -p "$fakeproc/4242/fd"
+printf 'dd\n' >"$fakeproc/4242/comm"
+ln -s "$disk" "$fakeproc/4242/fd/0"; ln -s "$disk" "$fakeproc/4242/fd/1"
+reset_disk; stage_xz "$xz_good"; set_contract
+SF_V3_PROC="$fakeproc" sf_v3_stream_write 2>"$tmp/noio.log" || fail 'missing io accounting broke the write'
+cmp -n "$raw_bytes" "$raw" "$disk" || fail 'noio output bytes differ'
+grep -Eq '^PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=verify bytes=0 total=[0-9]+ elapsed_ms=[0-9]+ proc=noio$' "$tmp/noio.log" \
+    || fail 'noio: verify heartbeat does not report proc=noio'
+grep -Eq '^PF_SELF_FLASH_V3_PROGRESS_DETAIL phase=write bytes=0 total=294912 elapsed_ms=[0-9]+ read=0 proc=noio$' "$tmp/noio.log" \
+    || fail 'noio: write heartbeat does not report proc=noio'
+if grep -q '^PF_SELF_FLASH_V3_PROGRESS phase=write percent' "$tmp/noio.log"; then
+    fail 'noio: write percent emitted without io accounting'
+fi
+grep -qx 'PF_SELF_FLASH_V3_PROGRESS phase=write-end percent=100' "$tmp/noio.log" || fail 'noio: no write-end'
+
 # ---- the REAL initrd shell: BusyBox ash running NOEXEC dd applets ----
 # The initrd runs `#!/bin/busybox sh` with standalone applets, so `dd` is forked
 # WITHOUT exec: /proc/<pid>/cmdline of the sink dd is the shell's own argv
@@ -189,19 +206,30 @@ SF_V3_PROGRESS_HEARTBEAT_MS=400
 export SF_V3_SD SF_V3_SD_IO SF_V3_STAGE_OFFSET SF_V3_COMPRESSED_BYTES
 export SF_V3_TARGET_RAW_BYTES SF_V3_TARGET_RAW_SHA256 SF_V3_WORK
 if sf_v3_stream_write; then rc=0; else rc=$?; fi
-[ -z "$(jobs -p)" ] || { echo "BB_DRIVER sampler left running" >&2; rc=97; }
+# busybox keeps reaped "Terminated" entries in its job table; what matters is
+# that no background job (a sampler) is still alive.
+for j in $(jobs -p); do
+    ! kill -0 "$j" 2>/dev/null || { echo "BB_DRIVER sampler left running pid=$j" >&2; rc=97; }
+done
 echo "BB_DRIVER rc=$rc write=$SF_V3_WRITE_RESULT" >&2
 exit "$rc"
 EOF
 } >"$bb_driver"
 
-reset_disk; stage_xz "$xz_good"
+# Incompressible fixture of the same size: the compressed stage (~288 KiB) then
+# outlasts the pipe buffers, so the stage-reader dd stays alive through the
+# throttled verify, as the ~600 MB stage read does on the device.
+bb_raw="$tmp/bb-raw.img"; bb_xz="$tmp/bb-raw.img.xz"
+head -c "$raw_bytes" /dev/urandom >"$bb_raw"
+xz -z -c "$bb_raw" >"$bb_xz"
+bb_sha="$(sha256sum "$bb_raw" | cut -d' ' -f1)"
+reset_disk; stage_xz "$bb_xz"
 bb_log="$tmp/bb.log"
 PATH="$emptybin" "$bb" sh "$bb_driver" "$disk" "$stage_offset" "$SF_V3_COMPRESSED_BYTES" \
-    "$raw_bytes" "$raw_sha" "$work" 2>"$bb_log" \
+    "$raw_bytes" "$bb_sha" "$work" 2>"$bb_log" \
     || fail "busybox run failed: $(tail -n 20 "$bb_log")"
 grep -qx 'BB_DRIVER rc=0 write=pass' "$bb_log" || fail "busybox driver: $(tail -n 5 "$bb_log")"
-cmp -n "$raw_bytes" "$raw" "$disk" || fail 'busybox: output bytes differ'
+cmp -n "$raw_bytes" "$bb_raw" "$disk" || fail 'busybox: output bytes differ'
 if grep -E '^PF_SELF_FLASH_V3_PROGRESS' "$bb_log" | grep -Ev '^PF_SELF_FLASH_V3_PROGRESS(_DETAIL)? ' | grep -q .; then
     fail 'busybox: malformed progress line'
 fi

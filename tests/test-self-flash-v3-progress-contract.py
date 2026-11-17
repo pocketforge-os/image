@@ -73,8 +73,10 @@ class ProgressContract(unittest.TestCase):
 
     def test_sink_is_not_identified_by_cmdline(self):
         # BusyBox runs dd as a NOEXEC applet: its cmdline is the shell's argv.
-        self.assertNotIn("/cmdline", SCRIPT.read_text().split(
-            "# ---- PF_SELF_FLASH_V3_PROGRESS", 1)[1].split("sf_v3_stream_verify() {", 1)[0])
+        section = SCRIPT.read_text().split(
+            "# ---- PF_SELF_FLASH_V3_PROGRESS", 1)[1].split("sf_v3_stream_verify() {", 1)[0]
+        code = [ln for ln in section.splitlines() if not ln.lstrip().startswith("#")]
+        self.assertFalse([ln for ln in code if "cmdline" in ln], code)
 
     def test_worker_test_passes(self):
         self.assertTrue(WORKER_TEST.is_file(), "missing %s" % WORKER_TEST)
