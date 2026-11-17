@@ -78,6 +78,29 @@ class ProgressContract(unittest.TestCase):
         code = [ln for ln in section.splitlines() if not ln.lstrip().startswith("#")]
         self.assertFalse([ln for ln in code if "cmdline" in ln], code)
 
+    def _progress_section(self):
+        return SCRIPT.read_text().split(
+            "# ---- PF_SELF_FLASH_V3_PROGRESS", 1)[1].split("sf_v3_stream_verify() {", 1)[0]
+
+    def test_write_bytes_come_from_the_card_block_stat(self):
+        # Base kernel 8c11370b has no CONFIG_TASK_IO_ACCOUNTING: /proc/<pid>/io is
+        # absent, so written bytes come from the card's written-sector counter.
+        section = self._progress_section()
+        self.assertIn('SF_V3_SYS_BLOCK="${SF_V3_SYS_BLOCK:-/sys/block}"', section)
+        self.assertRegex(section, r"(?m)^sf_v3_progress_stat_path\(\) \{$")
+        self.assertRegex(section, r"(?m)^sf_v3_progress_stat\(\) \{$")
+        self.assertIn("/stat", section)
+        # Percent denominator is the whole raw target (all three ranges).
+        self.assertRegex(section, r"\* 100 / SF_V3_TARGET_RAW_BYTES")
+        self.assertIn("512", section)
+
+    def test_details_carry_sectors_and_source(self):
+        details = [f for f, _ in _progress_printfs(SCRIPT.read_text())
+                   if f.startswith("PF_SELF_FLASH_V3_PROGRESS_DETAIL ")]
+        self.assertGreaterEqual(len(details), 3, details)
+        for fmt in details:
+            self.assertTrue(fmt.endswith(" sectors=%s src=%s\\n"), fmt)
+
     def test_worker_test_passes(self):
         self.assertTrue(WORKER_TEST.is_file(), "missing %s" % WORKER_TEST)
         r = subprocess.run(["sh", str(WORKER_TEST)], cwd=ROOT, capture_output=True,
