@@ -240,15 +240,31 @@ def missing_verify_tools() -> list[str]:
 
 
 def check_lines(out: str) -> dict[int, str]:
-    """CHECK <n> <name> PASS|FAIL ... -> {n: status}."""
+    """`CHECK <n> gate PASS|FAIL ...` -> {n: status}.
+
+    The gate line is the verdict of check n, decided by the script's built-in (pure-python) checks plus any external
+    cross-check that ran. Cross-check lines may say SKIP (tool missing, --allow-missing-tools); a gate line never may.
+    """
     res: dict[int, str] = {}
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) >= 4 and parts[0] == "CHECK" and parts[1].isdigit():
+        if len(parts) >= 4 and parts[0] == "CHECK" and parts[1].isdigit() and parts[2] == "gate":
             n = int(parts[1])
-            if res.get(n) != "FAIL":
-                res[n] = parts[3]
+            if n in res:
+                raise AssertionError(f"two gate lines for check {n}")
+            res[n] = parts[3]
     return res
+
+
+def path_without(tools: tuple[str, ...], work: Path) -> str:
+    """A PATH dir holding symlinks to every cross-check/fixture tool except `tools` (reproduces a runner without them)."""
+    d = work / ("bin-without-" + "-".join(tools))
+    d.mkdir(exist_ok=True)
+    for t in (*VERIFY_TOOLS, *FIXTURE_TOOLS):
+        src = shutil.which(t)
+        if t not in tools and src and not (d / t).exists():
+            (d / t).symlink_to(src)
+    return str(d)
 
 
 class Synthetic(unittest.TestCase):
@@ -456,6 +472,37 @@ class Synthetic(unittest.TestCase):
         r = self.verify(self.out, pin=False)  # default pins are the real 31271d56 / 24ef47d4
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("VERIFY result=FAIL", r.stdout)
+
+    def test_gates_pass_without_fdtget_and_dtc(self):
+        """The CI runner has no fdtget/dtc: check 5/6 must still be decided (PASS) by the built-in FDT parser."""
+        env = dict(os.environ, PATH=path_without(("fdtget", "dtc"), self.work))
+        r = self.verify(self.out, env=env, extra=["--allow-missing-tools"])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(check_lines(r.stdout), {n: "PASS" for n in range(1, 8)}, r.stdout)
+        self.assertIn("tool_missing=fdtget", r.stdout)
+        self.assertIn("tool_missing=dtc", r.stdout)
+        for name in ("bl31_reg_nomap", "linux_cma", "fdt_parse"):
+            self.assertRegex(r.stdout, rf"CHECK 5 {name} PASS", name)
+
+    def test_without_fdt_tools_and_without_allow_flag_fails_closed(self):
+        env = dict(os.environ, PATH=path_without(("fdtget", "dtc"), self.work))
+        r = self.verify(self.out, env=env, extra=[])
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(check_lines(r.stdout).get(5), "FAIL", r.stdout)
+
+    def test_check5_malformed_fdt_without_fdt_tools(self):
+        """Built-in parser negative control: a dtb.bin with a broken struct block fails gate 5 even with no dtc."""
+        d = self.out.read_bytes()
+        p4 = (P4_LBA * 512, (P4_LBA + P4_SECTORS) * 512)
+        pos = d.find(b"\xd0\x0d\xfe\xed", p4[0], p4[1])
+        self.assertGreater(pos, 0)
+        off_struct = struct.unpack_from(">I", d, pos + 8)[0]
+        img = self.mutated("c5-malformed.img", pos + off_struct + 3, xor=0x0E)  # FDT_BEGIN_NODE(1) -> token 0xF
+        env = dict(os.environ, PATH=path_without(("fdtget", "dtc"), self.work))
+        r = self.verify(img, env=env, extra=["--allow-missing-tools"])
+        self.assert_fails(r, 5)
+        self.assertIn("CHECK 5 fdt_parse FAIL", r.stdout)
+        img.unlink()
 
     def test_verify_fails_closed_when_crosscheck_tools_missing(self):
         empty = self.work / "emptybin"
