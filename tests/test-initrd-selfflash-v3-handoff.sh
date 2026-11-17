@@ -48,6 +48,64 @@ if grep -E 'mmcblk[0-9]|04022000|boot0|BOOT0' <<<"$(sed -n '/^# BEGIN POCKETFORG
     fail 'hand-off code names an eMMC or fixed block device'
 fi
 
+# ---- static kexec in the dev initrd (tsp-624ea955036f01d58629) -------------
+# The kexec row is only reachable if the built dev initrd carries a regular,
+# static AArch64 /sbin/kexec built from pinned, committed source.
+kexec_builder="$root/boards/tsp/initrd/build-kexec-static.sh"
+kexec_dir="$root/third_party/kexec-tools"
+kexec_version=2.0.32
+kexec_tarball="$kexec_dir/kexec-tools-$kexec_version.tar.xz"
+kexec_src_sha=8f81422a5fd2362cf6cb001b511e535565ed0f32c2f4451fb5eb68fed6710a5d
+kexec_bin_sha=09b191b07a4d24e7ccf3546199b68368cf02931706db67b3305662c00fd098c2
+[ -x "$kexec_builder" ] || fail 'build-kexec-static.sh missing or not executable'
+[ -f "$kexec_tarball" ] || fail "committed kexec-tools $kexec_version source tarball missing"
+[ "$(sha256sum "$kexec_tarball" | cut -d' ' -f1)" = "$kexec_src_sha" ] \
+    || fail 'committed kexec-tools tarball differs from the kernel.org sha256sums.asc digest'
+[ -f "$kexec_dir/kexec-tools-$kexec_version.tar.sign" ] || fail 'kernel.org detached signature not preserved'
+for pin in "$kexec_version" "$kexec_src_sha" "$kexec_bin_sha" E27CD9A1F5ACC2FF4BFE7285D7CF64696A374FBE; do
+    grep -Fq "$pin" "$kexec_dir/SOURCE.md" || fail "third_party/kexec-tools/SOURCE.md lacks pin $pin"
+done
+grep -Fq "KEXEC_TOOLS_SOURCE_SHA256=$kexec_src_sha" "$kexec_builder" || fail 'kexec builder does not pin the source sha'
+grep -Fq "KEXEC_STATIC_SHA256=$kexec_bin_sha" "$kexec_builder" || fail 'kexec builder does not pin the output sha'
+grep -q '^SF_V3_KEXEC_BIN="${SF_V3_KEXEC_BIN:-/sbin/kexec}"$' "$engine" || fail 'engine kexec path is not /sbin/kexec'
+dev_block="$(sed -n '/^if \[ "\$VARIANT" = "dev" \]; then$/,/^fi$/p' "$builder")"
+grep -Fq 'build-kexec-static.sh' <<<"$dev_block" || fail 'dev initrd does not stage the static kexec'
+grep -Fq '"${STAGING}/sbin/kexec"' <<<"$dev_block" || fail 'dev initrd does not stage kexec at /sbin/kexec'
+grep -Fq 'build-kexec-static.sh' <<<"$(grep -v '^ *#' "$builder" | sed '/^if \[ "\$VARIANT" = "dev" \]; then$/,/^fi$/d')" \
+    && fail 'static kexec is staged outside the dev-only self-flash block'
+# A wrong source tarball is refused before any compiler runs.
+cp "$kexec_tarball" "$tmp/bad.tar.xz"; printf x >>"$tmp/bad.tar.xz"
+rc=0; "$kexec_builder" --tarball "$tmp/bad.tar.xz" --out "$tmp/kexec-out" >"$tmp/kx.log" 2>&1 || rc=$?
+[ "$rc" = 1 ] && grep -q 'kexec-tools source sha256 mismatch' "$tmp/kx.log" && [ ! -e "$tmp/kexec-out" ] \
+    || fail "kexec builder accepted a modified tarball (rc=$rc)"
+
+# Real initrd leg: PF_TEST_BUILD_CONTAINER=<pinned build image> builds the dev
+# initrd twice in the container and inspects the packed /sbin/kexec.
+kexec_leg=SKIPPED
+if [ -n "${PF_TEST_BUILD_CONTAINER:-}" ]; then
+    out="$tmp/container"; mkdir -p "$out/kernel/lib/modules/7.2.0-pocketforge" "$out/gpu-km"
+    : >"$out/kernel/lib/modules/7.2.0-pocketforge/modules.builtin"
+    docker run --rm --network none --user "$(id -u):$(id -g)" -v "$root:/work/src:ro" -v "$out:/work/out" \
+        "$PF_TEST_BUILD_CONTAINER" bash -c '
+set -euo pipefail
+common=(--src /work/src --kernel-tsp-dir /work/out/kernel --gpu-km-dir /work/out/gpu-km
+        --gpu-model open --gpu-km-model in-tree-7.x --kernel-required-modules powervr --variant dev)
+export SOURCE_DATE_EPOCH=1790605388
+for f in a b; do bash /work/src/boards/tsp/initrd/build-initrd.sh "${common[@]}" --out /work/out/$f.gz >/work/out/$f.log 2>&1; done
+mkdir -p /work/out/x && cd /work/out/x && gzip -dc /work/out/a.gz | cpio -id --quiet
+aarch64-linux-gnu-readelf -h sbin/kexec | grep -c AArch64 >/work/out/elf.txt
+{ aarch64-linux-gnu-readelf -l sbin/kexec | grep -c -E "INTERP|DYNAMIC" || true; } >>/work/out/elf.txt
+' || fail "container initrd build failed ($(tail -n 5 "$out/a.log" 2>/dev/null))"
+    [ "$(sha256sum <"$out/a.gz")" = "$(sha256sum <"$out/b.gz")" ] || fail 'dev initrd with kexec is not reproducible'
+    [ -f "$out/x/sbin/kexec" ] && [ ! -L "$out/x/sbin/kexec" ] && [ -x "$out/x/sbin/kexec" ] \
+        || fail 'built dev initrd lacks a regular executable /sbin/kexec'
+    [ "$(stat -c %a "$out/x/sbin/kexec")" = 755 ] || fail '/sbin/kexec mode is not 0755'
+    [ "$(tr '\n' ' ' <"$out/elf.txt")" = '1 0 ' ] || fail "/sbin/kexec is not static AArch64 ($(tr '\n' ' ' <"$out/elf.txt"))"
+    [ "$(sha256sum "$out/x/sbin/kexec" | cut -d' ' -f1)" = "$kexec_bin_sha" ] || fail '/sbin/kexec sha differs from the pin'
+    kexec_leg="PASS initrd_sha256=$(sha256sum "$out/a.gz" | cut -d' ' -f1)"
+fi
+printf 'SELF_FLASH_V3_HANDOFF_KEXEC_PAYLOAD container_leg=%s\n' "$kexec_leg"
+
 # ---- fixture: a written target card with GPT + Android boot.img -----------
 card="$tmp/card.img"
 raw_bytes=$((8 * 1024 * 1024))
