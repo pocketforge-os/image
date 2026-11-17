@@ -41,15 +41,19 @@ done
 mkdir -p "$work/rootfs/usr/sbin"
 printf '#!/bin/sh\nexit 0\n' >"$work/rootfs/usr/sbin/kexec"
 chmod 0755 "$work/rootfs/usr/sbin/kexec"
-printf 'CONFIG_KEXEC_CORE=y\nCONFIG_KEXEC=y\n' >"$work/kernel.config"
-
-"$verifier" "$work/rootfs" "$work/kernel.config" canary >/dev/null \
-	|| fail 'verifier rejected a valid canary rootfs and resolved kernel config'
-
-printf 'CONFIG_VIDEO_SUN50I_G2D_MIX=y\n# CONFIG_KEXEC is not set\n' >"$work/kernel.config"
-"$verifier" "$work/rootfs" "$work/kernel.config" baseline >/dev/null \
-	|| fail 'verifier rejected the valid G2D baseline config'
-expect_canary_config="$work/kernel.config"
+# kernel-sunxi-7.x#185 contract: a133_defconfig and the canary fragment both
+# resolve classic kexec_load(2) WITH G2D MIX built in (its .shutdown quiesces
+# the mixer before machine_kexec()).  Both deliberate modes share that config.
+write_valid_config() {
+	printf 'CONFIG_KEXEC_CORE=y\nCONFIG_KEXEC=y\nCONFIG_VIDEO_SUN50I_G2D_MIX=y\n' >"$work/kernel.config"
+}
+write_valid_config
+for mode in baseline canary; do
+	output=$("$verifier" "$work/rootfs" "$work/kernel.config" "$mode") \
+		|| fail "verifier rejected the valid kexec+G2D MIX ${mode} config"
+	[ "$output" = "rootfs-kexec=PASS mode=${mode} loader=/usr/sbin/kexec api=kexec_load g2d=enabled" ] \
+		|| fail "${mode}: unexpected verifier output: ${output}"
+done
 
 expect_fail() {
 	local label=$1 expected=$2
@@ -65,30 +69,65 @@ expect_fail() {
 		|| fail "${label}: expected '${expected}', got: ${output}"
 }
 
+# The resolved config no longer distinguishes the modes, so the caller must
+# name one; an implicit/auto mode is refused.
+expect_fail implicit-mode 'usage: verify-rootfs-kexec.sh' \
+	"$verifier" "$work/rootfs" "$work/kernel.config"
+expect_fail auto-mode 'invalid expected mode: auto' \
+	"$verifier" "$work/rootfs" "$work/kernel.config" auto
+
 chmod 0644 "$work/rootfs/usr/sbin/kexec"
 expect_fail non-executable '/usr/sbin/kexec is not executable' \
-	"$verifier" "$work/rootfs" "$work/kernel.config"
+	"$verifier" "$work/rootfs" "$work/kernel.config" baseline
 chmod 0755 "$work/rootfs/usr/sbin/kexec"
-
-expect_fail disabled-canary 'expected canary config, resolved baseline' \
-	"$verifier" "$work/rootfs" "$expect_canary_config" canary
 
 mv "$work/rootfs/usr/sbin/kexec" "$work/kexec.saved"
 expect_fail missing '/usr/sbin/kexec is missing or not a regular file' \
-	"$verifier" "$work/rootfs" "$work/kernel.config"
+	"$verifier" "$work/rootfs" "$work/kernel.config" canary
 mv "$work/kexec.saved" "$work/rootfs/usr/sbin/kexec"
 
-printf '# CONFIG_KEXEC is not set\nCONFIG_KEXEC_CORE=y\n' >"$work/kernel.config"
-expect_fail ambiguous-baseline 'baseline config requires CONFIG_VIDEO_SUN50I_G2D_MIX=y exactly once' \
-	"$verifier" "$work/rootfs" "$work/kernel.config"
+expect_fail missing-config 'packaged kernel config is missing' \
+	"$verifier" "$work/rootfs" "$work/absent.config" baseline
 
-printf 'CONFIG_KEXEC=y\n# CONFIG_KEXEC_CORE is not set\n' >"$work/kernel.config"
-expect_fail missing-core 'canary config requires CONFIG_KEXEC_CORE=y exactly once' \
-	"$verifier" "$work/rootfs" "$work/kernel.config"
+for mode in baseline canary; do
+	# Retired pre-#185 baseline (G2D MIX on, classic kexec off) now fails.
+	printf 'CONFIG_VIDEO_SUN50I_G2D_MIX=y\n# CONFIG_KEXEC is not set\n' >"$work/kernel.config"
+	expect_fail "${mode}-kexec-off" "${mode} config requires CONFIG_KEXEC=y exactly once" \
+		"$verifier" "$work/rootfs" "$work/kernel.config" "$mode"
 
-printf 'CONFIG_KEXEC=y\nCONFIG_KEXEC_CORE=y\nCONFIG_VIDEO_SUN50I_G2D_MIX=y\n' >"$work/kernel.config"
-expect_fail unsafe-combination 'canary config must not enable CONFIG_VIDEO_SUN50I_G2D_MIX' \
-	"$verifier" "$work/rootfs" "$work/kernel.config"
+	# Retired pre-#185 canary (kexec on, G2D MIX traded away) now fails.
+	printf 'CONFIG_KEXEC_CORE=y\nCONFIG_KEXEC=y\n# CONFIG_VIDEO_SUN50I_G2D_MIX is not set\n' >"$work/kernel.config"
+	expect_fail "${mode}-g2d-missing" "${mode} config requires CONFIG_VIDEO_SUN50I_G2D_MIX=y exactly once" \
+		"$verifier" "$work/rootfs" "$work/kernel.config" "$mode"
+
+	printf 'CONFIG_KEXEC=y\n# CONFIG_KEXEC_CORE is not set\nCONFIG_VIDEO_SUN50I_G2D_MIX=y\n' >"$work/kernel.config"
+	expect_fail "${mode}-missing-core" "${mode} config requires CONFIG_KEXEC_CORE=y exactly once" \
+		"$verifier" "$work/rootfs" "$work/kernel.config" "$mode"
+
+	write_valid_config
+	echo 'CONFIG_VIDEO_SUN50I_G2D_MIX=y' >>"$work/kernel.config"
+	expect_fail "${mode}-g2d-duplicated" 'CONFIG_VIDEO_SUN50I_G2D_MIX=y appears 2 times' \
+		"$verifier" "$work/rootfs" "$work/kernel.config" "$mode"
+
+	write_valid_config
+	echo 'CONFIG_KEXEC=y' >>"$work/kernel.config"
+	expect_fail "${mode}-kexec-duplicated" 'CONFIG_KEXEC=y appears 2 times' \
+		"$verifier" "$work/rootfs" "$work/kernel.config" "$mode"
+
+	write_valid_config
+	echo 'CONFIG_KEXEC_CORE=y' >>"$work/kernel.config"
+	expect_fail "${mode}-core-duplicated" 'CONFIG_KEXEC_CORE=y appears 2 times' \
+		"$verifier" "$work/rootfs" "$work/kernel.config" "$mode"
+done
+
+# Optional: a real resolved .config (e.g. from kernel b0d35624 a133_defconfig)
+# must pass both modes.
+if [ -n "${PF_ROOTFS_KEXEC_REAL_CONFIG:-}" ]; then
+	for mode in baseline canary; do
+		"$verifier" "$work/rootfs" "$PF_ROOTFS_KEXEC_REAL_CONFIG" "$mode" \
+			|| fail "verifier rejected real resolved config ${PF_ROOTFS_KEXEC_REAL_CONFIG} (${mode})"
+	done
+fi
 
 # The owned build must pass the resolved config from the same kernel stage and
 # invoke the verifier after all rootfs producers, before ext4 assembly.
@@ -117,4 +156,4 @@ if sed -n '/if \[ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x \]/,/^fi$/p' "$builder"
 	fail 'rootfs builder permits an ambiguous A133 7.x verification mode'
 fi
 
-echo 'rootfs-kexec-test=PASS package=kexec-tools baseline=g2d canary=kexec_load'
+echo 'rootfs-kexec-test=PASS package=kexec-tools baseline=kexec_load+g2d canary=kexec_load+g2d'

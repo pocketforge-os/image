@@ -315,11 +315,11 @@ export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%a %b %e %
 printf '' > .scmversion
 
 # --- Configure from the committed owned defconfig ---------------------------------------
-# The A133 G2D diagnostic intentionally excludes classic KEXEC: a poisoned
-# diagnostic may require physical power removal.  A bounded SD re-entry canary
-# therefore starts from the unchanged shipping baseline and applies the
-# explicit source-owned fragment.  Every normal profile stays on its selected
-# defconfig and retains G2D.
+# Since kernel-sunxi-7.x#185 the shipping a133_defconfig enables classic KEXEC
+# alongside G2D MIX (the MIX .shutdown quiesces the mixer before
+# machine_kexec()).  The SD re-entry canary starts from that unchanged baseline
+# and applies the source-owned fragment, which pins the same kexec + G2D
+# contract.  Every normal profile stays on its selected defconfig.
 case "${PF_KERNEL_DEFCONFIG}" in
   a133_kexec_canary.config)
     [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ] \
