@@ -14,6 +14,7 @@
 #   failed or unverified write                          | no hand-off at all
 #
 # Every case runs against a file-backed card; the hand-off may only ever read it.
+# shellcheck disable=SC2034  # SF_V3_* are consumed by the sourced engine
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,8 +39,10 @@ grep -q 'reboot -f' <<<"$gate" && fail 'v3 gate still ends a verified write with
 grep -q 'sf_v3_handoff 0' <<<"$gate" || fail 'v3 gate does not hand off after a verified write'
 awk '/if sf_v3_run_armed_transaction; then/{t=1} t&&/sf_v3_handoff 0/{ok=1} t&&/^            fi$/{exit} END{exit !ok}' \
     <<<"$gate" || fail 'hand-off is not inside the verified-transaction branch'
-grep -Eq 'for ap in .*\bod\b' "$builder" || fail 'initrd applet assert lacks od (GPT/boot.img parse)'
-grep -Eq 'for ap in .*\bpoweroff\b' "$builder" || fail 'initrd applet assert lacks poweroff'
+applets="$(sed -n '/for ap in /,/; do$/p' "$builder")"
+for applet in od poweroff gunzip; do
+    grep -Eq "(^| )$applet( |;)" <<<"$applets" || fail "initrd applet assert lacks $applet (hand-off)"
+done
 if grep -E 'mmcblk[0-9]|04022000|boot0|BOOT0' <<<"$(sed -n '/^# BEGIN POCKETFORGE SELF-FLASH V3 HANDOFF/,/^# END POCKETFORGE SELF-FLASH V3 HANDOFF/p' "$engine")" \
         | grep -v '^ *#' | grep -q .; then
     fail 'hand-off code names an eMMC or fixed block device'
@@ -170,7 +173,7 @@ grep -q '^PF_SELF_FLASH_V3_HANDOFF_FALLBACK from=kexec to=reboot reason=kexec_lo
 
 # Unreadable target boot image: recorded fallback, kexec never invoked.
 setup yes yes absent
-SF_V3_TARGET_RAW_BYTES=$((3 * 1024 * 1024))   # boot partition ends past the written range
+SF_V3_TARGET_RAW_BYTES=$((3 * 1024 * 1024 - 512)) SF_V3_RAW_STREAM_BYTES=$((3 * 1024 * 1024 - 512))  # boot partition ends past the written range
 run_case kexec-target-outside 1 kexec "reboot -f;"
 grep -q '^PF_SELF_FLASH_V3_HANDOFF_FALLBACK from=kexec to=reboot reason=target_boot_image_invalid$' "$tmp/markers" \
     || fail 'invalid target boot image is not recorded'
