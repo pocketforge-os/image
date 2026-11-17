@@ -1452,7 +1452,10 @@ sf_v3_kernel_kexec_load() {
         return 1
     fi
     if [ -e "$SF_V3_KERNEL_CONFIG_GZ" ]; then
-        if ! gunzip -c "$SF_V3_KERNEL_CONFIG_GZ" 2>/dev/null | grep -qx 'CONFIG_KEXEC=y'; then
+        # No `grep -q` here: under pipefail an early-exiting grep makes gunzip
+        # die of SIGPIPE on a config larger than the pipe buffer. Plain grep
+        # drains the whole stream.
+        if ! gunzip -c "$SF_V3_KERNEL_CONFIG_GZ" 2>/dev/null | grep -x 'CONFIG_KEXEC=y' >/dev/null; then
             SF_V3_KEXEC_KERNEL_REASON=kexec_load_not_configured
             return 1
         fi
