@@ -1,8 +1,28 @@
-# Vendored from gpu-um-tsp docker/Dockerfile.ge8300-mesa-cross at aa539ea41c9453a3a15f0093498620825a496213.
+# Vendored from gpu-um-tsp docker/Dockerfile.ge8300-mesa-cross at d5b2de54fb993d5e1eb16c38af0f5bf137d99163.
 # Update this fixture deliberately when the platform.lock gpu-um-tsp pin moves.
 FROM ubuntu:24.04@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb AS toolchain
 
+# When APT_PROXY_URL is provided (CI passes the NAS apt-cacher-ng), route apt
+# through it before the first apt-get of this stage: the detect helper is
+# baked with the URL via sed and registered as apt's Proxy-Auto-Detect, and
+# the drop-in bounds hung transfers (Timeout/Retries) so a stalled fetch
+# through the proxy fails or retries within minutes instead of hanging until
+# the job timeout. It is removed at the end of this stage so no final image
+# carries proxy config.
+ARG APT_PROXY_URL=
+COPY docker/apt-proxy-detect.sh /usr/local/bin/apt-proxy-detect
+RUN if [ -n "${APT_PROXY_URL}" ]; then \
+      sed -i "s|@APT_PROXY_URL@|${APT_PROXY_URL}|" /usr/local/bin/apt-proxy-detect \
+      && printf '%s\n' \
+           'Acquire::http::Proxy-Auto-Detect "/usr/local/bin/apt-proxy-detect";' \
+           'Acquire::http::Timeout "30";' \
+           'Acquire::https::Timeout "30";' \
+           'Acquire::Retries "3";' \
+         >/etc/apt/apt.conf.d/01pf-proxy; \
+    fi
+
 COPY scripts/install-mesa-buildenv.sh /usr/local/src/install-mesa-buildenv.sh
+COPY scripts/keys/apt.llvm.org-snapshot.gpg.key /usr/local/src/keys/
 # No apt snapshot: snapshot.ubuntu.com answers 401 for /ubuntu-ports/ (Ubuntu
 # Pro only, 2026-09-21), so a snapshot can pin only the amd64 half and the
 # reconciled amd64 libc6 (8.6) then mismatches the live arm64 libc6 (8.9):
@@ -45,6 +65,10 @@ RUN sed -i '/^trap .rm -f -- /d' /usr/local/src/install-mesa-buildenv.sh \
        libdrm-dev:arm64 \
        libexpat1-dev:arm64 \
     && dpkg-query -W > /toolchain-packages.txt
+
+# All apt work of this stage is done: drop the proxy config and helper so no
+# final image carries proxy configuration.
+RUN rm -f /etc/apt/apt.conf.d/01pf-proxy /usr/local/bin/apt-proxy-detect
 
 COPY docker/pkg-config/ /usr/local/bin/
 COPY docker/meson/ /usr/local/share/mesa-cross/
