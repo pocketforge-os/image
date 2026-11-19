@@ -60,6 +60,9 @@ BOOT_CHAIN="vendor"
 UBOOT_SPL=""
 UBOOT_LAYOUT_CHECK=""
 UBOOT_CONFIG=""
+# tsp-mc9m.60.29.63.20.2: also burn the eGON blob at 8 KiB (stock eMMC layout).
+# Requires --boot-chain owned-spl; without owned-spl the flag is FATAL.
+SPL_8K_COPY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --m1b-mode)    M1B_MODE=1; shift ;;
@@ -70,6 +73,7 @@ while [ $# -gt 0 ]; do
         --uboot-spl)   UBOOT_SPL="$2"; shift 2 ;;
         --uboot-layout-check) UBOOT_LAYOUT_CHECK="$2"; shift 2 ;;
         --uboot-config) UBOOT_CONFIG="$2"; shift 2 ;;
+        --spl-8k-copy)  SPL_8K_COPY=1; shift ;;
         *) echo "build-sd-image.sh: unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -104,6 +108,10 @@ if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
         echo "FATAL: --boot-chain owned-spl requires --uboot-config <generated-.config> (got '${UBOOT_CONFIG}')" >&2
         exit 1
     fi
+fi
+if [ "${SPL_8K_COPY}" = "1" ] && [ "${BOOT_CHAIN}" != "owned-spl" ]; then
+    echo "FATAL: --spl-8k-copy requires --boot-chain owned-spl (stock eMMC dual-SPL layout only)" >&2
+    exit 2
 fi
 
 # Owned-substrate paths (bind-mounted by the build container)
@@ -610,6 +618,24 @@ if [ "${BOOT_CHAIN}" = "owned-spl" ]; then
     fi
     python3 "${TOOLS_DIR}/verify-owned-spl-fat.py" "${FAT_VERIFY_ARGS[@]}"
     echo "  boot-resource p4: owned-SPL payload verified (Image, dtb.bin, initrd.gz, boot/pocketforge-logo.bmp${KERNEL_SDR50_DTB:+, dtb-sdr50.bin} present)"
+fi
+
+# Dual-SPL (tsp-mc9m.60.29.63.20.2): replicate the eGON blob from 128 KiB down to 8 KiB so the
+# image matches the stock eMMC's dual-copy layout.  spl_8k_copy refuses overlap with GPT, nonzero
+# target, and bad checksums; verify() confirms the two slots are byte-identical afterward.
+if [ "${SPL_8K_COPY}" = "1" ]; then
+    echo "  SPL: applying 8 KiB eGON copy (dual-SPL layout)..."
+    if ! python3 "${SRC_DIR}/scripts/spl_8k_copy.py" apply "${SD_IMAGE}" "${UBOOT_SPL}"; then
+        echo "FATAL: spl_8k_copy apply failed" >&2
+        exit 1
+    fi
+    # Confirm GPT still validates after the in-place edit.
+    if command -v sgdisk >/dev/null 2>&1; then
+        sgdisk -v "${SD_IMAGE}" >/dev/null || { echo "FATAL: sgdisk -v failed after spl_8k_copy" >&2; exit 1; }
+    elif command -v sfdisk >/dev/null 2>&1; then
+        sfdisk -V "${SD_IMAGE}" >/dev/null || { echo "FATAL: sfdisk -V failed after spl_8k_copy" >&2; exit 1; }
+    fi
+    echo "  SPL: 8 KiB copy applied and verified (dual-SPL)"
 fi
 
 # ---- step 6: compress + checksum -------------------------------------------
