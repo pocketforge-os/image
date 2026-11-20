@@ -15,9 +15,13 @@ cat >"${scratch}/bin/make" <<'EOF'
 #!/bin/sh
 set -eu
 case " $* " in
-  *" fixture_defconfig "*)
+  *" a133_defconfig "*)
     mkdir -p include/config arch/arm64/boot/dts/allwinner
-    printf '%s\n' '# CONFIG_LOCALVERSION_AUTO is not set' >.config
+    printf '%s\n' \
+      '# CONFIG_LOCALVERSION_AUTO is not set' \
+      'CONFIG_KEXEC=y' \
+      'CONFIG_KEXEC_CORE=y' \
+      'CONFIG_VIDEO_SUN50I_G2D_MIX=y' >.config
     printf '%s\n' "$FAKE_KREL" >include/config/kernel.release
     : >arch/arm64/boot/dts/allwinner/fixture.dts
     ;;
@@ -88,11 +92,11 @@ run_kernel_stage() {
   if [[ $staged_sha != __unset__ ]]; then
     printf '%s\n' "$staged_sha" >"${work}/kernel/.pf-source-revision"
   fi
-  sed "s#/usr/local/bin/emit-axp717-low-soc-capability#${root}/scripts/emit-axp717-low-soc-capability.sh#g; s#/work/kernel#${work}/kernel#g; s#/out#${work}/out#g" \
+  sed "s#/usr/local/bin/emit-axp717-low-soc-capability#${root}/scripts/emit-axp717-low-soc-capability.sh#g; s#/usr/local/bin/verify-kernel-kexec-config#${root}/scripts/verify-kernel-kexec-config.sh#g; s#/work/kernel#${work}/kernel#g; s#/out#${work}/out#g" \
     "${scratch}/kernel-heredoc.sh" >"${work}/run.sh"
   local -a env_args=(
     "PATH=${scratch}/bin:${PATH}" "FAKE_KREL=${krel}" "FAKE_UTS_LAYOUT=${uts_layout}"
-    PF_KERNEL_REPO=kernel-sunxi-7.x PF_KERNEL_DEFCONFIG=fixture_defconfig
+    PF_KERNEL_REPO=kernel-sunxi-7.x PF_KERNEL_DEFCONFIG=a133_defconfig
     PF_KERNEL_DTB=fixture.dtb PF_TOOLCHAIN_GCC_VERSION=14.2.0
     PF_KERNEL_SOURCE_DATE_EPOCH=1790512830 SOURCE_DATE_EPOCH=1790512830
   )

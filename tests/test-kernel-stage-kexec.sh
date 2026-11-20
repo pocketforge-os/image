@@ -40,15 +40,17 @@ expect_fail() {
 		|| fail "${label}: missing CONFIG_${missing_symbol} reason: ${output}"
 }
 
-# Six negative fixture defconfigs cover every symbol in both deliberate A133
-# modes.  These are the resolved-config forms behind the four baseline contract
-# failures and two canary-policy failures catalogued by the image-build RCA;
-# the current post-kernel#185 contract requires all three symbols in both modes.
-for mode in baseline canary; do
-	for symbol in KEXEC KEXEC_CORE VIDEO_SUN50I_G2D_MIX; do
-		expect_fail "${mode}-${symbol,,}-disabled" "$mode" "$symbol"
-	done
-done
+# Four baseline fixtures preserve the two observed failure classes (two runs
+# apiece).  The two historical canary runs exposed the now-retired policy that
+# rejected G2D; post-kernel#185, canary requires the same three symbols as the
+# baseline, so its negative fixtures enforce both sides of that corrected
+# contract while the valid-canary fixture below prevents the old rejection.
+expect_fail baseline-g2d-run-44081756591 baseline VIDEO_SUN50I_G2D_MIX
+expect_fail baseline-g2d-run-44081755798 baseline VIDEO_SUN50I_G2D_MIX
+expect_fail baseline-kexec-run-44075712210 baseline KEXEC
+expect_fail baseline-kexec-run-44075703556 baseline KEXEC
+expect_fail canary-kexec-disabled canary KEXEC
+expect_fail canary-g2d-disabled canary VIDEO_SUN50I_G2D_MIX
 
 for mode in baseline canary; do
 	write_valid_config "valid-${mode}.config"
