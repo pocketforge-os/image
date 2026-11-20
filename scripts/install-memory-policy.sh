@@ -12,7 +12,7 @@ device_id="$3"
 source_root="$4"
 
 case "${device_id}" in
-    a133-open-7x|a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio|a133-open-7x-gpu-spl-trace)
+    a133-open-7x|a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-dualspl|a133-open-7x-gpu-cts|a133-open-7x-gpu-noradio|a133-open-7x-gpu-spl-trace)
         if [ "${kernel_repo}" != kernel-sunxi-7.x ]; then
             echo "memory-policy install: FAIL device=${device_id} kernel=${kernel_repo} expected=kernel-sunxi-7.x" >&2
             exit 1
