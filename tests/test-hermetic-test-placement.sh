@@ -24,7 +24,7 @@ test -x "$probe" || fail 'runner capability probe is missing or not executable'
 
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/image-hermetic-placement.XXXXXX")
 trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT
-tools='bwrap inotifywait systemd-analyze systemd-escape'
+tools='bwrap inotifywait systemd'
 
 for tool in $tools; do
     : >"$scratch/$tool"

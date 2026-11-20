@@ -10,12 +10,11 @@ name: hermetic tests
 # went red on main for a full cycle (ea8c7b8, tsp-mc9m.41.984.20.1) before
 # anyone noticed.
 #
-# Runner posture (tsp-ikk0.22): `image` is NOT on the `trimui-build-lab`
-# [self-hosted, docker] runner group's allow-list yet (see sign-and-scan.yml's
-# header), so this workflow must not require docker. It uses the SAME
-# [self-hosted, pf-builder-vm] group that session-authority-systemd.yml already
-# runs hermetic checks on (its `probe` job and test-session-authority-systemd-
-# safety.sh) -- proven working PR-check runner posture for this repo.
+# Runner posture (tsp-hqm1p.182.535): this daemonless workload uses the shared
+# [self-hosted, pf-ci-container] pool instead of occupying a pf-builder-vm slot.
+# The fail-closed probe below pins the bwrap, inotify and systemd capabilities
+# used by the suite. Keep pair and worker-image on their current placement until
+# P0d measures them; they are not part of this move.
 #
 # EXCLUDED from the list below (each needs a real docker daemon or live device
 # state, so it stays out of a hermetic gate):
@@ -80,7 +79,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, pf-builder-vm]
+    runs-on: [self-hosted, pf-ci-container]
     timeout-minutes: 30
     steps:
       # SHA-pinned (org Actions policy sha_pinning_required=true; bare @v4 = startup_failure)
@@ -91,6 +90,9 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
+
+      - name: Probe hermetic runner capabilities
+        run: tests/probe-hermetic-test-runner.sh
 
       - name: Run hermetic tests/*.sh
         run: |
