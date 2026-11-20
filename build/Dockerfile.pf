@@ -2765,6 +2765,7 @@ ROOTFS
 # cache edge for the provenance-critical userdata image.
 FROM rootfs AS assemble
 ARG PF_DEVICE_ID
+ARG PF_SPL_DUAL_8K=
 ARG PF_DISPLAY_PIPELINE
 ARG PF_GPU_REPO
 ARG PF_GPU_MODEL=ddk
@@ -2899,7 +2900,8 @@ case "${PF_BOOT_PROTO}" in
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
       bash /work/src/scripts/build-sd-image.sh --variant "${PF_VARIANT}" --substrate owned \
         --boot-chain owned-spl --uboot-spl "${UBOOT_SPL}" \
-        --uboot-layout-check "${UBOOT_LAYOUT_CHECK}" --uboot-config "${UBOOT_CONFIG}"
+        --uboot-layout-check "${UBOOT_LAYOUT_CHECK}" --uboot-config "${UBOOT_CONFIG}" \
+        ${PF_SPL_DUAL_8K:+--spl-8k-copy}
     ;;
   *)            # a133: vendor boot0 -> boot_package.fex (dragonsecboot) -> abootimg -> genimage GPT
     # Shim the owned kernel-tsp build-tree layout build-sd-image.sh expects (arch/arm64/boot/{Image,
