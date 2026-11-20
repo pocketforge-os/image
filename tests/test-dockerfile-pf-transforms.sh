@@ -88,13 +88,13 @@ grep -Fq "FAIL: installed output evidence export: expected 'present', got 'missi
   "$gpu_um_missing_installed_repro"
 printf '%s\n' 'PASS: gpu-um recipe guard rejects a missing installed-output evidence export'
 
-target_gpu_um_sha=3642a0e65dd2b3297b1457e9d2cc9da632b8d411
+target_gpu_um_sha=7175fc296ea933c2d5dbd70a64b7483718284e8d
 stale_gpu_um_sha=87ad73611a548e1805f0c21ed083915d79e34c09
 stale_dockerfile="$tmpdir/gpu-um-stale.Dockerfile"
 stale_fixture="$tmpdir/gpu-um-stale-fixture.Dockerfile"
 sed "s/$target_gpu_um_sha/$stale_gpu_um_sha/g" "$dockerfile" >"$stale_dockerfile"
 sed "s/$target_gpu_um_sha/$stale_gpu_um_sha/g" \
-  "$root/build/tests/fixtures/gpu-um-toolchain-3642a0e6.Dockerfile" >"$stale_fixture"
+  "$root/build/tests/fixtures/gpu-um-toolchain-7175fc29.Dockerfile" >"$stale_fixture"
 
 gpu_um_stale="$tmpdir/gpu-um-stale-source-pin.log"
 if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \
