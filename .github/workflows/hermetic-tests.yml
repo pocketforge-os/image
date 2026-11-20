@@ -159,6 +159,7 @@ jobs:
             tests/test-input-broker-supervisor.sh
             tests/test-input-harness-selftest.sh
             tests/test-kernel-build-identity.sh
+            tests/test-kernel-stage-kexec.sh
             tests/test-kernel-module-form.sh
             tests/test-launcher-runtime-contract.sh
             tests/test-low-battery-shutdown.sh
