@@ -24,7 +24,7 @@ test -x "$probe" || fail 'runner capability probe is missing or not executable'
 
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/image-hermetic-placement.XXXXXX")
 trap 'find "$scratch" -mindepth 1 -delete; rmdir "$scratch"' EXIT
-tools='bwrap inotifywait systemd'
+tools='bwrap python3 systemd'
 
 for tool in $tools; do
     : >"$scratch/$tool"
@@ -42,6 +42,15 @@ for missing in $tools; do
         || fail "missing $missing did not report BLOCKED"
     mv "$scratch/$missing.absent" "$scratch/$missing"
 done
+
+set +e
+PF_HERMETIC_PROBE_INOTIFY=missing PATH=$scratch \
+    "$probe" >"$scratch/stdout" 2>"$scratch/stderr"
+rc=$?
+set -e
+test "$rc" -eq 75 || fail "missing inotify returned $rc instead of 75"
+grep -Fq 'BLOCKED: missing inotify' "$scratch/stderr" \
+    || fail 'missing inotify did not report BLOCKED'
 
 PATH=$scratch "$probe" >"$scratch/stdout" 2>"$scratch/stderr" \
     || fail 'complete capability fixture was refused'
