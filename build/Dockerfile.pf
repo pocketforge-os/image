@@ -263,6 +263,7 @@ ARG PF_TOOLCHAIN_GCC_VERSION
 ARG PF_KERNEL_SOURCE_DATE_EPOCH
 COPY --from=kernel-src . /work/kernel
 COPY --chmod=0555 --from=image-src scripts/emit-axp717-low-soc-capability.sh /usr/local/bin/emit-axp717-low-soc-capability
+COPY --chmod=0555 --from=image-src scripts/verify-kernel-kexec-config.sh /usr/local/bin/verify-kernel-kexec-config
 RUN <<'KERNEL'
 set -eux
 : "${PF_KERNEL_SHA:?PF_KERNEL_SHA must be the lock-resolved full kernel revision}" \
@@ -329,6 +330,17 @@ case "${PF_KERNEL_DEFCONFIG}" in
     ;;
   *) make "${PF_KERNEL_DEFCONFIG}" ;;
 esac
+
+# Fail the 7.x A133 resolved-config contract before any kernel compile work.
+# The late rootfs gate remains independent and calls this same symbol checker.
+if [ "${PF_KERNEL_REPO}" = kernel-sunxi-7.x ]; then
+  case "${PF_KERNEL_DEFCONFIG}" in
+    a133_defconfig) kexec_mode=baseline ;;
+    a133_kexec_canary.config) kexec_mode=canary ;;
+    *) echo "GUARD FAIL: kernel-sunxi-7.x requires a133_defconfig or a133_kexec_canary.config"; exit 1 ;;
+  esac
+  /usr/local/bin/verify-kernel-kexec-config .config "${kexec_mode}"
+fi
 
 # --- VERMAGIC / REPRODUCIBILITY GUARDS (hard fail) -------------------------------------
 # Mirrors platform/families/sunxi/build-kernel.sh pf_kernel_assert_repro_guards() — keep

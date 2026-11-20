@@ -7,6 +7,13 @@
 # The config no longer distinguishes the modes, so the caller names one.
 set -eu
 
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+PF_KERNEL_KEXEC_CONFIG_LIBRARY=1
+export PF_KERNEL_KEXEC_CONFIG_LIBRARY
+# shellcheck source=/dev/null
+. "${script_dir}/verify-kernel-kexec-config.sh"
+unset PF_KERNEL_KEXEC_CONFIG_LIBRARY
+
 rootfs="${1:?usage: verify-rootfs-kexec.sh ROOTFS KERNEL_CONFIG baseline|canary}"
 kernel_config="${2:?usage: verify-rootfs-kexec.sh ROOTFS KERNEL_CONFIG baseline|canary}"
 expected_mode="${3:?usage: verify-rootfs-kexec.sh ROOTFS KERNEL_CONFIG baseline|canary}"
@@ -47,14 +54,7 @@ fi
 if [ ! -f "$kernel_config" ] || [ -L "$kernel_config" ]; then
 	miss kernel-config "packaged kernel config is missing or not a regular file: ${kernel_config}"
 else
-	for symbol in KEXEC KEXEC_CORE VIDEO_SUN50I_G2D_MIX; do
-		n=$(grep -cx "CONFIG_${symbol}=y" "$kernel_config" || true)
-		if [ "$n" -gt 1 ]; then
-			miss "CONFIG_${symbol}" "CONFIG_${symbol}=y appears ${n} times"
-		elif [ "$n" -ne 1 ]; then
-			miss "CONFIG_${symbol}" "${expected_mode} config requires CONFIG_${symbol}=y exactly once"
-		fi
-	done
+	verify_kernel_kexec_config "$kernel_config" "$expected_mode" miss
 fi
 
 finish
