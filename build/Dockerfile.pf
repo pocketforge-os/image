@@ -1135,8 +1135,14 @@ done
 # on a clone, so pin it to the TF-A commit; the __DATE__/__TIME__-based
 # BUILD_MESSAGE_TIMESTAMP default is deterministic under the exported SOURCE_DATE_EPOCH
 # (gcc >= 7 derives those macros from it).
+# Validate and map reset capability
+case "${PF_TFA_RESET_CAPABILITY}" in
+  axp717)  SUNXI_RESET_VAL=1 ;;
+  watchdog) SUNXI_RESET_VAL=0 ;;
+  *) echo "bootchain FAIL: PF_TFA_RESET_CAPABILITY must be axp717 or watchdog, got ${PF_TFA_RESET_CAPABILITY!r}"; exit 1 ;;
+esac
 tfa_short="$(printf '%s' "${PF_TFA_SHA}" | cut -c1-12)"
-make -C /work/tfa -s -j"$(nproc)" PLAT="${PF_TFA_PLAT}" DEBUG=1 \
+make -C /work/tfa -s -j"$(nproc)" PLAT="${PF_TFA_PLAT}" DEBUG=1 SUNXI_AXP717_SYSTEM_RESET=${SUNXI_RESET_VAL} \
   CROSS_COMPILE="$CROSS" BUILD_BASE=/work/tfa/build BUILD_STRING="g${tfa_short}" bl31
 BL31_BIN="/work/tfa/build/${PF_TFA_PLAT}/debug/bl31.bin"
 [ -f "$BL31_BIN" ] || { echo "bootchain FAIL: BL31 not produced at $BL31_BIN"; exit 1; }
@@ -1187,6 +1193,7 @@ esac
   printf 'bootchain uboot=%s@%s tfa=%s@%s\n' "${PF_UBOOT_REPO}" "${PF_UBOOT_SHA}" "${PF_TFA_REPO}" "${PF_TFA_SHA}"
   printf 'uboot.release=%s defconfig=%s\n' "${rel}" "${PF_UBOOT_DEFCONFIG}"
   printf 'tfa_plat=%s tfa_build=debug tfa_build_string=g%s\n' "${PF_TFA_PLAT}" "${tfa_short}"
+  printf 'tfa_reset_capability=%s sunxi_system_reset=%s\n' "${PF_TFA_RESET_CAPABILITY}" "${SUNXI_RESET_VAL}"
   printf 'source_date_epoch=%s\n' "${SOURCE_DATE_EPOCH}"
   printf 'bl31_sha256=%s\n' "$(sha256sum "$BL31_BIN" | cut -d' ' -f1)"
   printf 'spl_sha256=%s\n' "$(sha256sum /out/u-boot-sunxi-with-spl.bin | cut -d' ' -f1)"
