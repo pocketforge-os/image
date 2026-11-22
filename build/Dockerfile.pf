@@ -1097,6 +1097,7 @@ ARG PF_UBOOT_DEFCONFIG
 ARG PF_TFA_REPO
 ARG PF_TFA_SHA
 ARG PF_TFA_PLAT
+ARG PF_TFA_RESET_CAPABILITY
 ARG PF_TOOLCHAIN_GCC_VERSION
 # Bootchain repro epoch: pinned to the U-BOOT commit (component reproducibility — the
 # boot-chain binary stays byte-identical from the bootchain SHAs alone, independent of
@@ -1139,7 +1140,7 @@ done
 case "${PF_TFA_RESET_CAPABILITY}" in
   axp717)  SUNXI_RESET_VAL=1 ;;
   watchdog) SUNXI_RESET_VAL=0 ;;
-  *) echo "bootchain FAIL: PF_TFA_RESET_CAPABILITY must be axp717 or watchdog, got ${PF_TFA_RESET_CAPABILITY!r}"; exit 1 ;;
+  *) printf 'bootchain FAIL: PF_TFA_RESET_CAPABILITY must be axp717 or watchdog, got [%s]\n' "${PF_TFA_RESET_CAPABILITY}" >&2; exit 1 ;;
 esac
 tfa_short="$(printf '%s' "${PF_TFA_SHA}" | cut -c1-12)"
 make -C /work/tfa -s -j"$(nproc)" PLAT="${PF_TFA_PLAT}" DEBUG=1 SUNXI_AXP717_SYSTEM_RESET=${SUNXI_RESET_VAL} \
