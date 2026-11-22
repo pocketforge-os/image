@@ -64,11 +64,128 @@ if env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=g1 \
     PF_DEVICE_ID=legacy-direct \
     bash "${gamescope_boundary}" "${legacy_root}" \
     > "${scratch}/gamescope-g1-device.out" 2> "${scratch}/gamescope-g1-device.err"; then
-    echo 'FAIL: generated hook accepted Gamescope g1 on a legacy device' >&2
+    echo 'FAIL: generated hook accepted Gamescope g1 without a typed profile class' >&2
     exit 1
 fi
-grep -F 'refusing Gamescope package on legacy-direct' \
+grep -F 'Gamescope g1 profile class mismatch' \
     "${scratch}/gamescope-g1-device.err" >/dev/null
+
+# The typed profile class from Platform is the sole authorization gate for g1.
+# Device identity alone must not authorize it.  Platform emits exactly one
+# canonical class (a133-open-7x-gpu) for every g1 profile, including
+# resetcap-off.  Every other shape (missing, empty, wrong, near-miss,
+# formerly-allowed spelling, device-ID-only) must fail closed.
+g1_boundary="${scratch}/gamescope-g1-boundary.sh"
+awk '{ print }
+     /^case "\$\{PF_GAMESCOPE_MODE\}" in$/ { in_gamescope = 1; next }
+     in_gamescope && /^esac$/ { exit }' "${hook}" > "${g1_boundary}"
+
+g1_root="${scratch}/g1-root"
+mkdir -p "${g1_root}"
+
+# Positive: both base and resetcap-off device identities with the single
+# canonical class must pass the authorization gate and reach the next-stage
+# artifact check.  With GAMESCOPE_DIR set to a non-existent path the first
+# artifact check (od on the gamescope binary) fails deterministically;
+# the absence of "profile class mismatch" plus the presence of that sentinel
+# proves the class gate was passed.
+for device_id in a133-open-7x-gpu a133-open-7x-gpu-resetcap-off; do
+    env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=g1 \
+        PF_DEVICE_ID="${device_id}" \
+        GAMESCOPE_DIR=/nonexistent-gamescope-fixture \
+        PF_GAMESCOPE_PROFILE_CLASS=a133-open-7x-gpu \
+        bash "${g1_boundary}" "${g1_root}" \
+        > "${scratch}/g1-pos-${device_id}.out" \
+        2> "${scratch}/g1-pos-${device_id}.err" || true
+    if grep -F "Gamescope g1 profile class mismatch:" \
+        "${scratch}/g1-pos-${device_id}.err" >/dev/null; then
+        echo "FAIL: generated hook rejected the canonical class for ${device_id}" >&2
+        exit 1
+    fi
+    if ! grep -F "No such file or directory" \
+        "${scratch}/g1-pos-${device_id}.err" >/dev/null; then
+        echo "FAIL: generated hook for ${device_id} did not reach the artifact sentinel" >&2
+        cat "${scratch}/g1-pos-${device_id}.err" >&2
+        exit 1
+    fi
+done
+
+# Negative: every invalid class shape must be refused with the typed-class
+# diagnostic.  The assertion is on the exact refusal text, not merely on
+# the absence of success.
+for tuple in \
+    'missing ' \
+    'empty ""' \
+    'wrong a133-open-7x-gpu-cts' \
+    'near-miss a133-open-7x-gp' \
+    'prefix a133-open-7x-gpu-extra' \
+    'former-class a133-open-7x-gpu-resetcap-off'; do
+    read -r label profile_class <<< "${tuple}"
+    if [ "${label}" = "missing" ]; then
+        env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=g1 \
+            PF_DEVICE_ID=a133-open-7x-gpu \
+            bash "${g1_boundary}" "${g1_root}" \
+            > "${scratch}/g1-reject-${label}.out" \
+            2> "${scratch}/g1-reject-${label}.err" || true
+    else
+        env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=g1 \
+            PF_DEVICE_ID=a133-open-7x-gpu \
+            PF_GAMESCOPE_PROFILE_CLASS="${profile_class}" \
+            bash "${g1_boundary}" "${g1_root}" \
+            > "${scratch}/g1-reject-${label}.out" \
+            2> "${scratch}/g1-reject-${label}.err" || true
+    fi
+    if ! grep -F "Gamescope g1 profile class mismatch:" \
+        "${scratch}/g1-reject-${label}.err" >/dev/null; then
+        echo "FAIL: generated hook accepted Gamescope g1 with ${label} profile class" >&2
+        exit 1
+    fi
+done
+
+# Property sweep 1: no PF_DEVICE_ID value alone authorizes g1.
+# Every device identity without the exact canonical class must be refused.
+for device_id in \
+    a133-open-7x-gpu \
+    a133-open-7x-gpu-resetcap-off \
+    a133-open-7x-gpu-kexec-canary \
+    a133-open-7x-gpu-dualspl \
+    a133-open-7x-gpu-cts \
+    a133-open-7x-gpu-noradio \
+    unknown-device; do
+    env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=g1 \
+        PF_DEVICE_ID="${device_id}" \
+        bash "${g1_boundary}" "${g1_root}" \
+        > "${scratch}/g1-sweep-dev-${device_id}.out" \
+        2> "${scratch}/g1-sweep-dev-${device_id}.err" || true
+    if ! grep -F "Gamescope g1 profile class mismatch:" \
+        "${scratch}/g1-sweep-dev-${device_id}.err" >/dev/null; then
+        echo "FAIL: PF_DEVICE_ID=${device_id} alone authorized Gamescope g1" >&2
+        exit 1
+    fi
+done
+
+# Property sweep 2: no second class spelling is accepted.
+# Only the exact canonical value a133-open-7x-gpu must pass.
+for wrong_class in \
+    a133-open-7x-gpu-resetcap-off \
+    a133-open-7x-gpu-cts \
+    a133-open-7x-gpu-kexec-canary \
+    a133-open-7x-gpu-dualspl \
+    A133-OPEN-7X-GPU \
+    'a133-open-7x-gpu ' \
+    'a133-open-7x-gpu-extra'; do
+    env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=g1 \
+        PF_DEVICE_ID=a133-open-7x-gpu \
+        PF_GAMESCOPE_PROFILE_CLASS="${wrong_class}" \
+        bash "${g1_boundary}" "${g1_root}" \
+        > "${scratch}/g1-sweep-class.out" \
+        2> "${scratch}/g1-sweep-class.err" || true
+    if ! grep -F "Gamescope g1 profile class mismatch:" \
+        "${scratch}/g1-sweep-class.err" >/dev/null; then
+        echo "FAIL: generated hook accepted wrong profile class '${wrong_class}'" >&2
+        exit 1
+    fi
+done
 
 # 1. A function that build-rootfs.sh (or a library it sources) defines and the
 # hook calls must also be defined in the hook: the hook is a separate process.
