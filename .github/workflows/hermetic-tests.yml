@@ -115,6 +115,7 @@ jobs:
             tests/test-pf-app-namespace-paths.py
             tests/test-pf-x11-authorize-events.py
             tests/test-boot-animator.sh
+            tests/test-bootchain-reset-capability.sh
             tests/test-browser-platform-defaults.sh
             tests/test-build-cache-audit-isolation.sh
             tests/test-build-id.sh
