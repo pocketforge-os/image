@@ -207,17 +207,10 @@ case "${PF_GAMESCOPE_MODE}" in
         }
         ;;
     g1)
-        case "${PF_DEVICE_ID}" in
-            a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-dualspl|a133-open-7x-gpu-cts) ;;
-            *)
-                echo "FATAL: Gamescope g1 package is restricted to an a133-open-7x-gpu profile" >&2
-                exit 1
-                ;;
-        esac
         case "${PF_GAMESCOPE_PROFILE_CLASS:-}" in
-            a133-open-7x-gpu|a133-open-7x-gpu-resetcap-off) ;;
+            a133-open-7x-gpu) ;;
             *)
-                echo "FATAL: Gamescope g1 profile class mismatch: got '${PF_GAMESCOPE_PROFILE_CLASS:-<unset>}', want a133-open-7x-gpu or a133-open-7x-gpu-resetcap-off" >&2
+                echo "FATAL: Gamescope g1 profile class mismatch: got '${PF_GAMESCOPE_PROFILE_CLASS:-<unset>}', want a133-open-7x-gpu" >&2
                 exit 1
                 ;;
         esac
@@ -475,17 +468,10 @@ echo "[customize] Starting PocketForge rootfs customization..."
 case "${PF_GAMESCOPE_MODE}" in
     not-shipped) ;;
     g1)
-        case "${PF_DEVICE_ID}" in
-            a133-open-7x-gpu|a133-open-7x-gpu-kexec-canary|a133-open-7x-gpu-dualspl|a133-open-7x-gpu-cts) ;;
-            *)
-                echo "FATAL: refusing Gamescope package on ${PF_DEVICE_ID}" >&2
-                exit 1
-                ;;
-        esac
         case "${PF_GAMESCOPE_PROFILE_CLASS:-}" in
-            a133-open-7x-gpu|a133-open-7x-gpu-resetcap-off) ;;
+            a133-open-7x-gpu) ;;
             *)
-                echo "FATAL: Gamescope g1 profile class mismatch: got '${PF_GAMESCOPE_PROFILE_CLASS:-<unset>}', want a133-open-7x-gpu or a133-open-7x-gpu-resetcap-off" >&2
+                echo "FATAL: Gamescope g1 profile class mismatch: got '${PF_GAMESCOPE_PROFILE_CLASS:-<unset>}', want a133-open-7x-gpu" >&2
                 exit 1
                 ;;
         esac
