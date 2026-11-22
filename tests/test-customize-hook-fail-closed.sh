@@ -70,6 +70,59 @@ fi
 grep -F 'refusing Gamescope package on legacy-direct' \
     "${scratch}/gamescope-g1-device.err" >/dev/null
 
+# The typed profile class from Platform gates g1 package use; device identity
+# alone must not authorize it. Positive cases require the exact value; every
+# other shape (missing, empty, wrong, near-miss, device-ID-only) is refused.
+g1_boundary="${scratch}/gamescope-g1-boundary.sh"
+awk '{ print }
+     /^case "\$\{PF_GAMESCOPE_MODE\}" in$/ { in_gamescope = 1; next }
+     in_gamescope && /^esac$/ { exit }' "${hook}" > "${g1_boundary}"
+
+g1_root="${scratch}/g1-root"
+mkdir -p "${g1_root}"
+for profile_class in a133-open-7x-gpu a133-open-7x-gpu-resetcap-off; do
+    env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=g1 \
+        PF_DEVICE_ID=a133-open-7x-gpu \
+        PF_GAMESCOPE_PROFILE_CLASS="${profile_class}" \
+        bash "${g1_boundary}" "${g1_root}" \
+        > "${scratch}/g1-class-${profile_class}.out" \
+        2> "${scratch}/g1-class-${profile_class}.err" || true
+    if grep -F "Gamescope g1 profile class mismatch:" \
+        "${scratch}/g1-class-${profile_class}.err" >/dev/null; then
+        echo "FAIL: generated hook rejected the valid profile class ${profile_class}" >&2
+        exit 1
+    fi
+done
+
+for tuple in \
+    'missing ' \
+    'empty ""' \
+    'wrong a133-open-7x-gpu-cts' \
+    'near-miss a133-open-7x-gp' \
+    'prefix a133-open-7x-gpu-extra' \
+    'device-id-only a133-open-7x-gpu-noradio'; do
+    read -r label profile_class <<< "${tuple}"
+    if [ "${label}" = "missing" ]; then
+        env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=g1 \
+            PF_DEVICE_ID=a133-open-7x-gpu \
+            bash "${g1_boundary}" "${g1_root}" \
+            > "${scratch}/g1-reject-${label}.out" \
+            2> "${scratch}/g1-reject-${label}.err" || true
+    else
+        env -i PATH="${PATH}" TMPDIR="${scratch}" PF_GAMESCOPE_MODE=g1 \
+            PF_DEVICE_ID=a133-open-7x-gpu \
+            PF_GAMESCOPE_PROFILE_CLASS="${profile_class}" \
+            bash "${g1_boundary}" "${g1_root}" \
+            > "${scratch}/g1-reject-${label}.out" \
+            2> "${scratch}/g1-reject-${label}.err" || true
+    fi
+    if ! grep -F "Gamescope g1 profile class mismatch:" \
+        "${scratch}/g1-reject-${label}.err" >/dev/null; then
+        echo "FAIL: generated hook accepted Gamescope g1 with ${label} profile class" >&2
+        exit 1
+    fi
+done
+
 # 1. A function that build-rootfs.sh (or a library it sources) defines and the
 # hook calls must also be defined in the hook: the hook is a separate process.
 hook_code="${scratch}/hook-code.sh"
