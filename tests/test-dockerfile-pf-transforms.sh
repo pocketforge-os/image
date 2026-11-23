@@ -75,6 +75,12 @@ printf 'PASS: Dockerfile serves the apt.llvm.org source over the selected apt tr
 
 python3 "$root/build/tests/test_gpu_um_toolchain_drift.py"
 
+python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" --self-test || {
+  printf 'FAIL: gpu-um toolchain guard self-test failed (hostile inputs not rejected)\n' >&2
+  exit 1
+}
+printf 'PASS: gpu-um toolchain guard self-test rejected all hostile inputs\n'
+
 missing_installed_repro="$tmpdir/gpu-um-missing-installed-repro.Dockerfile"
 sed '/^COPY --from=gpu-um-build \/src\/installed-cross-build-sha256.txt \/installed-cross-build-sha256.txt$/d' \
   "$dockerfile" >"$missing_installed_repro"
@@ -110,3 +116,33 @@ grep -Fx \
   "FAIL: fixture source pin: expected '$target_gpu_um_sha', got '$stale_gpu_um_sha'" \
   "$gpu_um_stale" >/dev/null
 printf 'PASS: gpu-um toolchain guard rejects stale live and fixture source identities\n'
+
+# bd tsp-0df0a59562b2cb408557: decoy SHA comment — a second matching comment before the
+# real one would let re.search return the decoy (correct SHA) while the real comment
+# carries a different value. The guard now counts matches and rejects != 1.
+decoy_dockerfile="$tmpdir/gpu-um-decoy.Dockerfile"
+{
+  printf '# docker/Dockerfile.ge8300-mesa-cross at %s. Do NOT add\n' "$target_gpu_um_sha"
+  cat "$dockerfile"
+} >"$decoy_dockerfile"
+decoy_log="$tmpdir/gpu-um-decoy.log"
+if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \
+  --dockerfile "$decoy_dockerfile" >"$decoy_log" 2>&1; then
+  printf 'FAIL: gpu-um toolchain guard accepted a decoy SHA comment in the live Dockerfile\n' >&2
+  exit 1
+fi
+grep -Fq "decoy comment attack detected" "$decoy_log"
+printf 'PASS: gpu-um toolchain guard rejects decoy SHA comment in the live Dockerfile\n'
+
+# bd tsp-0df0a59562b2cb408557: symlink at the fixture path — read_text() follows symlinks,
+# which would let a PR replace the fixture with attacker-controlled content.
+symlink_fixture="$tmpdir/gpu-um-symlink-fixture.Dockerfile"
+ln -s "$root/build/tests/fixtures/gpu-um-toolchain-4051dc0a.Dockerfile" "$symlink_fixture"
+symlink_log="$tmpdir/gpu-um-symlink.log"
+if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \
+  --fixture "$symlink_fixture" >"$symlink_log" 2>&1; then
+  printf 'FAIL: gpu-um toolchain guard accepted a symlink fixture\n' >&2
+  exit 1
+fi
+grep -Fq "is a symlink" "$symlink_log"
+printf 'PASS: gpu-um toolchain guard rejects a symlink fixture\n'
