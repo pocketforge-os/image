@@ -29,12 +29,18 @@
 #
 # No systemd, no cgroup writes, no root required. Uses setsid for process
 # group isolation and standard POSIX signals.
+#
+# Process-leak prevention: fixture scripts use bash's built-in `read -t`
+# for blocking waits instead of `sleep N & wait $!`, which avoids forking
+# any subprocess that could be orphaned when a parent exits. The cleanup
+# trap tracks every supervisor PID and SIGKILLs its process group on
+# EXIT/INT/TERM, ensuring zero leaked processes on any exit path
+# (including mid-run `timeout -k`).
 set -euo pipefail
 
 # Re-exec under setsid if we are not our own process group leader.
-# This lets the EXIT trap `kill -- -$$` clean up orphaned descendants
-# (e.g. the supervisor/child sleep loops) without killing the parent
-# CI runner's process group.
+# This lets the EXIT trap clean up orphaned descendants without killing
+# the parent CI runner's process group.
 _self_pgid="$(ps -o pgid= $$ 2>/dev/null | tr -d ' ')"
 if [ -n "$_self_pgid" ] && [ "$_self_pgid" != "$$" ]; then
     exec setsid -- "$0" "$@"
@@ -44,26 +50,41 @@ unset _self_pgid
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-stop-race.XXXXXX")"
 
-# Cleanup: kill any surviving descendants, remove scratch.
-# We are our own process group leader (setsid re-exec above), so
-# `kill -- -$$` would kill us too. Instead, enumerate and kill any
-# remaining descendants (direct children) to ensure no orphaned
-# sleep/child processes leak after the test exits.
+# File tracking all supervisor PIDs we spawn (one PID per line).
+# The cleanup trap reads this to SIGKILL each supervisor's process group.
+_supervisor_pids_file="${scratch}/supervisor_pids"
+: > "$_supervisor_pids_file"
+
+# Register a supervisor PID so the cleanup trap can kill it.
+register_supervisor() {
+    printf '%s\n' "$1" >> "$_supervisor_pids_file"
+}
+
+# Cleanup: SIGKILL every registered supervisor process group, then
+# kill any remaining direct children of ours, then remove scratch.
+# We are our own process group leader (setsid re-exec above), so we
+# cannot `kill -- -$$` (that would kill us too). Instead we enumerate
+# known supervisor PIDs and kill their process groups, then fall back
+# to enumerating our direct children.
+#
+# This trap is installed on EXIT, INT, and TERM so it runs on:
+#   - Normal exit (EXIT)
+#   - Ctrl-C (INT)
+#   - External SIGTERM (TERM), e.g. from `timeout`
 cleanup_all() {
     local rc=$?
-    # Kill any known supervisor process group first.
-    if [ -f "${scratch}/supervisor.pid" ]; then
-        local sup
-        sup="$(cat "${scratch}/supervisor.pid" 2>/dev/null || true)"
-        if [ -n "$sup" ] && kill -0 "$sup" 2>/dev/null; then
-            kill -KILL -- -"$sup" 2>/dev/null || kill -KILL "$sup" 2>/dev/null || true
-        fi
+    # Kill every registered supervisor's process group.
+    if [ -f "$_supervisor_pids_file" ]; then
+        while IFS= read -r sup; do
+            [ -n "$sup" ] || continue
+            # Kill the whole process group first, then the PID itself.
+            kill -KILL -- -"$sup" 2>/dev/null || true
+            kill -KILL "$sup" 2>/dev/null || true
+        done < "$_supervisor_pids_file"
     fi
-    # Kill any remaining direct children of ours (catches any orphaned
-    # sleep/child processes from fixtures that were not in a supervisor
-    # process group). We enumerate PIDs to avoid killing ourselves.
+    # Kill any remaining direct children of ours.
     local orphans
-    orphans="$(ps -o pid= --ppid "$$" 2>/dev/null | tr -s ' ' | tr -d ' ' || true)"
+    orphans="$(ps -o pid= --ppid "$$" 2>/dev/null | tr -s '[:space:]' '\n' | grep -v "^$$\$" || true)"
     if [ -n "$orphans" ]; then
         # shellcheck disable=SC2086
         kill -KILL $orphans 2>/dev/null || true
@@ -72,7 +93,8 @@ cleanup_all() {
     exit "${rc}"
 }
 trap cleanup_all EXIT
-trap cleanup_all ERR
+trap cleanup_all INT
+trap cleanup_all TERM
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
@@ -82,6 +104,12 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 # Child: increments restart_file on SIGTERM, exits on SIGUSR1.
 # Arguments: restart_file pidfile readyfile
+#
+# Uses `read -t 3600` instead of `sleep 3600 & wait $!` to avoid forking
+# a subprocess. `read -t` is a bash builtin that blocks for up to N seconds
+# waiting for input; with no fd connected it returns immediately on timeout
+# or signal interruption. Crucially, no child process is created, so nothing
+# can be orphaned when this shell exits.
 write_child_script() {
     cat <<'CHILD_EOF'
 #!/usr/bin/env bash
@@ -93,7 +121,7 @@ trap 'count=$((count+1)); printf "%s\n" "$count" > "$restart_file"' TERM
 trap 'exit 0' USR1
 printf '%s\n' "$$" > "$pidfile"
 : > "$readyfile"
-while true; do sleep 3600 & wait $! 2>/dev/null || true; done
+while true; do read -t 3600 _ 2>/dev/null || true; done
 CHILD_EOF
 }
 
@@ -107,13 +135,16 @@ restart_file=$1; pidfile=$2; readyfile=$3
 trap '' TERM USR1
 printf '%s\n' "$$" > "$pidfile"
 : > "$readyfile"
-while true; do sleep 3600 & wait $! 2>/dev/null || true; done
+while true; do read -t 3600 _ 2>/dev/null || true; done
 STUBBORN_EOF
 }
 
 # Supervisor: spawns child, on SIGTERM sends SIGUSR1 and polls with timeout.
 # Arguments: child_script restart_file pidfile readyfile
 #   supervisor_pidfile timeout_sec [stubborn]
+#
+# All blocking waits use `read -t` (bash builtin) instead of `sleep` to
+# avoid forking subprocesses that could leak on exit.
 write_supervisor_script() {
     cat <<'SUPERVISOR_EOF'
 #!/usr/bin/env bash
@@ -135,7 +166,7 @@ handle_term() {
                 kill -KILL "$child_pid" 2>/dev/null || true
                 break
             fi
-            sleep 0.05
+            read -t 0.05 _ 2>/dev/null || true
         done
         wait "$child_pid" 2>/dev/null || true
     fi
@@ -152,10 +183,10 @@ child_pid=$!
 deadline=$((SECONDS + 5))
 while [ ! -f "$child_readyfile" ]; do
     if [ "$SECONDS" -ge "$deadline" ]; then exit 1; fi
-    sleep 0.02
+    read -t 0.05 _ 2>/dev/null || true
 done
 
-while true; do sleep 3600 & wait $! 2>/dev/null || true; done
+while true; do read -t 3600 _ 2>/dev/null || true; done
 SUPERVISOR_EOF
 }
 
@@ -217,6 +248,7 @@ run_control_group_case() {
     local supervisor_pid child_pid
     supervisor_pid="$(wait_for_pidfile "$supervisor_pidfile" 5)" \
         || fail "control-group: supervisor did not start"
+    register_supervisor "$supervisor_pid"
     child_pid="$(wait_for_pidfile "$child_pidfile" 5)" \
         || fail "control-group: child did not start"
 
@@ -261,6 +293,7 @@ run_mixed_case() {
     local supervisor_pid child_pid
     supervisor_pid="$(wait_for_pidfile "$supervisor_pidfile" 5)" \
         || fail "mixed: supervisor did not start"
+    register_supervisor "$supervisor_pid"
     child_pid="$(wait_for_pidfile "$child_pidfile" 5)" \
         || fail "mixed: child did not start"
 
@@ -304,6 +337,7 @@ run_timeout_case() {
     local supervisor_pid child_pid
     supervisor_pid="$(wait_for_pidfile "$supervisor_pidfile" 5)" \
         || fail "timeout: supervisor did not start"
+    register_supervisor "$supervisor_pid"
     child_pid="$(wait_for_pidfile "$child_pidfile" 5)" \
         || fail "timeout: child did not start"
 
