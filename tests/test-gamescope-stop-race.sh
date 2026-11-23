@@ -31,13 +31,27 @@
 # group isolation and standard POSIX signals.
 set -euo pipefail
 
+# Re-exec under setsid if we are not our own process group leader.
+# This lets the EXIT trap `kill -- -$$` clean up orphaned descendants
+# (e.g. the supervisor/child sleep loops) without killing the parent
+# CI runner's process group.
+_self_pgid="$(ps -o pgid= $$ 2>/dev/null | tr -d ' ')"
+if [ -n "$_self_pgid" ] && [ "$_self_pgid" != "$$" ]; then
+    exec setsid -- "$0" "$@"
+fi
+unset _self_pgid
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pf-stop-race.XXXXXX")"
 
 # Cleanup: kill any surviving descendants, remove scratch.
+# We are our own process group leader (setsid re-exec above), so
+# `kill -- -$$` would kill us too. Instead, enumerate and kill any
+# remaining descendants (direct children) to ensure no orphaned
+# sleep/child processes leak after the test exits.
 cleanup_all() {
     local rc=$?
-    # Kill any process in the scratch's process group tree.
+    # Kill any known supervisor process group first.
     if [ -f "${scratch}/supervisor.pid" ]; then
         local sup
         sup="$(cat "${scratch}/supervisor.pid" 2>/dev/null || true)"
@@ -45,10 +59,20 @@ cleanup_all() {
             kill -KILL -- -"$sup" 2>/dev/null || kill -KILL "$sup" 2>/dev/null || true
         fi
     fi
+    # Kill any remaining direct children of ours (catches any orphaned
+    # sleep/child processes from fixtures that were not in a supervisor
+    # process group). We enumerate PIDs to avoid killing ourselves.
+    local orphans
+    orphans="$(ps -o pid= --ppid "$$" 2>/dev/null | tr -s ' ' | tr -d ' ' || true)"
+    if [ -n "$orphans" ]; then
+        # shellcheck disable=SC2086
+        kill -KILL $orphans 2>/dev/null || true
+    fi
     rm -rf "${scratch}" 2>/dev/null || true
     exit "${rc}"
 }
 trap cleanup_all EXIT
+trap cleanup_all ERR
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
