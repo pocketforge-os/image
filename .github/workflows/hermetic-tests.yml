@@ -184,6 +184,7 @@ jobs:
             tests/test-pf-app-session-graph.sh
             tests/test-power-menu-wiring.sh
             tests/test-recovery-entry.sh
+            tests/test-resetcap-off-allowlists.sh
             tests/test-runtime-path-producers.sh
             tests/test-rootfs-abi-check.sh
             tests/test-rootfs-apt-policy.sh
