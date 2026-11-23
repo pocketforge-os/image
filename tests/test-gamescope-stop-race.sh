@@ -32,10 +32,11 @@
 #
 # Process-leak prevention: fixture scripts use bash's built-in `read -t`
 # for blocking waits instead of `sleep N & wait $!`, which avoids forking
-# any subprocess that could be orphaned when a parent exits. The cleanup
-# trap tracks every supervisor PID and SIGKILLs its process group on
-# EXIT/INT/TERM, ensuring zero leaked processes on any exit path
-# (including mid-run `timeout -k`).
+# any subprocess that could be orphaned when a parent exits. Each fixture
+# opens fd 9 read-write on <(:) so that `read -t -u 9` never sees EOF and
+# truly blocks instead of busy-spinning. The cleanup trap tracks every
+# supervisor PID and SIGKILLs its process group on EXIT/INT/TERM, ensuring
+# zero leaked processes on any exit path (including mid-run `timeout -k`).
 set -euo pipefail
 
 # Re-exec under setsid if we are not our own process group leader.
@@ -105,23 +106,23 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 # Child: increments restart_file on SIGTERM, exits on SIGUSR1.
 # Arguments: restart_file pidfile readyfile
 #
-# Uses `read -t 3600` instead of `sleep 3600 & wait $!` to avoid forking
-# a subprocess. `read -t` is a bash builtin that blocks for up to N seconds
-# waiting for input; with no fd connected it returns immediately on timeout
-# or signal interruption. Crucially, no child process is created, so nothing
-# can be orphaned when this shell exits.
+# Uses `read -t -u 9` instead of `sleep 3600 & wait $!` to avoid forking
+# a subprocess. fd 9 is opened read-write on <(:) so read never sees EOF
+# and truly blocks instead of busy-spinning. Crucially, no child process
+# is created, so nothing can be orphaned when this shell exits.
 write_child_script() {
     cat <<'CHILD_EOF'
 #!/usr/bin/env bash
 set -uo pipefail
 restart_file=$1; pidfile=$2; readyfile=$3
+exec 9<> <(:)
 count=0
 [ -f "$restart_file" ] && count=$(cat "$restart_file")
 trap 'count=$((count+1)); printf "%s\n" "$count" > "$restart_file"' TERM
 trap 'exit 0' USR1
 printf '%s\n' "$$" > "$pidfile"
 : > "$readyfile"
-while true; do read -t 3600 _ 2>/dev/null || true; done
+while true; do read -t 3600 -u 9 _ 2>/dev/null || true; done
 CHILD_EOF
 }
 
@@ -132,10 +133,11 @@ write_stubborn_child_script() {
 #!/usr/bin/env bash
 set -uo pipefail
 restart_file=$1; pidfile=$2; readyfile=$3
+exec 9<> <(:)
 trap '' TERM USR1
 printf '%s\n' "$$" > "$pidfile"
 : > "$readyfile"
-while true; do read -t 3600 _ 2>/dev/null || true; done
+while true; do read -t 3600 -u 9 _ 2>/dev/null || true; done
 STUBBORN_EOF
 }
 
@@ -143,14 +145,16 @@ STUBBORN_EOF
 # Arguments: child_script restart_file pidfile readyfile
 #   supervisor_pidfile timeout_sec [stubborn]
 #
-# All blocking waits use `read -t` (bash builtin) instead of `sleep` to
-# avoid forking subprocesses that could leak on exit.
+# All blocking waits use `read -t -u 9` (bash builtin) instead of `sleep`
+# to avoid forking subprocesses that could leak on exit. fd 9 is opened
+# read-write on <(:) so read never sees EOF and truly blocks.
 write_supervisor_script() {
     cat <<'SUPERVISOR_EOF'
 #!/usr/bin/env bash
 set -uo pipefail
 child_script=$1; restart_file=$2; child_pidfile=$3; child_readyfile=$4
 supervisor_pidfile=$5; timeout_sec=${6:-3}; stubborn=${7:-no}
+exec 9<> <(:)
 
 child_pid=0
 done_file="${supervisor_pidfile}.done"
@@ -166,7 +170,7 @@ handle_term() {
                 kill -KILL "$child_pid" 2>/dev/null || true
                 break
             fi
-            read -t 0.05 _ 2>/dev/null || true
+            read -t 0.05 -u 9 _ 2>/dev/null || true
         done
         wait "$child_pid" 2>/dev/null || true
     fi
@@ -183,10 +187,10 @@ child_pid=$!
 deadline=$((SECONDS + 5))
 while [ ! -f "$child_readyfile" ]; do
     if [ "$SECONDS" -ge "$deadline" ]; then exit 1; fi
-    read -t 0.05 _ 2>/dev/null || true
+    read -t 0.05 -u 9 _ 2>/dev/null || true
 done
 
-while true; do read -t 3600 _ 2>/dev/null || true; done
+while true; do read -t 3600 -u 9 _ 2>/dev/null || true; done
 SUPERVISOR_EOF
 }
 
