@@ -47,7 +47,7 @@ from pathlib import Path
 
 
 ARM64_DESTINATION = "/etc/apt/sources.list.d/ubuntu-arm64.sources"
-PINNED_GPU_UM_SHA = "4051dc0af0c2bc40c2c1b93df7a00e0cfc19ffa5"
+PINNED_GPU_UM_SHA = "9536be8855f0b1923d77cf241205f0f27002cbbd"
 
 # CVE-2026-109518 (bd tsp-hqm1p.143): reviewed downstream deviations from the pinned
 # upstream recipe, kept until gpu-um-tsp carries them. apt.llvm.org and ports.ubuntu.com
@@ -276,7 +276,7 @@ def self_test() -> int:
     """
     root = Path(__file__).resolve().parents[2]
     real_dockerfile = root / "build/Dockerfile.pf"
-    real_fixture = root / "build/tests/fixtures/gpu-um-toolchain-4051dc0a.Dockerfile"
+    real_fixture = root / "build/tests/fixtures/gpu-um-toolchain-9536be88.Dockerfile"
     
     failed = False
     
@@ -399,7 +399,7 @@ def main() -> int:
     parser.add_argument(
         "--fixture",
         type=Path,
-        default=root / "build/tests/fixtures/gpu-um-toolchain-4051dc0a.Dockerfile",
+        default=root / "build/tests/fixtures/gpu-um-toolchain-9536be88.Dockerfile",
     )
     parser.add_argument("--source-sha", default=PINNED_GPU_UM_SHA)
     parser.add_argument(
