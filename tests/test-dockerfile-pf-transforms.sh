@@ -94,13 +94,13 @@ grep -Fq "FAIL: installed output evidence export: expected 'present', got 'missi
   "$gpu_um_missing_installed_repro"
 printf '%s\n' 'PASS: gpu-um recipe guard rejects a missing installed-output evidence export'
 
-target_gpu_um_sha=a9b15ee12d9c528e6f7eec6ac441ab97f25b57a5
+target_gpu_um_sha=9eb1f045099c2a6cb912d9d02b61d5ea5009389e
 stale_gpu_um_sha=87ad73611a548e1805f0c21ed083915d79e34c09
 stale_dockerfile="$tmpdir/gpu-um-stale.Dockerfile"
 stale_fixture="$tmpdir/gpu-um-stale-fixture.Dockerfile"
 sed "s/$target_gpu_um_sha/$stale_gpu_um_sha/g" "$dockerfile" >"$stale_dockerfile"
 sed "s/$target_gpu_um_sha/$stale_gpu_um_sha/g" \
-  "$root/build/tests/fixtures/gpu-um-toolchain-a9b15ee1.Dockerfile" >"$stale_fixture"
+  "$root/build/tests/fixtures/gpu-um-toolchain-9eb1f045.Dockerfile" >"$stale_fixture"
 
 gpu_um_stale="$tmpdir/gpu-um-stale-source-pin.log"
 if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \
@@ -137,7 +137,7 @@ printf 'PASS: gpu-um toolchain guard rejects decoy SHA comment in the live Docke
 # bd tsp-0df0a59562b2cb408557: symlink at the fixture path — read_text() follows symlinks,
 # which would let a PR replace the fixture with attacker-controlled content.
 symlink_fixture="$tmpdir/gpu-um-symlink-fixture.Dockerfile"
-ln -s "$root/build/tests/fixtures/gpu-um-toolchain-a9b15ee1.Dockerfile" "$symlink_fixture"
+ln -s "$root/build/tests/fixtures/gpu-um-toolchain-9eb1f045.Dockerfile" "$symlink_fixture"
 symlink_log="$tmpdir/gpu-um-symlink.log"
 if python3 "$root/build/tests/test_gpu_um_toolchain_drift.py" \
   --fixture "$symlink_fixture" >"$symlink_log" 2>&1; then
