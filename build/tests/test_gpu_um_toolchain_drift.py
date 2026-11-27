@@ -47,7 +47,7 @@ from pathlib import Path
 
 
 ARM64_DESTINATION = "/etc/apt/sources.list.d/ubuntu-arm64.sources"
-PINNED_GPU_UM_SHA = "46ad1b96ee92b5aeac72c3960fac07352467e67d"
+PINNED_GPU_UM_SHA = "874354c9ee53d7b4038119ab72c05189914b2bda"
 
 # CVE-2026-109518 (bd tsp-hqm1p.143): reviewed downstream deviations from the pinned
 # upstream recipe, kept until gpu-um-tsp carries them. apt.llvm.org and ports.ubuntu.com
