@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-EXPECTED_SHA="8e2f5ef3d06aedf546e9d5ea96ea6443721104b8"
+EXPECTED_SHA="1cbad6897be2e9c46d5efb03c91d2d920f885e26"
 LOCK_FILE="platform.lock"
 if [ ! -f "$LOCK_FILE" ]; then
   LOCK_FILE="platform/platform.lock"
